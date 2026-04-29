@@ -175,6 +175,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "history", Type: "object", Required: false, Description: "History metadata for back and forward actions."},
 			},
 		},
+		"page-cleanup": {
+			Name:        "page-cleanup",
+			Description: "Cron-friendly dry-run or close result for inactive page targets.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when cleanup evaluation completed."},
+				{Name: "cleanup", Type: "page_cleanup_summary", Required: true, Description: "Dry-run flag, filters, selected page, candidate count, closed count, and next commands."},
+				{Name: "candidates", Type: "array<page_cleanup_candidate>", Required: true, Description: "Page targets considered with visibility state, hidden flag, keep reason, and close error."},
+				{Name: "closed", Type: "array<page_cleanup_candidate>", Required: true, Description: "Candidates closed when --close is set."},
+			},
+		},
 		"page-select": {
 			Name:        "page-select",
 			Description: "Selected default page target for the effective browser connection.",

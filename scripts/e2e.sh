@@ -79,6 +79,13 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "page forward" --json | jq -e '.ok == true and .commands.name == "forward" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page activate" --json | jq -e '.ok == true and .commands.name == "activate" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page close" --json | jq -e '.ok == true and .commands.name == "close" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "page cleanup" --json | jq -e '.ok == true and .commands.name == "cleanup" and (.commands.examples | any(contains("--close")))' >/dev/null
+"$binary" schema page-cleanup --json | jq -e '.ok == true and .schema.name == "page-cleanup" and (.schema.fields | map(.name) | index("candidates"))' >/dev/null
+"$binary" describe --json | jq -e '.commands.children[] | select(.name == "page") | .children[] | select(.name == "cleanup")' >/dev/null
+"$binary" --help | rg -q "cleanup routine|page cleanup|clean"
+"$binary" describe --command "page cleanup" --json | jq -r '.commands.examples[]' | rg -q 'cdp page cleanup --close'
+"$binary" describe --command "page cleanup" --json | jq -r '.commands.short' | rg -q 'cron cleanup'
+"$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null
 "$binary" describe --command "text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "html" --json | jq -e '.ok == true and .commands.name == "html" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "dom query" --json | jq -e '.ok == true and .commands.name == "query" and (.commands.examples | length > 0)' >/dev/null

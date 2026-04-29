@@ -281,6 +281,71 @@ func TestPagesJSON(t *testing.T) {
 	}
 }
 
+func TestPageCleanupJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-visible", "type": "page", "title": "Visible Page", "url": "https://example.test/visible", "attached": false},
+		{"targetId": "page-hidden", "type": "page", "title": "Hidden Page", "url": "https://example.test/hidden", "attached": false},
+		{"targetId": "page-attached", "type": "page", "title": "Attached Page", "url": "https://example.test/attached", "attached": true},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "cleanup", "--include-url", "example.test", "--idle-for", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("page cleanup exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK      bool `json:"ok"`
+		Cleanup struct {
+			DryRun         bool `json:"dry_run"`
+			CandidateCount int  `json:"candidate_count"`
+			ClosedCount    int  `json:"closed_count"`
+		} `json:"cleanup"`
+		Candidates []struct {
+			Target struct {
+				ID string `json:"targetId"`
+			} `json:"target"`
+			VisibilityState string `json:"visibility_state"`
+			Hidden          bool   `json:"hidden"`
+			KeepReason      string `json:"keep_reason"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("page cleanup output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Cleanup.DryRun || got.Cleanup.CandidateCount != 1 || got.Cleanup.ClosedCount != 0 {
+		t.Fatalf("page cleanup summary = %+v, want one dry-run candidate", got.Cleanup)
+	}
+	if len(got.Candidates) != 3 || got.Candidates[0].KeepReason != "visible" || got.Candidates[1].KeepReason != "" || !got.Candidates[1].Hidden || got.Candidates[2].KeepReason != "attached" {
+		t.Fatalf("page cleanup candidates = %+v, want visible kept, hidden candidate, attached kept", got.Candidates)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"page", "cleanup", "--include-url", "example.test", "--idle-for", "0s", "--close", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("page cleanup close exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var closed struct {
+		Cleanup struct {
+			DryRun      bool `json:"dry_run"`
+			ClosedCount int  `json:"closed_count"`
+		} `json:"cleanup"`
+		Closed []struct {
+			Target struct {
+				ID string `json:"targetId"`
+			} `json:"target"`
+		} `json:"closed"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &closed); err != nil {
+		t.Fatalf("page cleanup close output is invalid JSON: %v", err)
+	}
+	if closed.Cleanup.DryRun || closed.Cleanup.ClosedCount != 1 || len(closed.Closed) != 1 || closed.Closed[0].Target.ID != "page-hidden" {
+		t.Fatalf("page cleanup close = %+v, want hidden page closed", closed)
+	}
+}
+
 func TestPageSelectJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "First Page", "url": "https://example.test/first", "attached": false},
@@ -1793,7 +1858,7 @@ func TestProtocolExecTargetScopedJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("protocol exec target output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Scope != "target" || got.Method != "Runtime.evaluate" || got.Target.ID != "page-1" || got.SessionID != "session-1" || got.Result.Result.Value != "Example App" {
+	if !got.OK || got.Scope != "target" || got.Method != "Runtime.evaluate" || got.Target.ID != "page-1" || got.SessionID != "session-page-1" || got.Result.Result.Value != "Example App" {
 		t.Fatalf("protocol exec target = %+v, want target-scoped Runtime.evaluate", got)
 	}
 }
@@ -3473,7 +3538,11 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Target.createTarget" {
 				resp["result"] = map[string]any{"targetId": "created-page"}
 			} else if req.Method == "Target.attachToTarget" {
-				resp["result"] = map[string]any{"sessionId": "session-1"}
+				var params struct {
+					TargetID string `json:"targetId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				resp["result"] = map[string]any{"sessionId": "session-" + params.TargetID}
 			} else if req.Method == "Target.detachFromTarget" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Target.activateTarget" {
@@ -3693,7 +3762,16 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					},
 				}
 			} else if req.Method == "Runtime.evaluate" {
-				resp["result"] = fakeRuntimeEvaluateResult(req.Params)
+				if strings.Contains(string(req.Params), "document.visibilityState") {
+					hidden := strings.Contains(req.SessionID, "hidden")
+					state := "visible"
+					if hidden {
+						state = "hidden"
+					}
+					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
+				} else {
+					resp["result"] = fakeRuntimeEvaluateResult(req.Params)
+				}
 			} else if req.Method == "Page.captureScreenshot" {
 				resp["result"] = map[string]any{
 					"data": base64.StdEncoding.EncodeToString([]byte("synthetic screenshot")),

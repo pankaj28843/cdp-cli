@@ -1807,6 +1807,7 @@ func (a *app) newPageCommand() *cobra.Command {
 	cmd.AddCommand(a.newPageHistoryCommand("forward", "Navigate the selected page forward in history", 1))
 	cmd.AddCommand(a.newPageActivateCommand())
 	cmd.AddCommand(a.newPageCloseCommand())
+	cmd.AddCommand(a.newPageCleanupCommand())
 	return cmd
 }
 
@@ -1999,6 +2000,368 @@ func (a *app) newPageActivateCommand() *cobra.Command {
 
 func (a *app) newPageCloseCommand() *cobra.Command {
 	return a.newPageTargetCommand("close", "Close a page target", "closed", cdp.CloseTargetWithClient)
+}
+
+type cleanupCandidate struct {
+	Target          cdp.TargetInfo `json:"target"`
+	VisibilityState string         `json:"visibility_state,omitempty"`
+	Hidden          bool           `json:"hidden,omitempty"`
+	Prerendering    bool           `json:"prerendering,omitempty"`
+	FirstSeen       string         `json:"first_seen,omitempty"`
+	LastSeen        string         `json:"last_seen,omitempty"`
+	IdleFor         string         `json:"idle_for,omitempty"`
+	EligibleAt      string         `json:"eligible_at,omitempty"`
+	Ready           bool           `json:"ready"`
+	KeepReason      string         `json:"keep_reason,omitempty"`
+	CloseError      string         `json:"close_error,omitempty"`
+}
+
+type pageCleanupRecord struct {
+	Connection string `json:"connection"`
+	TargetID   string `json:"target_id"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
+	FirstSeen  string `json:"first_seen"`
+	LastSeen   string `json:"last_seen"`
+}
+
+type pageCleanupState struct {
+	Pages []pageCleanupRecord `json:"pages"`
+}
+
+func (a *app) newPageCleanupCommand() *cobra.Command {
+	var closePages bool
+	var includeAttached bool
+	var includeURL string
+	var excludeURL string
+	var idleFor time.Duration
+	var max int
+	cmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Close or list inactive page targets for cron cleanup",
+		Long: `Close or list inactive page targets for cron cleanup.
+
+Chrome DevTools Protocol does not expose a reliable last-used timestamp, so this
+command uses conservative signals: it only considers page targets, skips the
+currently selected page when known, skips attached pages unless --include-attached
+is set, and checks document.visibilityState before closing. The default is a dry
+run; pass --close to close candidates after they have remained inactive for
+--idle-for across cleanup runs.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if max < 0 {
+				return commandError("usage", "usage", "--max must be non-negative", ExitUsage, []string{"cdp page cleanup --max 10 --json"})
+			}
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			client, closeClient, err := a.browserCDPClient(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp daemon keepalive --auto-connect", "cdp connection current --json"},
+				)
+			}
+			defer closeClient(ctx)
+
+			targets, err := cdp.ListTargetsWithClient(ctx, client)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("list targets: %v", err),
+					ExitConnection,
+					[]string{"cdp doctor --json", "cdp daemon status --json"},
+				)
+			}
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			connectionName := a.connectionStateName(ctx)
+			selectedID := a.selectedPageID(ctx)
+			records, err := loadPageCleanupRecords(ctx, store.Dir)
+			if err != nil {
+				return commandError("internal", "internal", fmt.Sprintf("read page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
+			}
+			now := time.Now().UTC()
+			candidates := cleanupCandidates(ctx, client, targets, cleanupOptions{
+				Connection:      connectionName,
+				SelectedID:      selectedID,
+				IncludeAttached: includeAttached,
+				IncludeURL:      includeURL,
+				ExcludeURL:      excludeURL,
+				IdleFor:         idleFor,
+				Max:             max,
+				Now:             now,
+				Records:         records,
+			})
+			closed := []cleanupCandidate{}
+			if closePages {
+				for i := range candidates {
+					if !candidates[i].Ready {
+						continue
+					}
+					if err := cdp.CloseTargetWithClient(ctx, client, candidates[i].Target.TargetID); err != nil {
+						candidates[i].CloseError = err.Error()
+						continue
+					}
+					delete(records, pageCleanupKey(connectionName, candidates[i].Target.TargetID))
+					closed = append(closed, candidates[i])
+				}
+			}
+
+			if err := savePageCleanupRecords(ctx, store.Dir, records); err != nil {
+				return commandError("internal", "internal", fmt.Sprintf("write page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
+			}
+
+			lines := make([]string, 0, len(candidates))
+			for _, candidate := range candidates {
+				status := "candidate"
+				if candidate.KeepReason != "" {
+					status = "kept:" + candidate.KeepReason
+				} else if candidate.CloseError != "" {
+					status = "error"
+				} else if closePages {
+					status = "closed"
+				}
+				lines = append(lines, fmt.Sprintf("%s\t%s\t%s", candidate.Target.TargetID, status, candidate.Target.Title))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok": true,
+				"cleanup": map[string]any{
+					"dry_run":          !closePages,
+					"close":            closePages,
+					"candidate_count":  countClosableCandidates(candidates),
+					"closed_count":     len(closed),
+					"idle_for":         idleFor.String(),
+					"state_path":       pageCleanupStatePath(store.Dir),
+					"include_attached": includeAttached,
+					"include_url":      strings.TrimSpace(includeURL),
+					"exclude_url":      strings.TrimSpace(excludeURL),
+					"selected_page":    selectedID,
+					"next_commands": []string{
+						"cdp page cleanup --json",
+						"cdp page cleanup --close --max 10 --json",
+						"crontab -l | grep cdp",
+					},
+				},
+				"candidates": candidates,
+				"closed":     closed,
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&closePages, "close", false, "close matching inactive page targets; default is dry-run")
+	cmd.Flags().BoolVar(&includeAttached, "include-attached", false, "also consider attached page targets")
+	cmd.Flags().StringVar(&includeURL, "include-url", "", "only consider pages whose URL contains this text")
+	cmd.Flags().StringVar(&excludeURL, "exclude-url", "", "exclude pages whose URL contains this text")
+	cmd.Flags().DurationVar(&idleFor, "idle-for", 30*time.Minute, "minimum duration a page must remain inactive before --close can close it")
+	cmd.Flags().IntVar(&max, "max", 10, "maximum ready candidate pages to close or report; use 0 for no limit")
+	return cmd
+}
+
+type cleanupOptions struct {
+	Connection      string
+	SelectedID      string
+	IncludeAttached bool
+	IncludeURL      string
+	ExcludeURL      string
+	IdleFor         time.Duration
+	Max             int
+	Now             time.Time
+	Records         map[string]pageCleanupRecord
+}
+
+func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []cdp.TargetInfo, opts cleanupOptions) []cleanupCandidate {
+	candidates := []cleanupCandidate{}
+	includeURL := strings.ToLower(strings.TrimSpace(opts.IncludeURL))
+	excludeURL := strings.ToLower(strings.TrimSpace(opts.ExcludeURL))
+	seen := map[string]bool{}
+	for _, target := range targets {
+		if target.Type != "page" {
+			continue
+		}
+		urlText := strings.ToLower(target.URL)
+		if includeURL != "" && !strings.Contains(urlText, includeURL) {
+			continue
+		}
+		if excludeURL != "" && strings.Contains(urlText, excludeURL) {
+			continue
+		}
+		key := pageCleanupKey(opts.Connection, target.TargetID)
+		seen[key] = true
+		candidate := cleanupCandidate{Target: target}
+		switch {
+		case target.TargetID == strings.TrimSpace(opts.SelectedID):
+			candidate.KeepReason = "selected_page"
+		case target.Attached && !opts.IncludeAttached:
+			candidate.KeepReason = "attached"
+		default:
+			candidate.VisibilityState, candidate.Hidden, candidate.Prerendering = pageVisibility(ctx, client, target.TargetID)
+			if candidate.VisibilityState == "visible" && !candidate.Hidden {
+				candidate.KeepReason = "visible"
+			}
+		}
+		updateCleanupRecord(&candidate, opts, key)
+		candidates = append(candidates, candidate)
+		if opts.Max > 0 && countReadyCandidates(candidates) >= opts.Max {
+			break
+		}
+	}
+	for key := range opts.Records {
+		if strings.HasPrefix(key, opts.Connection+"|") && !seen[key] {
+			delete(opts.Records, key)
+		}
+	}
+	return candidates
+}
+
+func updateCleanupRecord(candidate *cleanupCandidate, opts cleanupOptions, key string) {
+	record, ok := opts.Records[key]
+	if !ok || candidate.KeepReason != "" {
+		record = pageCleanupRecord{
+			Connection: opts.Connection,
+			TargetID:   candidate.Target.TargetID,
+			URL:        candidate.Target.URL,
+			Title:      candidate.Target.Title,
+			FirstSeen:  opts.Now.Format(time.RFC3339),
+		}
+	}
+	record.LastSeen = opts.Now.Format(time.RFC3339)
+	record.URL = candidate.Target.URL
+	record.Title = candidate.Target.Title
+	opts.Records[key] = record
+	candidate.FirstSeen = record.FirstSeen
+	candidate.LastSeen = record.LastSeen
+	firstSeen, err := time.Parse(time.RFC3339, record.FirstSeen)
+	if err != nil {
+		return
+	}
+	idle := opts.Now.Sub(firstSeen)
+	if idle < 0 {
+		idle = 0
+	}
+	candidate.IdleFor = durationString(idle)
+	candidate.EligibleAt = firstSeen.Add(opts.IdleFor).UTC().Format(time.RFC3339)
+	if candidate.KeepReason == "" && idle >= opts.IdleFor {
+		candidate.Ready = true
+	}
+}
+
+func countReadyCandidates(candidates []cleanupCandidate) int {
+	count := 0
+	for _, candidate := range candidates {
+		if candidate.Ready {
+			count++
+		}
+	}
+	return count
+}
+
+func pageVisibility(ctx context.Context, client cdp.CommandClient, targetID string) (string, bool, bool) {
+	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, nil)
+	if err != nil {
+		return "unknown", false, false
+	}
+	defer session.Close(ctx)
+	var result struct {
+		VisibilityState string `json:"visibilityState"`
+		Hidden          bool   `json:"hidden"`
+		Prerendering    bool   `json:"prerendering"`
+	}
+	if err := evaluateJSONValue(ctx, session, `(() => ({visibilityState: document.visibilityState, hidden: document.hidden, prerendering: Boolean(document.prerendering)}))()`, "page cleanup visibility", &result); err != nil {
+		return "unknown", false, false
+	}
+	return result.VisibilityState, result.Hidden, result.Prerendering
+}
+
+func countClosableCandidates(candidates []cleanupCandidate) int {
+	count := 0
+	for _, candidate := range candidates {
+		if candidate.Ready {
+			count++
+		}
+	}
+	return count
+}
+
+func pageCleanupStatePath(stateDir string) string {
+	return filepath.Join(stateDir, "page-cleanup.json")
+}
+
+func pageCleanupKey(connection, targetID string) string {
+	return connection + "|" + targetID
+}
+
+func loadPageCleanupRecords(ctx context.Context, stateDir string) (map[string]pageCleanupRecord, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	path := pageCleanupStatePath(stateDir)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]pageCleanupRecord{}, nil
+		}
+		return nil, err
+	}
+	var file pageCleanupState
+	if err := json.Unmarshal(b, &file); err != nil {
+		return nil, err
+	}
+	records := map[string]pageCleanupRecord{}
+	for _, record := range file.Pages {
+		records[pageCleanupKey(record.Connection, record.TargetID)] = record
+	}
+	return records, nil
+}
+
+func savePageCleanupRecords(ctx context.Context, stateDir string, records map[string]pageCleanupRecord) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	pages := make([]pageCleanupRecord, 0, len(records))
+	for _, record := range records {
+		pages = append(pages, record)
+	}
+	sort.Slice(pages, func(i, j int) bool {
+		if pages[i].Connection == pages[j].Connection {
+			return pages[i].TargetID < pages[j].TargetID
+		}
+		return pages[i].Connection < pages[j].Connection
+	})
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(pageCleanupState{Pages: pages}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(pageCleanupStatePath(stateDir), append(b, '\n'), 0o600)
+}
+
+func (a *app) selectedPageID(ctx context.Context) string {
+	store, err := a.stateStore()
+	if err != nil {
+		return ""
+	}
+	file, err := store.Load(ctx)
+	if err != nil {
+		return ""
+	}
+	connection := a.connectionStateName(ctx)
+	selection, ok := state.PageSelectionForConnection(file, connection)
+	if !ok {
+		return ""
+	}
+	return selection.TargetID
 }
 
 func (a *app) newPageTargetCommand(use, short, action string, run func(context.Context, cdp.CommandClient, string) error) *cobra.Command {
@@ -9880,6 +10243,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp page close": {
 			"cdp page close --target <target-id> --json",
+		},
+		"cdp page cleanup": {
+			"cdp page cleanup --json",
+			"cdp page cleanup --close --max 10 --exclude-url localhost --json",
 		},
 		"cdp open": {
 			"cdp open https://example.com --json",

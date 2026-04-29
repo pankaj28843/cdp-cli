@@ -78,10 +78,10 @@ func (a *app) newRoot() *cobra.Command {
 		Short:         "Agent-oriented Chrome DevTools Protocol CLI",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Long: `cdp is a shell-first Chrome DevTools Protocol CLI for coding agents.
-
-The project is being built around a long-running local attach daemon, compact
-JSON output, jq-friendly filtering, and high-level browser debugging workflows.`,
+		Long: "cdp is a shell-first Chrome DevTools Protocol CLI for coding agents.\n\n" +
+			"The project is being built around a long-running local attach daemon, compact\n" +
+			"JSON output, jq-friendly filtering, high-level browser debugging workflows, and\n" +
+			"cleanup routines such as `cdp page cleanup --json` for cron-safe tab hygiene.",
 	}
 	a.root = root
 
