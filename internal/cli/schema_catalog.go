@@ -144,6 +144,65 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "click", Type: "click_result", Required: true, Description: "Selector, matched count, clicked boolean, and error metadata when applicable."},
 			},
 		},
+		"fill": {
+			Name:        "fill",
+			Description: "Set the value of the first matching form control.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when fill command completed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name, typically filled when an element is successfully updated."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "fill", Type: "fill_result", Required: true, Description: "Selector, matched count, filled boolean, and previous/current values."},
+			},
+		},
+		"type": {
+			Name:        "type",
+			Description: "Emit key events against the first matching control to simulate typing.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when type command completed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name, typically typed when an element is successfully updated."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "type", Type: "type_result", Required: true, Description: "Selector, matched count, typed string, previous value, and success flag."},
+			},
+		},
+		"press": {
+			Name:        "press",
+			Description: "Dispatch keyboard events for a key on the focused element or selector.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when press command completed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name, typically pressed when key dispatch succeeds."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "press", Type: "press_result", Required: true, Description: "Selector, key name, matched count, and dispatch status."},
+			},
+		},
+		"hover": {
+			Name:        "hover",
+			Description: "Dispatch pointer hover events over the first matching element.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when hover command completed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name, typically hovered when pointer events are dispatched."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "hover", Type: "hover_result", Required: true, Description: "Selector, matched count, hovered flag, and hovered coordinates."},
+			},
+		},
+		"drag": {
+			Name:        "drag",
+			Description: "Drag the first matching element by a delta using pointer events.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when drag command completed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name, typically dragged when pointer events are dispatched."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "drag", Type: "drag_result", Required: true, Description: "Selector, matched count, drag success flag, delta, and coordinates."},
+			},
+		},
+		"frames": {
+			Name:        "frames",
+			Description: "List the frame tree for the selected target.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when frame listing completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "frames", Type: "array<frame_summary>", Required: true, Description: "Flattened frame metadata including id, URL, parent id, and child count."},
+			},
+		},
 		"html": {
 			Name:        "html",
 			Description: "Compact HTML extracted from a CSS selector.",

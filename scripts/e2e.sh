@@ -38,6 +38,12 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("entries"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "click" --json | jq -e '.ok == true and .commands.name == "click" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "fill" --json | jq -e '.ok == true and .commands.name == "fill" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "type" --json | jq -e '.ok == true and .commands.name == "type" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "press" --json | jq -e '.ok == true and .commands.name == "press" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "hover" --json | jq -e '.ok == true and .commands.name == "hover" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "drag" --json | jq -e '.ok == true and .commands.name == "drag" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "frames" --json | jq -e '.ok == true and .commands.name == "frames" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("--url-contains")))' >/dev/null
 "$binary" describe --command "page reload" --json | jq -e '.ok == true and .commands.name == "reload" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page back" --json | jq -e '.ok == true and .commands.name == "back" and (.commands.examples | length > 0)' >/dev/null
@@ -101,6 +107,12 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema workflow-perf --json | jq -e '.ok == true and .schema.name == "workflow-perf" and (.schema.fields | map(.name) | index("performance"))' >/dev/null
 "$binary" schema workflow-debug-bundle --json | jq -e '.ok == true and .schema.name == "workflow-debug-bundle" and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
 "$binary" schema click --json | jq -e '.ok == true and .schema.name == "click" and (.schema.fields | map(.name) | index("click"))' >/dev/null
+"$binary" schema fill --json | jq -e '.ok == true and .schema.name == "fill" and (.schema.fields | map(.name) | index("fill"))' >/dev/null
+"$binary" schema type --json | jq -e '.ok == true and .schema.name == "type" and (.schema.fields | map(.name) | index("type"))' >/dev/null
+"$binary" schema press --json | jq -e '.ok == true and .schema.name == "press" and (.schema.fields | map(.name) | index("press"))' >/dev/null
+"$binary" schema hover --json | jq -e '.ok == true and .schema.name == "hover" and (.schema.fields | map(.name) | index("hover"))' >/dev/null
+"$binary" schema drag --json | jq -e '.ok == true and .schema.name == "drag" and (.schema.fields | map(.name) | index("drag"))' >/dev/null
+"$binary" schema frames --json | jq -e '.ok == true and .schema.name == "frames" and (.schema.fields | map(.name) | index("frames"))' >/dev/null
 
 mkdir -p "$state_dir/user-data"
 set +e

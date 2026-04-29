@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,7 +195,7 @@ func capabilityCatalog() []map[string]string {
 		{"name": "network", "status": "implemented", "commands": "network, workflow network-failures"},
 		{"name": "storage", "status": "implemented", "commands": "storage list/get/set/delete/clear/snapshot/diff, storage cookies"},
 		{"name": "raw_protocol", "status": "implemented", "commands": "protocol metadata/domains/search/describe/exec"},
-		{"name": "input_automation", "status": "implemented", "commands": "click, fill, type, press, hover, drag, upload"},
+		{"name": "input_automation", "status": "implemented", "commands": "click, fill, type, press, hover, drag"},
 		{"name": "emulation", "status": "planned", "commands": "viewport, media, user-agent, geolocation, network, cpu"},
 		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
 		{"name": "memory", "status": "planned", "commands": "heap snapshot"},
@@ -2594,6 +2595,91 @@ type clickResult struct {
 	Error    *evalError `json:"error,omitempty"`
 }
 
+type fillResult struct {
+	URL      string     `json:"url"`
+	Title    string     `json:"title"`
+	Selector string     `json:"selector"`
+	Count    int        `json:"count"`
+	Filled   bool       `json:"filled"`
+	Value    string     `json:"value"`
+	Previous string     `json:"previous"`
+	Error    *evalError `json:"error,omitempty"`
+}
+
+type typeResult struct {
+	URL      string     `json:"url"`
+	Title    string     `json:"title"`
+	Selector string     `json:"selector"`
+	Count    int        `json:"count"`
+	Typing   bool       `json:"typing"`
+	Typed    string     `json:"typed"`
+	Previous string     `json:"previous"`
+	Error    *evalError `json:"error,omitempty"`
+}
+
+type pressResult struct {
+	URL        string     `json:"url"`
+	Title      string     `json:"title"`
+	Selector   string     `json:"selector"`
+	Key        string     `json:"key"`
+	Count      int        `json:"count"`
+	Dispatched bool       `json:"dispatched"`
+	Error      *evalError `json:"error,omitempty"`
+}
+
+type hoverResult struct {
+	URL      string     `json:"url"`
+	Title    string     `json:"title"`
+	Selector string     `json:"selector"`
+	Count    int        `json:"count"`
+	Hovered  bool       `json:"hovered"`
+	X        float64    `json:"x"`
+	Y        float64    `json:"y"`
+	Error    *evalError `json:"error,omitempty"`
+}
+
+type dragResult struct {
+	URL      string     `json:"url"`
+	Title    string     `json:"title"`
+	Selector string     `json:"selector"`
+	Count    int        `json:"count"`
+	Dragged  bool       `json:"dragged"`
+	DeltaX   int        `json:"delta_x"`
+	DeltaY   int        `json:"delta_y"`
+	StartX   float64    `json:"start_x"`
+	StartY   float64    `json:"start_y"`
+	EndX     float64    `json:"end_x"`
+	EndY     float64    `json:"end_y"`
+	Error    *evalError `json:"error,omitempty"`
+}
+
+type frameTreeResponse struct {
+	FrameTree *frameTreeNode `json:"frameTree"`
+}
+
+type frameTreeNode struct {
+	Frame       *frameInfo      `json:"frame"`
+	ChildFrames []frameTreeNode `json:"childFrames"`
+}
+
+type frameInfo struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	URL            string `json:"url"`
+	SecurityOrigin string `json:"securityOrigin"`
+	MimeType       string `json:"mimeType"`
+}
+
+type frameSummary struct {
+	FrameID        string `json:"frame_id"`
+	Name           string `json:"name"`
+	URL            string `json:"url"`
+	SecurityOrigin string `json:"security_origin"`
+	MimeType       string `json:"mime_type"`
+	ParentID       string `json:"parent_id"`
+	ChildCount     int    `json:"child_count"`
+}
+
 func (a *app) newClickCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
@@ -2632,6 +2718,317 @@ func (a *app) newClickCommand() *cobra.Command {
 				"action": "clicked",
 				"target": pageRow(target),
 				"click":  result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
+func (a *app) newFillCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "fill <selector> <value>",
+		Short: "Set the value of the first matching form control",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result fillResult
+			if err := evaluateJSONValue(ctx, session, fillExpression(args[0], args[1]), "fill", &result); err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("fill %q: %s", args[0], result.Error.Message),
+					ExitUsage,
+					[]string{"cdp fill input.email example@example.com --json"},
+				)
+			}
+			if !result.Filled {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("no editable element found for selector %q", args[0]),
+					ExitUsage,
+					[]string{"cdp fill #name Alice --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("filled\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+				"ok":     true,
+				"action": "filled",
+				"target": pageRow(target),
+				"fill":   result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
+func (a *app) newTypeCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "type <selector> <text>",
+		Short: "Type text into the first matching form control",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result typeResult
+			if err := evaluateJSONValue(ctx, session, typeExpression(args[0], args[1]), "type", &result); err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("type %q: %s", args[0], result.Error.Message),
+					ExitUsage,
+					[]string{"cdp type input[name='email'] user@example.com --json"},
+				)
+			}
+			if !result.Typing {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("no editable element found for selector %q", args[0]),
+					ExitUsage,
+					[]string{"cdp type #name Alice --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("typed\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+				"ok":     true,
+				"action": "typed",
+				"target": pageRow(target),
+				"type":   result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
+func (a *app) newPressCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var selector string
+	cmd := &cobra.Command{
+		Use:   "press <key>",
+		Short: "Press a key on the focused element or an optional selector",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result pressResult
+			if err := evaluateJSONValue(ctx, session, pressExpression(args[0], selector), "press", &result); err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("press %q: %s", args[0], result.Error.Message),
+					ExitUsage,
+					[]string{"cdp press Enter --selector 'input[name=\"q\"]' --json"},
+				)
+			}
+			if !result.Dispatched {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("no target found for keypress %q", args[0]),
+					ExitUsage,
+					[]string{"cdp press Enter --selector 'body' --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("pressed\t%s\t%q", target.TargetID, result.Key), map[string]any{
+				"ok":     true,
+				"action": "pressed",
+				"target": pageRow(target),
+				"press":  result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&selector, "selector", "", "optional selector to focus before pressing the key")
+	return cmd
+}
+
+func (a *app) newHoverCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "hover <selector>",
+		Short: "Dispatch pointer hover events over the first matching element",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result hoverResult
+			if err := evaluateJSONValue(ctx, session, hoverExpression(args[0]), "hover", &result); err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("hover %q: %s", args[0], result.Error.Message),
+					ExitUsage,
+					[]string{"cdp hover 'button.primary' --json"},
+				)
+			}
+			if !result.Hovered {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("no matching element found for selector %q", args[0]),
+					ExitUsage,
+					[]string{"cdp hover 'button.primary' --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("hovered\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+				"ok":     true,
+				"action": "hovered",
+				"target": pageRow(target),
+				"hover":  result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
+func (a *app) newDragCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "drag <selector> <dx> <dy>",
+		Short: "Drag the first matching element by a delta",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			dx, err := strconv.Atoi(strings.TrimSpace(args[1]))
+			if err != nil {
+				return commandError("invalid_argument", "usage", "dx must be an integer", ExitUsage, []string{"cdp drag '.node' 10 20 --json"})
+			}
+			dy, err := strconv.Atoi(strings.TrimSpace(args[2]))
+			if err != nil {
+				return commandError("invalid_argument", "usage", "dy must be an integer", ExitUsage, []string{"cdp drag '.node' 10 20 --json"})
+			}
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result dragResult
+			if err := evaluateJSONValue(ctx, session, dragExpression(args[0], dx, dy), "drag", &result); err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("drag %q: %s", args[0], result.Error.Message),
+					ExitUsage,
+					[]string{"cdp drag '#drag-me' 10 20 --json"},
+				)
+			}
+			if !result.Dragged {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("no matching element found for selector %q", args[0]),
+					ExitUsage,
+					[]string{"cdp drag '#drag-me' 10 20 --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("dragged\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+				"ok":     true,
+				"action": "dragged",
+				"target": pageRow(target),
+				"drag":   result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
+func (a *app) newFramesCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "frames",
+		Short: "List the page frame tree for the selected target",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result frameTreeResponse
+			if err := execSessionJSON(ctx, session, "Page.getFrameTree", map[string]any{}, &result); err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("frames target %s: %v", session.TargetID, err),
+					ExitConnection,
+					[]string{"cdp frames --json"},
+				)
+			}
+			frames := collectFrameSummaries(result.FrameTree, "")
+			return a.render(ctx, fmt.Sprintf("frames\t%s\t%d", target.TargetID, len(frames)), map[string]any{
+				"ok":     true,
+				"target": pageRow(target),
+				"frames": frames,
 			})
 		},
 	}
@@ -3192,6 +3589,196 @@ func clickExpression(selector string) string {
   }
   return { url: location.href, title: document.title, selector, count: elements.length, clicked: true, marker };
 })()`, string(selectorJSON))
+}
+
+func collectFrameSummaries(node *frameTreeNode, parent string) []frameSummary {
+	if node == nil || node.Frame == nil {
+		return nil
+	}
+	frame := frameSummary{
+		FrameID:        node.Frame.ID,
+		Name:           node.Frame.Name,
+		URL:            node.Frame.URL,
+		SecurityOrigin: node.Frame.SecurityOrigin,
+		MimeType:       node.Frame.MimeType,
+		ParentID:       parent,
+		ChildCount:     len(node.ChildFrames),
+	}
+	out := []frameSummary{frame}
+	for idx := range node.ChildFrames {
+		out = append(out, collectFrameSummaries(&node.ChildFrames[idx], node.Frame.ID)...)
+	}
+	return out
+}
+
+func fillExpression(selector, value string) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_fill__";
+  const selector = %s;
+  const value = String(%s);
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, filled: false, previous: "", value: "", error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, filled: false, previous: "", value: "", error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const element = elements[0];
+  if (!("value" in element)) {
+    return { url: location.href, title: document.title, selector, count: 0, filled: false, previous: "", value: "", error: { name: "InvalidTargetError", message: "target element does not support direct value assignment" }, marker };
+  }
+  const previous = element.value ?? "";
+  try {
+    element.focus();
+    element.value = value;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return { url: location.href, title: document.title, selector, count: elements.length, filled: true, previous, value: String(element.value), marker };
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, filled: false, previous: String(previous), value: String(element.value ?? ""), error: { name: error.name, message: error.message }, marker };
+  }
+})()`, jsStringLiteral(selector), jsStringLiteral(value))
+}
+
+func typeExpression(selector, text string) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_type__";
+  const selector = %s;
+  const text = String(%s);
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", typing: false, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", typing: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const element = elements[0];
+  if (!("value" in element)) {
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", typing: false, error: { name: "InvalidTargetError", message: "target element does not support direct value assignment" }, marker };
+  }
+  const previous = String(element.value ?? "");
+  let value = previous;
+  try {
+    element.focus();
+    for (const ch of text) {
+      value += ch;
+      element.value = value;
+      const key = String(ch);
+      const keyCode = key.length > 0 ? key.codePointAt(0) : 0;
+      const init = { key, code: key.length === 1 ? "Key" + key.toUpperCase() : key, keyCode: keyCode || 0, charCode: keyCode || 0, bubbles: true, cancelable: true };
+      element.dispatchEvent(new KeyboardEvent("keydown", init));
+      element.dispatchEvent(new KeyboardEvent("keypress", init));
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent("keyup", init));
+    }
+    return { url: location.href, title: document.title, selector, count: elements.length, typed: text, previous, typing: true, marker };
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous, typing: false, error: { name: error.name, message: error.message }, marker };
+  }
+})()`, jsStringLiteral(selector), jsStringLiteral(text))
+}
+
+func pressExpression(key string, selector string) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_press__";
+  const key = String(%s);
+  const selector = %s;
+  let target;
+  if (selector) {
+    let elements;
+    try {
+      elements = Array.from(document.querySelectorAll(selector));
+    } catch (error) {
+      return { url: location.href, title: document.title, selector, key, count: 0, dispatched: false, error: { name: error.name, message: error.message }, marker };
+    }
+    if (elements.length === 0) {
+      return { url: location.href, title: document.title, selector, key, count: 0, dispatched: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+    }
+    target = elements[0];
+  } else {
+    target = document.activeElement || document.body;
+  }
+  if (!target) {
+    return { url: location.href, title: document.title, selector, key, count: 0, dispatched: false, error: { name: "InvalidTargetError", message: "no focused element to dispatch key events" }, marker };
+  }
+  const safeKey = key || "Unidentified";
+  const keyCode = safeKey.length > 0 ? safeKey.codePointAt(0) : 0;
+  const init = {
+    key: safeKey,
+    code: safeKey.length === 1 ? "Key" + safeKey.toUpperCase() : safeKey,
+    keyCode: keyCode || 0,
+    charCode: keyCode || 0,
+    bubbles: true,
+    cancelable: true,
+    view: window
+  };
+  target.focus();
+  target.dispatchEvent(new KeyboardEvent("keydown", init));
+  target.dispatchEvent(new KeyboardEvent("keypress", init));
+  target.dispatchEvent(new KeyboardEvent("keyup", init));
+  return { url: location.href, title: document.title, selector, key: safeKey, count: selector ? 1 : 0, dispatched: true, marker };
+})()`, jsStringLiteral(key), jsStringLiteral(selector))
+}
+
+func hoverExpression(selector string) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_hover__";
+  const selector = %s;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, hovered: false, x: 0, y: 0, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, hovered: false, x: 0, y: 0, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const element = elements[0];
+  const rect = element.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {
+    return { url: location.href, title: document.title, selector, count: elements.length, hovered: false, x: rect.x, y: rect.y, error: { name: "InvalidTargetError", message: "target has zero width and height" }, marker };
+  }
+  const x = rect.x + rect.width / 2;
+  const y = rect.y + rect.height / 2;
+  const eventInit = { clientX: x, clientY: y, bubbles: true, cancelable: true, view: window };
+  element.dispatchEvent(new MouseEvent("mouseover", eventInit));
+  element.dispatchEvent(new MouseEvent("mousemove", eventInit));
+  element.dispatchEvent(new MouseEvent("mouseenter", eventInit));
+  element.dispatchEvent(new MouseEvent("mouseover", eventInit));
+  return { url: location.href, title: document.title, selector, count: elements.length, hovered: true, x, y, marker };
+})()`, jsStringLiteral(selector))
+}
+
+func dragExpression(selector string, dx, dy int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_drag__";
+  const selector = %s;
+  const deltaX = %d;
+  const deltaY = %d;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, dragged: false, delta_x: deltaX, delta_y: deltaY, start_x: 0, start_y: 0, end_x: 0, end_y: 0, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, dragged: false, delta_x: deltaX, delta_y: deltaY, start_x: 0, start_y: 0, end_x: 0, end_y: 0, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const element = elements[0];
+  const rect = element.getBoundingClientRect();
+  const startX = rect.x + rect.width / 2;
+  const startY = rect.y + rect.height / 2;
+  const endX = startX + deltaX;
+  const endY = startY + deltaY;
+  element.dispatchEvent(new MouseEvent("mousedown", { clientX: startX, clientY: startY, bubbles: true, cancelable: true, buttons: 1, button: 0, view: window }));
+  element.dispatchEvent(new MouseEvent("mousemove", { clientX: endX, clientY: endY, bubbles: true, cancelable: true, buttons: 1, button: 0, view: window }));
+  element.dispatchEvent(new MouseEvent("mouseup", { clientX: endX, clientY: endY, bubbles: true, cancelable: true, button: 0, view: window }));
+  return { url: location.href, title: document.title, selector, count: elements.length, dragged: true, delta_x: deltaX, delta_y: deltaY, start_x: startX, start_y: startY, end_x: endX, end_y: endY, marker };
+})()`, jsStringLiteral(selector), dx, dy)
 }
 
 func textExpression(selector string, limit, minChars int) string {
@@ -9138,6 +9725,30 @@ func commandExamples(path string) []string {
 		"cdp click": {
 			"cdp click main --json",
 			"cdp click button --url-contains localhost --json",
+		},
+		"cdp fill": {
+			"cdp fill input[name='email'] user@example.com --json",
+			"cdp fill textarea#notes \"first line\\nsecond line\" --url-contains localhost --json",
+		},
+		"cdp type": {
+			"cdp type input[name='email'] user@example.com --json",
+			"cdp type textarea#notes \"typed characters\" --url-contains localhost --json",
+		},
+		"cdp press": {
+			"cdp press Enter --json",
+			"cdp press Tab --selector 'input[name=\"q\"]' --json",
+		},
+		"cdp hover": {
+			"cdp hover button.primary --json",
+			"cdp hover '.card' --url-contains localhost --json",
+		},
+		"cdp drag": {
+			"cdp drag '.draggable' 10 20 --json",
+			"cdp drag '#drag-handle' -8 12 --url-contains localhost --json",
+		},
+		"cdp frames": {
+			"cdp frames --json",
+			"cdp frames --url-contains localhost --json",
 		},
 		"cdp html": {
 			"cdp html main --max-chars 4000 --json",
