@@ -657,6 +657,7 @@ func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, 
 
 func (a *app) newTargetsCommand() *cobra.Command {
 	var limit int
+	var targetType string
 	cmd := &cobra.Command{
 		Use:   "targets",
 		Short: "List browser targets",
@@ -668,6 +669,7 @@ func (a *app) newTargetsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			targets = filterTargetsByType(targets, targetType)
 			rows := targetRows(targets)
 			rows = limitRows(rows, limit)
 			var lines []string
@@ -678,6 +680,7 @@ func (a *app) newTargetsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of targets to return; use 0 for no limit")
+	cmd.Flags().StringVar(&targetType, "type", "", "only return targets of this CDP type, such as page or service_worker")
 	return cmd
 }
 
@@ -743,6 +746,20 @@ func targetRows(targets []cdp.TargetInfo) []map[string]any {
 		})
 	}
 	return rows
+}
+
+func filterTargetsByType(targets []cdp.TargetInfo, targetType string) []cdp.TargetInfo {
+	targetType = strings.TrimSpace(targetType)
+	if targetType == "" {
+		return targets
+	}
+	filtered := make([]cdp.TargetInfo, 0, len(targets))
+	for _, target := range targets {
+		if target.Type == targetType {
+			filtered = append(filtered, target)
+		}
+	}
+	return filtered
 }
 
 func limitRows(rows []map[string]any, limit int) []map[string]any {
@@ -1096,6 +1113,7 @@ func commandExamples(path string) []string {
 		"cdp targets": {
 			"cdp targets --json",
 			"cdp targets --limit 10 --json",
+			"cdp targets --type service_worker --json",
 			"cdp targets --browser-url <browser-url> --json",
 		},
 		"cdp pages": {
