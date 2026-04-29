@@ -30,21 +30,33 @@ func (a *app) newVersionCommand() *cobra.Command {
 }
 
 func (a *app) newDescribeCommand() *cobra.Command {
-	return &cobra.Command{
+	var commandPath string
+	cmd := &cobra.Command{
 		Use:   "describe",
 		Short: "Describe the command tree as JSON for agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
 
+			target := a.root
+			if commandPath != "" {
+				var err error
+				target, err = findCommand(a.root, commandPath)
+				if err != nil {
+					return err
+				}
+			}
+
 			data := map[string]any{
 				"ok":       true,
-				"commands": describeCommand(a.root),
+				"commands": describeCommand(target),
 				"globals":  []string{"--json", "--jq", "--debug", "--timeout", "--profile", "--config"},
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)
 		},
 	}
+	cmd.Flags().StringVar(&commandPath, "command", "", "describe one command path, such as 'daemon status'")
+	return cmd
 }
 
 func (a *app) newDoctorCommand() *cobra.Command {
@@ -289,4 +301,26 @@ func describeCommand(cmd *cobra.Command) commandInfo {
 	}
 
 	return info
+}
+
+func findCommand(root *cobra.Command, path string) (*cobra.Command, error) {
+	parts := strings.Fields(path)
+	if len(parts) > 0 && parts[0] == root.Name() {
+		parts = parts[1:]
+	}
+	if len(parts) == 0 {
+		return root, nil
+	}
+
+	found, _, err := root.Find(parts)
+	if err != nil || found == nil {
+		return nil, commandError(
+			"unknown_command",
+			"usage",
+			fmt.Sprintf("unknown command path %q", path),
+			ExitUsage,
+			[]string{"cdp describe --json", "cdp --help"},
+		)
+	}
+	return found, nil
 }

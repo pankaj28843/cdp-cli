@@ -12,6 +12,7 @@ fi
 "$binary" version --json | jq -e '.version and .commit and .date' >/dev/null
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
 "$binary" describe --jq '.globals | index("--json")' >/dev/null
+"$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status"' >/dev/null
 "$binary" doctor --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
