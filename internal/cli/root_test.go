@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -87,6 +89,41 @@ func TestDaemonStatusJSON(t *testing.T) {
 	}
 	if !got.OK || got.Daemon.State != "not_running" || got.Daemon.ConnectionMode != "browser_url" {
 		t.Fatalf("daemon status = %+v, want not_running browser_url", got)
+	}
+}
+
+func TestConnectionMemoryJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"connection", "add", "default", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "connections.json")); err != nil {
+		t.Fatalf("connections.json was not written: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "current", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection current exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK         bool `json:"ok"`
+		Connection struct {
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			AutoConnect bool   `json:"auto_connect"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection current output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" || !got.Connection.AutoConnect {
+		t.Fatalf("connection current = %+v, want default auto_connect", got)
 	}
 }
 

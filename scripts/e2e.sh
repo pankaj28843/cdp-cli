@@ -18,6 +18,12 @@ fi
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
 
+state_dir="$(mktemp -d)"
+trap 'rm -rf "$state_dir"' EXIT
+"$binary" connection add default --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
+"$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default"' >/dev/null
+"$binary" connection list --state-dir "$state_dir" --json | jq -e '.ok == true and (.connections | length == 1)' >/dev/null
+
 if [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true" ]]; then
     "$binary" doctor --auto-connect --browser-url "$CDP_E2E_BROWSER_URL" --json \

@@ -12,6 +12,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/output"
+	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -30,6 +31,7 @@ type options struct {
 	config      string
 	browserURL  string
 	autoConnect bool
+	stateDir    string
 }
 
 type app struct {
@@ -86,6 +88,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.PersistentFlags().StringVar(&a.opts.browserURL, "browserUrl", os.Getenv("CDP_BROWSER_URL"), "alias for --browser-url")
 	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "auto-connect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "request Chrome's default-profile remote debugging flow when supported")
 	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "autoConnect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "alias for --auto-connect")
+	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
 
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
@@ -94,6 +97,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newExitCodesCommand())
 	root.AddCommand(a.newSchemaCommand())
 	root.AddCommand(a.newDaemonCommand())
+	root.AddCommand(a.newConnectionCommand())
 	root.AddCommand(a.newTargetsCommand())
 	root.AddCommand(a.newPagesCommand())
 	root.AddCommand(a.newOpenCommand())
@@ -122,6 +126,10 @@ func (a *app) connectionMode() string {
 
 func (a *app) daemonStatus(probe browser.ProbeResult) daemon.Status {
 	return daemon.Snapshot(a.connectionMode(), a.opts.autoConnect, probe)
+}
+
+func (a *app) stateStore() (state.Store, error) {
+	return state.NewStore(a.opts.stateDir)
 }
 
 func (a *app) commandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {

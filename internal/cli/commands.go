@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -62,6 +63,7 @@ func (a *app) newDescribeCommand() *cobra.Command {
 					"--browserUrl",
 					"--auto-connect",
 					"--autoConnect",
+					"--state-dir",
 				},
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)
@@ -271,6 +273,194 @@ func (a *app) newDaemonStatusCommand() *cobra.Command {
 				"daemon": status,
 			}
 			return a.render(ctx, status.Message, data)
+		},
+	}
+}
+
+func (a *app) newConnectionCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "connection",
+		Short: "Manage disk-backed browser connection memory",
+	}
+	cmd.AddCommand(a.newConnectionAddCommand())
+	cmd.AddCommand(a.newConnectionListCommand())
+	cmd.AddCommand(a.newConnectionSelectCommand())
+	cmd.AddCommand(a.newConnectionCurrentCommand())
+	return cmd
+}
+
+func (a *app) newConnectionAddCommand() *cobra.Command {
+	var browserURL string
+	var autoConnect bool
+	var channel string
+	var project string
+
+	cmd := &cobra.Command{
+		Use:   "add <name>",
+		Short: "Add or update a named browser connection",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			mode := "browser_url"
+			if autoConnect {
+				mode = "auto_connect"
+			}
+			if mode == "browser_url" && strings.TrimSpace(browserURL) == "" {
+				return commandError(
+					"missing_browser_url",
+					"usage",
+					"connection add requires --browser-url unless --auto-connect is set",
+					ExitUsage,
+					[]string{"cdp connection add local --browser-url <browser-url> --json"},
+				)
+			}
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			file, err := store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			conn := state.Connection{
+				Name:        args[0],
+				Mode:        mode,
+				BrowserURL:  browserURL,
+				AutoConnect: autoConnect,
+				Channel:     channel,
+				Project:     project,
+			}
+			file = state.UpsertConnection(file, conn)
+			if file.Selected == "" {
+				file.Selected = conn.Name
+			}
+			if err := store.Save(ctx, file); err != nil {
+				return err
+			}
+			return a.render(ctx, fmt.Sprintf("connection %s saved", conn.Name), map[string]any{
+				"ok":         true,
+				"connection": conn,
+				"selected":   file.Selected,
+				"state_path": store.Path(),
+			})
+		},
+	}
+	cmd.Flags().StringVar(&browserURL, "browser-url", "", "Chrome DevTools browser URL")
+	cmd.Flags().StringVar(&browserURL, "browserUrl", "", "alias for --browser-url")
+	cmd.Flags().BoolVar(&autoConnect, "auto-connect", false, "use Chrome's default-profile auto-connect flow")
+	cmd.Flags().BoolVar(&autoConnect, "autoConnect", false, "alias for --auto-connect")
+	cmd.Flags().StringVar(&channel, "channel", "stable", "Chrome channel for auto-connect")
+	cmd.Flags().StringVar(&project, "project", "", "optional project selector")
+	return cmd
+}
+
+func (a *app) newConnectionListCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List saved browser connections",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			file, err := store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			var lines []string
+			for _, conn := range file.Connections {
+				marker := " "
+				if conn.Name == file.Selected {
+					marker = "*"
+				}
+				lines = append(lines, fmt.Sprintf("%s %s %s", marker, conn.Name, conn.Mode))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":          true,
+				"connections": file.Connections,
+				"selected":    file.Selected,
+				"state_path":  store.Path(),
+			})
+		},
+	}
+}
+
+func (a *app) newConnectionSelectCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "select <name>",
+		Short: "Select the default browser connection",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			file, err := store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			file, ok := state.SelectConnection(file, args[0])
+			if !ok {
+				return commandError(
+					"unknown_connection",
+					"usage",
+					fmt.Sprintf("unknown connection %q", args[0]),
+					ExitUsage,
+					[]string{"cdp connection list --json", "cdp connection add <name> --browser-url <browser-url> --json"},
+				)
+			}
+			if err := store.Save(ctx, file); err != nil {
+				return err
+			}
+			return a.render(ctx, fmt.Sprintf("connection %s selected", args[0]), map[string]any{
+				"ok":         true,
+				"selected":   file.Selected,
+				"state_path": store.Path(),
+			})
+		},
+	}
+}
+
+func (a *app) newConnectionCurrentCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "current",
+		Short: "Show the selected browser connection",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			file, err := store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			conn, ok := state.CurrentConnection(file)
+			if !ok {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					"no browser connection is selected",
+					ExitConnection,
+					[]string{"cdp connection add default --auto-connect --json", "cdp connection list --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("%s %s", conn.Name, conn.Mode), map[string]any{
+				"ok":         true,
+				"connection": conn,
+				"state_path": store.Path(),
+			})
 		},
 	}
 }
