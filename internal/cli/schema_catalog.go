@@ -186,6 +186,18 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible post text items."},
 			},
 		},
+		"workflow-hacker-news": {
+			Name:        "workflow-hacker-news",
+			Description: "Focused Hacker News front-page story and page-organization summary.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one story row was found."},
+				{Name: "url", Type: "string", Required: true, Description: "Requested Hacker News URL."},
+				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata."},
+				{Name: "organization", Type: "object", Required: true, Description: "Stable selectors and layout notes for the table-based HN page."},
+				{Name: "stories", Type: "array<hacker_news_story>", Required: true, Description: "Visible story rows with rank, title, site, score, age, author, and comments."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, and limit metadata."},
+			},
+		},
 		"workflow-console-errors": {
 			Name:        "workflow-console-errors",
 			Description: "Focused console error and warning summary.",

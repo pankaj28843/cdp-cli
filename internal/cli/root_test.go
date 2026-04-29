@@ -1184,6 +1184,34 @@ func TestWorkflowVisiblePostsJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowHackerNewsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "hacker-news", "https://news.ycombinator.com/", "--browser-url", server.URL, "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow hacker-news exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK           bool              `json:"ok"`
+		Organization map[string]string `json:"organization"`
+		Stories      []struct {
+			Rank     int    `json:"rank"`
+			Title    string `json:"title"`
+			Score    int    `json:"score"`
+			Comments int    `json:"comments"`
+		} `json:"stories"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow hacker-news output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Stories) != 1 || got.Stories[0].Title != "Synthetic HN story" || got.Stories[0].Score != 42 || got.Organization["story_row_selector"] != "tr.athing" {
+		t.Fatalf("workflow hacker-news = %+v, want synthetic HN story and organization", got)
+	}
+}
+
 func TestDaemonStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
@@ -2414,6 +2442,39 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 					"selector": "main",
 					"matched":  true,
 					"count":    1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_hn_frontpage__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":   "https://news.ycombinator.com/",
+					"title": "Hacker News",
+					"count": 1,
+					"stories": []map[string]any{{
+						"rank":         1,
+						"id":           "123",
+						"title":        "Synthetic HN story",
+						"url":          "https://example.test/story",
+						"site":         "example.test",
+						"score":        42,
+						"user":         "alice",
+						"age":          "1 hour ago",
+						"comments":     7,
+						"comments_url": "https://news.ycombinator.com/item?id=123",
+					}},
+					"organization": map[string]string{
+						"page_kind":             "table-based link aggregator front page",
+						"container_selector":    "table.itemlist",
+						"story_row_selector":    "tr.athing",
+						"metadata_row_selector": "tr.athing + tr .subtext",
+						"title_selector":        ".titleline > a",
+						"rank_selector":         ".rank",
+						"discussion_signal":     "score, author, age, and comment links live in the metadata row after each story row",
+					},
 				},
 			},
 		}

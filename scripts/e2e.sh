@@ -50,6 +50,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target")))' >/dev/null
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "workflow hacker-news" --json | jq -e '.ok == true and .commands.name == "hacker-news" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow console-errors" --json | jq -e '.ok == true and .commands.name == "console-errors" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow network-failures" --json | jq -e '.ok == true and .commands.name == "network-failures" and (.commands.examples | length > 0)' >/dev/null
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
@@ -61,6 +62,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema css-inspect --json | jq -e '.ok == true and .schema.name == "css-inspect"' >/dev/null
 "$binary" schema layout-overflow --json | jq -e '.ok == true and .schema.name == "layout-overflow"' >/dev/null
 "$binary" schema wait --json | jq -e '.ok == true and .schema.name == "wait"' >/dev/null
+"$binary" schema workflow-hacker-news --json | jq -e '.ok == true and .schema.name == "workflow-hacker-news" and (.schema.fields | map(.name) | index("organization"))' >/dev/null
 "$binary" schema workflow-console-errors --json | jq -e '.ok == true and .schema.name == "workflow-console-errors"' >/dev/null
 "$binary" schema workflow-network-failures --json | jq -e '.ok == true and .schema.name == "workflow-network-failures"' >/dev/null
 
@@ -165,6 +167,17 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
         exit 1
       fi
       printf '%s\n' "$live_posts_output" | jq -e '.ok == true and (.items | length > 0)' >/dev/null
+    fi
+    if [[ -n "${CDP_E2E_HN_URL:-}" ]]; then
+      set +e
+      live_hn_output="$("$binary" --active-browser-probe --timeout "${CDP_E2E_HN_TIMEOUT:-45s}" workflow hacker-news "$CDP_E2E_HN_URL" --limit "${CDP_E2E_HN_LIMIT:-3}" --json 2>/tmp/cdp-cli-live-hn.err)"
+      live_hn_code=$?
+      set -e
+      if [[ "$live_hn_code" -ne 0 ]]; then
+        echo "workflow hacker-news failed for CDP_E2E_HN_URL with exit code $live_hn_code" >&2
+        exit 1
+      fi
+      printf '%s\n' "$live_hn_output" | jq -e '.ok == true and (.stories | length > 0) and .organization.story_row_selector == "tr.athing"' >/dev/null
     fi
   fi
 elif [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
