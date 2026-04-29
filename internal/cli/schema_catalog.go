@@ -50,6 +50,45 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with id, type, title, url, and attachment state."},
 			},
 		},
+		"open": {
+			Name:        "open",
+			Description: "Page open or navigation result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page was opened or navigated."},
+				{Name: "action", Type: "string", Required: true, Description: "Either created or navigated."},
+				{Name: "page", Type: "page", Required: true, Description: "Page target metadata with id, url, and action fields."},
+			},
+		},
+		"eval": {
+			Name:        "eval",
+			Description: "Page-scoped JavaScript evaluation result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when JavaScript evaluation completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "result", Type: "runtime_object", Required: true, Description: "Runtime object with type, value, and description fields."},
+			},
+		},
+		"snapshot": {
+			Name:        "snapshot",
+			Description: "Visible text extracted from selected page elements.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when snapshot extraction completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "snapshot", Type: "snapshot", Required: true, Description: "Page URL, title, selector, count, and extracted items."},
+				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible text items duplicated for jq convenience."},
+			},
+		},
+		"workflow-visible-posts": {
+			Name:        "workflow-visible-posts",
+			Description: "Open a feed page and return visible post-like text items.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one visible post was found."},
+				{Name: "url", Type: "string", Required: true, Description: "Requested URL."},
+				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata."},
+				{Name: "selector", Type: "string", Required: true, Description: "Post container selector used for extraction."},
+				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible post text items."},
+			},
+		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
 			Description: "Summarized live CDP protocol metadata.",

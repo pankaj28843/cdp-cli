@@ -1102,27 +1102,448 @@ func pageRows(targets []cdp.TargetInfo) []map[string]any {
 		if target.Type != "page" {
 			continue
 		}
-		pages = append(pages, map[string]any{
-			"id":       target.TargetID,
-			"type":     target.Type,
-			"title":    target.Title,
-			"url":      target.URL,
-			"attached": target.Attached,
-		})
+		pages = append(pages, pageRow(target))
 	}
 	return pages
 }
 
+func pageRow(target cdp.TargetInfo) map[string]any {
+	return map[string]any{
+		"id":       target.TargetID,
+		"type":     target.Type,
+		"title":    target.Title,
+		"url":      target.URL,
+		"attached": target.Attached,
+	}
+}
+
+func (a *app) pageEndpoint(ctx context.Context) (string, error) {
+	endpoint, err := a.browserEndpoint(ctx)
+	if err != nil {
+		return "", commandError(
+			"connection_not_configured",
+			"connection",
+			err.Error(),
+			ExitConnection,
+			[]string{"cdp connection current --json", "cdp doctor --active-browser-probe --json"},
+		)
+	}
+	return endpoint, nil
+}
+
+func (a *app) attachPageSession(ctx context.Context, targetID, urlContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
+	endpoint, err := a.pageEndpoint(ctx)
+	if err != nil {
+		return nil, cdp.TargetInfo{}, err
+	}
+	target, err := a.resolvePageTarget(ctx, targetID, urlContains)
+	if err != nil {
+		return nil, cdp.TargetInfo{}, err
+	}
+	session, err := cdp.AttachToTarget(ctx, endpoint, target.TargetID)
+	if err != nil {
+		return nil, cdp.TargetInfo{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+			ExitConnection,
+			[]string{"cdp pages --json", "cdp doctor --json"},
+		)
+	}
+	return session, target, nil
+}
+
+func (a *app) resolvePageTarget(ctx context.Context, targetID, urlContains string) (cdp.TargetInfo, error) {
+	targets, err := a.listTargets(ctx)
+	if err != nil {
+		return cdp.TargetInfo{}, err
+	}
+	return resolvePageTarget(targets, targetID, urlContains)
+}
+
+func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains string) (cdp.TargetInfo, error) {
+	targetID = strings.TrimSpace(targetID)
+	urlContains = strings.TrimSpace(urlContains)
+	var pages []cdp.TargetInfo
+	for _, target := range targets {
+		if target.Type == "page" {
+			pages = append(pages, target)
+		}
+	}
+	if targetID != "" {
+		var matches []cdp.TargetInfo
+		for _, page := range pages {
+			if page.TargetID == targetID || strings.HasPrefix(page.TargetID, targetID) {
+				matches = append(matches, page)
+			}
+		}
+		return onePageTarget(matches, fmt.Sprintf("target %q", targetID))
+	}
+	if urlContains != "" {
+		for _, page := range pages {
+			if strings.Contains(page.URL, urlContains) {
+				return page, nil
+			}
+		}
+		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page URL contains %q", urlContains))
+	}
+	return onePageTarget(pages, "default page")
+}
+
+func onePageTarget(matches []cdp.TargetInfo, label string) (cdp.TargetInfo, error) {
+	switch len(matches) {
+	case 0:
+		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no %s matched", label))
+	case 1:
+		return matches[0], nil
+	default:
+		return cdp.TargetInfo{}, commandError(
+			"ambiguous_target",
+			"usage",
+			fmt.Sprintf("%s matched %d pages; pass a longer --target", label, len(matches)),
+			ExitUsage,
+			[]string{"cdp pages --json", "cdp snapshot --target <target-id> --json"},
+		)
+	}
+}
+
+func targetNotFound(message string) error {
+	return commandError(
+		"target_not_found",
+		"usage",
+		message,
+		ExitUsage,
+		[]string{"cdp pages --json", "cdp open <url> --json"},
+	)
+}
+
+type pageSnapshot struct {
+	URL      string         `json:"url"`
+	Title    string         `json:"title"`
+	Selector string         `json:"selector"`
+	Count    int            `json:"count"`
+	Items    []snapshotItem `json:"items"`
+	Error    *snapshotError `json:"error,omitempty"`
+}
+
+type snapshotItem struct {
+	Index      int          `json:"index"`
+	Tag        string       `json:"tag"`
+	Role       string       `json:"role,omitempty"`
+	AriaLabel  string       `json:"aria_label,omitempty"`
+	Text       string       `json:"text"`
+	TextLength int          `json:"text_length"`
+	Href       string       `json:"href,omitempty"`
+	Rect       snapshotRect `json:"rect"`
+}
+
+type snapshotRect struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+type snapshotError struct {
+	Name    string `json:"name"`
+	Message string `json:"message"`
+}
+
+func collectPageSnapshot(ctx context.Context, session *cdp.PageSession, selector string, limit, minChars int) (pageSnapshot, error) {
+	if limit < 0 {
+		return pageSnapshot{}, commandError(
+			"usage",
+			"usage",
+			"--limit must be non-negative",
+			ExitUsage,
+			[]string{"cdp snapshot --limit 20 --json"},
+		)
+	}
+	if minChars < 0 {
+		return pageSnapshot{}, commandError(
+			"usage",
+			"usage",
+			"--min-chars must be non-negative",
+			ExitUsage,
+			[]string{"cdp snapshot --min-chars 1 --json"},
+		)
+	}
+	result, err := session.Evaluate(ctx, snapshotExpression(selector, limit, minChars), true)
+	if err != nil {
+		return pageSnapshot{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("snapshot target %s: %v", session.TargetID, err),
+			ExitConnection,
+			[]string{"cdp pages --json", "cdp doctor --json"},
+		)
+	}
+	if result.Exception != nil {
+		return pageSnapshot{}, commandError(
+			"javascript_exception",
+			"runtime",
+			fmt.Sprintf("snapshot javascript exception: %s", result.Exception.Text),
+			ExitCheckFailed,
+			[]string{"cdp snapshot --selector body --json", "cdp pages --json"},
+		)
+	}
+	var snapshot pageSnapshot
+	if err := json.Unmarshal(result.Object.Value, &snapshot); err != nil {
+		return pageSnapshot{}, commandError(
+			"invalid_snapshot_result",
+			"internal",
+			fmt.Sprintf("decode snapshot result: %v", err),
+			ExitInternal,
+			[]string{"cdp doctor --json", "cdp eval 'document.title' --json"},
+		)
+	}
+	if snapshot.Error != nil {
+		return pageSnapshot{}, commandError(
+			"invalid_selector",
+			"usage",
+			fmt.Sprintf("invalid selector %q: %s", selector, snapshot.Error.Message),
+			ExitUsage,
+			[]string{"cdp snapshot --selector body --json", "cdp snapshot --selector article --json"},
+		)
+	}
+	return snapshot, nil
+}
+
+func snapshotExpression(selector string, limit, minChars int) string {
+	selectorJSON, _ := json.Marshal(selector)
+	return fmt.Sprintf(`(() => {
+  const selector = %s;
+  const limit = %d;
+  const minChars = %d;
+  const normalize = (value) => (value || "").replace(/\s+/g, " ").trim();
+  const isVisible = (element) => {
+    const style = window.getComputedStyle(element);
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return {
+      url: location.href,
+      title: document.title,
+      selector,
+      count: 0,
+      items: [],
+      error: { name: error.name, message: error.message }
+    };
+  }
+  const items = [];
+  for (let index = 0; index < elements.length; index++) {
+    const element = elements[index];
+    if (!isVisible(element)) continue;
+    const text = normalize(element.innerText || element.textContent);
+    if (text.length < minChars) continue;
+    const rect = element.getBoundingClientRect();
+    items.push({
+      index,
+      tag: element.tagName.toLowerCase(),
+      role: element.getAttribute("role") || "",
+      aria_label: element.getAttribute("aria-label") || "",
+      text,
+      text_length: text.length,
+      href: element.href || "",
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    });
+    if (limit > 0 && items.length >= limit) break;
+  }
+  return { url: location.href, title: document.title, selector, count: items.length, items };
+})()`, string(selectorJSON), limit, minChars)
+}
+
+func snapshotTextLines(items []snapshotItem) []string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		text := item.Text
+		if len([]rune(text)) > 240 {
+			text = string([]rune(text)[:240]) + "..."
+		}
+		lines = append(lines, fmt.Sprintf("%d\t%s", item.Index, text))
+	}
+	return lines
+}
+
 func (a *app) newOpenCommand() *cobra.Command {
-	return planned("open <url>", "Open or navigate to a URL")
+	var targetID string
+	var urlContains string
+	var newTab bool
+	cmd := &cobra.Command{
+		Use:   "open <url>",
+		Short: "Open a URL in a new tab or navigate a selected page",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			endpoint, err := a.pageEndpoint(ctx)
+			if err != nil {
+				return err
+			}
+			rawURL := strings.TrimSpace(args[0])
+			pageAction := "created"
+			frameID := ""
+			target := cdp.TargetInfo{Type: "page", URL: rawURL}
+			if newTab || (targetID == "" && urlContains == "") {
+				createdID, err := cdp.CreateTarget(ctx, endpoint, rawURL)
+				if err != nil {
+					return commandError(
+						"connection_failed",
+						"connection",
+						fmt.Sprintf("open page: %v", err),
+						ExitConnection,
+						[]string{"cdp doctor --json", "cdp pages --json"},
+					)
+				}
+				target.TargetID = createdID
+			} else {
+				selected, err := a.resolvePageTarget(ctx, targetID, urlContains)
+				if err != nil {
+					return err
+				}
+				session, err := cdp.AttachToTarget(ctx, endpoint, selected.TargetID)
+				if err != nil {
+					return commandError(
+						"connection_failed",
+						"connection",
+						fmt.Sprintf("attach target %s: %v", selected.TargetID, err),
+						ExitConnection,
+						[]string{"cdp pages --json", "cdp doctor --json"},
+					)
+				}
+				defer session.Close(ctx)
+				frameID, err = session.Navigate(ctx, rawURL)
+				if err != nil {
+					return commandError(
+						"connection_failed",
+						"connection",
+						fmt.Sprintf("navigate target %s: %v", selected.TargetID, err),
+						ExitConnection,
+						[]string{"cdp pages --json", "cdp doctor --json"},
+					)
+				}
+				target = selected
+				target.URL = rawURL
+				pageAction = "navigated"
+			}
+			page := pageRow(target)
+			page["action"] = pageAction
+			page["frame_id"] = frameID
+			human := fmt.Sprintf("%s\t%s\t%s", pageAction, target.TargetID, rawURL)
+			return a.render(ctx, human, map[string]any{
+				"ok":     true,
+				"action": pageAction,
+				"page":   page,
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&newTab, "new-tab", true, "open a new tab instead of navigating an existing page")
+	cmd.Flags().StringVar(&targetID, "target", "", "navigate a page target by exact id or unique prefix when --new-tab=false")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "navigate the first page whose URL contains this text when --new-tab=false")
+	return cmd
 }
 
 func (a *app) newEvalCommand() *cobra.Command {
-	return planned("eval <expression>", "Evaluate JavaScript in the selected page")
+	var targetID string
+	var urlContains string
+	var awaitPromise bool
+	cmd := &cobra.Command{
+		Use:   "eval <expression>",
+		Short: "Evaluate JavaScript in a page target",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			result, err := session.Evaluate(ctx, args[0], awaitPromise)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("evaluate target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			if result.Exception != nil {
+				return commandError(
+					"javascript_exception",
+					"runtime",
+					fmt.Sprintf("javascript exception: %s", result.Exception.Text),
+					ExitCheckFailed,
+					[]string{"cdp eval 'document.title' --json", "cdp pages --json"},
+				)
+			}
+			human := string(result.Object.Value)
+			if human == "" {
+				human = result.Object.Description
+			}
+			return a.render(ctx, human, map[string]any{
+				"ok":     true,
+				"target": pageRow(target),
+				"result": result.Object,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().BoolVar(&awaitPromise, "await-promise", true, "wait for promise results before returning")
+	return cmd
 }
 
 func (a *app) newSnapshotCommand() *cobra.Command {
-	return planned("snapshot", "Print a compact accessibility snapshot")
+	var targetID string
+	var urlContains string
+	var selector string
+	var limit int
+	var minChars int
+	var interactiveOnly bool
+	cmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Print compact visible text from a page target",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			snapshot, err := collectPageSnapshot(ctx, session, selector, limit, minChars)
+			if err != nil {
+				return err
+			}
+			lines := snapshotTextLines(snapshot.Items)
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":               true,
+				"target":           pageRow(target),
+				"snapshot":         snapshot,
+				"items":            snapshot.Items,
+				"interactive_only": interactiveOnly,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract visible text from; use article for social feeds")
+	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of text items to return; use 0 for no limit")
+	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")
+	cmd.Flags().BoolVar(&interactiveOnly, "interactive-only", false, "reserved compatibility flag; snapshot still returns visible text items")
+	return cmd
 }
 
 func (a *app) newScreenshotCommand() *cobra.Command {
@@ -1376,11 +1797,123 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 		Short: "Run high-level browser debugging workflows",
 	}
 	cmd.AddCommand(planned("verify <url>", "Open a URL and collect basic verification evidence"))
+	cmd.AddCommand(a.newWorkflowVisiblePostsCommand())
 	cmd.AddCommand(planned("console-errors", "Summarize console errors"))
 	cmd.AddCommand(planned("network-failures", "Summarize failed network requests"))
 	cmd.AddCommand(planned("perf <url>", "Capture and summarize performance evidence"))
 	cmd.AddCommand(planned("a11y", "Run a focused accessibility workflow"))
 	return cmd
+}
+
+func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
+	var selector string
+	var limit int
+	var minChars int
+	var wait time.Duration
+	cmd := &cobra.Command{
+		Use:   "visible-posts <url>",
+		Short: "Open a feed page and list visible post text",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 30*time.Second)
+			defer cancel()
+
+			endpoint, err := a.pageEndpoint(ctx)
+			if err != nil {
+				return err
+			}
+			rawURL := strings.TrimSpace(args[0])
+			targetID, err := cdp.CreateTarget(ctx, endpoint, rawURL)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("open page: %v", err),
+					ExitConnection,
+					[]string{"cdp doctor --json", "cdp open <url> --json"},
+				)
+			}
+			session, err := cdp.AttachToTarget(ctx, endpoint, targetID)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("attach target %s: %v", targetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			defer session.Close(ctx)
+
+			snapshot, err := waitForSnapshotItems(ctx, session, selector, limit, minChars, wait)
+			if err != nil {
+				return err
+			}
+			if len(snapshot.Items) == 0 {
+				return commandError(
+					"no_visible_posts",
+					"check_failed",
+					fmt.Sprintf("no visible post elements matched selector %q", selector),
+					ExitCheckFailed,
+					[]string{
+						"cdp snapshot --selector article --json",
+						"cdp workflow visible-posts <url> --selector article --wait 30s --json",
+					},
+				)
+			}
+			lines := snapshotTextLines(snapshot.Items)
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":       true,
+				"url":      rawURL,
+				"target":   pageRow(cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}),
+				"selector": selector,
+				"items":    snapshot.Items,
+				"snapshot": snapshot,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&selector, "selector", "article", "CSS selector for post containers")
+	cmd.Flags().IntVar(&limit, "limit", 10, "maximum number of visible posts to return")
+	cmd.Flags().IntVar(&minChars, "min-chars", 20, "minimum normalized text length per post")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long to wait for matching visible posts")
+	return cmd
+}
+
+func waitForSnapshotItems(ctx context.Context, session *cdp.PageSession, selector string, limit, minChars int, wait time.Duration) (pageSnapshot, error) {
+	if wait < 0 {
+		return pageSnapshot{}, commandError(
+			"usage",
+			"usage",
+			"--wait must be non-negative",
+			ExitUsage,
+			[]string{"cdp workflow visible-posts <url> --wait 30s --json"},
+		)
+	}
+	deadline := time.Now().Add(wait)
+	var last pageSnapshot
+	for {
+		snapshot, err := collectPageSnapshot(ctx, session, selector, limit, minChars)
+		if err != nil {
+			return pageSnapshot{}, err
+		}
+		last = snapshot
+		if len(snapshot.Items) > 0 || wait == 0 || time.Now().After(deadline) {
+			return last, nil
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return pageSnapshot{}, commandError(
+				"timeout",
+				"timeout",
+				ctx.Err().Error(),
+				ExitTimeout,
+				[]string{"cdp workflow visible-posts <url> --timeout 45s --json"},
+			)
+		case <-timer.C:
+		}
+	}
 }
 
 func (a *app) newMCPCommand() *cobra.Command {
@@ -1488,6 +2021,18 @@ func commandExamples(path string) []string {
 			"cdp pages --url-contains localhost --json",
 			"cdp pages --browser-url <browser-url> --json",
 		},
+		"cdp open": {
+			"cdp open https://example.com --json",
+			"cdp open https://example.com --new-tab=false --target <target-id> --json",
+		},
+		"cdp eval": {
+			"cdp eval 'document.title' --json",
+			"cdp eval 'Array.from(document.querySelectorAll(\"article\"), el => el.innerText)' --url-contains x.com --json",
+		},
+		"cdp snapshot": {
+			"cdp snapshot --selector body --json",
+			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",
+		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",
 			"cdp protocol metadata --browser-url <browser-url> --json",
@@ -1509,6 +2054,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow verify": {
 			"cdp workflow verify https://example.com --json",
+		},
+		"cdp workflow visible-posts": {
+			"cdp workflow visible-posts https://x.com/<handle> --limit 5 --json",
+			"cdp workflow visible-posts https://example.com/feed --selector article --wait 30s --json",
 		},
 	}
 	return examples[path]

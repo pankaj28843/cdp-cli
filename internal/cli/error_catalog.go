@@ -67,6 +67,61 @@ func errorCatalog() []errorInfo {
 			},
 		},
 		{
+			Code:     "target_not_found",
+			Class:    "usage",
+			ExitCode: ExitUsage,
+			Message:  "the requested browser target was not found",
+			Meaning:  "A page-scoped command could not find the requested tab. List pages and pass a full target id or a unique prefix.",
+			RemediationCommands: []string{
+				"cdp pages --json",
+				"cdp open <url> --json",
+			},
+		},
+		{
+			Code:     "ambiguous_target",
+			Class:    "usage",
+			ExitCode: ExitUsage,
+			Message:  "the browser target selector matched multiple pages",
+			Meaning:  "The provided target prefix is not specific enough for a page-scoped command.",
+			RemediationCommands: []string{
+				"cdp pages --json",
+				"cdp snapshot --target <target-id> --json",
+			},
+		},
+		{
+			Code:     "javascript_exception",
+			Class:    "runtime",
+			ExitCode: ExitCheckFailed,
+			Message:  "page JavaScript evaluation failed",
+			Meaning:  "The page-scoped command reached Chrome, but the JavaScript expression threw in the selected page.",
+			RemediationCommands: []string{
+				"cdp eval 'document.title' --json",
+				"cdp pages --json",
+			},
+		},
+		{
+			Code:     "invalid_selector",
+			Class:    "usage",
+			ExitCode: ExitUsage,
+			Message:  "the CSS selector is invalid",
+			Meaning:  "The snapshot command could not run because the supplied selector is not valid CSS.",
+			RemediationCommands: []string{
+				"cdp snapshot --selector body --json",
+				"cdp snapshot --selector article --json",
+			},
+		},
+		{
+			Code:     "no_visible_posts",
+			Class:    "check_failed",
+			ExitCode: ExitCheckFailed,
+			Message:  "no visible post elements were found",
+			Meaning:  "The visible-posts workflow opened the page, but no visible elements matched the post selector before the wait deadline.",
+			RemediationCommands: []string{
+				"cdp snapshot --selector article --json",
+				"cdp workflow visible-posts <url> --selector article --wait 30s --json",
+			},
+		},
+		{
 			Code:     "not_implemented",
 			Class:    "not_implemented",
 			ExitCode: ExitNotImplemented,

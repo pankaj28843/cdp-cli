@@ -21,9 +21,10 @@ type cdpError struct {
 }
 
 type response struct {
-	ID     int64           `json:"id,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *cdpError       `json:"error,omitempty"`
+	ID        int64           `json:"id,omitempty"`
+	SessionID string          `json:"sessionId,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	Error     *cdpError       `json:"error,omitempty"`
 }
 
 func Dial(ctx context.Context, endpoint string) (*Client, error) {
@@ -39,15 +40,21 @@ func (c *Client) Close(status websocket.StatusCode, reason string) error {
 }
 
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
+	return c.CallSession(ctx, "", method, params, result)
+}
+
+func (c *Client) CallSession(ctx context.Context, sessionID, method string, params any, result any) error {
 	id := c.next.Add(1)
 	req := struct {
-		ID     int64  `json:"id"`
-		Method string `json:"method"`
-		Params any    `json:"params"`
+		ID        int64  `json:"id"`
+		SessionID string `json:"sessionId,omitempty"`
+		Method    string `json:"method"`
+		Params    any    `json:"params"`
 	}{
-		ID:     id,
-		Method: method,
-		Params: params,
+		ID:        id,
+		SessionID: sessionID,
+		Method:    method,
+		Params:    params,
 	}
 	if err := wsjson.Write(ctx, c.conn, req); err != nil {
 		return fmt.Errorf("write cdp command %s: %w", method, err)

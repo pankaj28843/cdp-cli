@@ -64,7 +64,7 @@ func TestDescribeJSON(t *testing.T) {
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"snapshot", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"screenshot", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitNotImplemented {
 		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
 	}
@@ -373,6 +373,117 @@ func TestProtocolExecJSON(t *testing.T) {
 	}
 	if !got.OK || got.Method != "Browser.getVersion" || got.Result.Product != "Chrome/Test" {
 		t.Fatalf("protocol exec = %+v, want Browser.getVersion result", got)
+	}
+}
+
+func TestOpenJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/feed", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("open exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Page   struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "created" || got.Page.ID != "created-page" || got.Page.URL != "https://example.test/feed" {
+		t.Fatalf("open output = %+v, want created page", got)
+	}
+}
+
+func TestEvalJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("eval exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Result struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("eval output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "page-1" || got.Result.Type != "string" || got.Result.Value != "Example App" {
+		t.Fatalf("eval output = %+v, want document title result", got)
+	}
+}
+
+func TestSnapshotJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"snapshot", "--selector", "article", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("snapshot exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Snapshot struct {
+			Selector string `json:"selector"`
+			Count    int    `json:"count"`
+		} `json:"snapshot"`
+		Items []struct {
+			Tag  string `json:"tag"`
+			Text string `json:"text"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("snapshot output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Snapshot.Selector != "article" || got.Snapshot.Count != 1 || len(got.Items) != 1 || got.Items[0].Text != "First visible synthetic post" {
+		t.Fatalf("snapshot output = %+v, want one article item", got)
+	}
+}
+
+func TestWorkflowVisiblePostsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "visible-posts", "https://example.test/feed", "--browser-url", server.URL, "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow visible-posts exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Items []struct {
+			Text string `json:"text"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow visible-posts output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Items) != 1 || got.Items[0].Text != "First visible synthetic post" {
+		t.Fatalf("workflow visible-posts = %+v, want synthetic post", got)
 	}
 }
 
@@ -1164,8 +1275,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 
 		for {
 			var req struct {
-				ID     int64  `json:"id"`
-				Method string `json:"method"`
+				ID        int64           `json:"id"`
+				SessionID string          `json:"sessionId"`
+				Method    string          `json:"method"`
+				Params    json.RawMessage `json:"params"`
 			}
 			if err := wsjson.Read(r.Context(), conn, &req); err != nil {
 				return
@@ -1173,8 +1286,21 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			resp := map[string]any{
 				"id": req.ID,
 			}
+			if req.SessionID != "" {
+				resp["sessionId"] = req.SessionID
+			}
 			if req.Method == "Target.getTargets" {
 				resp["result"] = map[string]any{"targetInfos": targets}
+			} else if req.Method == "Target.createTarget" {
+				resp["result"] = map[string]any{"targetId": "created-page"}
+			} else if req.Method == "Target.attachToTarget" {
+				resp["result"] = map[string]any{"sessionId": "session-1"}
+			} else if req.Method == "Target.detachFromTarget" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Page.navigate" {
+				resp["result"] = map[string]any{"frameId": "frame-1"}
+			} else if req.Method == "Runtime.evaluate" {
+				resp["result"] = fakeRuntimeEvaluateResult(req.Params)
 			} else if req.Method == "Browser.getVersion" {
 				resp["result"] = map[string]any{"product": "Chrome/Test", "protocolVersion": "1.3"}
 			} else {
@@ -1187,4 +1313,44 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	})
 	server = httptest.NewServer(mux)
 	return server
+}
+
+func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
+	var req struct {
+		Expression string `json:"expression"`
+	}
+	_ = json.Unmarshal(params, &req)
+	if strings.Contains(req.Expression, "querySelectorAll") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/feed",
+					"title":    "Example Feed",
+					"selector": "article",
+					"count":    1,
+					"items": []map[string]any{
+						{
+							"index":       0,
+							"tag":         "article",
+							"role":        "article",
+							"aria_label":  "",
+							"text":        "First visible synthetic post",
+							"text_length": 28,
+							"href":        "",
+							"rect": map[string]any{
+								"x": 0, "y": 10, "width": 600, "height": 120,
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+	return map[string]any{
+		"result": map[string]any{
+			"type":  "string",
+			"value": "Example App",
+		},
+	}
 }

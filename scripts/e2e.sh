@@ -25,6 +25,10 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
+"$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot"' >/dev/null
+"$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
 
 mkdir -p "$state_dir/user-data"
 set +e
@@ -116,6 +120,17 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
     else
       printf '%s\n' "$live_pages_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
+    if [[ -n "${CDP_E2E_VISIBLE_POSTS_URL:-}" ]]; then
+      set +e
+      live_posts_output="$("$binary" --active-browser-probe --timeout "${CDP_E2E_VISIBLE_POSTS_TIMEOUT:-45s}" workflow visible-posts "$CDP_E2E_VISIBLE_POSTS_URL" --selector "${CDP_E2E_VISIBLE_POSTS_SELECTOR:-article}" --limit "${CDP_E2E_VISIBLE_POSTS_LIMIT:-3}" --json 2>/tmp/cdp-cli-live-posts.err)"
+      live_posts_code=$?
+      set -e
+      if [[ "$live_posts_code" -ne 0 ]]; then
+        echo "workflow visible-posts failed for CDP_E2E_VISIBLE_POSTS_URL with exit code $live_posts_code" >&2
+        exit 1
+      fi
+      printf '%s\n' "$live_posts_output" | jq -e '.ok == true and (.items | length > 0)' >/dev/null
+    fi
   fi
 elif [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   "$binary" doctor --browser-url "$CDP_E2E_BROWSER_URL" --json \
@@ -129,9 +144,9 @@ snapshot_output="$("$binary" snapshot --json 2>/tmp/cdp-cli-snapshot.err)"
 snapshot_code=$?
 set -e
 
-if [[ "$snapshot_code" -ne 8 ]]; then
-  echo "snapshot exit code = $snapshot_code, want 8 while snapshot is planned" >&2
+if [[ "$snapshot_code" -ne 3 ]]; then
+  echo "snapshot exit code = $snapshot_code, want 3 without a browser connection" >&2
   exit 1
 fi
 
-printf '%s\n' "$snapshot_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null
+printf '%s\n' "$snapshot_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null

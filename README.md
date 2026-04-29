@@ -7,16 +7,19 @@ The goal is a long-running local CDP process that can attach to a user-approved 
 ## Status
 
 Early implementation. The command tree, JSON/error conventions, connection
-memory, browser readiness probes, target/page listing, raw CDP discovery, and
-raw CDP execution are in place. High-level page workflows and durable daemon
-process management are planned next.
+memory, browser readiness probes, target/page listing, page open/eval/snapshot
+commands, raw CDP discovery, and raw CDP execution are in place. Durable daemon
+process management is planned next.
 
 ## Intended Shape
 
 ```bash
 cdp daemon start --auto-connect --prime --reconnect 30s --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
+cdp open https://example.com --json
+cdp eval 'document.title' --json
 cdp snapshot --interactive-only --limit 50 --json
+cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
 cdp protocol search screenshot --json
 cdp protocol exec Page.captureScreenshot --params '{"format":"png"}' --save tmp/page.png --json
 cdp workflow console-errors --json
