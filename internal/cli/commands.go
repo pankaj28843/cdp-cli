@@ -9716,6 +9716,10 @@ func commandExamples(path string) []string {
 			"cdp doctor --json",
 			"cdp describe --json | jq '.commands.children | map(.name)'",
 		},
+		"cdp version": {
+			"cdp version --json",
+			"cdp version --json --compact",
+		},
 		"cdp describe": {
 			"cdp describe --json",
 			"cdp describe --command 'daemon status' --json",

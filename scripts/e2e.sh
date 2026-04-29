@@ -18,6 +18,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --jq '.globals | index("--json")' >/dev/null
 "$binary" describe --jq '.globals | index("--compact")' >/dev/null
 "$binary" describe --jq '.globals | index("--connection")' >/dev/null
+"$binary" describe --command "version" --json | jq -e '.ok == true and .commands.name == "version" and (.commands.examples | any(contains("version --json")))' >/dev/null
 "$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | length > 0)' >/dev/null

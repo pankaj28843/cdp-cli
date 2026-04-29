@@ -2984,6 +2984,37 @@ func TestDescribeProtocolExamplesCommandJSON(t *testing.T) {
 	}
 }
 
+func TestDescribeVersionCommandExamplesJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"describe", "--command", "version", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("describe version exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Commands struct {
+			Name     string   `json:"name"`
+			Examples []string `json:"examples"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("describe version output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Commands.Name != "version" || !hasExampleContaining(got.Commands.Examples, "version --json") {
+		t.Fatalf("describe version = %+v, want version --json example", got)
+	}
+}
+
+func hasExampleContaining(examples []string, needle string) bool {
+	for _, example := range examples {
+		if strings.Contains(example, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestProtocolExamplesSchemaJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
