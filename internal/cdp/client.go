@@ -43,7 +43,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	req := struct {
 		ID     int64  `json:"id"`
 		Method string `json:"method"`
-		Params any    `json:"params,omitempty"`
+		Params any    `json:"params"`
 	}{
 		ID:     id,
 		Method: method,

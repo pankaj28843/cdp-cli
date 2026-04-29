@@ -238,6 +238,31 @@ func TestProtocolDescribeJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExecJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "exec", "Browser.getVersion", "--params", "{}", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol exec exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Method string `json:"method"`
+		Result struct {
+			Product string `json:"product"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol exec output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Method != "Browser.getVersion" || got.Result.Product != "Chrome/Test" {
+		t.Fatalf("protocol exec = %+v, want Browser.getVersion result", got)
+	}
+}
+
 func TestDaemonStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
@@ -670,6 +695,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			}
 			if req.Method == "Target.getTargets" {
 				resp["result"] = map[string]any{"targetInfos": targets}
+			} else if req.Method == "Browser.getVersion" {
+				resp["result"] = map[string]any{"product": "Chrome/Test", "protocolVersion": "1.3"}
 			} else {
 				resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
 			}

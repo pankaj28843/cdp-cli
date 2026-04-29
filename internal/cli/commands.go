@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -633,7 +634,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 	cmd.AddCommand(a.newProtocolDomainsCommand())
 	cmd.AddCommand(a.newProtocolSearchCommand())
 	cmd.AddCommand(a.newProtocolDescribeCommand())
-	cmd.AddCommand(planned("exec <Domain.method>", "Execute a raw CDP method"))
+	cmd.AddCommand(a.newProtocolExecCommand())
 	return cmd
 }
 
@@ -750,6 +751,60 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+func (a *app) newProtocolExecCommand() *cobra.Command {
+	var params string
+	cmd := &cobra.Command{
+		Use:   "exec <Domain.method>",
+		Short: "Execute a raw CDP method",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			rawParams := json.RawMessage(params)
+			if len(rawParams) == 0 {
+				rawParams = json.RawMessage(`{}`)
+			}
+			if !json.Valid(rawParams) {
+				return commandError(
+					"invalid_json",
+					"usage",
+					"--params must be valid JSON",
+					ExitUsage,
+					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
+				)
+			}
+			endpoint, err := a.browserEndpoint(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp connection current --json", "cdp doctor --active-browser-probe --json"},
+				)
+			}
+			result, err := cdp.Exec(ctx, endpoint, args[0], rawParams)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("execute %s: %v", args[0], err),
+					ExitConnection,
+					[]string{"cdp doctor --json", "cdp protocol describe " + args[0] + " --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("%s ok", args[0]), map[string]any{
+				"ok":     true,
+				"method": args[0],
+				"result": result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&params, "params", "{}", "JSON params object for the CDP method")
+	return cmd
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
@@ -883,6 +938,9 @@ func commandExamples(path string) []string {
 		},
 		"cdp protocol describe": {
 			"cdp protocol describe Page.captureScreenshot --json",
+		},
+		"cdp protocol exec": {
+			"cdp protocol exec Browser.getVersion --params '{}' --json",
 		},
 		"cdp workflow verify": {
 			"cdp workflow verify https://example.com --json",

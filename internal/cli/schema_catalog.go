@@ -84,6 +84,15 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "entity", Type: "protocol_entity", Required: true, Description: "Entity metadata and raw protocol schema."},
 			},
 		},
+		"protocol-exec": {
+			Name:        "protocol-exec",
+			Description: "Raw CDP method execution result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the CDP method completed."},
+				{Name: "method", Type: "string", Required: true, Description: "Executed CDP method."},
+				{Name: "result", Type: "object", Required: true, Description: "Raw CDP result payload."},
+			},
+		},
 		"error-envelope": {
 			Name:        "error-envelope",
 			Description: "Stable JSON shape emitted when a command fails with --json or --jq.",
