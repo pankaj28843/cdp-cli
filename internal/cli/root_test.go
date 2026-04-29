@@ -655,6 +655,68 @@ func TestNetworkFailedFilterJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowConsoleErrorsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "console-errors", "--browser-url", server.URL, "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow console-errors exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Workflow struct {
+			Name  string `json:"name"`
+			Count int    `json:"count"`
+		} `json:"workflow"`
+		Messages []struct {
+			Level string `json:"level"`
+			Text  string `json:"text"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow console-errors output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "console-errors" || got.Workflow.Count == 0 || got.Messages[0].Level != "error" {
+		t.Fatalf("workflow console-errors = %+v, want error summary", got)
+	}
+}
+
+func TestWorkflowNetworkFailuresJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "network-failures", "--browser-url", server.URL, "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow network-failures exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Workflow struct {
+			Name  string `json:"name"`
+			Count int    `json:"count"`
+		} `json:"workflow"`
+		Requests []struct {
+			ID     string `json:"id"`
+			Failed bool   `json:"failed"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow network-failures output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "network-failures" || got.Workflow.Count != 1 || got.Requests[0].ID != "request-failed" {
+		t.Fatalf("workflow network-failures = %+v, want failed request summary", got)
+	}
+}
+
 func TestProtocolMetadataJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

@@ -186,6 +186,26 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible post text items."},
 			},
 		},
+		"workflow-console-errors": {
+			Name:        "workflow-console-errors",
+			Description: "Focused console error and warning summary.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when workflow collection completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Error and warning console/log messages."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, truncation, and suggested next commands."},
+			},
+		},
+		"workflow-network-failures": {
+			Name:        "workflow-network-failures",
+			Description: "Focused failed and HTTP error network request summary.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when workflow collection completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Failed request rows."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, truncation, and suggested next commands."},
+			},
+		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
 			Description: "Summarized CDP protocol metadata.",
