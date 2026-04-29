@@ -45,6 +45,22 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "browser", Type: "browser_probe", Required: true, Description: "Browser probe or daemon-backed browser availability metadata."},
 			},
 		},
+		"daemon-keepalive": {
+			Name:        "daemon-keepalive",
+			Description: "Cron-safe daemon health check and repair result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when keepalive completed or skipped due to an existing lock."},
+				{Name: "connection", Type: "string", Required: true, Description: "Connection name used for the keepalive lock."},
+				{Name: "mode", Type: "string", Required: true, Description: "Connection mode such as auto_connect or browser_url."},
+				{Name: "state", Type: "string", Required: true, Description: "Keepalive state: healthy, started, repaired, passive, or locked."},
+				{Name: "action", Type: "string", Required: true, Description: "Action taken: none, started, repaired, or skipped."},
+				{Name: "locked", Type: "boolean", Required: true, Description: "True when another keepalive process already owns the lock."},
+				{Name: "daemon", Type: "daemon_status", Required: false, Description: "Daemon status when checked or after repair."},
+				{Name: "start", Type: "daemon_start", Required: false, Description: "Daemon start metadata when keepalive started or repaired it."},
+				{Name: "chrome", Type: "chrome_keepalive", Required: false, Description: "Chrome launch/check metadata for auto-connect repair."},
+				{Name: "lock", Type: "lock_metadata", Required: true, Description: "Keepalive lock metadata."},
+			},
+		},
 		"pages": {
 			Name:        "pages",
 			Description: "Open page targets from the selected browser connection.",

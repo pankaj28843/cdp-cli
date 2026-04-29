@@ -10,13 +10,14 @@ Early implementation. The command tree, JSON/error conventions, connection
 memory, browser readiness probes, target/page listing, page open/eval/snapshot
 commands, screenshot artifact capture, console/log capture, raw CDP discovery,
 raw CDP execution, and a default-profile auto-connect keepalive daemon with
-local command routing are in place.
+local command routing plus a cron-safe `daemon keepalive` command are in place.
 
 ## Intended Shape
 
 ```bash
 cdp daemon start --auto-connect --json
 cdp daemon status --json
+cdp daemon keepalive --auto-connect --display :0 --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
 cdp open https://example.com --json
 cdp eval 'document.title' --json
@@ -27,6 +28,17 @@ cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
 cdp protocol search screenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
+```
+
+## Daemon Keepalive
+
+`cdp daemon keepalive` is safe to run from cron or a user timer. It acquires a
+per-connection lock before any active probe, exits successfully when another
+keepalive already owns that lock, and starts or repairs the daemon only when the
+selected connection is not healthy.
+
+```cron
+* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1
 ```
 
 ## Principles

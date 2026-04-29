@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -353,6 +354,7 @@ func (a *app) newDaemonCommand() *cobra.Command {
 	cmd.AddCommand(a.newDaemonStatusCommand())
 	cmd.AddCommand(a.newDaemonStopCommand())
 	cmd.AddCommand(a.newDaemonRestartCommand())
+	cmd.AddCommand(a.newDaemonKeepaliveCommand())
 	cmd.AddCommand(a.newDaemonHoldCommand())
 	cmd.AddCommand(planned("logs", "Show attach daemon logs"))
 	return cmd
@@ -779,6 +781,331 @@ func (a *app) newDaemonRestartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&connectionName, "connection-name", "default", "connection name to save when --browser-url or --auto-connect is supplied")
 	cmd.Flags().BoolVar(&remember, "remember", true, "save supplied connection metadata for future on-demand commands")
 	return cmd
+}
+
+type keepaliveChromeStatus struct {
+	Display  string   `json:"display,omitempty"`
+	Command  string   `json:"command,omitempty"`
+	Args     []string `json:"args,omitempty"`
+	Checked  bool     `json:"checked"`
+	Running  bool     `json:"running"`
+	Launched bool     `json:"launched"`
+	Skipped  bool     `json:"skipped"`
+	Reason   string   `json:"reason,omitempty"`
+}
+
+func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
+	var reconnect time.Duration
+	var lockTimeout time.Duration
+	var staleLockAfter time.Duration
+	var probeMode string
+	var display string
+	var chromeCommand string
+	var chromeArgs []string
+
+	cmd := &cobra.Command{
+		Use:   "keepalive",
+		Short: "Idempotently keep the daemon healthy for cron",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if reconnect < 0 || lockTimeout < 0 || staleLockAfter < 0 {
+				return commandError(
+					"invalid_duration",
+					"usage",
+					"--reconnect, --lock-timeout, and --stale-lock-after must be non-negative",
+					ExitUsage,
+					[]string{"cdp daemon keepalive --auto-connect --json"},
+				)
+			}
+			if probeMode != "auto" && probeMode != "passive" && probeMode != "active" {
+				return commandError(
+					"invalid_probe_mode",
+					"usage",
+					"--probe must be passive, active, or auto",
+					ExitUsage,
+					[]string{"cdp daemon keepalive --probe auto --json"},
+				)
+			}
+
+			ctx, cancel := a.commandContextWithDefault(cmd, 60*time.Second)
+			defer cancel()
+
+			if err := a.applySelectedConnection(ctx); err != nil {
+				return err
+			}
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			connectionName := a.keepaliveConnectionName(ctx)
+			mode := a.connectionMode()
+			lockName := "daemon-keepalive-" + mode + "-" + connectionName
+			lock, acquired, existingLock, err := daemon.AcquireLock(ctx, store.Dir, lockName, lockTimeout, staleLockAfter, daemon.LockMetadata{
+				Name:  lockName,
+				Phase: "checking",
+			})
+			if err != nil {
+				return commandError(
+					"lock_failed",
+					"connection",
+					fmt.Sprintf("acquire keepalive lock: %v", err),
+					ExitConnection,
+					[]string{"cdp daemon status --json"},
+				)
+			}
+			if !acquired {
+				return a.render(ctx, fmt.Sprintf("keepalive\t%s\tlocked", connectionName), map[string]any{
+					"ok":         true,
+					"connection": connectionName,
+					"mode":       mode,
+					"state":      "locked",
+					"action":     "skipped",
+					"locked":     true,
+					"lock":       existingLock,
+				})
+			}
+			defer lock.Release()
+
+			initialActiveProbe := a.opts.activeProbe
+			if probeMode == "passive" || probeMode == "auto" {
+				a.opts.activeProbe = false
+			}
+			if probeMode == "active" {
+				a.opts.activeProbe = true
+			}
+			probe, err := a.browserProbe(ctx)
+			if err != nil {
+				return commandError(
+					"invalid_browser_url",
+					"usage",
+					err.Error(),
+					ExitUsage,
+					[]string{"cdp daemon keepalive --browser-url <browser-url> --json"},
+				)
+			}
+			status := a.daemonStatus(ctx, probe)
+			probeResult := map[string]any{"mode": probeMode, "result": probe.State}
+			runtimeHealthy, runtimeCheck := keepaliveRuntimeCheck(ctx, status)
+			if status.State == "running" && runtimeHealthy {
+				return a.render(ctx, fmt.Sprintf("keepalive\t%s\thealthy", connectionName), map[string]any{
+					"ok":         true,
+					"connection": connectionName,
+					"mode":       mode,
+					"state":      "healthy",
+					"action":     "none",
+					"locked":     false,
+					"daemon":     status,
+					"probe":      probeResult,
+					"health":     runtimeCheck,
+					"lock":       map[string]any{"name": lock.Metadata.Name, "acquired": true},
+				})
+			}
+			if status.State == "running" {
+				if err := lock.Update(ctx, "repairing_daemon"); err != nil {
+					return err
+				}
+				if _, _, err := daemon.StopRuntime(ctx, store.Dir); err != nil {
+					return commandError(
+						"connection_failed",
+						"connection",
+						fmt.Sprintf("stop unhealthy daemon before repair: %v", err),
+						ExitConnection,
+						[]string{"cdp daemon stop --json", "cdp daemon keepalive --json"},
+					)
+				}
+			}
+			if a.opts.autoConnect && probeMode == "passive" {
+				return a.render(ctx, fmt.Sprintf("keepalive\t%s\tpassive", connectionName), map[string]any{
+					"ok":         true,
+					"connection": connectionName,
+					"mode":       mode,
+					"state":      "passive",
+					"action":     "skipped",
+					"locked":     false,
+					"daemon":     status,
+					"probe":      probeResult,
+					"lock":       map[string]any{"name": lock.Metadata.Name, "acquired": true},
+				})
+			}
+
+			chrome := keepaliveChromeStatus{Skipped: true, Reason: "not required for browser_url mode"}
+			if a.opts.autoConnect {
+				if err := lock.Update(ctx, "launching_chrome"); err != nil {
+					return err
+				}
+				chrome, err = ensureChromeForKeepalive(ctx, display, chromeCommand, chromeArgs)
+				if err != nil {
+					return commandError(
+						"chrome_start_failed",
+						"connection",
+						fmt.Sprintf("ensure Chrome is running: %v", err),
+						ExitConnection,
+						[]string{"cdp daemon keepalive --chrome-command <command> --json", "open chrome://inspect/#remote-debugging"},
+					)
+				}
+				if err := lock.Update(ctx, "active_probe"); err != nil {
+					return err
+				}
+				a.opts.activeProbe = true
+			} else {
+				a.opts.activeProbe = initialActiveProbe
+			}
+
+			if err := lock.Update(ctx, "starting_daemon"); err != nil {
+				return err
+			}
+			result, err := a.runDaemonStart(ctx, daemonStartConfig{
+				reconnect:      reconnect,
+				connectionName: connectionName,
+				remember:       true,
+			})
+			if err != nil {
+				return err
+			}
+			action := "started"
+			state := "started"
+			if status.Runtime != nil {
+				action = "repaired"
+				state = "repaired"
+			}
+			if start, ok := result.data["start"].(map[string]any); ok {
+				if already, ok := start["already_running"].(bool); ok && already {
+					action = "none"
+					state = "healthy"
+				}
+			}
+			if err := lock.Update(ctx, state); err != nil {
+				return err
+			}
+			data := map[string]any{
+				"ok":         true,
+				"connection": connectionName,
+				"mode":       mode,
+				"state":      state,
+				"action":     action,
+				"locked":     false,
+				"daemon":     result.data["daemon"],
+				"start":      result.data["start"],
+				"chrome":     chrome,
+				"probe":      probeResult,
+				"previous":   status,
+				"health":     runtimeCheck,
+				"lock":       map[string]any{"name": lock.Metadata.Name, "acquired": true},
+			}
+			if conn, ok := result.data["connection"]; ok {
+				data["connection_detail"] = conn
+			}
+			return a.render(ctx, fmt.Sprintf("keepalive\t%s\t%s", connectionName, state), data)
+		},
+	}
+	cmd.Flags().DurationVar(&reconnect, "reconnect", 0, "daemon reconnect interval, such as 30s")
+	cmd.Flags().DurationVar(&lockTimeout, "lock-timeout", 0, "how long to wait for another keepalive lock; 0s skips immediately")
+	cmd.Flags().DurationVar(&staleLockAfter, "stale-lock-after", 10*time.Minute, "remove a keepalive lock older than this duration; 0 disables stale cleanup")
+	cmd.Flags().StringVar(&probeMode, "probe", "auto", "probe mode: passive, active, or auto")
+	cmd.Flags().StringVar(&display, "display", os.Getenv("DISPLAY"), "DISPLAY value to use when launching Chrome for auto-connect")
+	cmd.Flags().StringVar(&chromeCommand, "chrome-command", "google-chrome-stable", "Chrome command to launch for auto-connect repair; empty disables launch")
+	cmd.Flags().StringArrayVar(&chromeArgs, "chrome-args", nil, "extra Chrome argument; repeat for multiple arguments")
+	return cmd
+}
+
+func (a *app) keepaliveConnectionName(ctx context.Context) string {
+	if strings.TrimSpace(a.opts.connection) != "" {
+		return strings.TrimSpace(a.opts.connection)
+	}
+	store, err := a.stateStore()
+	if err == nil {
+		if file, loadErr := store.Load(ctx); loadErr == nil {
+			if conn, ok := state.CurrentConnection(file); ok && strings.TrimSpace(conn.Name) != "" {
+				return conn.Name
+			}
+		}
+	}
+	if a.opts.autoConnect {
+		return "default"
+	}
+	if strings.TrimSpace(a.opts.browserURL) != "" {
+		return "browser-url"
+	}
+	return "default"
+}
+
+func keepaliveRuntimeCheck(ctx context.Context, status daemon.Status) (bool, map[string]any) {
+	check := map[string]any{
+		"runtime_state": status.State,
+	}
+	if status.Runtime == nil {
+		check["ok"] = false
+		check["result"] = "no_runtime"
+		return false, check
+	}
+	if !status.ProcessRunning {
+		check["ok"] = false
+		check["result"] = "not_running"
+		return false, check
+	}
+	var result struct {
+		TargetInfos []cdp.TargetInfo `json:"targetInfos"`
+	}
+	if err := (daemon.RuntimeClient{Runtime: *status.Runtime}).Call(ctx, "Target.getTargets", map[string]any{}, &result); err != nil {
+		check["ok"] = false
+		check["result"] = "target_list_failed"
+		check["error"] = err.Error()
+		return false, check
+	}
+	check["ok"] = true
+	check["result"] = "target_list_ok"
+	check["target_count"] = len(result.TargetInfos)
+	return true, check
+}
+
+func ensureChromeForKeepalive(ctx context.Context, display, chromeCommand string, chromeArgs []string) (keepaliveChromeStatus, error) {
+	status := keepaliveChromeStatus{
+		Display: display,
+		Command: chromeCommand,
+		Args:    chromeArgs,
+		Checked: true,
+	}
+	if strings.TrimSpace(chromeCommand) == "" {
+		status.Skipped = true
+		status.Reason = "chrome launch disabled"
+		return status, nil
+	}
+	if chromeProcessRunning(ctx, chromeCommand) {
+		status.Running = true
+		return status, nil
+	}
+	cmd := exec.CommandContext(ctx, chromeCommand, chromeArgs...)
+	if strings.TrimSpace(display) != "" {
+		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return status, fmt.Errorf("open null device: %w", err)
+	}
+	defer devNull.Close()
+	cmd.Stdin = devNull
+	cmd.Stdout = devNull
+	cmd.Stderr = devNull
+	if err := cmd.Start(); err != nil {
+		return status, err
+	}
+	status.Launched = true
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	return status, nil
+}
+
+func chromeProcessRunning(ctx context.Context, chromeCommand string) bool {
+	pgrep, err := exec.LookPath("pgrep")
+	if err != nil {
+		return false
+	}
+	name := filepath.Base(chromeCommand)
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, pgrep, "-x", name)
+	return cmd.Run() == nil
 }
 
 func (a *app) newDaemonHoldCommand() *cobra.Command {
@@ -4872,6 +5199,11 @@ func commandExamples(path string) []string {
 			"cdp daemon restart --auto-connect --json",
 			"cdp daemon restart --debug --autoConnect --active-browser-probe --json",
 			"cdp daemon restart --browser-url <browser-url> --json",
+		},
+		"cdp daemon keepalive": {
+			"cdp daemon keepalive --auto-connect --display :0 --json",
+			"cdp daemon keepalive --browser-url <browser-url> --json",
+			"cdp daemon keepalive --connection default --probe auto --json",
 		},
 		"cdp connection remove": {
 			"cdp connection remove stale --json",

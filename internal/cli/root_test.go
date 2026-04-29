@@ -1516,6 +1516,103 @@ func TestDaemonStartBrowserURLJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonKeepaliveStartsBrowserURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	stateDir := t.TempDir()
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Daemon struct {
+			State string `json:"state"`
+		} `json:"daemon"`
+		Start struct {
+			Keepalive bool `json:"keepalive_started"`
+		} `json:"start"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.State != "started" || got.Action != "started" || got.Daemon.State != "running" || !got.Start.Keepalive {
+		t.Fatalf("daemon keepalive = %+v, want started running daemon", got)
+	}
+}
+
+func TestDaemonKeepaliveHealthyJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Daemon struct {
+			State string `json:"state"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.State != "healthy" || got.Action != "none" || got.Daemon.State != "running" {
+		t.Fatalf("daemon keepalive = %+v, want healthy running daemon", got)
+	}
+}
+
+func TestDaemonKeepaliveLockedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := t.TempDir()
+	lockDir := filepath.Join(stateDir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	lockPath := filepath.Join(lockDir, "daemon-keepalive-browser_url-browser-url.lock")
+	lockBody := []byte(`{"name":"daemon-keepalive-browser_url-browser-url","pid":1234,"started_at":"2099-01-01T00:00:00Z","phase":"active_probe"}` + "\n")
+	if err := os.WriteFile(lockPath, lockBody, 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Locked bool   `json:"locked"`
+		Lock   struct {
+			Phase string `json:"phase"`
+		} `json:"lock"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.State != "locked" || got.Action != "skipped" || !got.Locked || got.Lock.Phase != "active_probe" {
+		t.Fatalf("daemon keepalive = %+v, want locked skip", got)
+	}
+}
+
 func TestDaemonRestartBrowserURLJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

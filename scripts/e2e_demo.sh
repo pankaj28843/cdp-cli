@@ -80,6 +80,8 @@ fi
   | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .status == "pass")' >/dev/null
 "$binary" daemon start --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
+"$binary" daemon keepalive --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .state == "healthy" and .action == "none"' >/dev/null
 "$binary" pages --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" wait text "Ready from demo app" --state-dir "$state_dir/cdp-state" --timeout 5s --json \
