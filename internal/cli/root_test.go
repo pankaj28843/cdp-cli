@@ -157,6 +157,33 @@ func TestPagesJSON(t *testing.T) {
 	}
 }
 
+func TestPagesURLFilterJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+		{"targetId": "page-2", "type": "page", "title": "Docs", "url": "https://docs.example.test/", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"pages", "--browser-url", server.URL, "--url-contains", "docs", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Pages []struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages output is invalid JSON: %v", err)
+	}
+	if len(got.Pages) != 1 || got.Pages[0].ID != "page-2" {
+		t.Fatalf("pages output = %+v, want docs page only", got)
+	}
+}
+
 func TestProtocolMetadataJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
