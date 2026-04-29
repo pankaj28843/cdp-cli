@@ -210,6 +210,34 @@ func TestProtocolSearchJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolDescribeJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "describe", "Page.captureScreenshot", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol describe exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Entity struct {
+			Kind   string `json:"kind"`
+			Path   string `json:"path"`
+			Schema struct {
+				Name string `json:"name"`
+			} `json:"schema"`
+		} `json:"entity"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol describe output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Entity.Kind != "command" || got.Entity.Path != "Page.captureScreenshot" || got.Entity.Schema.Name != "captureScreenshot" {
+		t.Fatalf("protocol describe = %+v, want captureScreenshot schema", got)
+	}
+}
+
 func TestDaemonStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 

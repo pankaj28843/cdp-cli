@@ -632,7 +632,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 	cmd.AddCommand(a.newProtocolMetadataCommand())
 	cmd.AddCommand(a.newProtocolDomainsCommand())
 	cmd.AddCommand(a.newProtocolSearchCommand())
-	cmd.AddCommand(planned("describe <Domain.method>", "Describe a CDP method schema"))
+	cmd.AddCommand(a.newProtocolDescribeCommand())
 	cmd.AddCommand(planned("exec <Domain.method>", "Execute a raw CDP method"))
 	return cmd
 }
@@ -718,6 +718,38 @@ func (a *app) newProtocolSearchCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum number of search results")
 	return cmd
+}
+
+func (a *app) newProtocolDescribeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "describe <Domain.entity>",
+		Short: "Describe a CDP domain, command, event, or type schema",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			protocol, err := a.fetchProtocol(ctx)
+			if err != nil {
+				return err
+			}
+			desc, ok := cdp.DescribeEntity(protocol, args[0])
+			if !ok {
+				return commandError(
+					"unknown_protocol_entity",
+					"usage",
+					fmt.Sprintf("unknown protocol entity %q", args[0]),
+					ExitUsage,
+					[]string{"cdp protocol search <query> --json", "cdp protocol domains --json"},
+				)
+			}
+			human := fmt.Sprintf("%s\t%s", desc.Kind, desc.Path)
+			return a.render(ctx, human, map[string]any{
+				"ok":     true,
+				"entity": desc,
+			})
+		},
+	}
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
@@ -848,6 +880,9 @@ func commandExamples(path string) []string {
 		},
 		"cdp protocol search": {
 			"cdp protocol search screenshot --json",
+		},
+		"cdp protocol describe": {
+			"cdp protocol describe Page.captureScreenshot --json",
 		},
 		"cdp workflow verify": {
 			"cdp workflow verify https://example.com --json",

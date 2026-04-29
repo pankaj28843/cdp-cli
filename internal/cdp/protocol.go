@@ -56,6 +56,17 @@ type SearchResult struct {
 	Deprecated   bool   `json:"deprecated,omitempty"`
 }
 
+type EntityDescription struct {
+	Domain       string          `json:"domain"`
+	Kind         string          `json:"kind"`
+	Name         string          `json:"name"`
+	Path         string          `json:"path"`
+	Description  string          `json:"description,omitempty"`
+	Experimental bool            `json:"experimental,omitempty"`
+	Deprecated   bool            `json:"deprecated,omitempty"`
+	Schema       json.RawMessage `json:"schema"`
+}
+
 func FetchProtocol(ctx context.Context, protocolURL string) (Protocol, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, protocolURL, nil)
 	if err != nil {
@@ -125,6 +136,29 @@ func SearchProtocol(protocol Protocol, query string, limit int) []SearchResult {
 	return results
 }
 
+func DescribeEntity(protocol Protocol, selector string) (EntityDescription, bool) {
+	selector = strings.TrimSpace(selector)
+	for _, domain := range protocol.Domains {
+		if strings.EqualFold(selector, domain.Domain) {
+			return describeDomain(domain), true
+		}
+		prefix, name, ok := strings.Cut(selector, ".")
+		if !ok || !strings.EqualFold(prefix, domain.Domain) {
+			continue
+		}
+		if desc, ok := describeItem(domain, "command", domain.Commands, name); ok {
+			return desc, true
+		}
+		if desc, ok := describeItem(domain, "event", domain.Events, name); ok {
+			return desc, true
+		}
+		if desc, ok := describeItem(domain, "type", domain.Types, name); ok {
+			return desc, true
+		}
+	}
+	return EntityDescription{}, false
+}
+
 func countJSONArray(raw json.RawMessage) int {
 	if len(raw) == 0 {
 		return 0
@@ -134,6 +168,44 @@ func countJSONArray(raw json.RawMessage) int {
 		return 0
 	}
 	return len(values)
+}
+
+func describeDomain(domain Domain) EntityDescription {
+	schema, _ := json.Marshal(domain)
+	return EntityDescription{
+		Domain:       domain.Domain,
+		Kind:         "domain",
+		Name:         domain.Domain,
+		Path:         domain.Domain,
+		Description:  domain.Description,
+		Experimental: domain.Experimental,
+		Deprecated:   domain.Deprecated,
+		Schema:       schema,
+	}
+}
+
+func describeItem(domain Domain, kind string, raw json.RawMessage, name string) (EntityDescription, bool) {
+	var items []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &items) != nil {
+		return EntityDescription{}, false
+	}
+	for _, item := range items {
+		var meta ProtocolItem
+		if json.Unmarshal(item, &meta) != nil || !strings.EqualFold(meta.Name, name) {
+			continue
+		}
+		return EntityDescription{
+			Domain:       domain.Domain,
+			Kind:         kind,
+			Name:         meta.Name,
+			Path:         domain.Domain + "." + meta.Name,
+			Description:  meta.Description,
+			Experimental: meta.Experimental || domain.Experimental,
+			Deprecated:   meta.Deprecated || domain.Deprecated,
+			Schema:       item,
+		}, true
+	}
+	return EntityDescription{}, false
 }
 
 func searchItems(domain Domain, kind string, raw json.RawMessage, terms []string) []SearchResult {

@@ -65,6 +65,24 @@ func TestSearchProtocol(t *testing.T) {
 	}
 }
 
+func TestDescribeEntity(t *testing.T) {
+	protocol := cdp.Protocol{
+		Domains: []cdp.Domain{
+			{
+				Domain: "Page",
+				Commands: mustRawMessage(t, []map[string]any{
+					{"name": "captureScreenshot", "description": "Capture page pixels", "returns": []map[string]any{{"name": "data", "type": "string"}}},
+				}),
+			},
+		},
+	}
+
+	got, ok := cdp.DescribeEntity(protocol, "Page.captureScreenshot")
+	if !ok || got.Kind != "command" || got.Path != "Page.captureScreenshot" || len(got.Schema) == 0 {
+		t.Fatalf("DescribeEntity() = %+v ok=%v, want command schema", got, ok)
+	}
+}
+
 func mustRawMessage(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 
