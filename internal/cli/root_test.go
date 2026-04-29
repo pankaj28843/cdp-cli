@@ -394,6 +394,152 @@ func TestPageCloseAndActivateJSON(t *testing.T) {
 	}
 }
 
+func TestTextCommandJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"text", "main", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("text exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Text struct {
+			Selector string `json:"selector"`
+			Text     string `json:"text"`
+			Items    []struct {
+				Text string `json:"text"`
+			} `json:"items"`
+		} `json:"text"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("text output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Text.Selector != "main" || got.Text.Text != "Synthetic main text" || len(got.Text.Items) != 1 {
+		t.Fatalf("text output = %+v, want compact text result", got)
+	}
+}
+
+func TestHTMLCommandJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"html", "main", "--browser-url", server.URL, "--max-chars", "80", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("html exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		HTML struct {
+			Selector string `json:"selector"`
+			Items    []struct {
+				HTML string `json:"html"`
+			} `json:"items"`
+		} `json:"html"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("html output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.HTML.Selector != "main" || len(got.HTML.Items) != 1 || !strings.Contains(got.HTML.Items[0].HTML, "Synthetic") {
+		t.Fatalf("html output = %+v, want compact html result", got)
+	}
+}
+
+func TestDOMQueryJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"dom", "query", "button", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("dom query exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Query struct {
+			Selector string `json:"selector"`
+			Nodes    []struct {
+				UID  string `json:"uid"`
+				Role string `json:"role"`
+				Text string `json:"text"`
+			} `json:"nodes"`
+		} `json:"query"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("dom query output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Query.Selector != "button" || len(got.Query.Nodes) != 1 || got.Query.Nodes[0].Role != "button" {
+		t.Fatalf("dom query output = %+v, want button node", got)
+	}
+}
+
+func TestCSSInspectJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"css", "inspect", "main", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("css inspect exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK      bool `json:"ok"`
+		Inspect struct {
+			Selector string            `json:"selector"`
+			Styles   map[string]string `json:"styles"`
+		} `json:"inspect"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("css inspect output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Inspect.Selector != "main" || got.Inspect.Styles["display"] != "block" {
+		t.Fatalf("css inspect output = %+v, want display block", got)
+	}
+}
+
+func TestLayoutOverflowJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"layout", "overflow", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("layout overflow exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Overflow struct {
+			Count int `json:"count"`
+			Items []struct {
+				UID string `json:"uid"`
+			} `json:"items"`
+		} `json:"overflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("layout overflow output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Overflow.Count != 1 || got.Overflow.Items[0].UID == "" {
+		t.Fatalf("layout overflow output = %+v, want one overflow item", got)
+	}
+}
+
 func TestProtocolMetadataJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -1792,6 +1938,115 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		Expression string `json:"expression"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if strings.Contains(req.Expression, "__cdp_cli_text__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "main",
+					"count":    1,
+					"text":     "Synthetic main text",
+					"items": []map[string]any{{
+						"index":       0,
+						"tag":         "main",
+						"text":        "Synthetic main text",
+						"text_length": 19,
+						"rect":        map[string]any{"x": 0, "y": 0, "width": 600, "height": 200},
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_html__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "main",
+					"count":    1,
+					"items": []map[string]any{{
+						"index":       0,
+						"tag":         "main",
+						"html":        "<main>Synthetic main text</main>",
+						"html_length": 32,
+						"truncated":   false,
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_dom_query__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "button",
+					"count":    1,
+					"nodes": []map[string]any{{
+						"uid":        "css:button:0",
+						"index":      0,
+						"tag":        "button",
+						"id_attr":    "save",
+						"classes":    []string{"primary"},
+						"role":       "button",
+						"aria_label": "Save",
+						"text":       "Save changes",
+						"rect":       map[string]any{"x": 10, "y": 20, "width": 100, "height": 32},
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_css_inspect__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "main",
+					"found":    true,
+					"count":    1,
+					"tag":      "main",
+					"styles": map[string]string{
+						"display":  "block",
+						"position": "static",
+					},
+					"rect": map[string]any{"x": 0, "y": 0, "width": 600, "height": 200},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_layout_overflow__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "body *",
+					"count":    1,
+					"items": []map[string]any{{
+						"uid":           "overflow:0",
+						"index":         0,
+						"tag":           "div",
+						"text":          "Too wide",
+						"rect":          map[string]any{"x": 0, "y": 0, "width": 320, "height": 20},
+						"client_width":  320,
+						"scroll_width":  640,
+						"client_height": 20,
+						"scroll_height": 20,
+					}},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "querySelectorAll") {
 		return map[string]any{
 			"result": map[string]any{

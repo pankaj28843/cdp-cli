@@ -78,6 +78,54 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "result", Type: "runtime_object", Required: true, Description: "Runtime object with type, value, and description fields."},
 			},
 		},
+		"text": {
+			Name:        "text",
+			Description: "Compact visible text extracted from a CSS selector.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when text extraction completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "text", Type: "text_result", Required: true, Description: "Selector, joined text, and per-element text items."},
+				{Name: "items", Type: "array<text_item>", Required: true, Description: "Text items duplicated for jq convenience."},
+			},
+		},
+		"html": {
+			Name:        "html",
+			Description: "Compact HTML extracted from a CSS selector.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when HTML extraction completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "html", Type: "html_result", Required: true, Description: "Selector and truncated HTML items."},
+			},
+		},
+		"dom-query": {
+			Name:        "dom-query",
+			Description: "DOM node summaries for a CSS selector.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when DOM query completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "query", Type: "dom_query_result", Required: true, Description: "Selector, count, and node summaries."},
+				{Name: "nodes", Type: "array<dom_node>", Required: true, Description: "Node summaries duplicated for jq convenience."},
+			},
+		},
+		"css-inspect": {
+			Name:        "css-inspect",
+			Description: "Computed style and box data for the first matching element.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when CSS inspection completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "inspect", Type: "css_inspect_result", Required: true, Description: "Selector, found flag, styles, and layout box."},
+			},
+		},
+		"layout-overflow": {
+			Name:        "layout-overflow",
+			Description: "Elements whose scroll dimensions exceed their client boxes.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when overflow scan completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "overflow", Type: "layout_overflow_result", Required: true, Description: "Selector, count, and overflow items."},
+				{Name: "items", Type: "array<layout_overflow_item>", Required: true, Description: "Overflow items duplicated for jq convenience."},
+			},
+		},
 		"snapshot": {
 			Name:        "snapshot",
 			Description: "Visible text extracted from selected page elements.",
