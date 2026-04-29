@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -30,6 +31,17 @@ type RuntimeException struct {
 type EvaluateResult struct {
 	Object    RuntimeObject     `json:"object"`
 	Exception *RuntimeException `json:"exception,omitempty"`
+}
+
+type ScreenshotOptions struct {
+	Format   string
+	Quality  int
+	FullPage bool
+}
+
+type ScreenshotResult struct {
+	Data   []byte
+	Format string
 }
 
 func CreateTarget(ctx context.Context, endpoint, rawURL string) (string, error) {
@@ -139,4 +151,34 @@ func (s *PageSession) Evaluate(ctx context.Context, expression string, awaitProm
 		return EvaluateResult{}, err
 	}
 	return EvaluateResult{Object: result.Result, Exception: result.ExceptionDetails}, nil
+}
+
+func (s *PageSession) CaptureScreenshot(ctx context.Context, opts ScreenshotOptions) (ScreenshotResult, error) {
+	format := strings.TrimSpace(opts.Format)
+	if format == "" {
+		format = "png"
+	}
+	params := map[string]any{
+		"format": format,
+	}
+	if opts.Quality > 0 {
+		params["quality"] = opts.Quality
+	}
+	if opts.FullPage {
+		params["captureBeyondViewport"] = true
+	}
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := s.client.CallSession(ctx, s.SessionID, "Page.captureScreenshot", params, &result); err != nil {
+		return ScreenshotResult{}, err
+	}
+	if result.Data == "" {
+		return ScreenshotResult{}, fmt.Errorf("Page.captureScreenshot returned empty data")
+	}
+	data, err := base64.StdEncoding.DecodeString(result.Data)
+	if err != nil {
+		return ScreenshotResult{}, fmt.Errorf("decode screenshot data: %w", err)
+	}
+	return ScreenshotResult{Data: data, Format: format}, nil
 }

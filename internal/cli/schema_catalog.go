@@ -78,6 +78,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible text items duplicated for jq convenience."},
 			},
 		},
+		"screenshot": {
+			Name:        "screenshot",
+			Description: "Page screenshot saved as a local artifact.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when screenshot capture completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "screenshot", Type: "artifact", Required: true, Description: "Path, byte count, format, and capture mode."},
+				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Artifact references for agent workflows."},
+			},
+		},
 		"workflow-visible-posts": {
 			Name:        "workflow-visible-posts",
 			Description: "Open a feed page and return visible post-like text items.",

@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -68,7 +69,7 @@ func TestDescribeJSON(t *testing.T) {
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"screenshot", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"console", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitNotImplemented {
 		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
 	}
@@ -550,6 +551,53 @@ func TestSnapshotJSON(t *testing.T) {
 	}
 	if !got.OK || got.Snapshot.Selector != "article" || got.Snapshot.Count != 1 || len(got.Items) != 1 || got.Items[0].Text != "First visible synthetic post" {
 		t.Fatalf("snapshot output = %+v, want one article item", got)
+	}
+}
+
+func TestScreenshotJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
+	})
+	defer server.Close()
+
+	outPath := filepath.Join(t.TempDir(), "shot.png")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "--out", outPath, "--full-page", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("screenshot exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Screenshot struct {
+			Path     string `json:"path"`
+			Bytes    int    `json:"bytes"`
+			Format   string `json:"format"`
+			FullPage bool   `json:"full_page"`
+		} `json:"screenshot"`
+		Artifacts []struct {
+			Type string `json:"type"`
+			Path string `json:"path"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("screenshot output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "page-1" || got.Screenshot.Path != outPath || got.Screenshot.Bytes != len("synthetic screenshot") || got.Screenshot.Format != "png" || !got.Screenshot.FullPage {
+		t.Fatalf("screenshot output = %+v, want artifact metadata", got)
+	}
+	if len(got.Artifacts) != 1 || got.Artifacts[0].Type != "screenshot" || got.Artifacts[0].Path != outPath {
+		t.Fatalf("screenshot artifacts = %+v, want screenshot artifact", got.Artifacts)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(b) != "synthetic screenshot" {
+		t.Fatalf("screenshot file = %q, want synthetic screenshot", string(b))
 	}
 }
 
@@ -1477,6 +1525,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{"frameId": "frame-1"}
 			} else if req.Method == "Runtime.evaluate" {
 				resp["result"] = fakeRuntimeEvaluateResult(req.Params)
+			} else if req.Method == "Page.captureScreenshot" {
+				resp["result"] = map[string]any{
+					"data": base64.StdEncoding.EncodeToString([]byte("synthetic screenshot")),
+				}
 			} else if req.Method == "Browser.getVersion" {
 				resp["result"] = map[string]any{"product": "Chrome/Test", "protocolVersion": "1.3"}
 			} else {

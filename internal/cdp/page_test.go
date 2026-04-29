@@ -2,6 +2,7 @@ package cdp_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,14 @@ func TestCreateTargetAttachAndEvaluate(t *testing.T) {
 						"value": "Example App",
 					},
 				}
+			case "Page.captureScreenshot":
+				if req.SessionID != "session-1" {
+					t.Errorf("Page.captureScreenshot session = %q, want session-1", req.SessionID)
+				}
+				resp["sessionId"] = req.SessionID
+				resp["result"] = map[string]any{
+					"data": base64.StdEncoding.EncodeToString([]byte("synthetic screenshot")),
+				}
 			case "Target.detachFromTarget":
 				resp["result"] = map[string]any{}
 			default:
@@ -82,5 +91,12 @@ func TestCreateTargetAttachAndEvaluate(t *testing.T) {
 	}
 	if string(result.Object.Value) != `"Example App"` {
 		t.Fatalf("Evaluate value = %s, want Example App", result.Object.Value)
+	}
+	shot, err := session.CaptureScreenshot(context.Background(), cdp.ScreenshotOptions{Format: "png", FullPage: true})
+	if err != nil {
+		t.Fatalf("CaptureScreenshot returned error: %v", err)
+	}
+	if string(shot.Data) != "synthetic screenshot" || shot.Format != "png" {
+		t.Fatalf("CaptureScreenshot = %+v, want synthetic png data", shot)
 	}
 }

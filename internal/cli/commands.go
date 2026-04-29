@@ -1764,7 +1764,159 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 }
 
 func (a *app) newScreenshotCommand() *cobra.Command {
-	return planned("screenshot", "Capture a page or element screenshot")
+	var targetID string
+	var urlContains string
+	var outPath string
+	var format string
+	var quality int
+	var fullPage bool
+	cmd := &cobra.Command{
+		Use:   "screenshot",
+		Short: "Capture a page screenshot to a file",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			outPath = strings.TrimSpace(outPath)
+			if outPath == "" {
+				return commandError(
+					"missing_output_path",
+					"usage",
+					"screenshot requires --out <path>",
+					ExitUsage,
+					[]string{"cdp screenshot --out tmp/page.png --json"},
+				)
+			}
+			normalizedFormat, err := normalizeScreenshotFormat(format, outPath)
+			if err != nil {
+				return err
+			}
+			if quality < 0 || quality > 100 {
+				return commandError(
+					"invalid_screenshot_quality",
+					"usage",
+					"--quality must be between 0 and 100",
+					ExitUsage,
+					[]string{"cdp screenshot --format jpeg --quality 80 --out tmp/page.jpg --json"},
+				)
+			}
+			if normalizedFormat == "png" && quality > 0 {
+				return commandError(
+					"invalid_screenshot_quality",
+					"usage",
+					"--quality is only supported for jpeg and webp screenshots",
+					ExitUsage,
+					[]string{"cdp screenshot --format jpeg --quality 80 --out tmp/page.jpg --json"},
+				)
+			}
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{
+				Format:   normalizedFormat,
+				Quality:  quality,
+				FullPage: fullPage,
+			})
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("capture screenshot target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			writtenPath, err := writeArtifactFile(outPath, shot.Data)
+			if err != nil {
+				return err
+			}
+			screenshot := map[string]any{
+				"path":      writtenPath,
+				"bytes":     len(shot.Data),
+				"format":    shot.Format,
+				"full_page": fullPage,
+			}
+			if quality > 0 {
+				screenshot["quality"] = quality
+			}
+			human := fmt.Sprintf("%s\t%d bytes", writtenPath, len(shot.Data))
+			return a.render(ctx, human, map[string]any{
+				"ok":         true,
+				"target":     pageRow(target),
+				"screenshot": screenshot,
+				"artifacts": []map[string]any{
+					{"type": "screenshot", "path": writtenPath},
+				},
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&outPath, "out", "", "required path to write the screenshot image")
+	cmd.Flags().StringVar(&format, "format", "", "screenshot format: png, jpeg, or webp; defaults to file extension or png")
+	cmd.Flags().IntVar(&quality, "quality", 0, "jpeg/webp quality from 1 to 100; 0 uses Chrome's default")
+	cmd.Flags().BoolVar(&fullPage, "full-page", false, "capture beyond the viewport when Chrome supports it")
+	return cmd
+}
+
+func normalizeScreenshotFormat(format, outPath string) (string, error) {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" {
+		switch strings.ToLower(filepath.Ext(outPath)) {
+		case ".jpg", ".jpeg":
+			format = "jpeg"
+		case ".webp":
+			format = "webp"
+		default:
+			format = "png"
+		}
+	}
+	if format == "jpg" {
+		format = "jpeg"
+	}
+	switch format {
+	case "png", "jpeg", "webp":
+		return format, nil
+	default:
+		return "", commandError(
+			"invalid_screenshot_format",
+			"usage",
+			fmt.Sprintf("unsupported screenshot format %q", format),
+			ExitUsage,
+			[]string{"cdp screenshot --format png --out tmp/page.png --json", "cdp screenshot --format jpeg --out tmp/page.jpg --json"},
+		)
+	}
+}
+
+func writeArtifactFile(path string, data []byte) (string, error) {
+	cleanPath := filepath.Clean(path)
+	dir := filepath.Dir(cleanPath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", commandError(
+				"artifact_write_failed",
+				"io",
+				fmt.Sprintf("create artifact directory: %v", err),
+				ExitInternal,
+				[]string{"cdp screenshot --out tmp/page.png --json"},
+			)
+		}
+	}
+	if err := os.WriteFile(cleanPath, data, 0o600); err != nil {
+		return "", commandError(
+			"artifact_write_failed",
+			"io",
+			fmt.Sprintf("write artifact %s: %v", cleanPath, err),
+			ExitInternal,
+			[]string{"cdp screenshot --out tmp/page.png --json"},
+		)
+	}
+	return cleanPath, nil
 }
 
 func (a *app) newConsoleCommand() *cobra.Command {
@@ -2291,6 +2443,11 @@ func commandExamples(path string) []string {
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",
+		},
+		"cdp screenshot": {
+			"cdp screenshot --out tmp/page.png --json",
+			"cdp screenshot --target <target-id> --full-page --out tmp/page.png --json",
+			"cdp screenshot --url-contains localhost --out tmp/page.png --json",
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",
