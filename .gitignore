@@ -1,0 +1,10 @@
+bin/
+dist/
+/cdp
+coverage.out
+*.test
+*.log
+.env
+.env.*
+tmp/
+.cdp-cli/
