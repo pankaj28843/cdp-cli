@@ -323,6 +323,7 @@ func (a *app) newConnectionCommand() *cobra.Command {
 	cmd.AddCommand(a.newConnectionSelectCommand())
 	cmd.AddCommand(a.newConnectionRemoveCommand())
 	cmd.AddCommand(a.newConnectionCurrentCommand())
+	cmd.AddCommand(a.newConnectionResolveCommand())
 	return cmd
 }
 
@@ -566,6 +567,92 @@ func (a *app) newConnectionCurrentCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+func (a *app) newConnectionResolveCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve",
+		Short: "Show the effective browser connection for this command",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			conn, source, ok, err := a.resolveConnection(ctx)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					"no browser connection is configured",
+					ExitConnection,
+					[]string{"cdp connection add default --auto-connect --json", "cdp connection list --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("%s %s", source, conn.Name), map[string]any{
+				"ok":         true,
+				"source":     source,
+				"connection": conn,
+				"state_path": store.Path(),
+			})
+		},
+	}
+}
+
+func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, bool, error) {
+	if a.opts.browserURL != "" || a.opts.autoConnect {
+		conn := state.Connection{
+			Name:        "flags",
+			Mode:        a.connectionMode(),
+			BrowserURL:  a.opts.browserURL,
+			AutoConnect: a.opts.autoConnect,
+		}
+		if a.opts.autoConnect {
+			conn.Channel = a.opts.channel
+		}
+		return conn, "flags", true, nil
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return state.Connection{}, "", false, err
+	}
+	file, err := store.Load(ctx)
+	if err != nil {
+		return state.Connection{}, "", false, err
+	}
+	if a.opts.connection != "" {
+		conn, ok := state.ConnectionByName(file, a.opts.connection)
+		if !ok {
+			return state.Connection{}, "", false, commandError(
+				"unknown_connection",
+				"usage",
+				fmt.Sprintf("unknown connection %q", a.opts.connection),
+				ExitUsage,
+				[]string{"cdp connection list --json", "cdp connection add <name> --browser-url <browser-url> --json"},
+			)
+		}
+		return conn, "named", true, nil
+	}
+	cwd, cwdErr := filepath.Abs(".")
+	if cwdErr == nil {
+		if conn, ok := state.ProjectConnection(file, cwd); ok {
+			return conn, "project", true, nil
+		}
+	}
+	if file.Selected != "" {
+		conn, ok := state.ConnectionByName(file, file.Selected)
+		return conn, "selected", ok, nil
+	}
+	conn, ok := state.CurrentConnection(file)
+	if ok {
+		return conn, "single", true, nil
+	}
+	return state.Connection{}, "", false, nil
 }
 
 func (a *app) newTargetsCommand() *cobra.Command {
@@ -986,6 +1073,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp connection remove": {
 			"cdp connection remove stale --json",
+		},
+		"cdp connection resolve": {
+			"cdp connection resolve --json",
+			"cdp connection resolve --connection default --json",
 		},
 		"cdp targets": {
 			"cdp targets --json",

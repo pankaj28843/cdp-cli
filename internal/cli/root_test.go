@@ -356,6 +356,36 @@ func TestConnectionRemoveJSON(t *testing.T) {
 	}
 }
 
+func TestConnectionResolveJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "default", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "resolve", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection resolve exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK         bool   `json:"ok"`
+		Source     string `json:"source"`
+		Connection struct {
+			Name string `json:"name"`
+			Mode string `json:"mode"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection resolve output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Source != "selected" || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" {
+		t.Fatalf("connection resolve = %+v, want selected default", got)
+	}
+}
+
 func TestDoctorUsesSelectedConnection(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()

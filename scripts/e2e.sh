@@ -24,6 +24,7 @@ trap 'rm -rf "$state_dir"' EXIT
 
 "$binary" connection add default --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
 "$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default"' >/dev/null
+"$binary" connection resolve --state-dir "$state_dir" --json | jq -e '.ok == true and .source == "selected" and .connection.name == "default"' >/dev/null
 "$binary" connection list --state-dir "$state_dir" --json | jq -e '.ok == true and (.connections | length == 1)' >/dev/null
 "$binary" connection add extra --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "extra"' >/dev/null
 "$binary" connection remove extra --state-dir "$state_dir" --json | jq -e '.ok == true and .removed == "extra" and (.connections | length == 1)' >/dev/null
