@@ -3083,6 +3083,30 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	}
 }
 
+func TestDoctorCapabilitiesSchemaJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"schema", "doctor-capabilities", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("schema doctor-capabilities exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Schema struct {
+			Name   string `json:"name"`
+			Fields []struct {
+				Name string `json:"name"`
+			} `json:"fields"`
+		} `json:"schema"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("schema doctor-capabilities output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Schema.Name != "doctor-capabilities" || !schemaHasField(got.Schema.Fields, "capabilities") {
+		t.Fatalf("schema doctor-capabilities = %+v, want capabilities field", got)
+	}
+}
+
 func capabilityStatus(capabilities []struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`

@@ -34,6 +34,14 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "checks", Type: "array<check>", Required: true, Description: "Readiness checks with name, status, and message."},
 			},
 		},
+		"doctor-capabilities": {
+			Name:        "doctor-capabilities",
+			Description: "Implemented and planned cdp-cli capability areas.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when capability metadata was generated."},
+				{Name: "capabilities", Type: "array<capability>", Required: true, Description: "Capability rows with name, status, and related commands."},
+			},
+		},
 		"connection-add": {
 			Name:        "connection-add",
 			Description: "Saved browser connection metadata after adding or updating a named connection.",
