@@ -47,3 +47,14 @@ func TestSelectMissingConnection(t *testing.T) {
 		t.Fatal("SelectConnection returned true for missing connection")
 	}
 }
+
+func TestConnectionByName(t *testing.T) {
+	file := state.File{Connections: []state.Connection{
+		{Name: "default", Mode: "auto_connect"},
+		{Name: "local", Mode: "browser_url"},
+	}}
+	got, ok := state.ConnectionByName(file, "local")
+	if !ok || got.Name != "local" || got.Mode != "browser_url" {
+		t.Fatalf("ConnectionByName() = %+v ok=%v, want local browser_url", got, ok)
+	}
+}

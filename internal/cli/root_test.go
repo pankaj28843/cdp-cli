@@ -362,6 +362,62 @@ func TestDoctorUsesSelectedConnection(t *testing.T) {
 	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
 }
 
+func TestDoctorUsesNamedConnection(t *testing.T) {
+	notCDP := httptest.NewServer(http.NotFoundHandler())
+	defer notCDP.Close()
+	cdpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"Browser":              "Chrome/144.0",
+			"Protocol-Version":     "1.3",
+			"webSocketDebuggerUrl": "ws://example.test/devtools/browser/test",
+		})
+	}))
+	defer cdpServer.Close()
+
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "selected", "--browser-url", notCDP.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add selected exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "add", "cdp", "--browser-url", cdpServer.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add cdp exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"doctor", "--connection", "cdp", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Checks []struct {
+			Name           string `json:"name"`
+			Status         string `json:"status"`
+			ConnectionMode string `json:"connection_mode"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	for _, check := range got.Checks {
+		if check.Name == "browser_debug_endpoint" {
+			if check.Status != "pass" || check.ConnectionMode != "browser_url" {
+				t.Fatalf("browser check = %+v, want named cdp connection", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
+}
+
 func TestDoctorReportsDaemonConnectedWhenBrowserIsAvailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/json/version" {

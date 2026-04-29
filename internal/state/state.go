@@ -127,6 +127,15 @@ func CurrentConnection(file File) (Connection, bool) {
 	return Connection{}, false
 }
 
+func ConnectionByName(file File, name string) (Connection, bool) {
+	for _, conn := range file.Connections {
+		if conn.Name == name {
+			return conn, true
+		}
+	}
+	return Connection{}, false
+}
+
 func sortConnections(conns []Connection) {
 	sort.Slice(conns, func(i, j int) bool {
 		return conns[i].Name < conns[j].Name

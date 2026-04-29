@@ -35,6 +35,7 @@ type options struct {
 	userDataDir string
 	stateDir    string
 	activeProbe bool
+	connection  string
 }
 
 type app struct {
@@ -95,6 +96,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.PersistentFlags().StringVar(&a.opts.userDataDir, "user-data-dir", os.Getenv("CDP_USER_DATA_DIR"), "Chrome user data directory for --auto-connect")
 	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
 	root.PersistentFlags().BoolVar(&a.opts.activeProbe, "active-browser-probe", os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "1" || os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "true", "actively connect to Chrome during auto-connect checks; may trigger a Chrome remote-debugging prompt")
+	root.PersistentFlags().StringVar(&a.opts.connection, "connection", os.Getenv("CDP_CONNECTION"), "named browser connection from local state to use for this command")
 
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
@@ -189,7 +191,22 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	conn, ok := state.CurrentConnection(file)
+	var conn state.Connection
+	var ok bool
+	if a.opts.connection != "" {
+		conn, ok = state.ConnectionByName(file, a.opts.connection)
+		if !ok {
+			return commandError(
+				"unknown_connection",
+				"usage",
+				fmt.Sprintf("unknown connection %q", a.opts.connection),
+				ExitUsage,
+				[]string{"cdp connection list --json", "cdp connection add <name> --browser-url <browser-url> --json"},
+			)
+		}
+	} else {
+		conn, ok = state.CurrentConnection(file)
+	}
 	if !ok {
 		return nil
 	}

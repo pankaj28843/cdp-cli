@@ -71,6 +71,7 @@ func (a *app) newDescribeCommand() *cobra.Command {
 					"--user-data-dir",
 					"--state-dir",
 					"--active-browser-probe",
+					"--connection",
 				},
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)

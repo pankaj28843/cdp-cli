@@ -15,6 +15,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" version --json | jq -e '.version and .commit and .date' >/dev/null
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
 "$binary" describe --jq '.globals | index("--json")' >/dev/null
+"$binary" describe --jq '.globals | index("--connection")' >/dev/null
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
