@@ -399,6 +399,86 @@ func TestDaemonStatusJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonStartBrowserURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "start", "--browser-url", server.URL, "--connection-name", "local", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon start exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Daemon struct {
+			State          string `json:"state"`
+			ConnectionMode string `json:"connection_mode"`
+		} `json:"daemon"`
+		Start struct {
+			ConnectionSaved bool   `json:"connection_saved"`
+			ConnectionName  string `json:"connection_name"`
+		} `json:"start"`
+		Connection struct {
+			Name       string `json:"name"`
+			Mode       string `json:"mode"`
+			BrowserURL string `json:"browser_url"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon start output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Daemon.State != "connected" || got.Daemon.ConnectionMode != "browser_url" || !got.Start.ConnectionSaved || got.Start.ConnectionName != "local" {
+		t.Fatalf("daemon start = %+v, want connected saved browser-url connection", got)
+	}
+	if got.Connection.Name != "local" || got.Connection.Mode != "browser_url" || got.Connection.BrowserURL != server.URL {
+		t.Fatalf("daemon start connection = %+v, want saved local browser-url", got.Connection)
+	}
+}
+
+func TestDaemonStartAutoConnectPermissionPendingJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	userDataDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "start", "--autoConnect", "--user-data-dir", userDataDir, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitPermission {
+		t.Fatalf("daemon start exit code = %d, want %d; stderr=%s", code, cli.ExitPermission, errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		ErrClass            string   `json:"err_class"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon start error output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "permission_pending" || got.ErrClass != "permission" || !containsString(got.RemediationCommands, "open chrome://inspect/#remote-debugging") {
+		t.Fatalf("daemon start error = %+v, want permission_pending with Chrome remediation", got)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "current", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection current exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var current struct {
+		Connection struct {
+			Name string `json:"name"`
+			Mode string `json:"mode"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &current); err != nil {
+		t.Fatalf("connection current output is invalid JSON: %v", err)
+	}
+	if current.Connection.Name != "default" || current.Connection.Mode != "auto_connect" {
+		t.Fatalf("connection current = %+v, want remembered auto_connect default", current.Connection)
+	}
+}
+
 func TestConnectionMemoryJSON(t *testing.T) {
 	stateDir := t.TempDir()
 	var out, errOut bytes.Buffer
@@ -1025,6 +1105,15 @@ func TestAutoConnectPagesRequiresActiveProbe(t *testing.T) {
 	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "--active-browser-probe") {
 		t.Fatalf("pages error = %+v, want active probe remediation", got)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {

@@ -18,12 +18,25 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --jq '.globals | index("--json")' >/dev/null
 "$binary" describe --jq '.globals | index("--compact")' >/dev/null
 "$binary" describe --jq '.globals | index("--connection")' >/dev/null
+"$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
+
+mkdir -p "$state_dir/user-data"
+set +e
+daemon_start_output="$("$binary" daemon start --autoConnect --user-data-dir "$state_dir/user-data" --state-dir "$state_dir" --json 2>/tmp/cdp-cli-daemon-start.err)"
+daemon_start_code=$?
+set -e
+if [[ "$daemon_start_code" -ne 4 ]]; then
+  echo "daemon start exit code = $daemon_start_code, want 4 while auto-connect permission is pending" >&2
+  exit 1
+fi
+printf '%s\n' "$daemon_start_output" | jq -e '.ok == false and .code == "permission_pending" and (.remediation_commands | index("open chrome://inspect/#remote-debugging"))' >/dev/null
+"$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default" and .connection.mode == "auto_connect"' >/dev/null
 
 "$binary" connection add default --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
 "$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default"' >/dev/null

@@ -6,7 +6,10 @@ The goal is a long-running local CDP process that can attach to a user-approved 
 
 ## Status
 
-Initial scaffold. The command tree, JSON/error conventions, and project layout are in place. Browser attachment and CDP execution are planned next.
+Early implementation. The command tree, JSON/error conventions, connection
+memory, browser readiness probes, target/page listing, raw CDP discovery, and
+raw CDP execution are in place. High-level page workflows and durable daemon
+process management are planned next.
 
 ## Intended Shape
 
