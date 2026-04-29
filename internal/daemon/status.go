@@ -43,6 +43,13 @@ func Snapshot(connectionMode string, autoConnect bool, probe browser.ProbeResult
 				"cdp doctor --auto-connect --json",
 			}
 		}
+	case "permission_pending":
+		status.State = "permission_pending"
+		status.Message = probe.Message
+		status.NextCommands = []string{
+			"cdp daemon start --auto-connect --help",
+			"cdp doctor --auto-connect --json",
+		}
 	case "unreachable":
 		status.State = "chrome_unavailable"
 		status.Message = "browser endpoint is not reachable"

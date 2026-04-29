@@ -31,6 +31,8 @@ type options struct {
 	config      string
 	browserURL  string
 	autoConnect bool
+	channel     string
+	userDataDir string
 	stateDir    string
 }
 
@@ -88,6 +90,8 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.PersistentFlags().StringVar(&a.opts.browserURL, "browserUrl", os.Getenv("CDP_BROWSER_URL"), "alias for --browser-url")
 	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "auto-connect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "request Chrome's default-profile remote debugging flow when supported")
 	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "autoConnect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "alias for --auto-connect")
+	root.PersistentFlags().StringVar(&a.opts.channel, "channel", envDefault("CDP_CHANNEL", "stable"), "Chrome channel for --auto-connect: stable, beta, canary, or dev")
+	root.PersistentFlags().StringVar(&a.opts.userDataDir, "user-data-dir", os.Getenv("CDP_USER_DATA_DIR"), "Chrome user data directory for --auto-connect")
 	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
 
 	root.AddCommand(a.newVersionCommand())
@@ -114,7 +118,15 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 }
 
 func (a *app) browserProbe(ctx context.Context) (browser.ProbeResult, error) {
-	return browser.Probe(ctx, a.opts.browserURL)
+	if err := a.applySelectedConnection(ctx); err != nil {
+		return browser.ProbeResult{}, err
+	}
+	return browser.Probe(ctx, browser.ProbeOptions{
+		BrowserURL:  a.opts.browserURL,
+		AutoConnect: a.opts.autoConnect,
+		Channel:     a.opts.channel,
+		UserDataDir: a.opts.userDataDir,
+	})
 }
 
 func (a *app) connectionMode() string {
@@ -130,6 +142,37 @@ func (a *app) daemonStatus(probe browser.ProbeResult) daemon.Status {
 
 func (a *app) stateStore() (state.Store, error) {
 	return state.NewStore(a.opts.stateDir)
+}
+
+func (a *app) applySelectedConnection(ctx context.Context) error {
+	if a.opts.browserURL != "" || a.opts.autoConnect {
+		return nil
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return err
+	}
+	file, err := store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	conn, ok := state.CurrentConnection(file)
+	if !ok {
+		return nil
+	}
+	a.opts.browserURL = conn.BrowserURL
+	a.opts.autoConnect = conn.AutoConnect || conn.Mode == "auto_connect"
+	if conn.Channel != "" {
+		a.opts.channel = conn.Channel
+	}
+	return nil
+}
+
+func envDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func (a *app) commandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {

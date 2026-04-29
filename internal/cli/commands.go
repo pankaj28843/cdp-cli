@@ -63,6 +63,8 @@ func (a *app) newDescribeCommand() *cobra.Command {
 					"--browserUrl",
 					"--auto-connect",
 					"--autoConnect",
+					"--channel",
+					"--user-data-dir",
 					"--state-dir",
 				},
 			}
@@ -103,12 +105,16 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				status = "pass"
 			case "not_configured":
 				status = "pending"
+			case "permission_pending":
+				status = "pending"
 			case "listening_not_cdp", "missing_browser_websocket", "invalid_response":
 				status = "warn"
 				if a.opts.autoConnect && probe.State == "listening_not_cdp" {
 					status = "pending"
 					probe.Message = "auto-connect endpoint is listening, but a CDP session is not established yet"
 				}
+			case "stale_state":
+				status = "warn"
 			default:
 				status = "fail"
 			}
@@ -330,8 +336,10 @@ func (a *app) newConnectionAddCommand() *cobra.Command {
 				Mode:        mode,
 				BrowserURL:  browserURL,
 				AutoConnect: autoConnect,
-				Channel:     channel,
 				Project:     project,
+			}
+			if autoConnect {
+				conn.Channel = channel
 			}
 			file = state.UpsertConnection(file, conn)
 			if file.Selected == "" {

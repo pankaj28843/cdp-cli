@@ -72,7 +72,7 @@ func TestPlannedCommandJSONError(t *testing.T) {
 func TestDaemonStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"daemon", "status", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"daemon", "status", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -125,6 +125,47 @@ func TestConnectionMemoryJSON(t *testing.T) {
 	if !got.OK || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" || !got.Connection.AutoConnect {
 		t.Fatalf("connection current = %+v, want default auto_connect", got)
 	}
+}
+
+func TestDoctorUsesSelectedConnection(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "local", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"doctor", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Checks []struct {
+			Name           string `json:"name"`
+			ConnectionMode string `json:"connection_mode"`
+			Details        struct {
+				State string `json:"state"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	for _, check := range got.Checks {
+		if check.Name == "browser_debug_endpoint" {
+			if check.ConnectionMode != "browser_url" || check.Details.State != "listening_not_cdp" {
+				t.Fatalf("browser check = %+v, want selected browser_url state", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
 }
 
 func TestExplainErrorJSON(t *testing.T) {
@@ -259,11 +300,8 @@ func TestDoctorBrowserURLWarnsForNonCDPEndpoint(t *testing.T) {
 }
 
 func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
-	server := httptest.NewServer(http.NotFoundHandler())
-	defer server.Close()
-
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"doctor", "--auto-connect", "--browserUrl", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"doctor", "--auto-connect", "--user-data-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -285,7 +323,7 @@ func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
 	}
 	for _, check := range got.Checks {
 		if check.Name == "browser_debug_endpoint" {
-			if check.Status != "pending" || check.ConnectionMode != "auto_connect" || !check.RequiresUserAllow || !check.DefaultProfileFlow || check.Details.State != "listening_not_cdp" {
+			if check.Status != "pending" || check.ConnectionMode != "auto_connect" || !check.RequiresUserAllow || !check.DefaultProfileFlow || check.Details.State != "permission_pending" {
 				t.Fatalf("browser check = %+v, want auto_connect pending permission flow", check)
 			}
 			return
