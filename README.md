@@ -9,8 +9,9 @@ The goal is a long-running local CDP process that can attach to a user-approved 
 Early implementation. The command tree, JSON/error conventions, connection
 memory, browser readiness probes, target/page listing, page open/eval/snapshot
 commands, screenshot artifact capture, console/log capture, raw CDP discovery,
-raw CDP execution, and a default-profile auto-connect keepalive daemon with
-local command routing plus a cron-safe `daemon keepalive` command are in place.
+raw CDP execution, Web Storage/cookie/Cache Storage controls, and a
+default-profile auto-connect keepalive daemon with local command routing plus a
+cron-safe `daemon keepalive` command are in place.
 
 ## Intended Shape
 
@@ -25,6 +26,8 @@ cdp eval 'document.title' --json
 cdp snapshot --interactive-only --limit 50 --json
 cdp screenshot --out tmp/page.png --json
 cdp console --errors --wait 2s --json
+cdp storage cache list --url-contains localhost --json
+cdp storage cache get app-cache http://localhost:5173/api/me --json
 cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
 cdp protocol search screenshot --json
 cdp protocol exec Browser.getVersion --json

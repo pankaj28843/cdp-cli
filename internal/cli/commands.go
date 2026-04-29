@@ -4521,6 +4521,7 @@ func (a *app) newStorageCommand() *cobra.Command {
 	cmd.AddCommand(a.newStorageSnapshotCommand())
 	cmd.AddCommand(a.newStorageDiffCommand())
 	cmd.AddCommand(a.newStorageCookiesCommand())
+	cmd.AddCommand(a.newStorageCacheCommand())
 	return cmd
 }
 
@@ -4559,7 +4560,7 @@ func (a *app) newStorageListCommand() *cobra.Command {
 		},
 	}
 	addStorageTargetFlags(cmd, &targetID, &urlContains)
-	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,quota,all")
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,quota,all")
 	return cmd
 }
 
@@ -4761,7 +4762,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 		},
 	}
 	addStorageTargetFlags(cmd, &targetID, &urlContains)
-	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,quota,all")
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,quota,all")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON storage snapshot artifact")
 	cmd.Flags().StringVar(&redact, "redact", "none", "redaction preset for output and artifacts: none or safe")
 	return cmd
@@ -4976,12 +4977,197 @@ func (a *app) newStorageCookiesDeleteCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newStorageCacheCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cache",
+		Short: "List, read, write, delete, and clear Cache Storage entries",
+	}
+	cmd.AddCommand(a.newStorageCacheListCommand())
+	cmd.AddCommand(a.newStorageCacheGetCommand())
+	cmd.AddCommand(a.newStorageCachePutCommand())
+	cmd.AddCommand(a.newStorageCacheDeleteCommand())
+	cmd.AddCommand(a.newStorageCacheClearCommand())
+	return cmd
+}
+
+func (a *app) newStorageCacheListCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var cacheName string
+	var requestURLContains string
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List Cache Storage caches and request metadata",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runCacheStorageOperation(ctx, session, cacheStorageListExpression(cacheName, requestURLContains))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("cache-storage\tcaches=%d\trequests=%d", len(result.Caches), result.RequestCount)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&cacheName, "cache", "", "limit output to one Cache Storage cache name")
+	cmd.Flags().StringVar(&requestURLContains, "request-url-contains", "", "only include cached requests whose URL contains this text")
+	return cmd
+}
+
+func (a *app) newStorageCacheGetCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var maxBodyBytes int
+	cmd := &cobra.Command{
+		Use:   "get <cache> <request-url>",
+		Short: "Read one Cache Storage response",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if maxBodyBytes < 0 {
+				return commandError("usage", "usage", "--max-body-bytes must be non-negative", ExitUsage, []string{"cdp storage cache get app-cache https://example.com/api --max-body-bytes 4096 --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runCacheStorageOperation(ctx, session, cacheStorageGetExpression(args[0], args[1], maxBodyBytes))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("cache-storage\t%s\tfound=%t", result.Cache, result.Found)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().IntVar(&maxBodyBytes, "max-body-bytes", 4096, "maximum cached response body bytes to include inline")
+	return cmd
+}
+
+func (a *app) newStorageCachePutCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var contentType string
+	var status int
+	cmd := &cobra.Command{
+		Use:   "put <cache> <request-url> <body|@file>",
+		Short: "Create or replace one Cache Storage response",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if status < 200 || status > 599 {
+				return commandError("usage", "usage", "--status must be between 200 and 599", ExitUsage, []string{"cdp storage cache put app-cache https://example.com/api '{\"ok\":true}' --status 200 --json"})
+			}
+			body, source, err := readStorageValueInput(args[2])
+			if err != nil {
+				return err
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runCacheStorageOperation(ctx, session, cacheStoragePutExpression(args[0], args[1], body, contentType, status))
+			if err != nil {
+				return err
+			}
+			result.BodySource = source
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("cache-storage\t%s\tput\t%s", result.Cache, result.RequestURL)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&contentType, "content-type", "text/plain; charset=utf-8", "Content-Type header for the cached response")
+	cmd.Flags().IntVar(&status, "status", 200, "HTTP status for the cached response")
+	return cmd
+}
+
+func (a *app) newStorageCacheDeleteCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:     "delete <cache> <request-url>",
+		Aliases: []string{"rm"},
+		Short:   "Delete one Cache Storage request entry",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runCacheStorageOperation(ctx, session, cacheStorageDeleteExpression(args[0], args[1]))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("cache-storage\t%s\tdeleted=%t", result.Cache, result.Deleted)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	return cmd
+}
+
+func (a *app) newStorageCacheClearCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "clear [cache]",
+		Short: "Delete one Cache Storage cache or all caches",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cacheName := ""
+			if len(args) > 0 {
+				cacheName = args[0]
+			}
+			if strings.TrimSpace(cacheName) == "" && !all {
+				return commandError("usage", "usage", "cache name or --all is required", ExitUsage, []string{"cdp storage cache clear app-cache --json", "cdp storage cache clear --all --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runCacheStorageOperation(ctx, session, cacheStorageClearExpression(cacheName, all))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("cache-storage\tcleared=%d", len(result.Cleared))
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().BoolVar(&all, "all", false, "delete every Cache Storage cache for the selected origin")
+	return cmd
+}
+
 type storageSnapshot struct {
 	URL            string              `json:"url,omitempty"`
 	Origin         string              `json:"origin,omitempty"`
 	LocalStorage   storageAreaSnapshot `json:"local_storage"`
 	SessionStorage storageAreaSnapshot `json:"session_storage"`
 	Cookies        []map[string]any    `json:"cookies,omitempty"`
+	CacheStorage   []cacheStorageCache `json:"cache_storage,omitempty"`
 	Quota          map[string]any      `json:"quota,omitempty"`
 }
 
@@ -5015,10 +5201,59 @@ type webStorageOperationResult struct {
 	Previous string `json:"previous,omitempty"`
 }
 
+type cacheStorageOperationResult struct {
+	URL          string                `json:"url,omitempty"`
+	Origin       string                `json:"origin,omitempty"`
+	Operation    string                `json:"operation"`
+	Available    bool                  `json:"available"`
+	Found        bool                  `json:"found,omitempty"`
+	Cache        string                `json:"cache,omitempty"`
+	RequestURL   string                `json:"request_url,omitempty"`
+	RequestCount int                   `json:"request_count,omitempty"`
+	CacheNames   []string              `json:"cache_names,omitempty"`
+	Caches       []cacheStorageCache   `json:"caches,omitempty"`
+	Response     *cacheStorageResponse `json:"response,omitempty"`
+	Body         *cacheStorageBody     `json:"body,omitempty"`
+	BodySource   string                `json:"body_source,omitempty"`
+	Created      bool                  `json:"created,omitempty"`
+	Updated      bool                  `json:"updated,omitempty"`
+	Deleted      bool                  `json:"deleted,omitempty"`
+	Cleared      []string              `json:"cleared,omitempty"`
+}
+
+type cacheStorageCache struct {
+	Name     string                `json:"name"`
+	Count    int                   `json:"count"`
+	Requests []cacheStorageRequest `json:"requests"`
+	Error    string                `json:"error,omitempty"`
+}
+
+type cacheStorageRequest struct {
+	URL      string                `json:"url"`
+	Method   string                `json:"method,omitempty"`
+	Response *cacheStorageResponse `json:"response,omitempty"`
+	Error    string                `json:"error,omitempty"`
+}
+
+type cacheStorageResponse struct {
+	Status      int    `json:"status,omitempty"`
+	StatusText  string `json:"status_text,omitempty"`
+	Type        string `json:"type,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+}
+
+type cacheStorageBody struct {
+	Text     string `json:"text,omitempty"`
+	Bytes    int    `json:"bytes"`
+	Omitted  bool   `json:"omitted,omitempty"`
+	MaxBytes int    `json:"max_bytes,omitempty"`
+}
+
 type storageDiffReport struct {
 	LocalStorage   storageAreaDiff `json:"local_storage"`
 	SessionStorage storageAreaDiff `json:"session_storage"`
 	Cookies        storageAreaDiff `json:"cookies"`
+	CacheStorage   storageAreaDiff `json:"cache_storage"`
 	Summary        map[string]int  `json:"summary"`
 }
 
@@ -5041,8 +5276,11 @@ func addStorageTargetFlags(cmd *cobra.Command, targetID, urlContains *string) {
 
 func parseStorageInclude(value string) (map[string]bool, error) {
 	set := parseCSVSet(value)
-	if len(set) == 0 || set["all"] {
+	if len(set) == 0 {
 		return defaultStorageIncludeSet(), nil
+	}
+	if set["all"] {
+		return allStorageIncludeSet(), nil
 	}
 	out := map[string]bool{}
 	for key := range set {
@@ -5053,10 +5291,12 @@ func parseStorageInclude(value string) (map[string]bool, error) {
 			out["sessionStorage"] = true
 		case "cookies", "cookie":
 			out["cookies"] = true
+		case "cache", "cachestorage", "cache_storage", "caches":
+			out["cacheStorage"] = true
 		case "quota", "usage":
 			out["quota"] = true
 		default:
-			return nil, commandError("usage", "usage", fmt.Sprintf("unknown storage include %q", key), ExitUsage, []string{"cdp storage list --include localStorage,sessionStorage,cookies --json"})
+			return nil, commandError("usage", "usage", fmt.Sprintf("unknown storage include %q", key), ExitUsage, []string{"cdp storage list --include localStorage,sessionStorage,cookies,cache --json"})
 		}
 	}
 	return out, nil
@@ -5064,6 +5304,10 @@ func parseStorageInclude(value string) (map[string]bool, error) {
 
 func defaultStorageIncludeSet() map[string]bool {
 	return map[string]bool{"localStorage": true, "sessionStorage": true, "cookies": true, "quota": true}
+}
+
+func allStorageIncludeSet() map[string]bool {
+	return map[string]bool{"localStorage": true, "sessionStorage": true, "cookies": true, "cacheStorage": true, "quota": true}
 }
 
 func normalizeWebStorageBackend(value string) (webStorageBackend, error) {
@@ -5101,6 +5345,14 @@ func collectStorageSnapshot(ctx context.Context, session *cdp.PageSession, targe
 			collectorErrors = append(collectorErrors, collectorError("cookies", err))
 		} else {
 			snapshot.Cookies = cookies
+		}
+	}
+	if includeSet["cacheStorage"] {
+		cacheResult, err := runCacheStorageOperation(ctx, session, cacheStorageListExpression("", ""))
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("cache_storage", err))
+		} else {
+			snapshot.CacheStorage = cacheResult.Caches
 		}
 	}
 	if includeSet["quota"] && snapshot.Origin != "" {
@@ -5283,6 +5535,215 @@ func webStorageOperationExpression(op, area, key, value string) string {
 })()`, op, jsStringLiteral(area), jsStringLiteral(key), jsStringLiteral(value), op, jsStringLiteral(area), op, jsStringLiteral(area), op, jsStringLiteral(area), op, jsStringLiteral(area))
 }
 
+func runCacheStorageOperation(ctx context.Context, session *cdp.PageSession, expression string) (cacheStorageOperationResult, error) {
+	result, err := session.Evaluate(ctx, expression, true)
+	if err != nil {
+		return cacheStorageOperationResult{}, storageCommandFailed("inspect cache storage", session.TargetID, err)
+	}
+	if result.Exception != nil {
+		return cacheStorageOperationResult{}, commandError("javascript_exception", "runtime", fmt.Sprintf("cache storage javascript exception: %s", result.Exception.Text), ExitCheckFailed, []string{"cdp storage cache list --json"})
+	}
+	var opResult cacheStorageOperationResult
+	if err := json.Unmarshal(result.Object.Value, &opResult); err != nil {
+		return cacheStorageOperationResult{}, commandError("invalid_storage_result", "runtime", fmt.Sprintf("decode cache storage result: %v", err), ExitCheckFailed, []string{"cdp storage cache list --json"})
+	}
+	return opResult, nil
+}
+
+func cacheStorageListExpression(cacheName, requestURLContains string) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_cache_storage_list__";
+  if (typeof caches === "undefined") {
+    throw new Error("CacheStorage is not available in this page context");
+  }
+  const requestedCache = %s;
+  const requestURLContains = %s;
+  const responseMeta = (response) => response ? ({
+    status: response.status,
+    status_text: response.statusText,
+    type: response.type,
+    content_type: response.headers.get("content-type") || ""
+  }) : null;
+  const allNames = (await caches.keys()).sort((a, b) => a.localeCompare(b));
+  const names = requestedCache ? allNames.filter((name) => name === requestedCache) : allNames;
+  const cacheRows = [];
+  let requestCount = 0;
+  for (const name of names) {
+    const cache = await caches.open(name);
+    const requests = await cache.keys();
+    const rows = [];
+    for (const request of requests) {
+      if (requestURLContains && !request.url.includes(requestURLContains)) {
+        continue;
+      }
+      const row = {url: request.url, method: request.method};
+      try {
+        const response = await cache.match(request);
+        if (response) {
+          row.response = responseMeta(response);
+        }
+      } catch (error) {
+        row.error = String(error && error.message || error);
+      }
+      rows.push(row);
+    }
+    rows.sort((a, b) => a.url.localeCompare(b.url));
+    requestCount += rows.length;
+    cacheRows.push({name, count: rows.length, requests: rows});
+  }
+  return {
+    url: location.href,
+    origin: location.origin,
+    operation: "list",
+    available: true,
+    found: requestedCache ? allNames.includes(requestedCache) : true,
+    cache: requestedCache,
+    cache_names: allNames,
+    request_count: requestCount,
+    caches: cacheRows
+  };
+})()`, jsStringLiteral(cacheName), jsStringLiteral(requestURLContains))
+}
+
+func cacheStorageGetExpression(cacheName, requestURL string, maxBodyBytes int) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_cache_storage_get__";
+  if (typeof caches === "undefined") {
+    throw new Error("CacheStorage is not available in this page context");
+  }
+  const cacheName = %s;
+  const request = new Request(%s);
+  const maxBodyBytes = %d;
+  const responseMeta = (response) => response ? ({
+    status: response.status,
+    status_text: response.statusText,
+    type: response.type,
+    content_type: response.headers.get("content-type") || ""
+  }) : null;
+  const truncate = (text) => {
+    const encoded = new TextEncoder().encode(text);
+    if (encoded.length <= maxBodyBytes) {
+      return {text, bytes: encoded.length, omitted: false, max_bytes: maxBodyBytes};
+    }
+    return {
+      text: new TextDecoder().decode(encoded.slice(0, maxBodyBytes)),
+      bytes: encoded.length,
+      omitted: true,
+      max_bytes: maxBodyBytes
+    };
+  };
+  const allNames = await caches.keys();
+  if (!allNames.includes(cacheName)) {
+    return {url: location.href, origin: location.origin, operation: "get", available: true, found: false, cache: cacheName, request_url: request.url};
+  }
+  const cache = await caches.open(cacheName);
+  const response = await cache.match(request);
+  if (!response) {
+    return {url: location.href, origin: location.origin, operation: "get", available: true, found: false, cache: cacheName, request_url: request.url};
+  }
+  const text = await response.clone().text();
+  return {
+    url: location.href,
+    origin: location.origin,
+    operation: "get",
+    available: true,
+    found: true,
+    cache: cacheName,
+    request_url: request.url,
+    response: responseMeta(response),
+    body: truncate(text)
+  };
+})()`, jsStringLiteral(cacheName), jsStringLiteral(requestURL), maxBodyBytes)
+}
+
+func cacheStoragePutExpression(cacheName, requestURL, body, contentType string, status int) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_cache_storage_put__";
+  if (typeof caches === "undefined") {
+    throw new Error("CacheStorage is not available in this page context");
+  }
+  const cacheName = %s;
+  const request = new Request(%s);
+  const body = %s;
+  const contentType = %s;
+  const headers = {};
+  if (contentType) {
+    headers["Content-Type"] = contentType;
+  }
+  const responseMeta = (response) => response ? ({
+    status: response.status,
+    status_text: response.statusText,
+    type: response.type,
+    content_type: response.headers.get("content-type") || ""
+  }) : null;
+  const cache = await caches.open(cacheName);
+  const previous = await cache.match(request);
+  await cache.put(request, new Response(body, {status: %d, headers}));
+  const response = await cache.match(request);
+  const cacheNames = (await caches.keys()).sort((a, b) => a.localeCompare(b));
+  return {
+    url: location.href,
+    origin: location.origin,
+    operation: "put",
+    available: true,
+    found: true,
+    cache: cacheName,
+    cache_names: cacheNames,
+    request_url: request.url,
+    created: !previous,
+    updated: !!previous,
+    response: responseMeta(response),
+    body: {bytes: new TextEncoder().encode(body).length}
+  };
+})()`, jsStringLiteral(cacheName), jsStringLiteral(requestURL), jsStringLiteral(body), jsStringLiteral(contentType), status)
+}
+
+func cacheStorageDeleteExpression(cacheName, requestURL string) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_cache_storage_delete__";
+  if (typeof caches === "undefined") {
+    throw new Error("CacheStorage is not available in this page context");
+  }
+  const cacheName = %s;
+  const request = new Request(%s);
+  const allNames = await caches.keys();
+  if (!allNames.includes(cacheName)) {
+    return {url: location.href, origin: location.origin, operation: "delete", available: true, found: false, deleted: false, cache: cacheName, request_url: request.url};
+  }
+  const cache = await caches.open(cacheName);
+  const deleted = await cache.delete(request);
+  return {url: location.href, origin: location.origin, operation: "delete", available: true, found: deleted, deleted, cache: cacheName, request_url: request.url};
+})()`, jsStringLiteral(cacheName), jsStringLiteral(requestURL))
+}
+
+func cacheStorageClearExpression(cacheName string, all bool) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_cache_storage_clear__";
+  if (typeof caches === "undefined") {
+    throw new Error("CacheStorage is not available in this page context");
+  }
+  const cacheName = %s;
+  const clearAll = %t;
+  const names = (await caches.keys()).sort((a, b) => a.localeCompare(b));
+  const targetNames = clearAll ? names : names.filter((name) => name === cacheName);
+  const cleared = [];
+  for (const name of targetNames) {
+    if (await caches.delete(name)) {
+      cleared.push(name);
+    }
+  }
+  return {
+    url: location.href,
+    origin: location.origin,
+    operation: "clear",
+    available: true,
+    found: cleared.length > 0,
+    cache: cacheName,
+    cleared
+  };
+})()`, jsStringLiteral(cacheName), all)
+}
+
 func jsStringLiteral(value string) string {
 	b, err := json.Marshal(value)
 	if err != nil {
@@ -5321,6 +5782,7 @@ func applyStorageRedaction(snapshot *storageSnapshot, redact string) {
 	redactStorageArea(&snapshot.LocalStorage, redact)
 	redactStorageArea(&snapshot.SessionStorage, redact)
 	redactStorageCookies(snapshot.Cookies, redact)
+	redactCacheStorage(snapshot.CacheStorage, redact)
 }
 
 func redactStorageArea(area *storageAreaSnapshot, redact string) {
@@ -5341,6 +5803,14 @@ func redactStorageCookies(cookies []map[string]any, redact string) {
 			cookie["value"] = "<redacted>"
 		} else if value != "" {
 			cookie["value"] = redactBodyText(value, redact)
+		}
+	}
+}
+
+func redactCacheStorage(caches []cacheStorageCache, redact string) {
+	for i := range caches {
+		for j := range caches[i].Requests {
+			caches[i].Requests[j].URL = redactURL(caches[i].Requests[j].URL, redact)
 		}
 	}
 }
@@ -5378,19 +5848,20 @@ func readStorageSnapshotFile(path string) (storageSnapshot, error) {
 }
 
 func storageSnapshotHasData(snapshot storageSnapshot) bool {
-	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0
+	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0 || len(snapshot.CacheStorage) > 0
 }
 
 func diffStorageSnapshots(left, right storageSnapshot) storageDiffReport {
 	local := diffStringMaps(storageEntryValues(left.LocalStorage), storageEntryValues(right.LocalStorage))
 	session := diffStringMaps(storageEntryValues(left.SessionStorage), storageEntryValues(right.SessionStorage))
 	cookies := diffStringMaps(cookieValues(left.Cookies), cookieValues(right.Cookies))
+	cache := diffStringMaps(cacheStorageValues(left.CacheStorage), cacheStorageValues(right.CacheStorage))
 	summary := map[string]int{
-		"added":   len(local.Added) + len(session.Added) + len(cookies.Added),
-		"removed": len(local.Removed) + len(session.Removed) + len(cookies.Removed),
-		"changed": len(local.Changed) + len(session.Changed) + len(cookies.Changed),
+		"added":   len(local.Added) + len(session.Added) + len(cookies.Added) + len(cache.Added),
+		"removed": len(local.Removed) + len(session.Removed) + len(cookies.Removed) + len(cache.Removed),
+		"changed": len(local.Changed) + len(session.Changed) + len(cookies.Changed) + len(cache.Changed),
 	}
-	return storageDiffReport{LocalStorage: local, SessionStorage: session, Cookies: cookies, Summary: summary}
+	return storageDiffReport{LocalStorage: local, SessionStorage: session, Cookies: cookies, CacheStorage: cache, Summary: summary}
 }
 
 func storageEntryValues(area storageAreaSnapshot) map[string]string {
@@ -5410,6 +5881,18 @@ func cookieValues(cookies []map[string]any) map[string]string {
 		}
 		b, _ := json.Marshal(cookie)
 		values[key] = string(b)
+	}
+	return values
+}
+
+func cacheStorageValues(caches []cacheStorageCache) map[string]string {
+	values := map[string]string{}
+	for _, cache := range caches {
+		for _, request := range cache.Requests {
+			key := cache.Name + "|" + request.URL
+			b, _ := json.Marshal(request.Response)
+			values[key] = string(b)
+		}
 	}
 	return values
 }
@@ -7197,7 +7680,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp storage list": {
 			"cdp storage list --url-contains localhost --json",
-			"cdp storage list --include localStorage,sessionStorage,cookies --json",
+			"cdp storage list --include localStorage,sessionStorage,cookies,cache --json",
 		},
 		"cdp storage get": {
 			"cdp storage get localStorage feature_flag --url-contains localhost --json",
@@ -7230,6 +7713,27 @@ func commandExamples(path string) []string {
 		},
 		"cdp storage cookies delete": {
 			"cdp storage cookies delete --url https://example.com --name feature_flag --json",
+		},
+		"cdp storage cache": {
+			"cdp storage cache list --url-contains localhost --json",
+		},
+		"cdp storage cache list": {
+			"cdp storage cache list --cache app-cache --json",
+			"cdp storage cache list --request-url-contains /api --json",
+		},
+		"cdp storage cache get": {
+			"cdp storage cache get app-cache https://example.com/api/me --max-body-bytes 4096 --json",
+		},
+		"cdp storage cache put": {
+			"cdp storage cache put app-cache https://example.com/api/fixture '{\"ok\":true}' --content-type application/json --json",
+			"cdp storage cache put app-cache https://example.com/api/fixture @tmp/fixture.json --json",
+		},
+		"cdp storage cache delete": {
+			"cdp storage cache delete app-cache https://example.com/api/fixture --json",
+		},
+		"cdp storage cache clear": {
+			"cdp storage cache clear app-cache --json",
+			"cdp storage cache clear --all --json",
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",

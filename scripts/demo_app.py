@@ -54,13 +54,23 @@ DEMO_HTML = """<!doctype html>
     localStorage.setItem('feature', 'enabled');
     sessionStorage.setItem('nonce', 'demo-session');
     document.cookie = 'demo_session=abc; SameSite=Lax; path=/';
+    const cacheReady = 'caches' in window
+      ? caches.open('cdp-demo-cache')
+          .then(cache => cache.put('/api/cached', new Response(JSON.stringify({cached: true, source: 'demo'}), {
+            status: 200,
+            headers: {'Content-Type': 'application/json'}
+          })))
+          .catch(error => console.warn('cache setup failed', error))
+      : Promise.resolve();
     console.log('demo app booted');
     console.error('synthetic demo error');
     fetch('/api/ok').then(() => fetch('/api/fail'));
-    setTimeout(() => {
-      document.querySelector('main').dataset.ready = 'true';
-      document.querySelector('#status').textContent = 'Ready from demo app';
-    }, 100);
+    cacheReady.finally(() => {
+      setTimeout(() => {
+        document.querySelector('main').dataset.ready = 'true';
+        document.querySelector('#status').textContent = 'Ready from demo app';
+      }, 100);
+    });
   </script>
 </body>
 </html>

@@ -126,8 +126,18 @@ jq -e --arg path "$state_dir/network-capture.local.json" '.ok == true and .artif
   | jq -e '.ok == true and .cookie.name == "cdp_demo"' >/dev/null
 "$binary" storage cookies delete --state-dir "$state_dir/cdp-state" --url "$app_url" --name cdp_demo --json \
   | jq -e '.ok == true and .cookie.name == "cdp_demo"' >/dev/null
-"$binary" storage snapshot --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --redact safe --out "$state_dir/storage.local.json" --json \
-  | jq -e --arg path "$state_dir/storage.local.json" '.ok == true and .artifact.path == $path and .storage.redact == "safe" and (.snapshot.local_storage.entries[] | select(.key == "feature" and .value == "disabled"))' >/dev/null
+"$binary" storage snapshot --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --include localStorage,sessionStorage,cookies,cache,quota --redact safe --out "$state_dir/storage.local.json" --json \
+  | jq -e --arg path "$state_dir/storage.local.json" '.ok == true and .artifact.path == $path and .storage.redact == "safe" and (.snapshot.local_storage.entries[] | select(.key == "feature" and .value == "disabled")) and (.snapshot.cache_storage[] | select(.name == "cdp-demo-cache"))' >/dev/null
+"$binary" storage cache list --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and (.storage.caches[] | select(.name == "cdp-demo-cache" and (.requests[] | select(.url | contains("/api/cached")))))' >/dev/null
+"$binary" storage cache get cdp-demo-cache "$app_url/api/cached" --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.found == true and .storage.response.content_type == "application/json" and (.storage.body.text | contains("\"cached\":true"))' >/dev/null
+"$binary" storage cache put cdp-demo-cache "$app_url/api/agent" '{"agent":true}' --content-type application/json --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.found == true and .storage.created == true and .storage.body_source == "inline"' >/dev/null
+"$binary" storage cache delete cdp-demo-cache "$app_url/api/agent" --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.deleted == true' >/dev/null
+"$binary" storage cache clear cdp-demo-cache --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and (.storage.cleared | index("cdp-demo-cache"))' >/dev/null
 "$binary" screenshot --state-dir "$state_dir/cdp-state" --out "$state_dir/demo.png" --json \
   | jq -e --arg path "$state_dir/demo.png" '.ok == true and .screenshot.path == $path and .screenshot.bytes > 0' >/dev/null
 "$binary" protocol exec Page.captureScreenshot --url-contains "$app_url" --params '{"format":"png"}' --save "$state_dir/protocol-shot.png" --state-dir "$state_dir/cdp-state" --json \

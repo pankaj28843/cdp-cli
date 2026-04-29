@@ -235,12 +235,21 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"storage": {
 			Name:        "storage",
-			Description: "Application storage inspection and Web Storage mutation result.",
+			Description: "Application storage inspection and Web Storage, cookie, or Cache Storage mutation result.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage command completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata for browser-backed commands."},
 				{Name: "storage", Type: "storage_result", Required: true, Description: "Storage area snapshot, operation result, or command metadata."},
 				{Name: "collector_errors", Type: "array<collector_error>", Required: false, Description: "Non-fatal collector errors for optional areas such as quota."},
+			},
+		},
+		"storage-cache": {
+			Name:        "storage-cache",
+			Description: "Cache Storage list/get/put/delete/clear result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the Cache Storage command completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "storage", Type: "cache_storage_result", Required: true, Description: "Cache names, request rows, response metadata, body truncation metadata, and mutation booleans."},
 			},
 		},
 		"storage-snapshot": {
@@ -249,7 +258,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage snapshot completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, and quota data."},
+				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, Cache Storage request metadata, and quota data."},
 				{Name: "storage", Type: "storage_snapshot_summary", Required: true, Description: "Snapshot options, redaction mode, warning, and collector errors."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},

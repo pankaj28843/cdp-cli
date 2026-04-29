@@ -57,6 +57,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "network capture" --json | jq -e '.ok == true and .commands.name == "capture" and (.commands.examples | any(contains("--redact")))' >/dev/null
 "$binary" describe --command "storage" --json | jq -e '.ok == true and .commands.name == "storage" and (.commands.children | map(.name) | index("snapshot"))' >/dev/null
 "$binary" describe --command "storage cookies set" --json | jq -e '.ok == true and .commands.name == "set" and (.commands.examples | any(contains("--name")))' >/dev/null
+"$binary" describe --command "storage cache" --json | jq -e '.ok == true and .commands.name == "cache" and (.commands.children | map(.name) | index("put"))' >/dev/null
+"$binary" describe --command "storage cache put" --json | jq -e '.ok == true and .commands.name == "put" and (.commands.examples | any(contains("--content-type")))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target")))' >/dev/null
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
@@ -69,6 +71,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema network --json | jq -e '.ok == true and .schema.name == "network"' >/dev/null
 "$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture"))' >/dev/null
 "$binary" schema storage --json | jq -e '.ok == true and .schema.name == "storage"' >/dev/null
+"$binary" schema storage-cache --json | jq -e '.ok == true and .schema.name == "storage-cache" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot"))' >/dev/null
 "$binary" schema storage-diff --json | jq -e '.ok == true and .schema.name == "storage-diff" and (.schema.fields | map(.name) | index("diff"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
@@ -254,6 +257,19 @@ if [[ "$storage_code" -ne 3 ]]; then
 fi
 
 printf '%s\n' "$storage_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null
+
+set +e
+cache_output="$("$binary" storage cache list --state-dir "$state_dir" --json 2>/tmp/cdp-cli-storage-cache.err)"
+cache_code=$?
+set -e
+
+if [[ "$cache_code" -ne 3 ]]; then
+  echo "storage cache exit code = $cache_code, want 3 without a browser connection" >&2
+  cat /tmp/cdp-cli-storage-cache.err >&2
+  exit 1
+fi
+
+printf '%s\n' "$cache_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null
 
 cat >"$state_dir/storage-left.json" <<'JSON'
 {"snapshot":{"local_storage":{"entries":[{"key":"feature","value":"enabled"}]},"session_storage":{"entries":[]},"cookies":[]}}
