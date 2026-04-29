@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -64,6 +65,40 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				},
 			}
 			return a.render(ctx, "cli: pass\ndaemon: pending\nbrowser: pending", data)
+		},
+	}
+}
+
+func (a *app) newExplainErrorCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "explain-error [code]",
+		Short: "Explain stable cdp error codes and recovery commands",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			if len(args) == 1 {
+				info, ok := findErrorInfo(args[0])
+				if !ok {
+					return commandError(
+						"unknown_error_code",
+						"usage",
+						fmt.Sprintf("unknown error code %q", args[0]),
+						ExitUsage,
+						[]string{"cdp explain-error --json", "cdp explain-error not_implemented --json"},
+					)
+				}
+				human := fmt.Sprintf("%s: %s\n%s", info.Code, info.Message, info.Meaning)
+				return a.render(ctx, human, map[string]any{"ok": true, "error": info})
+			}
+
+			catalog := errorCatalog()
+			var lines []string
+			for _, info := range catalog {
+				lines = append(lines, fmt.Sprintf("%s (%d): %s", info.Code, info.ExitCode, info.Message))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "errors": catalog})
 		},
 	}
 }

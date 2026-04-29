@@ -64,3 +64,26 @@ func TestPlannedCommandJSONError(t *testing.T) {
 		t.Fatalf("error envelope = %+v, want not_implemented", got)
 	}
 }
+
+func TestExplainErrorJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"explain-error", "not_implemented", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code     string `json:"code"`
+			ExitCode int    `json:"exit_code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("explain-error output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Error.Code != "not_implemented" || got.Error.ExitCode != cli.ExitNotImplemented {
+		t.Fatalf("explain-error = %+v, want not_implemented metadata", got)
+	}
+}

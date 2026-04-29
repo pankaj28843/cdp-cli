@@ -81,6 +81,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
 	root.AddCommand(a.newDoctorCommand())
+	root.AddCommand(a.newExplainErrorCommand())
 	root.AddCommand(a.newDaemonCommand())
 	root.AddCommand(a.newTargetsCommand())
 	root.AddCommand(a.newPagesCommand())

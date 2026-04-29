@@ -13,6 +13,7 @@ fi
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
 "$binary" describe --jq '.globals | index("--json")' >/dev/null
 "$binary" doctor --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
+"$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 
 set +e
 daemon_output="$("$binary" daemon status --json 2>/tmp/cdp-cli-daemon-status.err)"
@@ -25,4 +26,3 @@ if [[ "$daemon_code" -ne 8 ]]; then
 fi
 
 printf '%s\n' "$daemon_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null
-
