@@ -487,6 +487,43 @@ func TestConnectionPruneJSON(t *testing.T) {
 	}
 }
 
+func TestConnectionListProjectFilterJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	projectDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "global", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add global exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "add", "project", "--auto-connect", "--project", projectDir, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add project exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "list", "--project", projectDir, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection list exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Connections []struct {
+			Name string `json:"name"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection list output is invalid JSON: %v", err)
+	}
+	if len(got.Connections) != 1 || got.Connections[0].Name != "project" {
+		t.Fatalf("connection list = %+v, want project only", got)
+	}
+}
+
 func TestConnectionResolveJSON(t *testing.T) {
 	stateDir := t.TempDir()
 	var out, errOut bytes.Buffer

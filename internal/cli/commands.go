@@ -423,7 +423,8 @@ func normalizeProjectPath(project string) (string, error) {
 }
 
 func (a *app) newConnectionListCommand() *cobra.Command {
-	return &cobra.Command{
+	var project string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List saved browser connections",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -438,8 +439,19 @@ func (a *app) newConnectionListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			projectPath, err := normalizeProjectPath(project)
+			if err != nil {
+				return commandError(
+					"invalid_project",
+					"usage",
+					err.Error(),
+					ExitUsage,
+					[]string{"cdp connection list --project <path> --json"},
+				)
+			}
+			connections := filterConnectionsByProject(file.Connections, projectPath)
 			var lines []string
-			for _, conn := range file.Connections {
+			for _, conn := range connections {
 				marker := " "
 				if conn.Name == file.Selected {
 					marker = "*"
@@ -448,12 +460,27 @@ func (a *app) newConnectionListCommand() *cobra.Command {
 			}
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
 				"ok":          true,
-				"connections": file.Connections,
+				"connections": connections,
 				"selected":    file.Selected,
 				"state_path":  store.Path(),
 			})
 		},
 	}
+	cmd.Flags().StringVar(&project, "project", "", "only list connections scoped to this project path")
+	return cmd
+}
+
+func filterConnectionsByProject(connections []state.Connection, project string) []state.Connection {
+	if project == "" {
+		return connections
+	}
+	filtered := make([]state.Connection, 0, len(connections))
+	for _, conn := range connections {
+		if conn.Project == project {
+			filtered = append(filtered, conn)
+		}
+	}
+	return filtered
 }
 
 func (a *app) newConnectionSelectCommand() *cobra.Command {
@@ -1207,6 +1234,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp connection prune": {
 			"cdp connection prune --missing-projects --dry-run --json",
+		},
+		"cdp connection list": {
+			"cdp connection list --json",
+			"cdp connection list --project . --json",
 		},
 		"cdp connection resolve": {
 			"cdp connection resolve --json",
