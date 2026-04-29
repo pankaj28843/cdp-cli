@@ -1171,15 +1171,21 @@ func TestWorkflowConsoleErrorsJSON(t *testing.T) {
 			Count int    `json:"count"`
 		} `json:"workflow"`
 		Messages []struct {
-			Level string `json:"level"`
-			Text  string `json:"text"`
+			Type       string          `json:"type"`
+			Level      string          `json:"level"`
+			Text       string          `json:"text"`
+			Exception  json.RawMessage `json:"exception"`
+			StackTrace json.RawMessage `json:"stack_trace"`
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("workflow console-errors output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Workflow.Name != "console-errors" || got.Workflow.Count == 0 || got.Messages[0].Level != "error" {
+	if !got.OK || got.Workflow.Name != "console-errors" || got.Workflow.Count != 3 || got.Messages[0].Level != "error" {
 		t.Fatalf("workflow console-errors = %+v, want error summary", got)
+	}
+	if got.Messages[1].Type != "exception" || !strings.Contains(got.Messages[1].Text, "failed to fetch dashboard") || len(got.Messages[1].Exception) == 0 || len(got.Messages[1].StackTrace) == 0 {
+		t.Fatalf("workflow console exception = %+v, want reason, exception, and stack", got.Messages[1])
 	}
 }
 
@@ -1460,8 +1466,8 @@ func TestWorkflowPageLoadJSON(t *testing.T) {
 	if !got.OK || got.Workflow.Name != "page-load" || got.Workflow.Trigger != "navigate" || got.Workflow.RequestedURL != "https://example.test/app" || got.Workflow.Partial {
 		t.Fatalf("workflow page-load metadata = %+v, want complete navigate workflow", got.Workflow)
 	}
-	if len(got.Requests) != 2 || got.Requests[0].Status != 200 || len(got.Messages) != 2 {
-		t.Fatalf("workflow page-load evidence requests=%+v messages=%+v, want network and console evidence", got.Requests, got.Messages)
+	if len(got.Requests) != 2 || got.Requests[0].Status != 200 || len(got.Messages) != 3 || !strings.Contains(got.Messages[1].Text, "failed to fetch dashboard") {
+		t.Fatalf("workflow page-load evidence requests=%+v messages=%+v, want network and rich console evidence", got.Requests, got.Messages)
 	}
 	if len(got.Storage.LocalStorageKeys) != 1 || got.Storage.LocalStorageKeys[0] != "feature" || got.Performance.Count != 2 || got.Artifact.Path != outPath {
 		t.Fatalf("workflow page-load storage/performance/artifact = storage=%+v performance=%+v artifact=%+v", got.Storage, got.Performance, got.Artifact)
@@ -1964,11 +1970,17 @@ func TestConsoleJSON(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"target"`
 		Messages []struct {
-			ID     int    `json:"id"`
-			Source string `json:"source"`
-			Type   string `json:"type"`
-			Level  string `json:"level"`
-			Text   string `json:"text"`
+			ID           int             `json:"id"`
+			Source       string          `json:"source"`
+			Type         string          `json:"type"`
+			Level        string          `json:"level"`
+			Text         string          `json:"text"`
+			URL          string          `json:"url"`
+			LineNumber   int             `json:"line_number"`
+			ColumnNumber int             `json:"column_number"`
+			ScriptID     string          `json:"script_id"`
+			Exception    json.RawMessage `json:"exception"`
+			StackTrace   json.RawMessage `json:"stack_trace"`
 		} `json:"messages"`
 		Console struct {
 			Count      int  `json:"count"`
@@ -1978,14 +1990,26 @@ func TestConsoleJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("console output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Target.ID != "page-1" || got.Console.Count != 2 || !got.Console.ErrorsOnly {
-		t.Fatalf("console output = %+v, want two error messages", got)
+	if !got.OK || got.Target.ID != "page-1" || got.Console.Count != 3 || !got.Console.ErrorsOnly {
+		t.Fatalf("console output = %+v, want three error messages", got)
 	}
 	if got.Messages[0].ID != 0 || got.Messages[0].Source != "runtime" || got.Messages[0].Type != "error" || got.Messages[0].Text != "Synthetic console error" {
 		t.Fatalf("first console message = %+v, want runtime error", got.Messages[0])
 	}
-	if got.Messages[1].Source != "network" || got.Messages[1].Level != "error" || got.Messages[1].Text != "Synthetic network failure" {
-		t.Fatalf("second console message = %+v, want network log error", got.Messages[1])
+	if got.Messages[1].Source != "runtime" || got.Messages[1].Type != "exception" || got.Messages[1].Text != "Uncaught (in promise): TypeError: failed to fetch dashboard" {
+		t.Fatalf("second console message = %+v, want rich runtime exception", got.Messages[1])
+	}
+	if got.Messages[1].URL != "https://example.test/assets/app.js" || got.Messages[1].LineNumber != 41 || got.Messages[1].ColumnNumber != 9 || got.Messages[1].ScriptID != "script-1" {
+		t.Fatalf("second console location = %+v, want script location", got.Messages[1])
+	}
+	if len(got.Messages[1].Exception) == 0 || !strings.Contains(string(got.Messages[1].Exception), "TypeError") {
+		t.Fatalf("second console exception = %s, want serialized exception object", got.Messages[1].Exception)
+	}
+	if len(got.Messages[1].StackTrace) == 0 || !strings.Contains(string(got.Messages[1].StackTrace), "loadDashboard") {
+		t.Fatalf("second console stack_trace = %s, want stack frames", got.Messages[1].StackTrace)
+	}
+	if got.Messages[2].Source != "network" || got.Messages[2].Level != "error" || got.Messages[2].Text != "Synthetic network failure" {
+		t.Fatalf("third console message = %+v, want network log error", got.Messages[2])
 	}
 }
 
@@ -3594,6 +3618,33 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						"timestamp": 12.25,
 						"args": []map[string]any{
 							{"type": "string", "value": "Synthetic console error"},
+						},
+					},
+				}, map[string]any{
+					"sessionId": req.SessionID,
+					"method":    "Runtime.exceptionThrown",
+					"params": map[string]any{
+						"timestamp": 12.75,
+						"exceptionDetails": map[string]any{
+							"text":         "Uncaught (in promise)",
+							"url":          "https://example.test/assets/app.js",
+							"lineNumber":   41,
+							"columnNumber": 9,
+							"scriptId":     "script-1",
+							"exception": map[string]any{
+								"type":        "object",
+								"subtype":     "error",
+								"className":   "TypeError",
+								"description": "TypeError: failed to fetch dashboard",
+							},
+							"stackTrace": map[string]any{
+								"callFrames": []map[string]any{{
+									"functionName": "loadDashboard",
+									"url":          "https://example.test/assets/app.js",
+									"lineNumber":   41,
+									"columnNumber": 9,
+								}},
+							},
 						},
 					},
 				})

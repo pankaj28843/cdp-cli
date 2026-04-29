@@ -7412,16 +7412,21 @@ type consoleMessage struct {
 	Timestamp        float64             `json:"timestamp,omitempty"`
 	URL              string              `json:"url,omitempty"`
 	LineNumber       int                 `json:"line_number,omitempty"`
+	ColumnNumber     int                 `json:"column_number,omitempty"`
+	ScriptID         string              `json:"script_id,omitempty"`
 	NetworkRequestID string              `json:"network_request_id,omitempty"`
 	Args             []consoleMessageArg `json:"args,omitempty"`
+	Exception        *consoleMessageArg  `json:"exception,omitempty"`
 	StackTrace       json.RawMessage     `json:"stack_trace,omitempty"`
 }
 
 type consoleMessageArg struct {
-	Type        string          `json:"type"`
-	Subtype     string          `json:"subtype,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Value       json.RawMessage `json:"value,omitempty"`
+	Type                string          `json:"type"`
+	Subtype             string          `json:"subtype,omitempty"`
+	ClassName           string          `json:"class_name,omitempty"`
+	Description         string          `json:"description,omitempty"`
+	Value               json.RawMessage `json:"value,omitempty"`
+	UnserializableValue string          `json:"unserializable_value,omitempty"`
 }
 
 func collectConsoleMessages(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, errorsOnly bool, typeSet map[string]bool) ([]consoleMessage, bool, error) {
@@ -7500,29 +7505,32 @@ func consoleMessageFromEvent(event cdp.Event) (consoleMessage, bool) {
 		var params struct {
 			Timestamp        float64 `json:"timestamp"`
 			ExceptionDetails struct {
-				Text       string            `json:"text"`
-				URL        string            `json:"url"`
-				LineNumber int               `json:"lineNumber"`
-				StackTrace json.RawMessage   `json:"stackTrace"`
-				Exception  consoleMessageArg `json:"exception"`
+				Text         string            `json:"text"`
+				URL          string            `json:"url"`
+				LineNumber   int               `json:"lineNumber"`
+				ColumnNumber int               `json:"columnNumber"`
+				ScriptID     string            `json:"scriptId"`
+				StackTrace   json.RawMessage   `json:"stackTrace"`
+				Exception    consoleMessageArg `json:"exception"`
 			} `json:"exceptionDetails"`
 		}
 		if err := json.Unmarshal(event.Params, &params); err != nil {
 			return consoleMessage{}, false
 		}
-		text := params.ExceptionDetails.Text
-		if text == "" {
-			text = consoleArgText(params.ExceptionDetails.Exception)
-		}
+		text := consoleExceptionText(params.ExceptionDetails.Text, params.ExceptionDetails.Exception)
+		exception := params.ExceptionDetails.Exception
 		return consoleMessage{
-			Source:     "runtime",
-			Type:       "exception",
-			Level:      "error",
-			Text:       text,
-			Timestamp:  params.Timestamp,
-			URL:        params.ExceptionDetails.URL,
-			LineNumber: params.ExceptionDetails.LineNumber,
-			StackTrace: params.ExceptionDetails.StackTrace,
+			Source:       "runtime",
+			Type:         "exception",
+			Level:        "error",
+			Text:         text,
+			Timestamp:    params.Timestamp,
+			URL:          params.ExceptionDetails.URL,
+			LineNumber:   params.ExceptionDetails.LineNumber,
+			ColumnNumber: params.ExceptionDetails.ColumnNumber,
+			ScriptID:     params.ExceptionDetails.ScriptID,
+			Exception:    &exception,
+			StackTrace:   params.ExceptionDetails.StackTrace,
 		}, true
 	case "Log.entryAdded":
 		var params struct {
@@ -7584,6 +7592,21 @@ func consoleArgsText(args []consoleMessageArg) string {
 	return strings.Join(texts, " ")
 }
 
+func consoleExceptionText(prefix string, exception consoleMessageArg) string {
+	text := strings.TrimSpace(prefix)
+	detail := strings.TrimSpace(consoleArgText(exception))
+	if detail == "" || detail == exception.Type {
+		return text
+	}
+	if text == "" {
+		return detail
+	}
+	if strings.Contains(text, detail) {
+		return text
+	}
+	return text + ": " + detail
+}
+
 func consoleArgText(arg consoleMessageArg) string {
 	if len(arg.Value) > 0 {
 		var value any
@@ -7592,8 +7615,14 @@ func consoleArgText(arg consoleMessageArg) string {
 		}
 		return string(arg.Value)
 	}
+	if arg.UnserializableValue != "" {
+		return arg.UnserializableValue
+	}
 	if arg.Description != "" {
 		return arg.Description
+	}
+	if arg.ClassName != "" {
+		return arg.ClassName
 	}
 	return arg.Type
 }
