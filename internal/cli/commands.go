@@ -103,6 +103,47 @@ func (a *app) newExplainErrorCommand() *cobra.Command {
 	}
 }
 
+func (a *app) newExitCodesCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "exit-codes",
+		Short: "Print stable process exit codes",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			catalog := errorCatalog()
+			var lines []string
+			lines = append(lines, fmt.Sprintf("%d: ok", ExitOK))
+			for _, info := range catalog {
+				lines = append(lines, fmt.Sprintf("%d: %s", info.ExitCode, info.Code))
+			}
+
+			data := map[string]any{
+				"ok": true,
+				"exit_codes": append([]map[string]any{{
+					"code":    ExitOK,
+					"name":    "ok",
+					"meaning": "the command completed successfully",
+				}}, exitCodeRows(catalog)...),
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), data)
+		},
+	}
+}
+
+func exitCodeRows(catalog []errorInfo) []map[string]any {
+	rows := make([]map[string]any, 0, len(catalog))
+	for _, info := range catalog {
+		rows = append(rows, map[string]any{
+			"code":      info.ExitCode,
+			"name":      info.Code,
+			"err_class": info.Class,
+			"meaning":   info.Meaning,
+		})
+	}
+	return rows
+}
+
 func (a *app) newDaemonCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",

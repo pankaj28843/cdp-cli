@@ -87,3 +87,26 @@ func TestExplainErrorJSON(t *testing.T) {
 		t.Fatalf("explain-error = %+v, want not_implemented metadata", got)
 	}
 }
+
+func TestExitCodesJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"exit-codes", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		ExitCodes []struct {
+			Code int    `json:"code"`
+			Name string `json:"name"`
+		} `json:"exit_codes"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("exit-codes output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.ExitCodes) < 2 || got.ExitCodes[0].Code != cli.ExitOK {
+		t.Fatalf("exit-codes = %+v, want ok plus error rows", got)
+	}
+}
