@@ -85,7 +85,8 @@ func (a *app) newDescribeCommand() *cobra.Command {
 }
 
 func (a *app) newDoctorCommand() *cobra.Command {
-	return &cobra.Command{
+	var checkName string
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run local readiness checks",
 		Long:  "Run readiness checks for the CLI, selected browser connection, and daemon path.",
@@ -127,6 +128,18 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				"details":              probe,
 				"remediation_commands": probe.RemediationCommands,
 			})
+			if checkName != "" {
+				checks = filterChecksByName(checks, checkName)
+				if len(checks) == 0 {
+					return commandError(
+						"unknown_check",
+						"usage",
+						fmt.Sprintf("unknown doctor check %q", checkName),
+						ExitUsage,
+						[]string{"cdp doctor --json", "cdp doctor --check daemon --json"},
+					)
+				}
+			}
 
 			data := map[string]any{
 				"ok":     browserStatus != "fail" && daemonCheckStatus != "fail",
@@ -136,6 +149,18 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			return a.render(ctx, human, data)
 		},
 	}
+	cmd.Flags().StringVar(&checkName, "check", "", "only return one check by name")
+	return cmd
+}
+
+func filterChecksByName(checks []map[string]any, name string) []map[string]any {
+	filtered := make([]map[string]any, 0, len(checks))
+	for _, check := range checks {
+		if check["name"] == name {
+			filtered = append(filtered, check)
+		}
+	}
+	return filtered
 }
 
 func browserDoctorStatus(autoConnect bool, probe *browser.ProbeResult) string {
@@ -1216,6 +1241,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp doctor": {
 			"cdp doctor --json",
+			"cdp doctor --check daemon --json",
 		},
 		"cdp explain-error": {
 			"cdp explain-error not_implemented --json",

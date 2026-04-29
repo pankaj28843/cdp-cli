@@ -606,6 +606,25 @@ func TestDoctorUsesSelectedConnection(t *testing.T) {
 	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
 }
 
+func TestDoctorCheckFilterJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--check", "daemon", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Checks []struct {
+			Name string `json:"name"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	if len(got.Checks) != 1 || got.Checks[0].Name != "daemon" {
+		t.Fatalf("doctor checks = %+v, want daemon only", got.Checks)
+	}
+}
+
 func TestDoctorUsesNamedConnection(t *testing.T) {
 	notCDP := httptest.NewServer(http.NotFoundHandler())
 	defer notCDP.Close()
