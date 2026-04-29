@@ -199,7 +199,7 @@ func capabilityCatalog() []map[string]string {
 		{"name": "emulation", "status": "planned", "commands": "viewport, media, user-agent, geolocation, network, cpu"},
 		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
 		{"name": "memory", "status": "planned", "commands": "heap snapshot"},
-		{"name": "advanced_storage", "status": "planned", "commands": "IndexedDB, Cache Storage, service workers"},
+		{"name": "advanced_storage", "status": "implemented", "commands": "storage indexeddb, storage cache, storage service-workers"},
 	}
 }
 

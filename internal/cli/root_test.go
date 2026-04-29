@@ -3078,6 +3078,21 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	if got.Capabilities[0].Name != "connection" || got.Capabilities[0].Status != "implemented" {
 		t.Fatalf("first capability = %+v, want implemented connection", got.Capabilities[0])
 	}
+	if status := capabilityStatus(got.Capabilities, "advanced_storage"); status != "implemented" {
+		t.Fatalf("advanced_storage capability status = %q, want implemented", status)
+	}
+}
+
+func capabilityStatus(capabilities []struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}, name string) string {
+	for _, capability := range capabilities {
+		if capability.Name == name {
+			return capability.Status
+		}
+	}
+	return ""
 }
 
 func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
