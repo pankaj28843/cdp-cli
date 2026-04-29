@@ -212,6 +212,18 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "network", Type: "network_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
 			},
 		},
+		"network-capture": {
+			Name:        "network-capture",
+			Description: "Full local network metadata capture with headers, bodies, timing, initiators, redaction, and artifact output.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when network capture completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "requests", Type: "array<network_capture_request>", Required: true, Description: "Full request/response records keyed by CDP request id."},
+				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, redaction mode, warning, and collector errors."},
+				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
+				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
+			},
+		},
 		"workflow-visible-posts": {
 			Name:        "workflow-visible-posts",
 			Description: "Open a feed page and return visible post-like text items.",

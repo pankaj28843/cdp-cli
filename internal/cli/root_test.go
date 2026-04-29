@@ -750,6 +750,114 @@ func TestNetworkFailedFilterJSON(t *testing.T) {
 	}
 }
 
+func TestNetworkCaptureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "network.local.json")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"network", "capture",
+		"--wait", "250ms",
+		"--out", outPath,
+		"--redact", "safe",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("network capture exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Requests []struct {
+			ID              string         `json:"id"`
+			URL             string         `json:"url"`
+			RequestHeaders  map[string]any `json:"request_headers"`
+			ResponseHeaders map[string]any `json:"response_headers"`
+			RequestPostData struct {
+				Text string `json:"text"`
+			} `json:"request_post_data"`
+			Body struct {
+				Text string `json:"text"`
+			} `json:"body"`
+			Initiator json.RawMessage `json:"initiator"`
+			Timing    json.RawMessage `json:"timing"`
+		} `json:"requests"`
+		Capture struct {
+			Count  int    `json:"count"`
+			Redact string `json:"redact"`
+		} `json:"capture"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("network capture output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Capture.Count != 2 || len(got.Requests) != 2 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath {
+		t.Fatalf("network capture = %+v, want two safe-redacted requests and artifact", got)
+	}
+	if got.Requests[0].RequestHeaders["Authorization"] != "<redacted>" || got.Requests[0].ResponseHeaders["Set-Cookie"] != "<redacted>" {
+		t.Fatalf("network capture headers = request=%+v response=%+v, want sensitive headers redacted", got.Requests[0].RequestHeaders, got.Requests[0].ResponseHeaders)
+	}
+	if !strings.Contains(got.Requests[0].Body.Text, `"ok":true`) || strings.Contains(got.Requests[0].Body.Text, "secret") || len(got.Requests[0].Initiator) == 0 || len(got.Requests[0].Timing) == 0 {
+		t.Fatalf("network capture request-ok = %+v, want body, initiator, and timing", got.Requests[0])
+	}
+	if !strings.Contains(got.Requests[1].RequestPostData.Text, "redacted") || strings.Contains(got.Requests[1].RequestPostData.Text, "secret") {
+		t.Fatalf("network capture post data = %q, want redacted csrf", got.Requests[1].RequestPostData.Text)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("network capture artifact was not written: %v", err)
+	}
+}
+
+func TestNetworkCaptureDefaultKeepsLocalCredentials(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"network", "capture",
+		"--wait", "250ms",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("network capture exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Requests []struct {
+			URL             string         `json:"url"`
+			RequestHeaders  map[string]any `json:"request_headers"`
+			ResponseHeaders map[string]any `json:"response_headers"`
+			Body            struct {
+				Text string `json:"text"`
+			} `json:"body"`
+		} `json:"requests"`
+		Capture struct {
+			Redact string `json:"redact"`
+		} `json:"capture"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("network capture output is invalid JSON: %v", err)
+	}
+	if len(got.Requests) == 0 || got.Capture.Redact != "none" {
+		t.Fatalf("network capture = %+v, want default unredacted local capture", got)
+	}
+	if got.Requests[0].URL != "https://example.test/app?token=abc" || got.Requests[0].RequestHeaders["Authorization"] != "Bearer secret" || got.Requests[0].ResponseHeaders["Set-Cookie"] != "session=secret" {
+		t.Fatalf("network capture local credentials = %+v, want unredacted synthetic credentials", got.Requests[0])
+	}
+	if !strings.Contains(got.Requests[0].Body.Text, `"token":"secret"`) {
+		t.Fatalf("network capture response body = %q, want unredacted synthetic token by default", got.Requests[0].Body.Text)
+	}
+}
+
 func TestWorkflowConsoleErrorsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -2709,9 +2817,26 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						"sessionId": req.SessionID,
 						"method":    "Network.requestWillBeSent",
 						"params": map[string]any{
+							"requestId":   "request-ok",
+							"loaderId":    "loader-1",
+							"documentURL": "https://example.test/app?session=abc",
+							"type":        "Document",
+							"timestamp":   1.25,
+							"wallTime":    2.5,
+							"initiator":   map[string]any{"type": "parser", "url": "https://example.test/app", "lineNumber": 1},
+							"request": map[string]any{
+								"url":     "https://example.test/app?token=abc",
+								"method":  "GET",
+								"headers": map[string]any{"Accept": "text/html", "Authorization": "Bearer secret"},
+							},
+						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.requestWillBeSentExtraInfo",
+						"params": map[string]any{
 							"requestId": "request-ok",
-							"type":      "Document",
-							"request":   map[string]any{"url": "https://example.test/app", "method": "GET"},
+							"headers":   map[string]any{"Accept": "text/html", "Authorization": "Bearer secret"},
 						},
 					},
 					map[string]any{
@@ -2720,8 +2845,35 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						"params": map[string]any{
 							"requestId": "request-ok",
 							"type":      "Document",
-							"response":  map[string]any{"url": "https://example.test/app", "status": 200, "statusText": "OK", "mimeType": "text/html"},
+							"response": map[string]any{
+								"url":               "https://example.test/app?token=abc",
+								"status":            200,
+								"statusText":        "OK",
+								"headers":           map[string]any{"Content-Type": "application/json", "Set-Cookie": "session=secret"},
+								"mimeType":          "application/json",
+								"protocol":          "h2",
+								"remoteIPAddress":   "203.0.113.10",
+								"remotePort":        443,
+								"connectionId":      77,
+								"connectionReused":  true,
+								"encodedDataLength": 42,
+								"timing":            map[string]any{"requestTime": 1.25, "receiveHeadersEnd": 12.5},
+							},
 						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.responseReceivedExtraInfo",
+						"params": map[string]any{
+							"requestId":  "request-ok",
+							"statusCode": 200,
+							"headers":    map[string]any{"Content-Type": "application/json", "Set-Cookie": "session=secret"},
+						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.loadingFinished",
+						"params":    map[string]any{"requestId": "request-ok", "encodedDataLength": 42},
 					},
 					map[string]any{
 						"sessionId": req.SessionID,
@@ -2729,7 +2881,13 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						"params": map[string]any{
 							"requestId": "request-failed",
 							"type":      "Fetch",
-							"request":   map[string]any{"url": "https://example.test/api", "method": "POST"},
+							"request": map[string]any{
+								"url":         "https://example.test/api",
+								"method":      "POST",
+								"headers":     map[string]any{"Content-Type": "application/json", "X-CSRF-Token": "secret"},
+								"hasPostData": true,
+								"postData":    `{"csrf":"secret","query":"value"}`,
+							},
 						},
 					},
 					map[string]any{
@@ -2742,6 +2900,26 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						},
 					},
 				)
+			} else if req.Method == "Network.getRequestPostData" {
+				var params struct {
+					RequestID string `json:"requestId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				if params.RequestID == "request-failed" {
+					resp["result"] = map[string]any{"postData": `{"csrf":"secret","query":"value"}`}
+				} else {
+					resp["error"] = map[string]any{"code": -32000, "message": "No post data available"}
+				}
+			} else if req.Method == "Network.getResponseBody" {
+				var params struct {
+					RequestID string `json:"requestId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				if params.RequestID == "request-ok" {
+					resp["result"] = map[string]any{"body": `{"ok":true,"token":"secret"}`, "base64Encoded": false}
+				} else {
+					resp["error"] = map[string]any{"code": -32000, "message": "No resource with given identifier found"}
+				}
 			} else if req.Method == "Runtime.enable" {
 				resp["result"] = map[string]any{}
 				events = append(events, map[string]any{

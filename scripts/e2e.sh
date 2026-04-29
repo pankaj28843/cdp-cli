@@ -52,6 +52,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--failed")))' >/dev/null
+"$binary" describe --command "network capture" --json | jq -e '.ok == true and .commands.name == "capture" and (.commands.examples | any(contains("--redact")))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target")))' >/dev/null
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
@@ -62,6 +63,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
 "$binary" schema console --json | jq -e '.ok == true and .schema.name == "console"' >/dev/null
 "$binary" schema network --json | jq -e '.ok == true and .schema.name == "network"' >/dev/null
+"$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text"' >/dev/null
 "$binary" schema html --json | jq -e '.ok == true and .schema.name == "html"' >/dev/null
