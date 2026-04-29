@@ -21,6 +21,13 @@ import (
 	"nhooyr.io/websocket/wsjson"
 )
 
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+		os.Exit(cli.Execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr, cli.BuildInfo{}))
+	}
+	os.Exit(m.Run())
+}
+
 func TestVersionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
@@ -93,9 +100,10 @@ func TestTargetsJSON(t *testing.T) {
 		{"targetId": "worker-1", "type": "service_worker", "title": "Worker", "url": "https://example.test/sw.js", "attached": true},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"targets", "--browser-url", server.URL, "--limit", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"targets", "--limit", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("targets exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -121,9 +129,10 @@ func TestTargetsTypeFilterJSON(t *testing.T) {
 		{"targetId": "worker-1", "type": "service_worker", "title": "Worker", "url": "https://example.test/sw.js", "attached": true},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"targets", "--browser-url", server.URL, "--type", "service_worker", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"targets", "--type", "service_worker", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("targets exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -148,9 +157,10 @@ func TestPagesJSON(t *testing.T) {
 		{"targetId": "worker-1", "type": "service_worker", "title": "Worker", "url": "https://example.test/sw.js", "attached": true},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"pages", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"pages", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -178,6 +188,7 @@ func TestPagesUsesRunningDaemonByDefaultJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	stateDir := t.TempDir()
 	var addOut, addErr bytes.Buffer
@@ -266,15 +277,16 @@ func TestPagesURLFilterJSON(t *testing.T) {
 		{"targetId": "page-3", "type": "page", "title": "Docs Admin", "url": "https://docs.example.test/admin", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	tests := []struct {
 		name string
 		args []string
 		want []string
 	}{
-		{"contains", []string{"pages", "--browser-url", server.URL, "--url-contains", "docs", "--json"}, []string{"page-2", "page-3"}},
-		{"include", []string{"pages", "--browser-url", server.URL, "--include-url", "docs", "--json"}, []string{"page-2", "page-3"}},
-		{"exclude", []string{"pages", "--browser-url", server.URL, "--include-url", "docs", "--exclude-url", "admin", "--json"}, []string{"page-2"}},
+		{"contains", []string{"pages", "--url-contains", "docs", "--json"}, []string{"page-2", "page-3"}},
+		{"include", []string{"pages", "--include-url", "docs", "--json"}, []string{"page-2", "page-3"}},
+		{"exclude", []string{"pages", "--include-url", "docs", "--exclude-url", "admin", "--json"}, []string{"page-2"}},
 	}
 
 	for _, tt := range tests {
@@ -310,9 +322,10 @@ func TestPageReloadJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"page", "reload", "--browser-url", server.URL, "--target", "page", "--ignore-cache", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"page", "reload", "--target", "page", "--ignore-cache", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("page reload exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -337,6 +350,7 @@ func TestPageHistoryNavigationJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/current", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	tests := []struct {
 		name   string
@@ -344,8 +358,8 @@ func TestPageHistoryNavigationJSON(t *testing.T) {
 		action string
 		entry  int
 	}{
-		{"back", []string{"page", "back", "--browser-url", server.URL, "--target", "page", "--json"}, "back", 1},
-		{"forward", []string{"page", "forward", "--browser-url", server.URL, "--target", "page", "--json"}, "forward", 3},
+		{"back", []string{"page", "back", "--target", "page", "--json"}, "back", 1},
+		{"forward", []string{"page", "forward", "--target", "page", "--json"}, "forward", 3},
 	}
 
 	for _, tt := range tests {
@@ -378,14 +392,15 @@ func TestPageCloseAndActivateJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	tests := []struct {
 		name   string
 		args   []string
 		action string
 	}{
-		{"activate", []string{"page", "activate", "--browser-url", server.URL, "--target", "page", "--json"}, "activated"},
-		{"close", []string{"page", "close", "--browser-url", server.URL, "--target", "page", "--json"}, "closed"},
+		{"activate", []string{"page", "activate", "--target", "page", "--json"}, "activated"},
+		{"close", []string{"page", "close", "--target", "page", "--json"}, "closed"},
 	}
 
 	for _, tt := range tests {
@@ -418,9 +433,10 @@ func TestTextCommandJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"text", "main", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"text", "main", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("text exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -448,9 +464,10 @@ func TestHTMLCommandJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"html", "main", "--browser-url", server.URL, "--max-chars", "80", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"html", "main", "--max-chars", "80", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("html exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -477,9 +494,10 @@ func TestDOMQueryJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"dom", "query", "button", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"dom", "query", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("dom query exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -508,9 +526,10 @@ func TestCSSInspectJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"css", "inspect", "main", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"css", "inspect", "main", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("css inspect exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -535,9 +554,10 @@ func TestLayoutOverflowJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"layout", "overflow", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"layout", "overflow", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("layout overflow exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -564,9 +584,10 @@ func TestWaitTextJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "text", "Ready", "--browser-url", server.URL, "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "text", "Ready", "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("wait text exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -592,9 +613,10 @@ func TestWaitSelectorJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "selector", "main", "--browser-url", server.URL, "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "selector", "main", "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("wait selector exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -620,11 +642,12 @@ func TestNetworkJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"network", "--browser-url", server.URL, "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"network", "--wait", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
-		t.Fatalf("network exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+		t.Fatalf("network exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -652,11 +675,12 @@ func TestNetworkFailedFilterJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"network", "--browser-url", server.URL, "--failed", "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"network", "--failed", "--wait", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
-		t.Fatalf("network --failed exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+		t.Fatalf("network --failed exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -679,9 +703,10 @@ func TestWorkflowConsoleErrorsJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "console-errors", "--browser-url", server.URL, "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "console-errors", "--wait", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow console-errors exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -710,11 +735,12 @@ func TestWorkflowNetworkFailuresJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "network-failures", "--browser-url", server.URL, "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "network-failures", "--wait", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
-		t.Fatalf("workflow network-failures exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+		t.Fatalf("workflow network-failures exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -739,9 +765,10 @@ func TestWorkflowNetworkFailuresJSON(t *testing.T) {
 func TestProtocolMetadataJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "metadata", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "metadata", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol metadata exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -767,9 +794,10 @@ func TestProtocolMetadataJSON(t *testing.T) {
 func TestProtocolDomainsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "domains", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "domains", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol domains exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -793,9 +821,10 @@ func TestProtocolDomainsJSON(t *testing.T) {
 func TestProtocolDomainsExperimentalFilterJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "domains", "--experimental", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "domains", "--experimental", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol domains exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -817,9 +846,10 @@ func TestProtocolDomainsExperimentalFilterJSON(t *testing.T) {
 func TestProtocolSearchJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "search", "capture", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "search", "capture", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol search exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -843,9 +873,10 @@ func TestProtocolSearchJSON(t *testing.T) {
 func TestProtocolSearchKindFilterJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "search", "console", "--kind", "event", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "search", "console", "--kind", "event", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol search exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -867,9 +898,10 @@ func TestProtocolSearchKindFilterJSON(t *testing.T) {
 func TestProtocolDescribeJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "describe", "Page.captureScreenshot", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "describe", "Page.captureScreenshot", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol describe exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -895,9 +927,10 @@ func TestProtocolDescribeJSON(t *testing.T) {
 func TestProtocolExamplesJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "examples", "Page.captureScreenshot", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "examples", "Page.captureScreenshot", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol examples exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -920,9 +953,10 @@ func TestProtocolExamplesJSON(t *testing.T) {
 func TestProtocolExecJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"protocol", "exec", "Browser.getVersion", "--params", "{}", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"protocol", "exec", "Browser.getVersion", "--params", "{}", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("protocol exec exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -948,13 +982,13 @@ func TestProtocolExecTargetScopedJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{
 		"protocol", "exec", "Runtime.evaluate",
 		"--target", "page",
 		"--params", `{"expression":"document.title","returnByValue":true}`,
-		"--browser-url", server.URL,
 		"--json",
 	}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
@@ -986,9 +1020,10 @@ func TestProtocolExecTargetScopedJSON(t *testing.T) {
 func TestOpenJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"open", "https://example.test/feed", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/feed", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("open exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1014,9 +1049,10 @@ func TestEvalJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("eval exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1044,9 +1080,10 @@ func TestConsoleJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"console", "--errors", "--wait", "50ms", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"console", "--errors", "--wait", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("console exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1087,9 +1124,10 @@ func TestSnapshotJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"snapshot", "--selector", "article", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"snapshot", "--selector", "article", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("snapshot exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1118,10 +1156,11 @@ func TestScreenshotJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
 	})
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	outPath := filepath.Join(t.TempDir(), "shot.png")
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"screenshot", "--out", outPath, "--full-page", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"screenshot", "--out", outPath, "--full-page", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("screenshot exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1163,9 +1202,10 @@ func TestScreenshotJSON(t *testing.T) {
 func TestWorkflowVisiblePostsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "visible-posts", "https://example.test/feed", "--browser-url", server.URL, "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "visible-posts", "https://example.test/feed", "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow visible-posts exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1187,9 +1227,10 @@ func TestWorkflowVisiblePostsJSON(t *testing.T) {
 func TestWorkflowHackerNewsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "hacker-news", "https://news.ycombinator.com/", "--browser-url", server.URL, "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "hacker-news", "https://news.ycombinator.com/", "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow hacker-news exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1215,9 +1256,10 @@ func TestWorkflowHackerNewsJSON(t *testing.T) {
 func TestWorkflowHackerNewsHumanTable(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "hacker-news", "https://news.ycombinator.com/", "--browser-url", server.URL, "--wait", "0s"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "hacker-news", "https://news.ycombinator.com/", "--wait", "0s"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow hacker-news exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1315,6 +1357,10 @@ func TestDaemonStartBrowserURLJSON(t *testing.T) {
 	defer server.Close()
 
 	stateDir := t.TempDir()
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"daemon", "start", "--browser-url", server.URL, "--connection-name", "local", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
@@ -1330,6 +1376,7 @@ func TestDaemonStartBrowserURLJSON(t *testing.T) {
 		Start struct {
 			ConnectionSaved bool   `json:"connection_saved"`
 			ConnectionName  string `json:"connection_name"`
+			Keepalive       bool   `json:"keepalive_started"`
 		} `json:"start"`
 		Connection struct {
 			Name       string `json:"name"`
@@ -1340,11 +1387,55 @@ func TestDaemonStartBrowserURLJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon start output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Daemon.State != "connected" || got.Daemon.ConnectionMode != "browser_url" || !got.Start.ConnectionSaved || got.Start.ConnectionName != "local" {
-		t.Fatalf("daemon start = %+v, want connected saved browser-url connection", got)
+	if !got.OK || got.Daemon.State != "running" || got.Daemon.ConnectionMode != "browser_url" || !got.Start.ConnectionSaved || got.Start.ConnectionName != "local" || !got.Start.Keepalive {
+		t.Fatalf("daemon start = %+v, want running saved browser-url keepalive connection", got)
 	}
 	if got.Connection.Name != "local" || got.Connection.Mode != "browser_url" || got.Connection.BrowserURL != server.URL {
 		t.Fatalf("daemon start connection = %+v, want saved local browser-url", got.Connection)
+	}
+}
+
+func TestDaemonRestartBrowserURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	stateDir := t.TempDir()
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "start", "--browser-url", server.URL, "--connection-name", "local", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon start exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"daemon", "restart", "--browser-url", server.URL, "--connection-name", "local", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon restart exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Daemon struct {
+			State          string `json:"state"`
+			ConnectionMode string `json:"connection_mode"`
+		} `json:"daemon"`
+		Start struct {
+			Keepalive bool `json:"keepalive_started"`
+		} `json:"start"`
+		Restart struct {
+			Stopped bool `json:"stopped"`
+		} `json:"restart"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon restart output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Daemon.State != "running" || got.Daemon.ConnectionMode != "browser_url" || !got.Start.Keepalive || !got.Restart.Stopped {
+		t.Fatalf("daemon restart = %+v, want stopped previous daemon and running browser-url daemon", got)
 	}
 }
 
@@ -1387,6 +1478,29 @@ func TestDaemonStartAutoConnectPermissionPendingJSON(t *testing.T) {
 	}
 	if current.Connection.Name != "default" || current.Connection.Mode != "auto_connect" {
 		t.Fatalf("connection current = %+v, want remembered auto_connect default", current.Connection)
+	}
+}
+
+func TestDaemonRestartAutoConnectPermissionPendingJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	userDataDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "restart", "--debug", "--autoConnect", "--active-browser-probe", "--user-data-dir", userDataDir, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitPermission {
+		t.Fatalf("daemon restart exit code = %d, want %d; stderr=%s", code, cli.ExitPermission, errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		ErrClass            string   `json:"err_class"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon restart error output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "permission_pending" || got.ErrClass != "permission" || !containsString(got.RemediationCommands, "open chrome://inspect/#remote-debugging") {
+		t.Fatalf("daemon restart error = %+v, want permission_pending with Chrome remediation", got)
 	}
 }
 
@@ -2077,14 +2191,14 @@ func TestDoctorAutoConnectPassiveSkipsActiveProbe(t *testing.T) {
 	}
 }
 
-func TestAutoConnectPagesRequiresActiveProbe(t *testing.T) {
+func TestAutoConnectPagesRequiresRunningDaemon(t *testing.T) {
 	userDataDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte("1\n/devtools/browser/test\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"pages", "--auto-connect", "--user-data-dir", userDataDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"pages", "--auto-connect", "--user-data-dir", userDataDir, "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitConnection {
 		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitConnection, errOut.String())
 	}
@@ -2097,8 +2211,8 @@ func TestAutoConnectPagesRequiresActiveProbe(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("pages error output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "--active-browser-probe") {
-		t.Fatalf("pages error = %+v, want active probe remediation", got)
+	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running cdp daemon") {
+		t.Fatalf("pages error = %+v, want daemon-required remediation", got)
 	}
 }
 
@@ -2120,6 +2234,30 @@ func fakeWebSocketEndpoint(t *testing.T, rawURL string) string {
 	u.Scheme = "ws"
 	u.Path = "/devtools/browser/test"
 	return u.String()
+}
+
+func startFakeDaemon(t *testing.T, server *httptest.Server, connectionMode string) string {
+	t.Helper()
+	stateDir := t.TempDir()
+	t.Setenv("CDP_STATE_DIR", stateDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), connectionMode, 30*time.Second)
+	}()
+	waitForDaemonRuntime(t, ctx, stateDir)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+	return stateDir
 }
 
 func waitForDaemonRuntime(t *testing.T, ctx context.Context, stateDir string) {

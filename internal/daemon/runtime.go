@@ -3,8 +3,10 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,12 @@ import (
 
 const RuntimeFileName = "daemon.json"
 const RuntimeSocketFileName = "daemon.sock"
+
+const (
+	RPCMethodDrainEvents   = "Daemon.drainEvents"
+	RPCMethodReadEvent     = "Daemon.readEvent"
+	RPCMethodFetchProtocol = "Daemon.fetchProtocol"
+)
 
 type Runtime struct {
 	PID               int    `json:"pid"`
@@ -300,6 +308,45 @@ func (c RuntimeClient) CallSession(ctx context.Context, sessionID, method string
 	return nil
 }
 
+func (c RuntimeClient) DrainEvents(ctx context.Context) ([]cdp.Event, error) {
+	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodDrainEvents, nil)
+	if err != nil {
+		return nil, err
+	}
+	var events []cdp.Event
+	if len(raw) == 0 {
+		return events, nil
+	}
+	if err := json.Unmarshal(raw, &events); err != nil {
+		return nil, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodDrainEvents, err)
+	}
+	return events, nil
+}
+
+func (c RuntimeClient) ReadEvent(ctx context.Context) (cdp.Event, error) {
+	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodReadEvent, nil)
+	if err != nil {
+		return cdp.Event{}, err
+	}
+	var event cdp.Event
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return cdp.Event{}, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodReadEvent, err)
+	}
+	return event, nil
+}
+
+func (c RuntimeClient) FetchProtocol(ctx context.Context) (cdp.Protocol, error) {
+	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodFetchProtocol, nil)
+	if err != nil {
+		return cdp.Protocol{}, err
+	}
+	var protocol cdp.Protocol
+	if err := json.Unmarshal(raw, &protocol); err != nil {
+		return cdp.Protocol{}, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodFetchProtocol, err)
+	}
+	return protocol, nil
+}
+
 func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string, params any) (json.RawMessage, error) {
 	if strings.TrimSpace(runtime.SocketPath) == "" {
 		return nil, fmt.Errorf("daemon runtime does not expose an rpc socket; restart the daemon")
@@ -328,11 +375,30 @@ func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string,
 	}
 	var resp RPCResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, context.DeadlineExceeded
+		}
 		return nil, fmt.Errorf("read daemon rpc response %s: %w", method, err)
 	}
 	if !resp.OK {
 		if resp.Error == "" {
 			resp.Error = "daemon rpc call failed"
+		}
+		switch resp.Error {
+		case context.DeadlineExceeded.Error():
+			return nil, context.DeadlineExceeded
+		case context.Canceled.Error():
+			return nil, context.Canceled
+		}
+		if strings.Contains(resp.Error, context.DeadlineExceeded.Error()) {
+			return nil, context.DeadlineExceeded
+		}
+		if strings.Contains(resp.Error, context.Canceled.Error()) {
+			return nil, context.Canceled
 		}
 		return nil, fmt.Errorf("%s", resp.Error)
 	}
@@ -447,17 +513,46 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: "daemon rpc method is required"})
 		return
 	}
-	var result json.RawMessage
-	params := any(req.Params)
-	if len(req.Params) == 0 {
-		params = map[string]any{}
-	}
 	callCtx := ctx
 	cancel := func() {}
 	if req.TimeoutMillis > 0 {
 		callCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
 	}
 	defer cancel()
+
+	switch req.Method {
+	case RPCMethodDrainEvents:
+		writeRPCResult(conn, client.DrainEvents())
+		return
+	case RPCMethodReadEvent:
+		event, err := client.ReadEvent(callCtx)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+			return
+		}
+		writeRPCResult(conn, event)
+		return
+	case RPCMethodFetchProtocol:
+		protocolURL, err := protocolURLFromEndpoint(client.Endpoint())
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+			return
+		}
+		protocol, err := cdp.FetchProtocol(callCtx, protocolURL)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+			return
+		}
+		protocol.Source = "daemon"
+		writeRPCResult(conn, protocol)
+		return
+	}
+
+	var result json.RawMessage
+	params := any(req.Params)
+	if len(req.Params) == 0 {
+		params = map[string]any{}
+	}
 	mu.Lock()
 	err := client.CallSession(callCtx, req.SessionID, req.Method, params, &result)
 	mu.Unlock()
@@ -466,6 +561,15 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 		return
 	}
 	_ = json.NewEncoder(conn).Encode(RPCResponse{OK: true, Result: result})
+}
+
+func writeRPCResult(conn net.Conn, value any) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+		return
+	}
+	_ = json.NewEncoder(conn).Encode(RPCResponse{OK: true, Result: raw})
 }
 
 func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration, mu *sync.Mutex) error {
@@ -535,6 +639,25 @@ func marshalParams(params any) (json.RawMessage, error) {
 		}
 		return b, nil
 	}
+}
+
+func protocolURLFromEndpoint(endpoint string) (string, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("parse daemon browser endpoint: %w", err)
+	}
+	switch parsed.Scheme {
+	case "ws":
+		parsed.Scheme = "http"
+	case "wss":
+		parsed.Scheme = "https"
+	default:
+		return "", fmt.Errorf("daemon browser endpoint has unsupported scheme %q", parsed.Scheme)
+	}
+	parsed.Path = "/json/protocol"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
 }
 
 func durationString(d time.Duration) string {

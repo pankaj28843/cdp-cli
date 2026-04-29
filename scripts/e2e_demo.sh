@@ -21,7 +21,7 @@ chrome_pid=""
 
 cleanup() {
   if [[ -n "$chrome_pid" ]]; then
-    "$binary" daemon stop --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
+    "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
     kill "$chrome_pid" 2>/dev/null || true
     wait "$chrome_pid" 2>/dev/null || true
   fi
@@ -78,30 +78,32 @@ fi
 
 "$binary" doctor --browser-url "$browser_url" --json \
   | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .status == "pass")' >/dev/null
-"$binary" pages --browser-url "$browser_url" --json \
+"$binary" daemon start --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
+"$binary" pages --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
-"$binary" wait text "Ready from demo app" --browser-url "$browser_url" --timeout 5s --json \
+"$binary" wait text "Ready from demo app" --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
-"$binary" text main --browser-url "$browser_url" --json \
+"$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null
-"$binary" dom query button --browser-url "$browser_url" --json \
+"$binary" dom query button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.nodes | length >= 1)' >/dev/null
-"$binary" css inspect main --browser-url "$browser_url" --json \
+"$binary" css inspect main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .inspect.found == true' >/dev/null
-"$binary" layout overflow --browser-url "$browser_url" --selector '.overflow' --json \
+"$binary" layout overflow --state-dir "$state_dir/cdp-state" --selector '.overflow' --json \
   | jq -e '.ok == true and (.items | length >= 1)' >/dev/null
-"$binary" console --browser-url "$browser_url" --errors --wait 250ms --json \
+"$binary" console --state-dir "$state_dir/cdp-state" --errors --wait 250ms --json \
   | jq -e '.ok == true and (.messages[] | select(.text | contains("synthetic demo error")))' >/dev/null
 probe_id="$(date +%s%N)"
 network_output="$state_dir/network.json"
-"$binary" network --browser-url "$browser_url" --failed --wait 2s --json >"$network_output" &
+"$binary" network --state-dir "$state_dir/cdp-state" --failed --wait 2s --json >"$network_output" &
 network_pid=$!
 sleep 0.2
-"$binary" eval "fetch('$app_url/api/fail?probe=$probe_id').then(r => r.status)" --browser-url "$browser_url" --await-promise --json \
+"$binary" eval "fetch('$app_url/api/fail?probe=$probe_id').then(r => r.status)" --state-dir "$state_dir/cdp-state" --await-promise --json \
   | jq -e '.ok == true and .result.value == 503' >/dev/null
 wait "$network_pid"
 jq -e --arg probe "$probe_id" '.ok == true and (.requests[] | select((.url | contains($probe)) and .status == 503))' "$network_output" >/dev/null
-"$binary" screenshot --browser-url "$browser_url" --out "$state_dir/demo.png" --json \
+"$binary" screenshot --state-dir "$state_dir/cdp-state" --out "$state_dir/demo.png" --json \
   | jq -e --arg path "$state_dir/demo.png" '.ok == true and .screenshot.path == $path and .screenshot.bytes > 0' >/dev/null
 
 printf 'demo e2e passed: %s\n' "$app_url"

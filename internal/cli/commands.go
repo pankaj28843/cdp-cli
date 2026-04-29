@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -353,9 +352,22 @@ func (a *app) newDaemonCommand() *cobra.Command {
 	cmd.AddCommand(a.newDaemonStartCommand())
 	cmd.AddCommand(a.newDaemonStatusCommand())
 	cmd.AddCommand(a.newDaemonStopCommand())
+	cmd.AddCommand(a.newDaemonRestartCommand())
 	cmd.AddCommand(a.newDaemonHoldCommand())
 	cmd.AddCommand(planned("logs", "Show attach daemon logs"))
 	return cmd
+}
+
+type daemonStartConfig struct {
+	prime          bool
+	reconnect      time.Duration
+	connectionName string
+	remember       bool
+}
+
+type daemonStartResult struct {
+	human string
+	data  map[string]any
 }
 
 func (a *app) newDaemonStartCommand() *cobra.Command {
@@ -371,144 +383,16 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, 60*time.Second)
 			defer cancel()
 
-			if a.opts.browserURL != "" && a.opts.autoConnect {
-				return commandError(
-					"conflicting_connection_flags",
-					"usage",
-					"use either --browser-url or --auto-connect, not both",
-					ExitUsage,
-					[]string{"cdp daemon start --auto-connect --json", "cdp daemon start --browser-url <browser-url> --json"},
-				)
-			}
-			if reconnect < 0 {
-				return commandError(
-					"invalid_reconnect_interval",
-					"usage",
-					"--reconnect must be a non-negative duration",
-					ExitUsage,
-					[]string{"cdp daemon start --reconnect 30s --json"},
-				)
-			}
-
-			var err error
-			if err := a.applySelectedConnection(ctx); err != nil {
+			result, err := a.runDaemonStart(ctx, daemonStartConfig{
+				prime:          prime,
+				reconnect:      reconnect,
+				connectionName: connectionName,
+				remember:       remember,
+			})
+			if err != nil {
 				return err
 			}
-			explicitConnection := a.opts.browserURL != "" || a.opts.autoConnect
-			keepAlive := a.opts.autoConnect
-			if keepAlive || prime {
-				a.opts.activeProbe = true
-			}
-
-			var endpoint string
-			var runtime *daemon.Runtime
-			var alreadyRunning bool
-			var savedConnection *state.Connection
-			var statePath string
-			if keepAlive && explicitConnection && remember {
-				savedConnection, statePath, err = a.rememberDaemonConnection(ctx, connectionName)
-				if err != nil {
-					return err
-				}
-			}
-			if keepAlive {
-				endpoint, err = a.browserEndpoint(ctx)
-				if err != nil {
-					return commandError(
-						"permission_pending",
-						"permission",
-						err.Error(),
-						ExitPermission,
-						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
-					)
-				}
-			}
-
-			var probe browser.ProbeResult
-			if keepAlive {
-				probe = browser.ProbeResult{
-					State:                "cdp_available",
-					Message:              "daemon keepalive process holds the approved Chrome DevTools WebSocket",
-					ConnectionMode:       "auto_connect",
-					Channel:              a.opts.channel,
-					WebSocketDebuggerURL: true,
-				}
-			} else {
-				probe, err = a.browserProbe(ctx)
-				if err != nil {
-					return commandError(
-						"invalid_browser_url",
-						"usage",
-						err.Error(),
-						ExitUsage,
-						[]string{"cdp daemon start --browser-url <browser-url> --json"},
-					)
-				}
-			}
-
-			if savedConnection == nil && explicitConnection && remember {
-				savedConnection, statePath, err = a.rememberDaemonConnection(ctx, connectionName)
-				if err != nil {
-					return err
-				}
-			}
-
-			if keepAlive {
-				r, reused, err := a.startKeepAlive(ctx, endpoint, reconnect)
-				if err != nil {
-					return commandError(
-						"permission_pending",
-						"permission",
-						fmt.Sprintf("start daemon keepalive: %v", err),
-						ExitPermission,
-						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
-					)
-				}
-				runtime = &r
-				alreadyRunning = reused
-			}
-
-			status := a.daemonStatus(ctx, probe)
-			if runtime != nil {
-				status = daemon.WithRuntime(status, *runtime, true)
-			}
-			if !keepAlive {
-				if err := daemonStartFailure(probe, status); err != nil {
-					return err
-				}
-			}
-
-			start := map[string]any{
-				"state":              status.State,
-				"message":            status.Message,
-				"connection_mode":    status.ConnectionMode,
-				"prime":              prime,
-				"connection_saved":   savedConnection != nil,
-				"next_commands":      status.NextCommands,
-				"reconnect_interval": durationString(reconnect),
-				"keepalive_started":  runtime != nil && !alreadyRunning,
-				"already_running":    alreadyRunning,
-			}
-			data := map[string]any{
-				"ok":      true,
-				"daemon":  status,
-				"start":   start,
-				"browser": probe,
-			}
-			if savedConnection != nil {
-				start["connection_name"] = savedConnection.Name
-				start["state_path"] = statePath
-				data["connection"] = savedConnection
-			}
-			if runtime != nil {
-				start["runtime"] = runtime
-				data["runtime"] = runtime
-			}
-			human := status.Message
-			if savedConnection != nil {
-				human = fmt.Sprintf("%s\nconnection %s saved", human, savedConnection.Name)
-			}
-			return a.render(ctx, human, data)
+			return a.render(ctx, result.human, result.data)
 		},
 	}
 	cmd.Flags().BoolVar(&prime, "prime", false, "compatibility flag; daemon start validates auto-connect by default")
@@ -516,6 +400,147 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&connectionName, "connection-name", "default", "connection name to save when --browser-url or --auto-connect is supplied")
 	cmd.Flags().BoolVar(&remember, "remember", true, "save supplied connection metadata for future on-demand commands")
 	return cmd
+}
+
+func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemonStartResult, error) {
+	if a.opts.browserURL != "" && a.opts.autoConnect {
+		return daemonStartResult{}, commandError(
+			"conflicting_connection_flags",
+			"usage",
+			"use either --browser-url or --auto-connect, not both",
+			ExitUsage,
+			[]string{"cdp daemon start --auto-connect --json", "cdp daemon start --browser-url <browser-url> --json"},
+		)
+	}
+	if cfg.reconnect < 0 {
+		return daemonStartResult{}, commandError(
+			"invalid_reconnect_interval",
+			"usage",
+			"--reconnect must be a non-negative duration",
+			ExitUsage,
+			[]string{"cdp daemon start --reconnect 30s --json"},
+		)
+	}
+
+	var err error
+	if err := a.applySelectedConnection(ctx); err != nil {
+		return daemonStartResult{}, err
+	}
+	explicitConnection := a.opts.browserURL != "" || a.opts.autoConnect
+	keepAlive := explicitConnection
+	if (keepAlive && a.opts.autoConnect) || cfg.prime {
+		a.opts.activeProbe = true
+	}
+
+	var endpoint string
+	var runtime *daemon.Runtime
+	var alreadyRunning bool
+	var savedConnection *state.Connection
+	var statePath string
+	if keepAlive && explicitConnection && cfg.remember {
+		savedConnection, statePath, err = a.rememberDaemonConnection(ctx, cfg.connectionName)
+		if err != nil {
+			return daemonStartResult{}, err
+		}
+	}
+	if keepAlive {
+		endpoint, err = a.browserEndpoint(ctx)
+		if err != nil {
+			return daemonStartResult{}, commandError(
+				"permission_pending",
+				"permission",
+				err.Error(),
+				ExitPermission,
+				[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
+			)
+		}
+	}
+
+	var probe browser.ProbeResult
+	if keepAlive {
+		probe = browser.ProbeResult{
+			State:                "cdp_available",
+			Message:              "daemon keepalive process holds the approved Chrome DevTools WebSocket",
+			ConnectionMode:       a.connectionMode(),
+			Channel:              a.opts.channel,
+			WebSocketDebuggerURL: true,
+		}
+	} else {
+		probe, err = a.browserProbe(ctx)
+		if err != nil {
+			return daemonStartResult{}, commandError(
+				"invalid_browser_url",
+				"usage",
+				err.Error(),
+				ExitUsage,
+				[]string{"cdp daemon start --browser-url <browser-url> --json"},
+			)
+		}
+	}
+
+	if savedConnection == nil && explicitConnection && cfg.remember {
+		savedConnection, statePath, err = a.rememberDaemonConnection(ctx, cfg.connectionName)
+		if err != nil {
+			return daemonStartResult{}, err
+		}
+	}
+
+	if keepAlive {
+		r, reused, err := a.startKeepAlive(ctx, endpoint, cfg.reconnect)
+		if err != nil {
+			return daemonStartResult{}, commandError(
+				"permission_pending",
+				"permission",
+				fmt.Sprintf("start daemon keepalive: %v", err),
+				ExitPermission,
+				[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
+			)
+		}
+		runtime = &r
+		alreadyRunning = reused
+	}
+
+	status := a.daemonStatus(ctx, probe)
+	if runtime != nil {
+		status = daemon.WithRuntime(status, *runtime, true)
+	}
+	if !keepAlive {
+		if err := daemonStartFailure(probe, status); err != nil {
+			return daemonStartResult{}, err
+		}
+	}
+
+	start := map[string]any{
+		"state":              status.State,
+		"message":            status.Message,
+		"connection_mode":    status.ConnectionMode,
+		"prime":              cfg.prime,
+		"connection_saved":   savedConnection != nil,
+		"next_commands":      status.NextCommands,
+		"reconnect_interval": durationString(cfg.reconnect),
+		"keepalive_started":  runtime != nil && !alreadyRunning,
+		"already_running":    alreadyRunning,
+	}
+	data := map[string]any{
+		"ok":      true,
+		"daemon":  status,
+		"start":   start,
+		"browser": probe,
+	}
+	if savedConnection != nil {
+		start["connection_name"] = savedConnection.Name
+		start["state_path"] = statePath
+		data["connection"] = savedConnection
+	}
+	if runtime != nil {
+		start["runtime"] = runtime
+		data["runtime"] = runtime
+	}
+	human := status.Message
+	if savedConnection != nil {
+		human = fmt.Sprintf("%s\nconnection %s saved", human, savedConnection.Name)
+	}
+	return daemonStartResult{human: human, data: data}, nil
 }
 
 func (a *app) rememberDaemonConnection(ctx context.Context, name string) (*state.Connection, string, error) {
@@ -695,6 +720,65 @@ func (a *app) newDaemonStopCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+func (a *app) newDaemonRestartCommand() *cobra.Command {
+	var prime bool
+	var reconnect time.Duration
+	var connectionName string
+	var remember bool
+
+	cmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the attach daemon and reconnect through the daemon gateway",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 60*time.Second)
+			defer cancel()
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			previousRuntime, stopped, err := daemon.StopRuntime(ctx, store.Dir)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("stop daemon before restart: %v", err),
+					ExitConnection,
+					[]string{"cdp daemon status --json", "cdp daemon stop --json"},
+				)
+			}
+
+			result, err := a.runDaemonStart(ctx, daemonStartConfig{
+				prime:          prime,
+				reconnect:      reconnect,
+				connectionName: connectionName,
+				remember:       remember,
+			})
+			if err != nil {
+				return err
+			}
+			restart := map[string]any{
+				"stopped": stopped,
+			}
+			if previousRuntime.PID > 0 {
+				restart["previous_runtime"] = previousRuntime
+			}
+			result.data["restart"] = restart
+			if stopped {
+				result.human = fmt.Sprintf("daemon process %d stopped\n%s", previousRuntime.PID, result.human)
+			} else {
+				result.human = fmt.Sprintf("daemon was not running\n%s", result.human)
+			}
+			return a.render(ctx, result.human, result.data)
+		},
+	}
+	cmd.Flags().BoolVar(&prime, "prime", false, "compatibility flag; daemon restart validates auto-connect by default")
+	cmd.Flags().DurationVar(&reconnect, "reconnect", 0, "requested daemon reconnect interval, such as 30s")
+	cmd.Flags().StringVar(&connectionName, "connection-name", "default", "connection name to save when --browser-url or --auto-connect is supplied")
+	cmd.Flags().BoolVar(&remember, "remember", true, "save supplied connection metadata for future on-demand commands")
+	return cmd
 }
 
 func (a *app) newDaemonHoldCommand() *cobra.Command {
@@ -1494,85 +1578,53 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 	return cmd
 }
 
+type browserEventClient interface {
+	cdp.CommandClient
+	DrainEvents(context.Context) ([]cdp.Event, error)
+	ReadEvent(context.Context) (cdp.Event, error)
+}
+
 func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(context.Context) error, error) {
-	opts, err := a.browserOptions(ctx)
+	runtime, err := a.requiredDaemonRuntime(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if runtime, ok := a.runningRuntimeForOptions(ctx, opts); ok {
-		return daemon.RuntimeClient{Runtime: runtime}, func(context.Context) error { return nil }, nil
-	}
-	if opts.AutoConnect && !opts.ActiveProbe {
-		return nil, nil, fmt.Errorf("auto-connect browser attach is passive by default to avoid Chrome prompts; run `cdp daemon start --auto-connect --json` once, or pass --active-browser-probe to attach directly")
-	}
-	endpoint, err := browser.ResolveEndpoint(ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	client, err := cdp.Dial(ctx, endpoint)
-	if err != nil {
-		return nil, nil, err
-	}
-	return client, func(context.Context) error {
-		return client.CloseNormal()
-	}, nil
+	return daemon.RuntimeClient{Runtime: runtime}, func(context.Context) error { return nil }, nil
 }
 
-func (a *app) browserEventCDPClient(ctx context.Context) (*cdp.Client, func(context.Context) error, error) {
-	opts, err := a.browserOptions(ctx)
+func (a *app) browserEventCDPClient(ctx context.Context) (browserEventClient, func(context.Context) error, error) {
+	runtime, err := a.requiredDaemonRuntime(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if runtime, ok := a.runningRuntimeForOptions(ctx, opts); ok {
-		if runtime.Endpoint == "" {
-			return nil, nil, fmt.Errorf("running daemon does not expose an event-capable browser endpoint; restart it with `cdp daemon stop --json` then `cdp daemon start --auto-connect --json`")
-		}
-		client, err := cdp.Dial(ctx, runtime.Endpoint)
-		if err != nil {
-			return nil, nil, err
-		}
-		return client, func(context.Context) error {
-			return client.CloseNormal()
-		}, nil
-	}
-	if opts.AutoConnect && !opts.ActiveProbe {
-		return nil, nil, fmt.Errorf("auto-connect browser attach is passive by default to avoid Chrome prompts; run `cdp daemon start --auto-connect --json` once, or pass --active-browser-probe to attach directly")
-	}
-	endpoint, err := browser.ResolveEndpoint(ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	client, err := cdp.Dial(ctx, endpoint)
-	if err != nil {
-		return nil, nil, err
-	}
-	return client, func(context.Context) error {
-		return client.CloseNormal()
-	}, nil
+	return daemon.RuntimeClient{Runtime: runtime}, func(context.Context) error { return nil }, nil
 }
 
-func (a *app) runningRuntimeForOptions(ctx context.Context, opts browser.ProbeOptions) (daemon.Runtime, bool) {
-	if !opts.AutoConnect || opts.BrowserURL != "" {
-		return daemon.Runtime{}, false
+func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error) {
+	if _, err := a.browserOptions(ctx); err != nil {
+		return daemon.Runtime{}, err
 	}
 	store, err := a.stateStore()
 	if err != nil {
-		return daemon.Runtime{}, false
+		return daemon.Runtime{}, err
 	}
 	runtime, ok, err := daemon.LoadRuntime(ctx, store.Dir)
-	if err != nil || !ok {
-		return daemon.Runtime{}, false
+	if err != nil {
+		return daemon.Runtime{}, err
 	}
-	if runtime.ConnectionMode != "auto_connect" {
-		return daemon.Runtime{}, false
+	if !ok {
+		return daemon.Runtime{}, fmt.Errorf("browser commands require a running cdp daemon; run `cdp daemon start --auto-connect --json` or `cdp daemon start --browser-url <browser-url> --json`")
 	}
-	if opts.UserDataDir != "" && runtime.UserDataDir != opts.UserDataDir {
-		return daemon.Runtime{}, false
+	if !a.runtimeMatchesConnection(runtime) {
+		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the selected browser connection; run `cdp daemon status --json` or restart it with `cdp daemon stop --json` then `cdp daemon start --json`")
 	}
-	if !daemon.RuntimeRunning(runtime) || !daemon.RuntimeSocketReady(ctx, runtime) {
-		return daemon.Runtime{}, false
+	if !daemon.RuntimeRunning(runtime) {
+		return daemon.Runtime{}, fmt.Errorf("daemon runtime state exists but the process is not running; run `cdp daemon start --json`")
 	}
-	return runtime, true
+	if !daemon.RuntimeSocketReady(ctx, runtime) {
+		return daemon.Runtime{}, fmt.Errorf("daemon runtime socket is not ready; run `cdp daemon status --json` or restart it with `cdp daemon stop --json` then `cdp daemon start --json`")
+	}
+	return runtime, nil
 }
 
 func (a *app) attachPageSession(ctx context.Context, targetID, urlContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
@@ -1605,7 +1657,7 @@ func (a *app) attachPageSession(ctx context.Context, targetID, urlContains strin
 	return session, target, nil
 }
 
-func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains string) (*cdp.Client, *cdp.PageSession, cdp.TargetInfo, error) {
+func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains string) (browserEventClient, *cdp.PageSession, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		return nil, nil, cdp.TargetInfo{}, commandError(
@@ -3089,7 +3141,7 @@ type networkRequest struct {
 	EncodedDataLength float64 `json:"encoded_data_length,omitempty"`
 }
 
-func collectNetworkRequests(ctx context.Context, client *cdp.Client, sessionID string, wait time.Duration, limit int, failedOnly bool) ([]networkRequest, bool, error) {
+func collectNetworkRequests(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, failedOnly bool) ([]networkRequest, bool, error) {
 	if err := client.CallSession(ctx, sessionID, "Network.enable", map[string]any{}, nil); err != nil {
 		return nil, false, err
 	}
@@ -3113,7 +3165,11 @@ func collectNetworkRequests(ctx context.Context, client *cdp.Client, sessionID s
 		}
 		mergeNetworkRequest(existing, req)
 	}
-	for _, event := range client.DrainEvents() {
+	events, err := client.DrainEvents(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, event := range events {
 		addEvent(event)
 	}
 	if wait > 0 {
@@ -3274,7 +3330,7 @@ type consoleMessageArg struct {
 	Value       json.RawMessage `json:"value,omitempty"`
 }
 
-func collectConsoleMessages(ctx context.Context, client *cdp.Client, sessionID string, wait time.Duration, limit int, errorsOnly bool, typeSet map[string]bool) ([]consoleMessage, bool, error) {
+func collectConsoleMessages(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, errorsOnly bool, typeSet map[string]bool) ([]consoleMessage, bool, error) {
 	if err := client.CallSession(ctx, sessionID, "Runtime.enable", map[string]any{}, nil); err != nil {
 		return nil, false, err
 	}
@@ -3301,7 +3357,11 @@ func collectConsoleMessages(ctx context.Context, client *cdp.Client, sessionID s
 			messages = append(messages, msg)
 		}
 	}
-	addEventMessages(client.DrainEvents())
+	events, err := client.DrainEvents(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	addEventMessages(events)
 
 	if wait > 0 {
 		eventCtx, cancel := context.WithTimeout(ctx, wait)
@@ -3843,22 +3903,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
-	opts, err := a.browserOptions(ctx)
-	if err != nil {
-		return cdp.Protocol{}, err
-	}
-	var protocolURL string
-	allowOfficialFallback := true
-	if opts.AutoConnect && !opts.ActiveProbe {
-		if _, ok := a.runningRuntimeForOptions(ctx, opts); ok {
-			protocolURL, err = browser.ResolveProtocolURL(ctx, opts)
-		} else {
-			err = nil
-		}
-	} else {
-		protocolURL, err = browser.ResolveProtocolURL(ctx, opts)
-		allowOfficialFallback = opts.BrowserURL == "" && !opts.ActiveProbe
-	}
+	runtime, err := a.requiredDaemonRuntime(ctx)
 	if err != nil {
 		return cdp.Protocol{}, commandError(
 			"connection_not_configured",
@@ -3868,30 +3913,14 @@ func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
 			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 		)
 	}
-	if protocolURL != "" {
-		protocol, err := cdp.FetchProtocol(ctx, protocolURL)
-		if err == nil {
-			return protocol, nil
-		}
-		var httpErr cdp.ProtocolHTTPError
-		if !allowOfficialFallback || !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
-			return cdp.Protocol{}, commandError(
-				"connection_failed",
-				"connection",
-				fmt.Sprintf("fetch protocol metadata: %v", err),
-				ExitConnection,
-				[]string{"cdp doctor --json", "cdp daemon status --json"},
-			)
-		}
-	}
-	protocol, err := cdp.FetchOfficialProtocol(ctx)
+	protocol, err := daemon.RuntimeClient{Runtime: runtime}.FetchProtocol(ctx)
 	if err != nil {
 		return cdp.Protocol{}, commandError(
 			"connection_failed",
 			"connection",
-			fmt.Sprintf("fetch official protocol metadata: %v", err),
+			fmt.Sprintf("fetch protocol metadata through daemon: %v", err),
 			ExitConnection,
-			[]string{"cdp doctor --json", "cdp daemon status --json", "cdp protocol exec Browser.getVersion --json"},
+			[]string{"cdp doctor --json", "cdp daemon status --json"},
 		)
 	}
 	return protocol, nil
@@ -4445,6 +4474,11 @@ func commandExamples(path string) []string {
 		"cdp daemon stop": {
 			"cdp daemon stop --json",
 		},
+		"cdp daemon restart": {
+			"cdp daemon restart --auto-connect --json",
+			"cdp daemon restart --debug --autoConnect --active-browser-probe --json",
+			"cdp daemon restart --browser-url <browser-url> --json",
+		},
 		"cdp connection remove": {
 			"cdp connection remove stale --json",
 		},
@@ -4463,13 +4497,11 @@ func commandExamples(path string) []string {
 			"cdp targets --json",
 			"cdp targets --limit 10 --json",
 			"cdp targets --type service_worker --json",
-			"cdp targets --browser-url <browser-url> --json",
 		},
 		"cdp pages": {
 			"cdp pages --json",
 			"cdp pages --limit 10 --json",
 			"cdp pages --include-url localhost --exclude-url admin --json",
-			"cdp pages --browser-url <browser-url> --json",
 		},
 		"cdp page reload": {
 			"cdp page reload --target <target-id> --json",
@@ -4543,12 +4575,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",
-			"cdp protocol metadata --browser-url <browser-url> --json",
 		},
 		"cdp protocol domains": {
 			"cdp protocol domains --json",
 			"cdp protocol domains --experimental --json",
-			"cdp protocol domains --browser-url <browser-url> --json",
 		},
 		"cdp protocol search": {
 			"cdp protocol search screenshot --json",

@@ -34,6 +34,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "checks", Type: "array<check>", Required: true, Description: "Readiness checks with name, status, and message."},
 			},
 		},
+		"daemon-restart": {
+			Name:        "daemon-restart",
+			Description: "Stop the existing daemon runtime if present, then start a daemon-backed browser connection.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when restart completed."},
+				{Name: "daemon", Type: "daemon_status", Required: true, Description: "Current daemon status after restart."},
+				{Name: "start", Type: "daemon_start", Required: true, Description: "Start metadata including connection mode and keepalive state."},
+				{Name: "restart", Type: "daemon_restart", Required: true, Description: "Stop metadata including whether a previous daemon process was stopped."},
+				{Name: "browser", Type: "browser_probe", Required: true, Description: "Browser probe or daemon-backed browser availability metadata."},
+			},
+		},
 		"pages": {
 			Name:        "pages",
 			Description: "Open page targets from the selected browser connection.",

@@ -92,14 +92,14 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.PersistentFlags().DurationVar(&a.opts.timeout, "timeout", 0, "ceiling-bound command execution, such as 30s or 2m")
 	root.PersistentFlags().StringVar(&a.opts.profile, "profile", config.DefaultProfile, "named cdp-cli profile to use")
 	root.PersistentFlags().StringVar(&a.opts.config, "config", "", "path to config file")
-	root.PersistentFlags().StringVar(&a.opts.browserURL, "browser-url", os.Getenv("CDP_BROWSER_URL"), "Chrome DevTools browser URL; can also be set with CDP_BROWSER_URL")
+	root.PersistentFlags().StringVar(&a.opts.browserURL, "browser-url", os.Getenv("CDP_BROWSER_URL"), "Chrome DevTools browser URL for daemon lifecycle and connection management; can also be set with CDP_BROWSER_URL")
 	root.PersistentFlags().StringVar(&a.opts.browserURL, "browserUrl", os.Getenv("CDP_BROWSER_URL"), "alias for --browser-url")
-	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "auto-connect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "request Chrome's default-profile remote debugging flow when supported")
+	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "auto-connect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "select Chrome's default-profile remote debugging flow for daemon lifecycle commands")
 	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "autoConnect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "alias for --auto-connect")
 	root.PersistentFlags().StringVar(&a.opts.channel, "channel", envDefault("CDP_CHANNEL", "stable"), "Chrome channel for --auto-connect: stable, beta, canary, or dev")
 	root.PersistentFlags().StringVar(&a.opts.userDataDir, "user-data-dir", os.Getenv("CDP_USER_DATA_DIR"), "Chrome user data directory for --auto-connect")
 	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
-	root.PersistentFlags().BoolVar(&a.opts.activeProbe, "active-browser-probe", os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "1" || os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "true", "actively connect to Chrome during auto-connect checks; may trigger a Chrome remote-debugging prompt")
+	root.PersistentFlags().BoolVar(&a.opts.activeProbe, "active-browser-probe", os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "1" || os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "true", "actively connect to Chrome during daemon status/start checks; may trigger a Chrome remote-debugging prompt")
 	root.PersistentFlags().StringVar(&a.opts.connection, "connection", os.Getenv("CDP_CONNECTION"), "named browser connection from local state to use for this command")
 
 	root.AddCommand(a.newVersionCommand())
@@ -151,17 +151,6 @@ func (a *app) browserEndpoint(ctx context.Context) (string, error) {
 	return browser.ResolveEndpoint(ctx, opts)
 }
 
-func (a *app) browserProtocolURL(ctx context.Context) (string, error) {
-	opts, err := a.browserOptions(ctx)
-	if err != nil {
-		return "", err
-	}
-	if opts.AutoConnect && !opts.ActiveProbe {
-		return "", fmt.Errorf("auto-connect protocol discovery is passive by default to avoid Chrome prompts; pass --active-browser-probe to query Chrome directly")
-	}
-	return browser.ResolveProtocolURL(ctx, opts)
-}
-
 func (a *app) browserOptions(ctx context.Context) (browser.ProbeOptions, error) {
 	if err := a.applySelectedConnection(ctx); err != nil {
 		return browser.ProbeOptions{}, err
@@ -200,9 +189,6 @@ func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemo
 
 func (a *app) runtimeMatchesConnection(runtime daemon.Runtime) bool {
 	if runtime.ConnectionMode != a.connectionMode() {
-		return false
-	}
-	if a.opts.browserURL != "" {
 		return false
 	}
 	if a.opts.userDataDir != "" && runtime.UserDataDir != a.opts.userDataDir {

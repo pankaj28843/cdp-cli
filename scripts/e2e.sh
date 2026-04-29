@@ -21,6 +21,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect")))' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities | map(.name) | index("raw_protocol"))' >/dev/null
@@ -30,6 +31,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot"' >/dev/null
 "$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.fields | map(.name) | index("scope"))' >/dev/null
 "$binary" schema protocol-examples --json | jq -e '.ok == true and .schema.name == "protocol-examples" and (.schema.fields | map(.name) | index("examples"))' >/dev/null
+"$binary" schema daemon-restart --json | jq -e '.ok == true and .schema.name == "daemon-restart" and (.schema.fields | map(.name) | index("restart"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page reload" --json | jq -e '.ok == true and .commands.name == "reload" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page back" --json | jq -e '.ok == true and .commands.name == "back" and (.commands.examples | length > 0)' >/dev/null
@@ -78,6 +80,16 @@ fi
 printf '%s\n' "$daemon_start_output" | jq -e '.ok == false and .code == "permission_pending" and (.remediation_commands | index("open chrome://inspect/#remote-debugging"))' >/dev/null
 "$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default" and .connection.mode == "auto_connect"' >/dev/null
 
+set +e
+daemon_restart_output="$("$binary" daemon restart --debug --autoConnect --active-browser-probe --user-data-dir "$state_dir/user-data" --state-dir "$state_dir" --json 2>/tmp/cdp-cli-daemon-restart.err)"
+daemon_restart_code=$?
+set -e
+if [[ "$daemon_restart_code" -ne 4 ]]; then
+  echo "daemon restart exit code = $daemon_restart_code, want 4 while auto-connect permission is pending" >&2
+  exit 1
+fi
+printf '%s\n' "$daemon_restart_output" | jq -e '.ok == false and .code == "permission_pending" and (.remediation_commands | index("open chrome://inspect/#remote-debugging"))' >/dev/null
+
 "$binary" connection add default --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
 "$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default"' >/dev/null
 "$binary" connection resolve --state-dir "$state_dir" --json | jq -e '.ok == true and .source == "selected" and .connection.name == "default"' >/dev/null
@@ -95,7 +107,16 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
   "$binary" daemon status --json | jq -e '.daemon.connection_mode == "auto_connect" and (.daemon.state == "passive" or .daemon.state == "permission_pending")' >/dev/null
   if [[ "${CDP_E2E_ACTIVE_BROWSER:-}" == "1" || "${CDP_E2E_ACTIVE_BROWSER:-}" == "true" ]]; then
     set +e
-    live_protocol_output="$("$binary" --active-browser-probe --timeout 5s protocol metadata --json 2>/tmp/cdp-cli-live-protocol.err)"
+    live_daemon_output="$("$binary" daemon start --auto-connect --timeout 10s --json 2>/tmp/cdp-cli-live-daemon-start.err)"
+    live_daemon_code=$?
+    set -e
+    if [[ "$live_daemon_code" -eq 0 ]]; then
+      printf '%s\n' "$live_daemon_output" | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
+    else
+      printf '%s\n' "$live_daemon_output" | jq -e '.ok == false and (.code == "permission_pending" or .code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+    fi
+    set +e
+    live_protocol_output="$("$binary" --timeout 5s protocol metadata --json 2>/tmp/cdp-cli-live-protocol.err)"
     live_protocol_code=$?
     set -e
     if [[ "$live_protocol_code" -eq 0 ]]; then
@@ -104,7 +125,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_protocol_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
     set +e
-    live_domains_output="$("$binary" --active-browser-probe --timeout 5s protocol domains --json 2>/tmp/cdp-cli-live-domains.err)"
+    live_domains_output="$("$binary" --timeout 5s protocol domains --json 2>/tmp/cdp-cli-live-domains.err)"
     live_domains_code=$?
     set -e
     if [[ "$live_domains_code" -eq 0 ]]; then
@@ -113,7 +134,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_domains_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
     set +e
-    live_search_output="$("$binary" --active-browser-probe --timeout 5s protocol search screenshot --json 2>/tmp/cdp-cli-live-search.err)"
+    live_search_output="$("$binary" --timeout 5s protocol search screenshot --json 2>/tmp/cdp-cli-live-search.err)"
     live_search_code=$?
     set -e
     if [[ "$live_search_code" -eq 0 ]]; then
@@ -122,7 +143,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_search_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
     set +e
-    live_describe_output="$("$binary" --active-browser-probe --timeout 5s protocol describe Page.captureScreenshot --json 2>/tmp/cdp-cli-live-describe.err)"
+    live_describe_output="$("$binary" --timeout 5s protocol describe Page.captureScreenshot --json 2>/tmp/cdp-cli-live-describe.err)"
     live_describe_code=$?
     set -e
     if [[ "$live_describe_code" -eq 0 ]]; then
@@ -131,7 +152,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_describe_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured" or .code == "unknown_protocol_entity")' >/dev/null
     fi
     set +e
-    live_exec_output="$("$binary" --active-browser-probe --timeout 5s protocol exec Browser.getVersion --params '{}' --json 2>/tmp/cdp-cli-live-exec.err)"
+    live_exec_output="$("$binary" --timeout 5s protocol exec Browser.getVersion --params '{}' --json 2>/tmp/cdp-cli-live-exec.err)"
     live_exec_code=$?
     set -e
     if [[ "$live_exec_code" -eq 0 ]]; then
@@ -140,7 +161,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_exec_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
     set +e
-    live_targets_output="$("$binary" --active-browser-probe --timeout 5s targets --json 2>/tmp/cdp-cli-live-targets.err)"
+    live_targets_output="$("$binary" --timeout 5s targets --json 2>/tmp/cdp-cli-live-targets.err)"
     live_targets_code=$?
     set -e
     if [[ "$live_targets_code" -eq 0 ]]; then
@@ -149,7 +170,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_targets_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
     set +e
-    live_pages_output="$("$binary" --active-browser-probe --timeout 5s pages --json 2>/tmp/cdp-cli-live-pages.err)"
+    live_pages_output="$("$binary" --timeout 5s pages --json 2>/tmp/cdp-cli-live-pages.err)"
     live_pages_code=$?
     set -e
     if [[ "$live_pages_code" -eq 0 ]]; then
@@ -159,7 +180,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
     fi
     if [[ -n "${CDP_E2E_VISIBLE_POSTS_URL:-}" ]]; then
       set +e
-      live_posts_output="$("$binary" --active-browser-probe --timeout "${CDP_E2E_VISIBLE_POSTS_TIMEOUT:-45s}" workflow visible-posts "$CDP_E2E_VISIBLE_POSTS_URL" --selector "${CDP_E2E_VISIBLE_POSTS_SELECTOR:-article}" --limit "${CDP_E2E_VISIBLE_POSTS_LIMIT:-3}" --json 2>/tmp/cdp-cli-live-posts.err)"
+      live_posts_output="$("$binary" --timeout "${CDP_E2E_VISIBLE_POSTS_TIMEOUT:-45s}" workflow visible-posts "$CDP_E2E_VISIBLE_POSTS_URL" --selector "${CDP_E2E_VISIBLE_POSTS_SELECTOR:-article}" --limit "${CDP_E2E_VISIBLE_POSTS_LIMIT:-3}" --json 2>/tmp/cdp-cli-live-posts.err)"
       live_posts_code=$?
       set -e
       if [[ "$live_posts_code" -ne 0 ]]; then
@@ -170,7 +191,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
     fi
     if [[ -n "${CDP_E2E_HN_URL:-}" ]]; then
       set +e
-      live_hn_output="$("$binary" --active-browser-probe --timeout "${CDP_E2E_HN_TIMEOUT:-45s}" workflow hacker-news "$CDP_E2E_HN_URL" --limit "${CDP_E2E_HN_LIMIT:-3}" --json 2>/tmp/cdp-cli-live-hn.err)"
+      live_hn_output="$("$binary" --timeout "${CDP_E2E_HN_TIMEOUT:-45s}" workflow hacker-news "$CDP_E2E_HN_URL" --limit "${CDP_E2E_HN_LIMIT:-3}" --json 2>/tmp/cdp-cli-live-hn.err)"
       live_hn_code=$?
       set -e
       if [[ "$live_hn_code" -ne 0 ]]; then
@@ -179,10 +200,16 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       fi
       printf '%s\n' "$live_hn_output" | jq -e '.ok == true and (.stories | length > 0) and .organization.story_row_selector == "tr.athing"' >/dev/null
     fi
+    "$binary" daemon stop --json >/dev/null 2>&1 || true
   fi
 elif [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   "$binary" doctor --browser-url "$CDP_E2E_BROWSER_URL" --json \
     | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .connection_mode == "browser_url" and (.status == "pass" or .status == "warn"))' >/dev/null
+  "$binary" daemon start --browser-url "$CDP_E2E_BROWSER_URL" --state-dir "$state_dir/live-browser" --json \
+    | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
+  "$binary" pages --state-dir "$state_dir/live-browser" --json \
+    | jq -e '.ok == true and (.pages | type == "array")' >/dev/null
+  "$binary" daemon stop --state-dir "$state_dir/live-browser" --json >/dev/null
 fi
 
 "$binary" daemon status --state-dir "$state_dir" --json | jq -e '.ok == true and .daemon.state' >/dev/null
