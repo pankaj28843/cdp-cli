@@ -8,8 +8,9 @@ The goal is a long-running local CDP process that can attach to a user-approved 
 
 Early implementation. The command tree, JSON/error conventions, connection
 memory, browser readiness probes, target/page listing, page open/eval/snapshot
-commands, raw CDP discovery, and raw CDP execution are in place. Durable daemon
-process management is planned next.
+commands, raw CDP discovery, raw CDP execution, and a default-profile
+auto-connect keepalive daemon are in place. Full daemon IPC for browser commands
+is planned next.
 
 ## Intended Shape
 

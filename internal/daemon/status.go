@@ -8,6 +8,8 @@ type Status struct {
 	ConnectionMode     string              `json:"connection_mode"`
 	RequiresUserAllow  bool                `json:"requires_user_allow"`
 	DefaultProfileFlow bool                `json:"default_profile_flow"`
+	ProcessRunning     bool                `json:"process_running"`
+	Runtime            *Runtime            `json:"runtime,omitempty"`
 	BrowserProbe       browser.ProbeResult `json:"browser_probe"`
 	NextCommands       []string            `json:"next_commands"`
 }
@@ -65,5 +67,26 @@ func Snapshot(connectionMode string, autoConnect bool, probe browser.ProbeResult
 		status.Message = probe.Message
 	}
 
+	return status
+}
+
+func WithRuntime(status Status, runtime Runtime, running bool) Status {
+	status.Runtime = &runtime
+	status.ProcessRunning = running
+	if running {
+		status.State = "running"
+		status.Message = "daemon keepalive process is running"
+		status.NextCommands = []string{
+			"cdp pages --json",
+			"cdp daemon stop --json",
+		}
+	} else if runtime.PID > 0 {
+		status.State = "stale_state"
+		status.Message = "daemon runtime state exists but the process is not running"
+		status.NextCommands = []string{
+			"cdp daemon stop --json",
+			"cdp daemon start --auto-connect --prime --json",
+		}
+	}
 	return status
 }

@@ -107,7 +107,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				)
 			}
 			browserStatus := browserDoctorStatus(a.opts.autoConnect, &probe)
-			daemonStatus := a.daemonStatus(probe)
+			daemonStatus := a.daemonStatus(ctx, probe)
 			daemonCheckStatus := daemonDoctorStatus(daemonStatus.State)
 			checks := []map[string]any{
 				{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
@@ -186,11 +186,11 @@ func browserDoctorStatus(autoConnect bool, probe *browser.ProbeResult) string {
 
 func daemonDoctorStatus(state string) string {
 	switch state {
-	case "connected":
+	case "connected", "running":
 		return "pass"
 	case "not_running", "permission_pending", "passive":
 		return "pending"
-	case "chrome_unavailable", "disconnected":
+	case "chrome_unavailable", "disconnected", "stale_state":
 		return "warn"
 	default:
 		return "pending"
@@ -309,7 +309,8 @@ func (a *app) newDaemonCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newDaemonStartCommand())
 	cmd.AddCommand(a.newDaemonStatusCommand())
-	cmd.AddCommand(planned("stop", "Stop the attach daemon"))
+	cmd.AddCommand(a.newDaemonStopCommand())
+	cmd.AddCommand(a.newDaemonHoldCommand())
 	cmd.AddCommand(planned("logs", "Show attach daemon logs"))
 	return cmd
 }
@@ -324,7 +325,7 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 		Use:   "start",
 		Short: "Prepare and probe the browser attach path",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.browserCommandContext(cmd)
+			ctx, cancel := a.commandContextWithDefault(cmd, 60*time.Second)
 			defer cancel()
 
 			if a.opts.browserURL != "" && a.opts.autoConnect {
@@ -346,20 +347,49 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 				)
 			}
 
+			var err error
 			explicitConnection := a.opts.browserURL != "" || a.opts.autoConnect
 			if prime {
 				a.opts.activeProbe = true
 			}
 
-			probe, err := a.browserProbe(ctx)
-			if err != nil {
-				return commandError(
-					"invalid_browser_url",
-					"usage",
-					err.Error(),
-					ExitUsage,
-					[]string{"cdp daemon start --browser-url <browser-url> --json"},
-				)
+			var endpoint string
+			var runtime *daemon.Runtime
+			var alreadyRunning bool
+			keepAlive := a.opts.autoConnect && prime
+			if keepAlive {
+				endpoint, err = a.browserEndpoint(ctx)
+				if err != nil {
+					return commandError(
+						"permission_pending",
+						"permission",
+						err.Error(),
+						ExitPermission,
+						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --prime --json"},
+					)
+				}
+			}
+
+			var probe browser.ProbeResult
+			if keepAlive {
+				probe = browser.ProbeResult{
+					State:                "cdp_available",
+					Message:              "daemon keepalive process holds the approved Chrome DevTools WebSocket",
+					ConnectionMode:       "auto_connect",
+					Channel:              a.opts.channel,
+					WebSocketDebuggerURL: true,
+				}
+			} else {
+				probe, err = a.browserProbe(ctx)
+				if err != nil {
+					return commandError(
+						"invalid_browser_url",
+						"usage",
+						err.Error(),
+						ExitUsage,
+						[]string{"cdp daemon start --browser-url <browser-url> --json"},
+					)
+				}
 			}
 
 			var savedConnection *state.Connection
@@ -371,9 +401,29 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 				}
 			}
 
-			status := a.daemonStatus(probe)
-			if err := daemonStartFailure(probe, status); err != nil {
-				return err
+			if keepAlive {
+				r, reused, err := a.startKeepAlive(ctx, endpoint, reconnect)
+				if err != nil {
+					return commandError(
+						"permission_pending",
+						"permission",
+						fmt.Sprintf("start daemon keepalive: %v", err),
+						ExitPermission,
+						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --prime --json"},
+					)
+				}
+				runtime = &r
+				alreadyRunning = reused
+			}
+
+			status := a.daemonStatus(ctx, probe)
+			if runtime != nil {
+				status = daemon.WithRuntime(status, *runtime, true)
+			}
+			if !keepAlive {
+				if err := daemonStartFailure(probe, status); err != nil {
+					return err
+				}
 			}
 
 			start := map[string]any{
@@ -384,6 +434,8 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 				"connection_saved":   savedConnection != nil,
 				"next_commands":      status.NextCommands,
 				"reconnect_interval": durationString(reconnect),
+				"keepalive_started":  runtime != nil && !alreadyRunning,
+				"already_running":    alreadyRunning,
 			}
 			data := map[string]any{
 				"ok":      true,
@@ -395,6 +447,10 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 				start["connection_name"] = savedConnection.Name
 				start["state_path"] = statePath
 				data["connection"] = savedConnection
+			}
+			if runtime != nil {
+				start["runtime"] = runtime
+				data["runtime"] = runtime
 			}
 			human := status.Message
 			if savedConnection != nil {
@@ -531,12 +587,72 @@ func (a *app) newDaemonStatusCommand() *cobra.Command {
 					[]string{"cdp daemon status --browser-url <browser-url> --json"},
 				)
 			}
-			status := a.daemonStatus(probe)
+			status := a.daemonStatus(ctx, probe)
 			data := map[string]any{
 				"ok":     true,
 				"daemon": status,
 			}
 			return a.render(ctx, status.Message, data)
+		},
+	}
+}
+
+func (a *app) startKeepAlive(ctx context.Context, endpoint string, reconnect time.Duration) (daemon.Runtime, bool, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return daemon.Runtime{}, false, fmt.Errorf("resolve current executable: %w", err)
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return daemon.Runtime{}, false, err
+	}
+	return daemon.StartKeepAlive(ctx, executable, store.Dir, endpoint, a.connectionMode(), reconnect)
+}
+
+func (a *app) newDaemonStopCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the attach daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			runtime, stopped, err := daemon.StopRuntime(ctx, store.Dir)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("stop daemon: %v", err),
+					ExitConnection,
+					[]string{"cdp daemon status --json"},
+				)
+			}
+			human := "daemon was not running"
+			if stopped {
+				human = fmt.Sprintf("daemon process %d stopped", runtime.PID)
+			}
+			return a.render(ctx, human, map[string]any{
+				"ok":      true,
+				"stopped": stopped,
+				"runtime": runtime,
+			})
+		},
+	}
+}
+
+func (a *app) newDaemonHoldCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:    "hold",
+		Short:  "Hold a browser WebSocket open for daemon start",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signalContext(cmd.Context())
+			defer stop()
+			return daemon.HoldFromEnv(ctx)
 		},
 	}
 }
@@ -1994,6 +2110,9 @@ func commandExamples(path string) []string {
 		},
 		"cdp daemon status": {
 			"cdp daemon status --json",
+		},
+		"cdp daemon stop": {
+			"cdp daemon stop --json",
 		},
 		"cdp connection remove": {
 			"cdp connection remove stale --json",

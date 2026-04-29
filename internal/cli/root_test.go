@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cli"
+	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
@@ -507,6 +509,57 @@ func TestDaemonStatusJSON(t *testing.T) {
 	}
 	if !got.OK || got.Daemon.State != "not_running" || got.Daemon.ConnectionMode != "browser_url" {
 		t.Fatalf("daemon status = %+v, want not_running browser_url", got)
+	}
+}
+
+func TestDaemonStatusReportsRuntimeJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := daemon.SaveRuntime(context.Background(), stateDir, daemon.Runtime{
+		PID:               os.Getpid(),
+		StartedAt:         time.Now().UTC().Format(time.RFC3339),
+		ConnectionMode:    "auto_connect",
+		ReconnectInterval: "30s",
+	}); err != nil {
+		t.Fatalf("SaveRuntime returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "status", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon status exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Daemon struct {
+			State          string `json:"state"`
+			ProcessRunning bool   `json:"process_running"`
+			Runtime        struct {
+				PID int `json:"pid"`
+			} `json:"runtime"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon status output is invalid JSON: %v", err)
+	}
+	if got.Daemon.State != "running" || !got.Daemon.ProcessRunning || got.Daemon.Runtime.PID != os.Getpid() {
+		t.Fatalf("daemon status = %+v, want running current pid", got.Daemon)
+	}
+}
+
+func TestDaemonStopNotRunningJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon stop exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK      bool `json:"ok"`
+		Stopped bool `json:"stopped"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon stop output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Stopped {
+		t.Fatalf("daemon stop = %+v, want ok not stopped", got)
 	}
 }
 

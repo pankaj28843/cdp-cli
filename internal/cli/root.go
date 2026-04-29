@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
@@ -173,8 +175,21 @@ func (a *app) connectionMode() string {
 	return "browser_url"
 }
 
-func (a *app) daemonStatus(probe browser.ProbeResult) daemon.Status {
-	return daemon.Snapshot(a.connectionMode(), a.opts.autoConnect, probe)
+func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemon.Status {
+	status := daemon.Snapshot(a.connectionMode(), a.opts.autoConnect, probe)
+	store, err := a.stateStore()
+	if err != nil {
+		return status
+	}
+	runtime, ok, err := daemon.LoadRuntime(ctx, store.Dir)
+	if err != nil || !ok {
+		return status
+	}
+	return daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime))
+}
+
+func signalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 }
 
 func (a *app) stateStore() (state.Store, error) {

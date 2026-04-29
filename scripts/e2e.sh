@@ -20,6 +20,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --jq '.globals | index("--connection")' >/dev/null
 "$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | length > 0)' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
@@ -50,6 +51,7 @@ printf '%s\n' "$daemon_start_output" | jq -e '.ok == false and .code == "permiss
 "$binary" connection remove extra --state-dir "$state_dir" --json | jq -e '.ok == true and .removed == "extra" and (.connections | length == 1)' >/dev/null
 "$binary" connection add stale --browser-url http://example.invalid --project "$state_dir/missing-project" --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "stale"' >/dev/null
 "$binary" connection prune --missing-projects --state-dir "$state_dir" --json | jq -e '.ok == true and (.removed | length == 1)' >/dev/null
+"$binary" daemon stop --state-dir "$state_dir" --json | jq -e '.ok == true and .stopped == false' >/dev/null
 
 if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true" ]]; then
   "$binary" connection add default --auto-connect --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
