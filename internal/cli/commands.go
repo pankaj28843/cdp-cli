@@ -9759,6 +9759,20 @@ func commandExamples(path string) []string {
 			"cdp daemon logs --tail 100 --json",
 			"cdp daemon logs --tail 0 --json",
 		},
+		"cdp connection": {
+			"cdp connection list --json",
+			"cdp connection current --json",
+		},
+		"cdp connection add": {
+			"cdp connection add local --browser-url <browser-url> --json",
+			"cdp connection add default --auto-connect --json",
+		},
+		"cdp connection select": {
+			"cdp connection select local --json",
+		},
+		"cdp connection current": {
+			"cdp connection current --json",
+		},
 		"cdp connection remove": {
 			"cdp connection remove stale --json",
 		},
