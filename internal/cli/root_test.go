@@ -1043,6 +1043,12 @@ func TestStorageListAndSnapshotJSON(t *testing.T) {
 					Value string `json:"value"`
 				} `json:"entries"`
 			} `json:"local_storage"`
+			SessionStorage struct {
+				Entries []struct {
+					Key   string `json:"key"`
+					Value string `json:"value"`
+				} `json:"entries"`
+			} `json:"session_storage"`
 			Cookies []map[string]any `json:"cookies"`
 		} `json:"snapshot"`
 		Artifact struct {
@@ -1052,8 +1058,21 @@ func TestStorageListAndSnapshotJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &snap); err != nil {
 		t.Fatalf("storage snapshot output is invalid JSON: %v", err)
 	}
-	if snap.Artifact.Path != outPath || snap.Snapshot.LocalStorage.Entries[0].Value != "<redacted>" || snap.Snapshot.Cookies[0]["value"] != "<redacted>" {
-		t.Fatalf("storage snapshot = %+v, want redacted artifact", snap)
+	if snap.Artifact.Path != outPath {
+		t.Fatalf("storage snapshot artifact = %+v, want %q", snap.Artifact, outPath)
+	}
+	for _, entry := range snap.Snapshot.LocalStorage.Entries {
+		if entry.Value != "<redacted>" {
+			t.Fatalf("localStorage entry %q value = %q, want redacted", entry.Key, entry.Value)
+		}
+	}
+	for _, entry := range snap.Snapshot.SessionStorage.Entries {
+		if entry.Value != "<redacted>" {
+			t.Fatalf("sessionStorage entry %q value = %q, want redacted", entry.Key, entry.Value)
+		}
+	}
+	if snap.Snapshot.Cookies[0]["value"] != "<redacted>" {
+		t.Fatalf("storage snapshot cookies = %+v, want redacted values", snap.Snapshot.Cookies)
 	}
 }
 

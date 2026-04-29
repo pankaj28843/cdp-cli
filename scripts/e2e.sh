@@ -118,7 +118,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema storage-cache --json | jq -e '.ok == true and .schema.name == "storage-cache" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema storage-indexeddb --json | jq -e '.ok == true and .schema.name == "storage-indexeddb" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema storage-service-workers --json | jq -e '.ok == true and .schema.name == "storage-service-workers" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
-"$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot"))' >/dev/null
+"$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields[] | select(.name == "snapshot").description | contains("--redact safe"))' >/dev/null
 "$binary" schema storage-diff --json | jq -e '.ok == true and .schema.name == "storage-diff" and (.schema.fields | map(.name) | index("diff"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text"' >/dev/null

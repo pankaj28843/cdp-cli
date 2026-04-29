@@ -7199,7 +7199,7 @@ func applyStorageRedaction(snapshot *storageSnapshot, redact string) {
 
 func redactStorageArea(area *storageAreaSnapshot, redact string) {
 	for i := range area.Entries {
-		if sensitiveName(area.Entries[i].Key) {
+		if redact == "safe" || sensitiveName(area.Entries[i].Key) {
 			area.Entries[i].Value = "<redacted>"
 			continue
 		}
@@ -7209,9 +7209,8 @@ func redactStorageArea(area *storageAreaSnapshot, redact string) {
 
 func redactStorageCookies(cookies []map[string]any, redact string) {
 	for _, cookie := range cookies {
-		name, _ := cookie["name"].(string)
 		value, _ := cookie["value"].(string)
-		if sensitiveName(name) || sensitiveHeaderValue(value) {
+		if redact == "safe" || sensitiveHeaderValue(value) {
 			cookie["value"] = "<redacted>"
 		} else if value != "" {
 			cookie["value"] = redactBodyText(value, redact)

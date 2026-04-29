@@ -415,7 +415,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage snapshot completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, IndexedDB metadata, Cache Storage request metadata, service worker registrations, and quota data."},
+				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, IndexedDB metadata, Cache Storage request metadata, service worker registrations, and quota data; --redact safe replaces storage and cookie values with <redacted>."},
 				{Name: "storage", Type: "storage_snapshot_summary", Required: true, Description: "Snapshot options, redaction mode, warning, and collector errors."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
