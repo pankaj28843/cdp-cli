@@ -4305,6 +4305,10 @@ func commandExamples(path string) []string {
 		"cdp protocol describe": {
 			"cdp protocol describe Page.captureScreenshot --json",
 		},
+		"cdp protocol examples": {
+			"cdp protocol examples Page.captureScreenshot --json",
+			"cdp protocol examples Runtime.evaluate --json",
+		},
 		"cdp protocol exec": {
 			"cdp protocol exec Browser.getVersion --params '{}' --json",
 			"cdp protocol exec Runtime.evaluate --target <target-id> --params '{\"expression\":\"document.title\",\"returnByValue\":true}' --json",

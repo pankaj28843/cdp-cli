@@ -1817,6 +1817,29 @@ func TestDescribeCommandJSON(t *testing.T) {
 	}
 }
 
+func TestDescribeProtocolExamplesCommandJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"describe", "--command", "protocol examples", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Commands struct {
+			Name     string   `json:"name"`
+			Examples []string `json:"examples"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("describe protocol examples output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Commands.Name != "examples" || len(got.Commands.Examples) == 0 || !strings.Contains(got.Commands.Examples[0], "Page.captureScreenshot") {
+		t.Fatalf("describe protocol examples = %+v, want Page.captureScreenshot example", got)
+	}
+}
+
 func TestProtocolExamplesSchemaJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
