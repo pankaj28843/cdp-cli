@@ -91,11 +91,26 @@ func (a *app) newDescribeCommand() *cobra.Command {
 
 func (a *app) newDoctorCommand() *cobra.Command {
 	var checkName string
+	var capabilities bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run local readiness checks",
 		Long:  "Run readiness checks for the CLI, selected browser connection, and daemon path.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if capabilities {
+				ctx, cancel := a.commandContext(cmd)
+				defer cancel()
+				rows := capabilityCatalog()
+				lines := make([]string, 0, len(rows))
+				for _, row := range rows {
+					lines = append(lines, fmt.Sprintf("%s\t%s", row["name"], row["status"]))
+				}
+				return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+					"ok":           true,
+					"capabilities": rows,
+				})
+			}
+
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -162,7 +177,25 @@ func (a *app) newDoctorCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&checkName, "check", "", "only return one check by name")
+	cmd.Flags().BoolVar(&capabilities, "capabilities", false, "report implemented and planned capability areas without probing Chrome")
 	return cmd
+}
+
+func capabilityCatalog() []map[string]string {
+	return []map[string]string{
+		{"name": "connection", "status": "implemented", "commands": "connection, daemon, doctor"},
+		{"name": "target_discovery", "status": "implemented", "commands": "targets, pages"},
+		{"name": "page_control", "status": "implemented", "commands": "page reload/back/forward/activate/close, open"},
+		{"name": "page_inspection", "status": "implemented", "commands": "eval, text, html, snapshot, dom query, css inspect, layout overflow"},
+		{"name": "artifacts", "status": "implemented", "commands": "screenshot"},
+		{"name": "console", "status": "implemented", "commands": "console, workflow console-errors"},
+		{"name": "network", "status": "implemented", "commands": "network, workflow network-failures"},
+		{"name": "raw_protocol", "status": "implemented", "commands": "protocol metadata/domains/search/describe/exec"},
+		{"name": "input_automation", "status": "planned", "commands": "click, fill, type, press, hover, drag, upload"},
+		{"name": "emulation", "status": "planned", "commands": "viewport, media, user-agent, geolocation, network, cpu"},
+		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
+		{"name": "memory_storage", "status": "planned", "commands": "heap snapshot, storage, service workers"},
+	}
 }
 
 func filterChecksByName(checks []map[string]any, name string) []map[string]any {

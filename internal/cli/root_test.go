@@ -1827,6 +1827,31 @@ func TestDoctorBrowserURLWarnsForNonCDPEndpoint(t *testing.T) {
 	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
 }
 
+func TestDoctorCapabilitiesJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--capabilities", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor --capabilities exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK           bool `json:"ok"`
+		Capabilities []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor --capabilities output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Capabilities) == 0 {
+		t.Fatalf("doctor --capabilities = %+v, want capabilities", got)
+	}
+	if got.Capabilities[0].Name != "connection" || got.Capabilities[0].Status != "implemented" {
+		t.Fatalf("first capability = %+v, want implemented connection", got.Capabilities[0])
+	}
+}
+
 func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"doctor", "--auto-connect", "--user-data-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
