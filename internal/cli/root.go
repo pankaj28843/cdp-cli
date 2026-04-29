@@ -205,7 +205,13 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 			)
 		}
 	} else {
-		conn, ok = state.CurrentConnection(file)
+		cwd, cwdErr := os.Getwd()
+		if cwdErr == nil {
+			conn, ok = state.ProjectConnection(file, cwd)
+		}
+		if !ok {
+			conn, ok = state.CurrentConnection(file)
+		}
 	}
 	if !ok {
 		return nil

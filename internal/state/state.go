@@ -127,6 +127,26 @@ func CurrentConnection(file File) (Connection, bool) {
 	return Connection{}, false
 }
 
+func ProjectConnection(file File, cwd string) (Connection, bool) {
+	cwd = filepath.Clean(cwd)
+	var best Connection
+	bestLen := -1
+	for _, conn := range file.Connections {
+		if conn.Project == "" {
+			continue
+		}
+		project := filepath.Clean(conn.Project)
+		if cwd != project && !strings.HasPrefix(cwd, project+string(os.PathSeparator)) {
+			continue
+		}
+		if len(project) > bestLen {
+			best = conn
+			bestLen = len(project)
+		}
+	}
+	return best, bestLen >= 0
+}
+
 func ConnectionByName(file File, name string) (Connection, bool) {
 	for _, conn := range file.Connections {
 		if conn.Name == name {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
@@ -351,6 +352,16 @@ func (a *app) newConnectionAddCommand() *cobra.Command {
 					[]string{"cdp connection add local --browser-url <browser-url> --json"},
 				)
 			}
+			projectPath, err := normalizeProjectPath(project)
+			if err != nil {
+				return commandError(
+					"invalid_project",
+					"usage",
+					err.Error(),
+					ExitUsage,
+					[]string{"cdp connection add local --browser-url <browser-url> --project <path> --json"},
+				)
+			}
 
 			store, err := a.stateStore()
 			if err != nil {
@@ -367,6 +378,7 @@ func (a *app) newConnectionAddCommand() *cobra.Command {
 				AutoConnect: autoConnect,
 				Project:     project,
 			}
+			conn.Project = projectPath
 			if autoConnect {
 				conn.Channel = channel
 			}
@@ -392,6 +404,18 @@ func (a *app) newConnectionAddCommand() *cobra.Command {
 	cmd.Flags().StringVar(&channel, "channel", "stable", "Chrome channel for auto-connect")
 	cmd.Flags().StringVar(&project, "project", "", "optional project selector")
 	return cmd
+}
+
+func normalizeProjectPath(project string) (string, error) {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(project)
+	if err != nil {
+		return "", fmt.Errorf("resolve project path: %w", err)
+	}
+	return filepath.Clean(abs), nil
 }
 
 func (a *app) newConnectionListCommand() *cobra.Command {

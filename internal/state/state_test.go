@@ -58,3 +58,16 @@ func TestConnectionByName(t *testing.T) {
 		t.Fatalf("ConnectionByName() = %+v ok=%v, want local browser_url", got, ok)
 	}
 }
+
+func TestProjectConnectionUsesLongestPrefix(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	nested := filepath.Join(root, "app")
+	file := state.File{Connections: []state.Connection{
+		{Name: "root", Mode: "browser_url", Project: root},
+		{Name: "nested", Mode: "browser_url", Project: nested},
+	}}
+	got, ok := state.ProjectConnection(file, filepath.Join(nested, "cmd"))
+	if !ok || got.Name != "nested" {
+		t.Fatalf("ProjectConnection() = %+v ok=%v, want nested", got, ok)
+	}
+}
