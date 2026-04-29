@@ -21,6 +21,7 @@ chrome_pid=""
 
 cleanup() {
   if [[ -n "$chrome_pid" ]]; then
+    "$binary" daemon stop --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
     kill "$chrome_pid" 2>/dev/null || true
     wait "$chrome_pid" 2>/dev/null || true
   fi
@@ -28,7 +29,11 @@ cleanup() {
     kill "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
   fi
-  rm -rf "$state_dir" || true
+  for _ in {1..20}; do
+    rm -rf "$state_dir" 2>/dev/null && return
+    sleep 0.1
+  done
+  rm -rf "$state_dir" 2>/dev/null || true
 }
 trap cleanup EXIT
 
