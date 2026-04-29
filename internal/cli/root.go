@@ -10,6 +10,7 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/config"
+	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -110,6 +111,17 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 
 func (a *app) browserProbe(ctx context.Context) (browser.ProbeResult, error) {
 	return browser.Probe(ctx, a.opts.browserURL)
+}
+
+func (a *app) connectionMode() string {
+	if a.opts.autoConnect {
+		return "auto_connect"
+	}
+	return "browser_url"
+}
+
+func (a *app) daemonStatus(probe browser.ProbeResult) daemon.Status {
+	return daemon.Snapshot(a.connectionMode(), a.opts.autoConnect, probe)
 }
 
 func (a *app) commandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {

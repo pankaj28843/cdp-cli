@@ -95,11 +95,6 @@ func (a *app) newDoctorCommand() *cobra.Command {
 					[]string{"cdp doctor --browser-url <browser-url> --json"},
 				)
 			}
-			connectionMode := "browser_url"
-			if a.opts.autoConnect {
-				connectionMode = "auto_connect"
-			}
-
 			status := "pending"
 			switch probe.State {
 			case "cdp_available":
@@ -119,7 +114,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				"name":                 "browser_debug_endpoint",
 				"status":               status,
 				"message":              probe.Message,
-				"connection_mode":      connectionMode,
+				"connection_mode":      a.connectionMode(),
 				"requires_user_allow":  a.opts.autoConnect,
 				"default_profile_flow": a.opts.autoConnect,
 				"details":              probe,
@@ -246,10 +241,38 @@ func (a *app) newDaemonCommand() *cobra.Command {
 		Short: "Manage the long-running Chrome attach daemon",
 	}
 	cmd.AddCommand(planned("start", "Start the attach daemon"))
-	cmd.AddCommand(planned("status", "Show attach daemon status"))
+	cmd.AddCommand(a.newDaemonStatusCommand())
 	cmd.AddCommand(planned("stop", "Stop the attach daemon"))
 	cmd.AddCommand(planned("logs", "Show attach daemon logs"))
 	return cmd
+}
+
+func (a *app) newDaemonStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show attach daemon status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			probe, err := a.browserProbe(ctx)
+			if err != nil {
+				return commandError(
+					"invalid_browser_url",
+					"usage",
+					err.Error(),
+					ExitUsage,
+					[]string{"cdp daemon status --browser-url <browser-url> --json"},
+				)
+			}
+			status := a.daemonStatus(probe)
+			data := map[string]any{
+				"ok":     true,
+				"daemon": status,
+			}
+			return a.render(ctx, status.Message, data)
+		},
+	}
 }
 
 func (a *app) newTargetsCommand() *cobra.Command {

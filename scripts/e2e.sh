@@ -28,14 +28,16 @@ if [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   fi
 fi
 
+"$binary" daemon status --json | jq -e '.ok == true and .daemon.state' >/dev/null
+
 set +e
-daemon_output="$("$binary" daemon status --json 2>/tmp/cdp-cli-daemon-status.err)"
-daemon_code=$?
+pages_output="$("$binary" pages --json 2>/tmp/cdp-cli-pages.err)"
+pages_code=$?
 set -e
 
-if [[ "$daemon_code" -ne 8 ]]; then
-  echo "daemon status exit code = $daemon_code, want 8 while daemon is planned" >&2
+if [[ "$pages_code" -ne 8 ]]; then
+  echo "pages exit code = $pages_code, want 8 while pages is planned" >&2
   exit 1
 fi
 
-printf '%s\n' "$daemon_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null
+printf '%s\n' "$pages_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null

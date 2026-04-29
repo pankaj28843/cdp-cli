@@ -49,7 +49,7 @@ func TestDescribeJSON(t *testing.T) {
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"daemon", "status", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"pages", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitNotImplemented {
 		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
 	}
@@ -64,6 +64,29 @@ func TestPlannedCommandJSONError(t *testing.T) {
 	}
 	if got.OK || got.Code != "not_implemented" || got.ErrClass != "not_implemented" {
 		t.Fatalf("error envelope = %+v, want not_implemented", got)
+	}
+}
+
+func TestDaemonStatusJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"daemon", "status", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Daemon struct {
+			State          string `json:"state"`
+			ConnectionMode string `json:"connection_mode"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon status output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Daemon.State != "not_running" || got.Daemon.ConnectionMode != "browser_url" {
+		t.Fatalf("daemon status = %+v, want not_running browser_url", got)
 	}
 }
 
