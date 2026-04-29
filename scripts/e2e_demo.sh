@@ -92,10 +92,15 @@ fi
   | jq -e '.ok == true and (.items | length >= 1)' >/dev/null
 "$binary" console --browser-url "$browser_url" --errors --wait 250ms --json \
   | jq -e '.ok == true and (.messages[] | select(.text | contains("synthetic demo error")))' >/dev/null
-"$binary" eval "fetch('$app_url/api/fail?probe=' + Date.now()).then(r => r.status)" --browser-url "$browser_url" --await-promise --json \
+probe_id="$(date +%s%N)"
+network_output="$state_dir/network.json"
+"$binary" network --browser-url "$browser_url" --failed --wait 2s --json >"$network_output" &
+network_pid=$!
+sleep 0.2
+"$binary" eval "fetch('$app_url/api/fail?probe=$probe_id').then(r => r.status)" --browser-url "$browser_url" --await-promise --json \
   | jq -e '.ok == true and .result.value == 503' >/dev/null
-"$binary" network --browser-url "$browser_url" --failed --wait 250ms --json \
-  | jq -e '.ok == true and ((.requests // []) | type == "array")' >/dev/null
+wait "$network_pid"
+jq -e --arg probe "$probe_id" '.ok == true and (.requests[] | select((.url | contains($probe)) and .status == 503))' "$network_output" >/dev/null
 "$binary" screenshot --browser-url "$browser_url" --out "$state_dir/demo.png" --json \
   | jq -e --arg path "$state_dir/demo.png" '.ok == true and .screenshot.path == $path and .screenshot.bytes > 0' >/dev/null
 
