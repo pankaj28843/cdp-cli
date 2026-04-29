@@ -72,10 +72,39 @@ DEMO_HTML = """<!doctype html>
     const serviceWorkerReady = 'serviceWorker' in navigator
       ? navigator.serviceWorker.register('/sw.js').catch(error => console.warn('service worker setup failed', error))
       : Promise.resolve();
+    const indexedDBReady = 'indexedDB' in window
+      ? new Promise((resolve, reject) => {
+          const request = indexedDB.open('cdp-demo-db', 1);
+          request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains('settings')) {
+              db.createObjectStore('settings');
+            }
+          };
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const db = request.result;
+            const tx = db.transaction('settings', 'readwrite');
+            tx.objectStore('settings').put({enabled: true, source: 'demo'}, 'feature');
+            tx.oncomplete = () => {
+              db.close();
+              resolve();
+            };
+            tx.onerror = () => {
+              db.close();
+              reject(tx.error);
+            };
+            tx.onabort = () => {
+              db.close();
+              reject(tx.error);
+            };
+          };
+        }).catch(error => console.warn('indexeddb setup failed', error))
+      : Promise.resolve();
     console.log('demo app booted');
     console.error('synthetic demo error');
     fetch('/api/ok').then(() => fetch('/api/fail'));
-    Promise.all([cacheReady, serviceWorkerReady]).finally(() => {
+    Promise.all([cacheReady, serviceWorkerReady, indexedDBReady]).finally(() => {
       setTimeout(() => {
         document.querySelector('main').dataset.ready = 'true';
         document.querySelector('#status').textContent = 'Ready from demo app';

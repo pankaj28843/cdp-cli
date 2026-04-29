@@ -4521,6 +4521,7 @@ func (a *app) newStorageCommand() *cobra.Command {
 	cmd.AddCommand(a.newStorageSnapshotCommand())
 	cmd.AddCommand(a.newStorageDiffCommand())
 	cmd.AddCommand(a.newStorageCookiesCommand())
+	cmd.AddCommand(a.newStorageIndexedDBCommand())
 	cmd.AddCommand(a.newStorageCacheCommand())
 	cmd.AddCommand(a.newStorageServiceWorkersCommand())
 	return cmd
@@ -4561,7 +4562,7 @@ func (a *app) newStorageListCommand() *cobra.Command {
 		},
 	}
 	addStorageTargetFlags(cmd, &targetID, &urlContains)
-	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,serviceWorkers,quota,all")
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,indexeddb,cache,serviceWorkers,quota,all")
 	return cmd
 }
 
@@ -4763,7 +4764,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 		},
 	}
 	addStorageTargetFlags(cmd, &targetID, &urlContains)
-	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,serviceWorkers,quota,all")
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,indexeddb,cache,serviceWorkers,quota,all")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON storage snapshot artifact")
 	cmd.Flags().StringVar(&redact, "redact", "none", "redaction preset for output and artifacts: none or safe")
 	return cmd
@@ -4975,6 +4976,171 @@ func (a *app) newStorageCookiesDeleteCommand() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "cookie name")
 	cmd.Flags().StringVar(&domain, "domain", "", "cookie domain")
 	cmd.Flags().StringVar(&path, "path", "", "cookie path")
+	return cmd
+}
+
+func (a *app) newStorageIndexedDBCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "indexeddb",
+		Short: "List, read, write, delete, and clear IndexedDB records",
+	}
+	cmd.AddCommand(a.newStorageIndexedDBListCommand())
+	cmd.AddCommand(a.newStorageIndexedDBGetCommand())
+	cmd.AddCommand(a.newStorageIndexedDBPutCommand())
+	cmd.AddCommand(a.newStorageIndexedDBDeleteCommand())
+	cmd.AddCommand(a.newStorageIndexedDBClearCommand())
+	return cmd
+}
+
+func (a *app) newStorageIndexedDBListCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List IndexedDB databases, object stores, indexes, and counts",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runIndexedDBOperation(ctx, session, indexedDBListExpression())
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("indexeddb\tdatabases=%d", len(result.Databases))
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	return cmd
+}
+
+func (a *app) newStorageIndexedDBGetCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var keyJSON bool
+	cmd := &cobra.Command{
+		Use:   "get <database> <store> <key>",
+		Short: "Read one IndexedDB record",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runIndexedDBOperation(ctx, session, indexedDBGetExpression(args[0], args[1], args[2], keyJSON))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("indexeddb\t%s/%s\tfound=%t", result.Database, result.Store, result.Found)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().BoolVar(&keyJSON, "key-json", false, "parse <key> as JSON instead of using it as a string")
+	return cmd
+}
+
+func (a *app) newStorageIndexedDBPutCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var keyJSON bool
+	cmd := &cobra.Command{
+		Use:   "put <database> <store> <key> <value|@file>",
+		Short: "Create or replace one IndexedDB record",
+		Args:  cobra.ExactArgs(4),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			value, source, err := readStorageValueInput(args[3])
+			if err != nil {
+				return err
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runIndexedDBOperation(ctx, session, indexedDBPutExpression(args[0], args[1], args[2], value, keyJSON))
+			if err != nil {
+				return err
+			}
+			result.ValueSource = source
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("indexeddb\t%s/%s\tput", result.Database, result.Store)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().BoolVar(&keyJSON, "key-json", false, "parse <key> as JSON instead of using it as a string")
+	return cmd
+}
+
+func (a *app) newStorageIndexedDBDeleteCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var keyJSON bool
+	cmd := &cobra.Command{
+		Use:     "delete <database> <store> <key>",
+		Aliases: []string{"rm"},
+		Short:   "Delete one IndexedDB record",
+		Args:    cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runIndexedDBOperation(ctx, session, indexedDBDeleteExpression(args[0], args[1], args[2], keyJSON))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("indexeddb\t%s/%s\tdeleted=%t", result.Database, result.Store, result.Deleted)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().BoolVar(&keyJSON, "key-json", false, "parse <key> as JSON instead of using it as a string")
+	return cmd
+}
+
+func (a *app) newStorageIndexedDBClearCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "clear <database> <store>",
+		Short: "Clear one IndexedDB object store",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runIndexedDBOperation(ctx, session, indexedDBClearExpression(args[0], args[1]))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("indexeddb\t%s/%s\tcleared=%d", result.Database, result.Store, result.Cleared)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
 	return cmd
 }
 
@@ -5242,6 +5408,7 @@ type storageSnapshot struct {
 	LocalStorage   storageAreaSnapshot         `json:"local_storage"`
 	SessionStorage storageAreaSnapshot         `json:"session_storage"`
 	Cookies        []map[string]any            `json:"cookies,omitempty"`
+	IndexedDB      []indexedDBDatabase         `json:"indexeddb,omitempty"`
 	CacheStorage   []cacheStorageCache         `json:"cache_storage,omitempty"`
 	ServiceWorkers []serviceWorkerRegistration `json:"service_workers,omitempty"`
 	Quota          map[string]any              `json:"quota,omitempty"`
@@ -5275,6 +5442,51 @@ type webStorageOperationResult struct {
 	Bytes    int    `json:"bytes,omitempty"`
 	Cleared  int    `json:"cleared,omitempty"`
 	Previous string `json:"previous,omitempty"`
+}
+
+type indexedDBOperationResult struct {
+	URL         string                 `json:"url,omitempty"`
+	Origin      string                 `json:"origin,omitempty"`
+	Operation   string                 `json:"operation"`
+	Available   bool                   `json:"available"`
+	Found       bool                   `json:"found,omitempty"`
+	Database    string                 `json:"database,omitempty"`
+	Store       string                 `json:"store,omitempty"`
+	Key         any                    `json:"key,omitempty"`
+	Value       any                    `json:"value,omitempty"`
+	Previous    any                    `json:"previous,omitempty"`
+	KeySource   string                 `json:"key_source,omitempty"`
+	ValueSource string                 `json:"value_source,omitempty"`
+	Created     bool                   `json:"created,omitempty"`
+	Updated     bool                   `json:"updated,omitempty"`
+	Deleted     bool                   `json:"deleted,omitempty"`
+	Cleared     int                    `json:"cleared,omitempty"`
+	Count       int                    `json:"count"`
+	Databases   []indexedDBDatabase    `json:"databases,omitempty"`
+	Stores      []indexedDBObjectStore `json:"stores,omitempty"`
+}
+
+type indexedDBDatabase struct {
+	Name    string                 `json:"name"`
+	Version int                    `json:"version,omitempty"`
+	Stores  []indexedDBObjectStore `json:"stores"`
+	Error   string                 `json:"error,omitempty"`
+}
+
+type indexedDBObjectStore struct {
+	Name          string           `json:"name"`
+	KeyPath       any              `json:"key_path,omitempty"`
+	AutoIncrement bool             `json:"auto_increment,omitempty"`
+	Count         int              `json:"count"`
+	Indexes       []indexedDBIndex `json:"indexes,omitempty"`
+	Error         string           `json:"error,omitempty"`
+}
+
+type indexedDBIndex struct {
+	Name       string `json:"name"`
+	KeyPath    any    `json:"key_path,omitempty"`
+	Unique     bool   `json:"unique,omitempty"`
+	MultiEntry bool   `json:"multi_entry,omitempty"`
 }
 
 type cacheStorageOperationResult struct {
@@ -5355,6 +5567,7 @@ type storageDiffReport struct {
 	LocalStorage   storageAreaDiff `json:"local_storage"`
 	SessionStorage storageAreaDiff `json:"session_storage"`
 	Cookies        storageAreaDiff `json:"cookies"`
+	IndexedDB      storageAreaDiff `json:"indexeddb"`
 	CacheStorage   storageAreaDiff `json:"cache_storage"`
 	ServiceWorkers storageAreaDiff `json:"service_workers"`
 	Summary        map[string]int  `json:"summary"`
@@ -5394,6 +5607,8 @@ func parseStorageInclude(value string) (map[string]bool, error) {
 			out["sessionStorage"] = true
 		case "cookies", "cookie":
 			out["cookies"] = true
+		case "indexeddb", "indexed", "idb":
+			out["indexedDB"] = true
 		case "cache", "cachestorage", "cache_storage", "caches":
 			out["cacheStorage"] = true
 		case "serviceworkers", "serviceworker", "service_workers", "service-worker", "service-workers", "sw":
@@ -5412,7 +5627,7 @@ func defaultStorageIncludeSet() map[string]bool {
 }
 
 func allStorageIncludeSet() map[string]bool {
-	return map[string]bool{"localStorage": true, "sessionStorage": true, "cookies": true, "cacheStorage": true, "serviceWorkers": true, "quota": true}
+	return map[string]bool{"localStorage": true, "sessionStorage": true, "cookies": true, "indexedDB": true, "cacheStorage": true, "serviceWorkers": true, "quota": true}
 }
 
 func normalizeWebStorageBackend(value string) (webStorageBackend, error) {
@@ -5450,6 +5665,14 @@ func collectStorageSnapshot(ctx context.Context, session *cdp.PageSession, targe
 			collectorErrors = append(collectorErrors, collectorError("cookies", err))
 		} else {
 			snapshot.Cookies = cookies
+		}
+	}
+	if includeSet["indexedDB"] {
+		indexedDBResult, err := runIndexedDBOperation(ctx, session, indexedDBListExpression())
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("indexeddb", err))
+		} else {
+			snapshot.IndexedDB = indexedDBResult.Databases
 		}
 	}
 	if includeSet["cacheStorage"] {
@@ -5646,6 +5869,233 @@ func webStorageOperationExpression(op, area, key, value string) string {
   }
   throw new Error("unsupported storage operation");
 })()`, op, jsStringLiteral(area), jsStringLiteral(key), jsStringLiteral(value), op, jsStringLiteral(area), op, jsStringLiteral(area), op, jsStringLiteral(area), op, jsStringLiteral(area))
+}
+
+func runIndexedDBOperation(ctx context.Context, session *cdp.PageSession, expression string) (indexedDBOperationResult, error) {
+	result, err := session.Evaluate(ctx, expression, true)
+	if err != nil {
+		return indexedDBOperationResult{}, storageCommandFailed("inspect indexeddb", session.TargetID, err)
+	}
+	if result.Exception != nil {
+		return indexedDBOperationResult{}, commandError("javascript_exception", "runtime", fmt.Sprintf("indexeddb javascript exception: %s", result.Exception.Text), ExitCheckFailed, []string{"cdp storage indexeddb list --json"})
+	}
+	var opResult indexedDBOperationResult
+	if err := json.Unmarshal(result.Object.Value, &opResult); err != nil {
+		return indexedDBOperationResult{}, commandError("invalid_storage_result", "runtime", fmt.Sprintf("decode indexeddb result: %v", err), ExitCheckFailed, []string{"cdp storage indexeddb list --json"})
+	}
+	return opResult, nil
+}
+
+func indexedDBListExpression() string {
+	return `(async () => {
+  "__cdp_cli_indexeddb_list__";
+  if (typeof indexedDB === "undefined") {
+    throw new Error("IndexedDB is not available in this page context");
+  }
+  if (typeof indexedDB.databases !== "function") {
+    throw new Error("indexedDB.databases is not available in this browser");
+  }
+  const requestPromise = (request) => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB request failed"));
+  });
+  const transactionDone = (transaction) => new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("IndexedDB transaction failed"));
+    transaction.onabort = () => reject(transaction.error || new Error("IndexedDB transaction aborted"));
+  });
+  const openDB = (name) => new Promise((resolve, reject) => {
+    const request = indexedDB.open(name);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB open failed"));
+    request.onblocked = () => reject(new Error("IndexedDB open blocked"));
+  });
+  const storeInfo = async (db, storeName) => {
+    const transaction = db.transaction(storeName, "readonly");
+    const done = transactionDone(transaction);
+    const store = transaction.objectStore(storeName);
+    const indexes = Array.from(store.indexNames).map((name) => {
+      const index = store.index(name);
+      return {name: index.name, key_path: index.keyPath, unique: index.unique, multi_entry: index.multiEntry};
+    }).sort((a, b) => a.name.localeCompare(b.name));
+    const count = await requestPromise(store.count());
+    await done;
+    return {name: store.name, key_path: store.keyPath, auto_increment: store.autoIncrement, count, indexes};
+  };
+  const databaseInfos = (await indexedDB.databases())
+    .filter((info) => info && info.name)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const databases = [];
+  for (const info of databaseInfos) {
+    const row = {name: info.name, version: info.version || 0, stores: []};
+    let db;
+    try {
+      db = await openDB(info.name);
+      const storeNames = Array.from(db.objectStoreNames).sort((a, b) => a.localeCompare(b));
+      for (const storeName of storeNames) {
+        try {
+          row.stores.push(await storeInfo(db, storeName));
+        } catch (error) {
+          row.stores.push({name: storeName, count: 0, error: String(error && error.message || error)});
+        }
+      }
+    } catch (error) {
+      row.error = String(error && error.message || error);
+    } finally {
+      if (db) {
+        db.close();
+      }
+    }
+    databases.push(row);
+  }
+  return {url: location.href, origin: location.origin, operation: "list", available: true, count: databases.length, databases};
+})()`
+}
+
+func indexedDBGetExpression(database, store, key string, keyJSON bool) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_indexeddb_get__";
+  %s
+  const databaseName = %s;
+  const storeName = %s;
+  const key = %s;
+  const db = await openDB(databaseName);
+  try {
+    ensureStore(db, storeName);
+    const transaction = db.transaction(storeName, "readonly");
+    const done = transactionDone(transaction);
+    const value = await requestPromise(transaction.objectStore(storeName).get(key));
+    await done;
+    const found = value !== undefined;
+    return {url: location.href, origin: location.origin, operation: "get", available: true, found, database: databaseName, store: storeName, key, key_source: %s, value: found ? value : null};
+  } finally {
+    db.close();
+  }
+})()`, indexedDBOperationHelpers(), jsStringLiteral(database), jsStringLiteral(store), indexedDBKeyExpression(key, keyJSON), jsStringLiteral(indexedDBKeySource(keyJSON)))
+}
+
+func indexedDBPutExpression(database, store, key, value string, keyJSON bool) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_indexeddb_put__";
+  %s
+  const databaseName = %s;
+  const storeName = %s;
+  const key = %s;
+  const value = parseValue(%s);
+  const db = await openDB(databaseName);
+  try {
+    ensureStore(db, storeName);
+    const transaction = db.transaction(storeName, "readwrite");
+    const done = transactionDone(transaction);
+    const objectStore = transaction.objectStore(storeName);
+    const previousRequest = objectStore.get(key);
+    const putRequest = objectStore.keyPath ? objectStore.put(value) : objectStore.put(value, key);
+    const previous = await requestPromise(previousRequest);
+    const savedKey = await requestPromise(putRequest);
+    await done;
+    const existed = previous !== undefined;
+    return {url: location.href, origin: location.origin, operation: "put", available: true, found: true, database: databaseName, store: storeName, key: savedKey, key_source: %s, value, previous: existed ? previous : null, created: !existed, updated: existed};
+  } finally {
+    db.close();
+  }
+})()`, indexedDBOperationHelpers(), jsStringLiteral(database), jsStringLiteral(store), indexedDBKeyExpression(key, keyJSON), jsStringLiteral(value), jsStringLiteral(indexedDBKeySource(keyJSON)))
+}
+
+func indexedDBDeleteExpression(database, store, key string, keyJSON bool) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_indexeddb_delete__";
+  %s
+  const databaseName = %s;
+  const storeName = %s;
+  const key = %s;
+  const db = await openDB(databaseName);
+  try {
+    ensureStore(db, storeName);
+    const transaction = db.transaction(storeName, "readwrite");
+    const done = transactionDone(transaction);
+    const objectStore = transaction.objectStore(storeName);
+    const previousRequest = objectStore.get(key);
+    const deleteRequest = objectStore.delete(key);
+    const previous = await requestPromise(previousRequest);
+    await requestPromise(deleteRequest);
+    await done;
+    const found = previous !== undefined;
+    return {url: location.href, origin: location.origin, operation: "delete", available: true, found, deleted: found, database: databaseName, store: storeName, key, key_source: %s, previous: found ? previous : null};
+  } finally {
+    db.close();
+  }
+})()`, indexedDBOperationHelpers(), jsStringLiteral(database), jsStringLiteral(store), indexedDBKeyExpression(key, keyJSON), jsStringLiteral(indexedDBKeySource(keyJSON)))
+}
+
+func indexedDBClearExpression(database, store string) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_indexeddb_clear__";
+  %s
+  const databaseName = %s;
+  const storeName = %s;
+  const db = await openDB(databaseName);
+  try {
+    ensureStore(db, storeName);
+    const transaction = db.transaction(storeName, "readwrite");
+    const done = transactionDone(transaction);
+    const objectStore = transaction.objectStore(storeName);
+    const countRequest = objectStore.count();
+    const clearRequest = objectStore.clear();
+    const count = await requestPromise(countRequest);
+    await requestPromise(clearRequest);
+    await done;
+    return {url: location.href, origin: location.origin, operation: "clear", available: true, found: count > 0, database: databaseName, store: storeName, cleared: count, count: 0};
+  } finally {
+    db.close();
+  }
+})()`, indexedDBOperationHelpers(), jsStringLiteral(database), jsStringLiteral(store))
+}
+
+func indexedDBOperationHelpers() string {
+	return `if (typeof indexedDB === "undefined") {
+    throw new Error("IndexedDB is not available in this page context");
+  }
+  const requestPromise = (request) => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB request failed"));
+  });
+  const transactionDone = (transaction) => new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("IndexedDB transaction failed"));
+    transaction.onabort = () => reject(transaction.error || new Error("IndexedDB transaction aborted"));
+  });
+  const openDB = (name) => new Promise((resolve, reject) => {
+    const request = indexedDB.open(name);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB open failed"));
+    request.onblocked = () => reject(new Error("IndexedDB open blocked"));
+  });
+  const ensureStore = (db, storeName) => {
+    if (!db.objectStoreNames.contains(storeName)) {
+      throw new Error("IndexedDB object store not found: " + storeName);
+    }
+  };
+  const parseValue = (text) => {
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      return text;
+    }
+  };`
+}
+
+func indexedDBKeyExpression(key string, keyJSON bool) string {
+	if keyJSON {
+		return fmt.Sprintf("JSON.parse(%s)", jsStringLiteral(key))
+	}
+	return jsStringLiteral(key)
+}
+
+func indexedDBKeySource(keyJSON bool) string {
+	if keyJSON {
+		return "json"
+	}
+	return "string"
 }
 
 func runCacheStorageOperation(ctx context.Context, session *cdp.PageSession, expression string) (cacheStorageOperationResult, error) {
@@ -6067,21 +6517,22 @@ func readStorageSnapshotFile(path string) (storageSnapshot, error) {
 }
 
 func storageSnapshotHasData(snapshot storageSnapshot) bool {
-	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0 || len(snapshot.CacheStorage) > 0 || len(snapshot.ServiceWorkers) > 0
+	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0 || len(snapshot.IndexedDB) > 0 || len(snapshot.CacheStorage) > 0 || len(snapshot.ServiceWorkers) > 0
 }
 
 func diffStorageSnapshots(left, right storageSnapshot) storageDiffReport {
 	local := diffStringMaps(storageEntryValues(left.LocalStorage), storageEntryValues(right.LocalStorage))
 	session := diffStringMaps(storageEntryValues(left.SessionStorage), storageEntryValues(right.SessionStorage))
 	cookies := diffStringMaps(cookieValues(left.Cookies), cookieValues(right.Cookies))
+	indexedDB := diffStringMaps(indexedDBValues(left.IndexedDB), indexedDBValues(right.IndexedDB))
 	cache := diffStringMaps(cacheStorageValues(left.CacheStorage), cacheStorageValues(right.CacheStorage))
 	serviceWorkers := diffStringMaps(serviceWorkerValues(left.ServiceWorkers), serviceWorkerValues(right.ServiceWorkers))
 	summary := map[string]int{
-		"added":   len(local.Added) + len(session.Added) + len(cookies.Added) + len(cache.Added) + len(serviceWorkers.Added),
-		"removed": len(local.Removed) + len(session.Removed) + len(cookies.Removed) + len(cache.Removed) + len(serviceWorkers.Removed),
-		"changed": len(local.Changed) + len(session.Changed) + len(cookies.Changed) + len(cache.Changed) + len(serviceWorkers.Changed),
+		"added":   len(local.Added) + len(session.Added) + len(cookies.Added) + len(indexedDB.Added) + len(cache.Added) + len(serviceWorkers.Added),
+		"removed": len(local.Removed) + len(session.Removed) + len(cookies.Removed) + len(indexedDB.Removed) + len(cache.Removed) + len(serviceWorkers.Removed),
+		"changed": len(local.Changed) + len(session.Changed) + len(cookies.Changed) + len(indexedDB.Changed) + len(cache.Changed) + len(serviceWorkers.Changed),
 	}
-	return storageDiffReport{LocalStorage: local, SessionStorage: session, Cookies: cookies, CacheStorage: cache, ServiceWorkers: serviceWorkers, Summary: summary}
+	return storageDiffReport{LocalStorage: local, SessionStorage: session, Cookies: cookies, IndexedDB: indexedDB, CacheStorage: cache, ServiceWorkers: serviceWorkers, Summary: summary}
 }
 
 func storageEntryValues(area storageAreaSnapshot) map[string]string {
@@ -6101,6 +6552,18 @@ func cookieValues(cookies []map[string]any) map[string]string {
 		}
 		b, _ := json.Marshal(cookie)
 		values[key] = string(b)
+	}
+	return values
+}
+
+func indexedDBValues(databases []indexedDBDatabase) map[string]string {
+	values := map[string]string{}
+	for _, database := range databases {
+		for _, store := range database.Stores {
+			key := database.Name + "|" + store.Name
+			b, _ := json.Marshal(store)
+			values[key] = string(b)
+		}
 	}
 	return values
 }
@@ -7945,6 +8408,26 @@ func commandExamples(path string) []string {
 		},
 		"cdp storage cookies delete": {
 			"cdp storage cookies delete --url https://example.com --name feature_flag --json",
+		},
+		"cdp storage indexeddb": {
+			"cdp storage indexeddb list --url-contains localhost --json",
+		},
+		"cdp storage indexeddb list": {
+			"cdp storage indexeddb list --url-contains localhost --json",
+		},
+		"cdp storage indexeddb get": {
+			"cdp storage indexeddb get app settings feature --json",
+			"cdp storage indexeddb get app records '[\"compound\",1]' --key-json --json",
+		},
+		"cdp storage indexeddb put": {
+			"cdp storage indexeddb put app settings feature '{\"enabled\":true}' --json",
+			"cdp storage indexeddb put app settings feature @tmp/value.json --json",
+		},
+		"cdp storage indexeddb delete": {
+			"cdp storage indexeddb delete app settings feature --json",
+		},
+		"cdp storage indexeddb clear": {
+			"cdp storage indexeddb clear app settings --json",
 		},
 		"cdp storage cache": {
 			"cdp storage cache list --url-contains localhost --json",
