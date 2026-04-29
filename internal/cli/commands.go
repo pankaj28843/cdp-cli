@@ -12,6 +12,7 @@ type commandInfo struct {
 	Use      string        `json:"use"`
 	Short    string        `json:"short,omitempty"`
 	Aliases  []string      `json:"aliases,omitempty"`
+	Examples []string      `json:"examples,omitempty"`
 	Children []commandInfo `json:"children,omitempty"`
 }
 
@@ -287,10 +288,11 @@ func planned(use, short string) *cobra.Command {
 
 func describeCommand(cmd *cobra.Command) commandInfo {
 	info := commandInfo{
-		Name:    cmd.Name(),
-		Use:     cmd.UseLine(),
-		Short:   cmd.Short,
-		Aliases: cmd.Aliases,
+		Name:     cmd.Name(),
+		Use:      cmd.UseLine(),
+		Short:    cmd.Short,
+		Aliases:  cmd.Aliases,
+		Examples: commandExamples(cmd.CommandPath()),
 	}
 
 	for _, child := range cmd.Commands() {
@@ -301,6 +303,42 @@ func describeCommand(cmd *cobra.Command) commandInfo {
 	}
 
 	return info
+}
+
+func commandExamples(path string) []string {
+	examples := map[string][]string{
+		"cdp": {
+			"cdp doctor --json",
+			"cdp describe --json | jq '.commands.children | map(.name)'",
+		},
+		"cdp describe": {
+			"cdp describe --json",
+			"cdp describe --command 'daemon status' --json",
+		},
+		"cdp doctor": {
+			"cdp doctor --json",
+		},
+		"cdp explain-error": {
+			"cdp explain-error not_implemented --json",
+		},
+		"cdp exit-codes": {
+			"cdp exit-codes --json",
+		},
+		"cdp schema": {
+			"cdp schema --json",
+			"cdp schema error-envelope --json",
+		},
+		"cdp daemon status": {
+			"cdp daemon status --json",
+		},
+		"cdp protocol search": {
+			"cdp protocol search screenshot --json",
+		},
+		"cdp workflow verify": {
+			"cdp workflow verify https://example.com --json",
+		},
+	}
+	return examples[path]
 }
 
 func findCommand(root *cobra.Command, path string) (*cobra.Command, error) {

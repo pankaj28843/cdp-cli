@@ -148,14 +148,15 @@ func TestDescribeCommandJSON(t *testing.T) {
 	var got struct {
 		OK       bool `json:"ok"`
 		Commands struct {
-			Name string `json:"name"`
-			Use  string `json:"use"`
+			Name     string   `json:"name"`
+			Use      string   `json:"use"`
+			Examples []string `json:"examples"`
 		} `json:"commands"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("describe output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Commands.Name != "status" || !strings.Contains(got.Commands.Use, "daemon status") {
+	if !got.OK || got.Commands.Name != "status" || !strings.Contains(got.Commands.Use, "daemon status") || len(got.Commands.Examples) == 0 {
 		t.Fatalf("describe --command = %+v, want daemon status command", got)
 	}
 }
