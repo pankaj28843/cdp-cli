@@ -74,6 +74,24 @@ func ResolveEndpoint(ctx context.Context, opts ProbeOptions) (string, error) {
 	return version.WebSocketDebuggerURL, nil
 }
 
+func ResolveProtocolURL(ctx context.Context, opts ProbeOptions) (string, error) {
+	if opts.AutoConnect {
+		channel := opts.Channel
+		if channel == "" {
+			channel = "stable"
+		}
+		port, _, err := activePort(opts.UserDataDir, channel)
+		if err != nil {
+			return "", fmt.Errorf("resolve auto-connect protocol endpoint: %w", err)
+		}
+		return fmt.Sprintf("http://%s/json/protocol", net.JoinHostPort("127.0.0.1", port)), nil
+	}
+	if strings.TrimSpace(opts.BrowserURL) == "" {
+		return "", fmt.Errorf("browser endpoint is not configured")
+	}
+	return protocolEndpoint(opts.BrowserURL)
+}
+
 func probeBrowserURL(ctx context.Context, rawURL string) (ProbeResult, error) {
 	if strings.TrimSpace(rawURL) == "" {
 		return ProbeResult{
@@ -349,6 +367,14 @@ func websocketProbe(ctx context.Context, port, path string) (int, error) {
 }
 
 func versionEndpoint(rawURL string) (string, error) {
+	return discoveryEndpoint(rawURL, "/json/version")
+}
+
+func protocolEndpoint(rawURL string) (string, error) {
+	return discoveryEndpoint(rawURL, "/json/protocol")
+}
+
+func discoveryEndpoint(rawURL, path string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return "", fmt.Errorf("parse browser url: %w", err)
@@ -359,7 +385,7 @@ func versionEndpoint(rawURL string) (string, error) {
 	if u.Host == "" {
 		return "", fmt.Errorf("parse browser url: missing host")
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/json/version"
+	u.Path = strings.TrimRight(u.Path, "/") + path
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil

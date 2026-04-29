@@ -130,6 +130,34 @@ func TestPagesJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolMetadataJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "metadata", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol metadata exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Protocol struct {
+			DomainCount int `json:"domain_count"`
+			Domains     []struct {
+				Name         string `json:"name"`
+				CommandCount int    `json:"command_count"`
+			} `json:"domains"`
+		} `json:"protocol"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol metadata output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Protocol.DomainCount != 2 || got.Protocol.Domains[0].Name != "Page" || got.Protocol.Domains[0].CommandCount != 1 {
+		t.Fatalf("protocol metadata = %+v, want compact domain summary", got)
+	}
+}
+
 func TestDaemonStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
@@ -449,6 +477,26 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			"Browser":              "Chrome/144.0",
 			"Protocol-Version":     "1.3",
 			"webSocketDebuggerUrl": wsURL,
+		})
+	})
+	mux.HandleFunc("/json/protocol", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"version": map[string]string{"major": "1", "minor": "3"},
+			"domains": []map[string]any{
+				{
+					"domain":      "Page",
+					"description": "Page domain",
+					"commands": []map[string]any{
+						{"name": "navigate"},
+					},
+				},
+				{
+					"domain": "Runtime",
+					"events": []map[string]any{
+						{"name": "consoleAPICalled"},
+					},
+				},
+			},
 		})
 	})
 	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {

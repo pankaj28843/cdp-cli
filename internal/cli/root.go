@@ -133,6 +133,14 @@ func (a *app) browserEndpoint(ctx context.Context) (string, error) {
 	return browser.ResolveEndpoint(ctx, opts)
 }
 
+func (a *app) browserProtocolURL(ctx context.Context) (string, error) {
+	opts, err := a.browserOptions(ctx)
+	if err != nil {
+		return "", err
+	}
+	return browser.ResolveProtocolURL(ctx, opts)
+}
+
 func (a *app) browserOptions(ctx context.Context) (browser.ProbeOptions, error) {
 	if err := a.applySelectedConnection(ctx); err != nil {
 		return browser.ProbeOptions{}, err

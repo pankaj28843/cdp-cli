@@ -50,6 +50,14 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with id, type, title, url, and attachment state."},
 			},
 		},
+		"protocol-metadata": {
+			Name:        "protocol-metadata",
+			Description: "Summarized live CDP protocol metadata.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol metadata was fetched."},
+				{Name: "protocol", Type: "protocol_summary", Required: true, Description: "Version, domain count, and compact domain summaries."},
+			},
+		},
 		"error-envelope": {
 			Name:        "error-envelope",
 			Description: "Stable JSON shape emitted when a command fails with --json or --jq.",

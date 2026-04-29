@@ -628,12 +628,55 @@ func (a *app) newCDPCommand() *cobra.Command {
 		Aliases: []string{"cdp"},
 		Short:   "Discover and execute raw CDP methods",
 	}
-	cmd.AddCommand(planned("metadata", "Print the live protocol metadata"))
+	cmd.AddCommand(a.newProtocolMetadataCommand())
 	cmd.AddCommand(planned("domains", "List CDP domains"))
 	cmd.AddCommand(planned("search <query>", "Search CDP domains, methods, events, and types"))
 	cmd.AddCommand(planned("describe <Domain.method>", "Describe a CDP method schema"))
 	cmd.AddCommand(planned("exec <Domain.method>", "Execute a raw CDP method"))
 	return cmd
+}
+
+func (a *app) newProtocolMetadataCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "metadata",
+		Short: "Print the live protocol metadata",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			protocolURL, err := a.browserProtocolURL(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
+				)
+			}
+			protocol, err := cdp.FetchProtocol(ctx, protocolURL)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("fetch protocol metadata: %v", err),
+					ExitConnection,
+					[]string{"cdp doctor --json", "cdp daemon status --json"},
+				)
+			}
+			domains := cdp.SummarizeDomains(protocol.Domains)
+			data := map[string]any{
+				"ok": true,
+				"protocol": map[string]any{
+					"version":      protocol.Version,
+					"domain_count": len(domains),
+					"domains":      domains,
+				},
+			}
+			human := fmt.Sprintf("CDP %s.%s, %d domains", protocol.Version.Major, protocol.Version.Minor, len(domains))
+			return a.render(ctx, human, data)
+		},
+	}
 }
 
 func (a *app) newWorkflowCommand() *cobra.Command {
@@ -729,6 +772,10 @@ func commandExamples(path string) []string {
 		"cdp pages": {
 			"cdp pages --json",
 			"cdp pages --browser-url <browser-url> --json",
+		},
+		"cdp protocol metadata": {
+			"cdp protocol metadata --json",
+			"cdp protocol metadata --browser-url <browser-url> --json",
 		},
 		"cdp protocol search": {
 			"cdp protocol search screenshot --json",
