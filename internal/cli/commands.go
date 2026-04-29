@@ -60,6 +60,7 @@ func (a *app) newDescribeCommand() *cobra.Command {
 				"commands": describeCommand(target),
 				"globals": []string{
 					"--json",
+					"--compact",
 					"--jq",
 					"--debug",
 					"--timeout",

@@ -10,8 +10,9 @@ import (
 )
 
 type Options struct {
-	JSON bool
-	JQ   string
+	JSON    bool
+	JQ      string
+	Compact bool
 }
 
 type Artifact struct {
@@ -42,7 +43,13 @@ func Render(ctx context.Context, w io.Writer, opts Options, human string, data a
 }
 
 func renderJSON(ctx context.Context, w io.Writer, opts Options, data any) error {
-	b, err := json.MarshalIndent(data, "", "  ")
+	var b []byte
+	var err error
+	if opts.Compact {
+		b, err = json.Marshal(data)
+	} else {
+		b, err = json.MarshalIndent(data, "", "  ")
+	}
 	if err != nil {
 		return fmt.Errorf("marshal json: %w", err)
 	}

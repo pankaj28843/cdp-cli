@@ -24,6 +24,7 @@ type BuildInfo struct {
 
 type options struct {
 	json        bool
+	compact     bool
 	jq          string
 	debug       bool
 	timeout     time.Duration
@@ -83,6 +84,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	a.root = root
 
 	root.PersistentFlags().BoolVar(&a.opts.json, "json", false, "emit JSON on stdout")
+	root.PersistentFlags().BoolVar(&a.opts.compact, "compact", false, "emit compact JSON without indentation")
 	root.PersistentFlags().StringVar(&a.opts.jq, "jq", "", "filter JSON output with jq expression; implies --json")
 	root.PersistentFlags().BoolVar(&a.opts.debug, "debug", false, "write debug details to stderr")
 	root.PersistentFlags().DurationVar(&a.opts.timeout, "timeout", 0, "ceiling-bound command execution, such as 30s or 2m")
@@ -253,8 +255,9 @@ func (a *app) commandContextWithDefault(cmd *cobra.Command, fallback time.Durati
 
 func (a *app) render(ctx context.Context, human string, data any) error {
 	return output.Render(ctx, a.out, output.Options{
-		JSON: a.opts.json,
-		JQ:   a.opts.jq,
+		JSON:    a.opts.json,
+		JQ:      a.opts.jq,
+		Compact: a.opts.compact,
 	}, human, data)
 }
 
@@ -278,7 +281,7 @@ func (a *app) renderError(ctx context.Context, err error) error {
 	}
 
 	if a.opts.json || a.opts.jq != "" {
-		return output.Render(ctx, a.out, output.Options{JSON: true, JQ: a.opts.jq}, "", env)
+		return output.Render(ctx, a.out, output.Options{JSON: true, JQ: a.opts.jq, Compact: a.opts.compact}, "", env)
 	}
 
 	_, writeErr := fmt.Fprintln(a.err, env.Message)

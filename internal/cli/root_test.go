@@ -37,6 +37,17 @@ func TestVersionJSON(t *testing.T) {
 	}
 }
 
+func TestVersionCompactJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"version", "--json", "--compact"}, &out, &errOut, cli.BuildInfo{Version: "test"})
+	if code != cli.ExitOK {
+		t.Fatalf("version exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	if strings.Contains(out.String(), "\n  ") {
+		t.Fatalf("compact output contains indentation: %q", out.String())
+	}
+}
+
 func TestDescribeJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 

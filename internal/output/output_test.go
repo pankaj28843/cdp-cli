@@ -38,3 +38,16 @@ func TestRenderJSON(t *testing.T) {
 		t.Fatalf("version = %q, want %q", got["version"], "dev")
 	}
 }
+
+func TestRenderCompactJSON(t *testing.T) {
+	var buf bytes.Buffer
+	data := map[string]string{"version": "dev"}
+
+	err := output.Render(context.Background(), &buf, output.Options{JSON: true, Compact: true}, "ignored", data)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != `{"version":"dev"}` {
+		t.Fatalf("compact JSON = %q, want minified object", got)
+	}
+}
