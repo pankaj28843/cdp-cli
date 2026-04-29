@@ -252,13 +252,22 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "storage", Type: "cache_storage_result", Required: true, Description: "Cache names, request rows, response metadata, body truncation metadata, and mutation booleans."},
 			},
 		},
+		"storage-service-workers": {
+			Name:        "storage-service-workers",
+			Description: "Service worker registration list/unregister result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the service worker command completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "storage", Type: "service_worker_result", Required: true, Description: "Registration scopes, script URLs, lifecycle states, and unregister results."},
+			},
+		},
 		"storage-snapshot": {
 			Name:        "storage-snapshot",
 			Description: "Local forensic storage snapshot with optional redaction and artifact output.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage snapshot completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, Cache Storage request metadata, and quota data."},
+				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, Cache Storage request metadata, service worker registrations, and quota data."},
 				{Name: "storage", Type: "storage_snapshot_summary", Required: true, Description: "Snapshot options, redaction mode, warning, and collector errors."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},

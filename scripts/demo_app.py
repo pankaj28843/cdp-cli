@@ -6,6 +6,13 @@ import sys
 
 class DemoHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/sw.js":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript")
+            self.send_header("Service-Worker-Allowed", "/")
+            self.end_headers()
+            self.wfile.write(SERVICE_WORKER_JS.encode())
+            return
         if self.path == "/api/ok":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -62,10 +69,13 @@ DEMO_HTML = """<!doctype html>
           })))
           .catch(error => console.warn('cache setup failed', error))
       : Promise.resolve();
+    const serviceWorkerReady = 'serviceWorker' in navigator
+      ? navigator.serviceWorker.register('/sw.js').catch(error => console.warn('service worker setup failed', error))
+      : Promise.resolve();
     console.log('demo app booted');
     console.error('synthetic demo error');
     fetch('/api/ok').then(() => fetch('/api/fail'));
-    cacheReady.finally(() => {
+    Promise.all([cacheReady, serviceWorkerReady]).finally(() => {
       setTimeout(() => {
         document.querySelector('main').dataset.ready = 'true';
         document.querySelector('#status').textContent = 'Ready from demo app';
@@ -74,6 +84,16 @@ DEMO_HTML = """<!doctype html>
   </script>
 </body>
 </html>
+"""
+
+SERVICE_WORKER_JS = """
+self.addEventListener('install', event => {
+  self.skipWaiting();
+});
+self.addEventListener('activate', event => {
+  event.waitUntil(self.clients.claim());
+});
+self.addEventListener('fetch', event => {});
 """
 
 

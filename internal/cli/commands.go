@@ -4522,6 +4522,7 @@ func (a *app) newStorageCommand() *cobra.Command {
 	cmd.AddCommand(a.newStorageDiffCommand())
 	cmd.AddCommand(a.newStorageCookiesCommand())
 	cmd.AddCommand(a.newStorageCacheCommand())
+	cmd.AddCommand(a.newStorageServiceWorkersCommand())
 	return cmd
 }
 
@@ -4560,7 +4561,7 @@ func (a *app) newStorageListCommand() *cobra.Command {
 		},
 	}
 	addStorageTargetFlags(cmd, &targetID, &urlContains)
-	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,quota,all")
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,serviceWorkers,quota,all")
 	return cmd
 }
 
@@ -4762,7 +4763,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 		},
 	}
 	addStorageTargetFlags(cmd, &targetID, &urlContains)
-	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,quota,all")
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,cache,serviceWorkers,quota,all")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON storage snapshot artifact")
 	cmd.Flags().StringVar(&redact, "redact", "none", "redaction preset for output and artifacts: none or safe")
 	return cmd
@@ -5161,14 +5162,89 @@ func (a *app) newStorageCacheClearCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newStorageServiceWorkersCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "service-workers",
+		Aliases: []string{"service-worker", "sw"},
+		Short:   "List and unregister service workers for the selected origin",
+	}
+	cmd.AddCommand(a.newStorageServiceWorkersListCommand())
+	cmd.AddCommand(a.newStorageServiceWorkersUnregisterCommand())
+	return cmd
+}
+
+func (a *app) newStorageServiceWorkersListCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List service worker registrations",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runServiceWorkerOperation(ctx, session, serviceWorkerListExpression())
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("service-workers\t%d", result.Count)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	return cmd
+}
+
+func (a *app) newStorageServiceWorkersUnregisterCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var scope string
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "unregister",
+		Short: "Unregister one service worker scope or every scope",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(scope) == "" && !all {
+				return commandError("usage", "usage", "--scope or --all is required", ExitUsage, []string{"cdp storage service-workers unregister --scope https://example.com/ --json", "cdp storage service-workers unregister --all --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runServiceWorkerOperation(ctx, session, serviceWorkerUnregisterExpression(scope, all))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("service-workers\tunregistered=%d", len(result.Unregistered))
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&scope, "scope", "", "service worker registration scope URL to unregister")
+	cmd.Flags().BoolVar(&all, "all", false, "unregister every service worker registration for the selected origin")
+	return cmd
+}
+
 type storageSnapshot struct {
-	URL            string              `json:"url,omitempty"`
-	Origin         string              `json:"origin,omitempty"`
-	LocalStorage   storageAreaSnapshot `json:"local_storage"`
-	SessionStorage storageAreaSnapshot `json:"session_storage"`
-	Cookies        []map[string]any    `json:"cookies,omitempty"`
-	CacheStorage   []cacheStorageCache `json:"cache_storage,omitempty"`
-	Quota          map[string]any      `json:"quota,omitempty"`
+	URL            string                      `json:"url,omitempty"`
+	Origin         string                      `json:"origin,omitempty"`
+	LocalStorage   storageAreaSnapshot         `json:"local_storage"`
+	SessionStorage storageAreaSnapshot         `json:"session_storage"`
+	Cookies        []map[string]any            `json:"cookies,omitempty"`
+	CacheStorage   []cacheStorageCache         `json:"cache_storage,omitempty"`
+	ServiceWorkers []serviceWorkerRegistration `json:"service_workers,omitempty"`
+	Quota          map[string]any              `json:"quota,omitempty"`
 }
 
 type storageAreaSnapshot struct {
@@ -5249,11 +5325,38 @@ type cacheStorageBody struct {
 	MaxBytes int    `json:"max_bytes,omitempty"`
 }
 
+type serviceWorkerOperationResult struct {
+	URL           string                      `json:"url,omitempty"`
+	Origin        string                      `json:"origin,omitempty"`
+	Operation     string                      `json:"operation"`
+	Available     bool                        `json:"available"`
+	Found         bool                        `json:"found,omitempty"`
+	Count         int                         `json:"count"`
+	Scope         string                      `json:"scope,omitempty"`
+	Registrations []serviceWorkerRegistration `json:"registrations,omitempty"`
+	Unregistered  []serviceWorkerRegistration `json:"unregistered,omitempty"`
+}
+
+type serviceWorkerRegistration struct {
+	ScopeURL       string             `json:"scope_url"`
+	UpdateViaCache string             `json:"update_via_cache,omitempty"`
+	Active         *serviceWorkerInfo `json:"active,omitempty"`
+	Waiting        *serviceWorkerInfo `json:"waiting,omitempty"`
+	Installing     *serviceWorkerInfo `json:"installing,omitempty"`
+	Result         *bool              `json:"result,omitempty"`
+}
+
+type serviceWorkerInfo struct {
+	ScriptURL string `json:"script_url,omitempty"`
+	State     string `json:"state,omitempty"`
+}
+
 type storageDiffReport struct {
 	LocalStorage   storageAreaDiff `json:"local_storage"`
 	SessionStorage storageAreaDiff `json:"session_storage"`
 	Cookies        storageAreaDiff `json:"cookies"`
 	CacheStorage   storageAreaDiff `json:"cache_storage"`
+	ServiceWorkers storageAreaDiff `json:"service_workers"`
 	Summary        map[string]int  `json:"summary"`
 }
 
@@ -5293,10 +5396,12 @@ func parseStorageInclude(value string) (map[string]bool, error) {
 			out["cookies"] = true
 		case "cache", "cachestorage", "cache_storage", "caches":
 			out["cacheStorage"] = true
+		case "serviceworkers", "serviceworker", "service_workers", "service-worker", "service-workers", "sw":
+			out["serviceWorkers"] = true
 		case "quota", "usage":
 			out["quota"] = true
 		default:
-			return nil, commandError("usage", "usage", fmt.Sprintf("unknown storage include %q", key), ExitUsage, []string{"cdp storage list --include localStorage,sessionStorage,cookies,cache --json"})
+			return nil, commandError("usage", "usage", fmt.Sprintf("unknown storage include %q", key), ExitUsage, []string{"cdp storage list --include localStorage,sessionStorage,cookies,cache,serviceWorkers --json"})
 		}
 	}
 	return out, nil
@@ -5307,7 +5412,7 @@ func defaultStorageIncludeSet() map[string]bool {
 }
 
 func allStorageIncludeSet() map[string]bool {
-	return map[string]bool{"localStorage": true, "sessionStorage": true, "cookies": true, "cacheStorage": true, "quota": true}
+	return map[string]bool{"localStorage": true, "sessionStorage": true, "cookies": true, "cacheStorage": true, "serviceWorkers": true, "quota": true}
 }
 
 func normalizeWebStorageBackend(value string) (webStorageBackend, error) {
@@ -5353,6 +5458,14 @@ func collectStorageSnapshot(ctx context.Context, session *cdp.PageSession, targe
 			collectorErrors = append(collectorErrors, collectorError("cache_storage", err))
 		} else {
 			snapshot.CacheStorage = cacheResult.Caches
+		}
+	}
+	if includeSet["serviceWorkers"] {
+		serviceWorkerResult, err := runServiceWorkerOperation(ctx, session, serviceWorkerListExpression())
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("service_workers", err))
+		} else {
+			snapshot.ServiceWorkers = serviceWorkerResult.Registrations
 		}
 	}
 	if includeSet["quota"] && snapshot.Origin != "" {
@@ -5744,6 +5857,96 @@ func cacheStorageClearExpression(cacheName string, all bool) string {
 })()`, jsStringLiteral(cacheName), all)
 }
 
+func runServiceWorkerOperation(ctx context.Context, session *cdp.PageSession, expression string) (serviceWorkerOperationResult, error) {
+	result, err := session.Evaluate(ctx, expression, true)
+	if err != nil {
+		return serviceWorkerOperationResult{}, storageCommandFailed("inspect service workers", session.TargetID, err)
+	}
+	if result.Exception != nil {
+		return serviceWorkerOperationResult{}, commandError("javascript_exception", "runtime", fmt.Sprintf("service worker javascript exception: %s", result.Exception.Text), ExitCheckFailed, []string{"cdp storage service-workers list --json"})
+	}
+	var opResult serviceWorkerOperationResult
+	if err := json.Unmarshal(result.Object.Value, &opResult); err != nil {
+		return serviceWorkerOperationResult{}, commandError("invalid_storage_result", "runtime", fmt.Sprintf("decode service worker result: %v", err), ExitCheckFailed, []string{"cdp storage service-workers list --json"})
+	}
+	return opResult, nil
+}
+
+func serviceWorkerListExpression() string {
+	return `(async () => {
+  "__cdp_cli_service_workers_list__";
+  if (!("serviceWorker" in navigator)) {
+    throw new Error("service workers are not available in this page context");
+  }
+  const workerInfo = (worker) => worker ? {
+    script_url: worker.scriptURL || "",
+    state: worker.state || ""
+  } : null;
+  const registrationInfo = (registration) => ({
+    scope_url: registration.scope || "",
+    update_via_cache: registration.updateViaCache || "",
+    active: workerInfo(registration.active),
+    waiting: workerInfo(registration.waiting),
+    installing: workerInfo(registration.installing)
+  });
+  const registrations = (await navigator.serviceWorker.getRegistrations())
+    .map(registrationInfo)
+    .sort((a, b) => a.scope_url.localeCompare(b.scope_url));
+  return {
+    url: location.href,
+    origin: location.origin,
+    operation: "list",
+    available: true,
+    count: registrations.length,
+    registrations
+  };
+})()`
+}
+
+func serviceWorkerUnregisterExpression(scope string, all bool) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_service_workers_unregister__";
+  if (!("serviceWorker" in navigator)) {
+    throw new Error("service workers are not available in this page context");
+  }
+  const requestedScope = %s;
+  const unregisterAll = %t;
+  const normalize = (value) => String(value || "").replace(/\/+$/, "");
+  const workerInfo = (worker) => worker ? {
+    script_url: worker.scriptURL || "",
+    state: worker.state || ""
+  } : null;
+  const registrationInfo = (registration, result) => ({
+    scope_url: registration.scope || "",
+    update_via_cache: registration.updateViaCache || "",
+    active: workerInfo(registration.active),
+    waiting: workerInfo(registration.waiting),
+    installing: workerInfo(registration.installing),
+    result
+  });
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const selected = unregisterAll
+    ? registrations
+    : registrations.filter((registration) => registration.scope === requestedScope || normalize(registration.scope) === normalize(requestedScope));
+  const unregistered = [];
+  for (const registration of selected) {
+    const result = await registration.unregister();
+    unregistered.push(registrationInfo(registration, result));
+  }
+  unregistered.sort((a, b) => a.scope_url.localeCompare(b.scope_url));
+  return {
+    url: location.href,
+    origin: location.origin,
+    operation: "unregister",
+    available: true,
+    found: selected.length > 0,
+    count: unregistered.length,
+    scope: requestedScope,
+    unregistered
+  };
+})()`, jsStringLiteral(scope), all)
+}
+
 func jsStringLiteral(value string) string {
 	b, err := json.Marshal(value)
 	if err != nil {
@@ -5783,6 +5986,7 @@ func applyStorageRedaction(snapshot *storageSnapshot, redact string) {
 	redactStorageArea(&snapshot.SessionStorage, redact)
 	redactStorageCookies(snapshot.Cookies, redact)
 	redactCacheStorage(snapshot.CacheStorage, redact)
+	redactServiceWorkers(snapshot.ServiceWorkers, redact)
 }
 
 func redactStorageArea(area *storageAreaSnapshot, redact string) {
@@ -5811,6 +6015,21 @@ func redactCacheStorage(caches []cacheStorageCache, redact string) {
 	for i := range caches {
 		for j := range caches[i].Requests {
 			caches[i].Requests[j].URL = redactURL(caches[i].Requests[j].URL, redact)
+		}
+	}
+}
+
+func redactServiceWorkers(registrations []serviceWorkerRegistration, redact string) {
+	for i := range registrations {
+		registrations[i].ScopeURL = redactURL(registrations[i].ScopeURL, redact)
+		if registrations[i].Active != nil {
+			registrations[i].Active.ScriptURL = redactURL(registrations[i].Active.ScriptURL, redact)
+		}
+		if registrations[i].Waiting != nil {
+			registrations[i].Waiting.ScriptURL = redactURL(registrations[i].Waiting.ScriptURL, redact)
+		}
+		if registrations[i].Installing != nil {
+			registrations[i].Installing.ScriptURL = redactURL(registrations[i].Installing.ScriptURL, redact)
 		}
 	}
 }
@@ -5848,7 +6067,7 @@ func readStorageSnapshotFile(path string) (storageSnapshot, error) {
 }
 
 func storageSnapshotHasData(snapshot storageSnapshot) bool {
-	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0 || len(snapshot.CacheStorage) > 0
+	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0 || len(snapshot.CacheStorage) > 0 || len(snapshot.ServiceWorkers) > 0
 }
 
 func diffStorageSnapshots(left, right storageSnapshot) storageDiffReport {
@@ -5856,12 +6075,13 @@ func diffStorageSnapshots(left, right storageSnapshot) storageDiffReport {
 	session := diffStringMaps(storageEntryValues(left.SessionStorage), storageEntryValues(right.SessionStorage))
 	cookies := diffStringMaps(cookieValues(left.Cookies), cookieValues(right.Cookies))
 	cache := diffStringMaps(cacheStorageValues(left.CacheStorage), cacheStorageValues(right.CacheStorage))
+	serviceWorkers := diffStringMaps(serviceWorkerValues(left.ServiceWorkers), serviceWorkerValues(right.ServiceWorkers))
 	summary := map[string]int{
-		"added":   len(local.Added) + len(session.Added) + len(cookies.Added) + len(cache.Added),
-		"removed": len(local.Removed) + len(session.Removed) + len(cookies.Removed) + len(cache.Removed),
-		"changed": len(local.Changed) + len(session.Changed) + len(cookies.Changed) + len(cache.Changed),
+		"added":   len(local.Added) + len(session.Added) + len(cookies.Added) + len(cache.Added) + len(serviceWorkers.Added),
+		"removed": len(local.Removed) + len(session.Removed) + len(cookies.Removed) + len(cache.Removed) + len(serviceWorkers.Removed),
+		"changed": len(local.Changed) + len(session.Changed) + len(cookies.Changed) + len(cache.Changed) + len(serviceWorkers.Changed),
 	}
-	return storageDiffReport{LocalStorage: local, SessionStorage: session, Cookies: cookies, CacheStorage: cache, Summary: summary}
+	return storageDiffReport{LocalStorage: local, SessionStorage: session, Cookies: cookies, CacheStorage: cache, ServiceWorkers: serviceWorkers, Summary: summary}
 }
 
 func storageEntryValues(area storageAreaSnapshot) map[string]string {
@@ -5893,6 +6113,18 @@ func cacheStorageValues(caches []cacheStorageCache) map[string]string {
 			b, _ := json.Marshal(request.Response)
 			values[key] = string(b)
 		}
+	}
+	return values
+}
+
+func serviceWorkerValues(registrations []serviceWorkerRegistration) map[string]string {
+	values := map[string]string{}
+	for _, registration := range registrations {
+		if registration.ScopeURL == "" {
+			continue
+		}
+		b, _ := json.Marshal(registration)
+		values[registration.ScopeURL] = string(b)
 	}
 	return values
 }
@@ -7734,6 +7966,16 @@ func commandExamples(path string) []string {
 		"cdp storage cache clear": {
 			"cdp storage cache clear app-cache --json",
 			"cdp storage cache clear --all --json",
+		},
+		"cdp storage service-workers": {
+			"cdp storage service-workers list --url-contains localhost --json",
+		},
+		"cdp storage service-workers list": {
+			"cdp storage service-workers list --url-contains localhost --json",
+		},
+		"cdp storage service-workers unregister": {
+			"cdp storage service-workers unregister --scope https://example.com/ --json",
+			"cdp storage service-workers unregister --all --json",
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",

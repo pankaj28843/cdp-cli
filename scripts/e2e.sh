@@ -59,6 +59,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "storage cookies set" --json | jq -e '.ok == true and .commands.name == "set" and (.commands.examples | any(contains("--name")))' >/dev/null
 "$binary" describe --command "storage cache" --json | jq -e '.ok == true and .commands.name == "cache" and (.commands.children | map(.name) | index("put"))' >/dev/null
 "$binary" describe --command "storage cache put" --json | jq -e '.ok == true and .commands.name == "put" and (.commands.examples | any(contains("--content-type")))' >/dev/null
+"$binary" describe --command "storage service-workers" --json | jq -e '.ok == true and .commands.name == "service-workers" and (.commands.children | map(.name) | index("unregister"))' >/dev/null
+"$binary" describe --command "storage service-workers unregister" --json | jq -e '.ok == true and .commands.name == "unregister" and (.commands.examples | any(contains("--scope")))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target")))' >/dev/null
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
@@ -72,6 +74,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture"))' >/dev/null
 "$binary" schema storage --json | jq -e '.ok == true and .schema.name == "storage"' >/dev/null
 "$binary" schema storage-cache --json | jq -e '.ok == true and .schema.name == "storage-cache" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
+"$binary" schema storage-service-workers --json | jq -e '.ok == true and .schema.name == "storage-service-workers" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot"))' >/dev/null
 "$binary" schema storage-diff --json | jq -e '.ok == true and .schema.name == "storage-diff" and (.schema.fields | map(.name) | index("diff"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
@@ -270,6 +273,19 @@ if [[ "$cache_code" -ne 3 ]]; then
 fi
 
 printf '%s\n' "$cache_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null
+
+set +e
+service_worker_output="$("$binary" storage service-workers list --state-dir "$state_dir" --json 2>/tmp/cdp-cli-service-workers.err)"
+service_worker_code=$?
+set -e
+
+if [[ "$service_worker_code" -ne 3 ]]; then
+  echo "storage service-workers exit code = $service_worker_code, want 3 without a browser connection" >&2
+  cat /tmp/cdp-cli-service-workers.err >&2
+  exit 1
+fi
+
+printf '%s\n' "$service_worker_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null
 
 cat >"$state_dir/storage-left.json" <<'JSON'
 {"snapshot":{"local_storage":{"entries":[{"key":"feature","value":"enabled"}]},"session_storage":{"entries":[]},"cookies":[]}}
