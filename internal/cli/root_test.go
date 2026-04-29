@@ -1123,6 +1123,54 @@ func TestProtocolExecTargetScopedJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExecSaveArtifactJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "protocol-shot.png")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"protocol", "exec", "Page.captureScreenshot",
+		"--target", "page",
+		"--params", `{"format":"png"}`,
+		"--save", outPath,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol exec save exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Artifact struct {
+			Path  string `json:"path"`
+			Bytes int    `json:"bytes"`
+			Field string `json:"field"`
+		} `json:"artifact"`
+		Result struct {
+			Data struct {
+				Omitted bool `json:"omitted"`
+			} `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol exec save output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Artifact.Path != outPath || got.Artifact.Bytes != len("synthetic screenshot") || got.Artifact.Field != "data" || !got.Result.Data.Omitted {
+		t.Fatalf("protocol exec save = %+v, want saved redacted artifact", got)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(b) != "synthetic screenshot" {
+		t.Fatalf("saved protocol artifact = %q, want synthetic screenshot", string(b))
+	}
+}
+
 func TestOpenJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

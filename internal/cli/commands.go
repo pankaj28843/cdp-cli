@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -4287,6 +4288,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	var params string
 	var targetID string
 	var urlContains string
+	var savePath string
 	cmd := &cobra.Command{
 		Use:   "exec <Domain.method>",
 		Short: "Execute a raw browser-scoped or target-scoped CDP method",
@@ -4325,14 +4327,24 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 						[]string{"cdp pages --json", "cdp protocol describe " + args[0] + " --json"},
 					)
 				}
-				return a.render(ctx, fmt.Sprintf("%s ok", args[0]), map[string]any{
+				data := map[string]any{
 					"ok":         true,
 					"scope":      "target",
 					"method":     args[0],
 					"target":     pageRow(target),
 					"session_id": session.SessionID,
 					"result":     result,
-				})
+				}
+				if strings.TrimSpace(savePath) != "" {
+					artifact, redactedResult, err := saveProtocolExecArtifact(savePath, result)
+					if err != nil {
+						return err
+					}
+					data["result"] = redactedResult
+					data["artifact"] = artifact
+					data["artifacts"] = []map[string]any{artifact}
+				}
+				return a.render(ctx, fmt.Sprintf("%s ok", args[0]), data)
 			}
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
@@ -4356,18 +4368,92 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp doctor --json", "cdp protocol describe " + args[0] + " --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("%s ok", args[0]), map[string]any{
+			data := map[string]any{
 				"ok":     true,
 				"scope":  "browser",
 				"method": args[0],
 				"result": result,
-			})
+			}
+			if strings.TrimSpace(savePath) != "" {
+				artifact, redactedResult, err := saveProtocolExecArtifact(savePath, result)
+				if err != nil {
+					return err
+				}
+				data["result"] = redactedResult
+				data["artifact"] = artifact
+				data["artifacts"] = []map[string]any{artifact}
+			}
+			return a.render(ctx, fmt.Sprintf("%s ok", args[0]), data)
 		},
 	}
 	cmd.Flags().StringVar(&params, "params", "{}", "JSON params object for the CDP method")
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix for target-scoped execution")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text for target-scoped execution")
+	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
 	return cmd
+}
+
+func saveProtocolExecArtifact(path string, result json.RawMessage) (map[string]any, any, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(result, &fields); err != nil {
+		return nil, nil, commandError(
+			"protocol_result_not_saveable",
+			"usage",
+			fmt.Sprintf("protocol result is not a JSON object with a base64 data field: %v", err),
+			ExitUsage,
+			[]string{"cdp protocol exec Page.captureScreenshot --target <target-id> --save tmp/page.png --json"},
+		)
+	}
+	rawData, ok := fields["data"]
+	if !ok {
+		return nil, nil, commandError(
+			"protocol_result_not_saveable",
+			"usage",
+			"protocol result has no base64 data field to save",
+			ExitUsage,
+			[]string{"cdp protocol exec Page.captureScreenshot --target <target-id> --save tmp/page.png --json"},
+		)
+	}
+	var encoded string
+	if err := json.Unmarshal(rawData, &encoded); err != nil || encoded == "" {
+		return nil, nil, commandError(
+			"protocol_result_not_saveable",
+			"usage",
+			"protocol result data field is not a non-empty base64 string",
+			ExitUsage,
+			[]string{"cdp protocol exec Page.captureScreenshot --target <target-id> --save tmp/page.png --json"},
+		)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, nil, commandError(
+			"protocol_result_not_saveable",
+			"usage",
+			fmt.Sprintf("decode protocol result data: %v", err),
+			ExitUsage,
+			[]string{"cdp protocol exec Page.captureScreenshot --target <target-id> --save tmp/page.png --json"},
+		)
+	}
+	writtenPath, err := writeArtifactFile(path, decoded)
+	if err != nil {
+		return nil, nil, err
+	}
+	var redacted map[string]any
+	if err := json.Unmarshal(result, &redacted); err != nil {
+		return nil, nil, err
+	}
+	redacted["data"] = map[string]any{
+		"omitted": true,
+		"reason":  "saved_to_artifact",
+	}
+	artifact := map[string]any{
+		"type":     "protocol-result",
+		"path":     writtenPath,
+		"bytes":    len(decoded),
+		"field":    "data",
+		"encoding": "base64",
+	}
+	return artifact, redacted, nil
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
@@ -5429,6 +5515,7 @@ func commandExamples(path string) []string {
 		"cdp protocol exec": {
 			"cdp protocol exec Browser.getVersion --params '{}' --json",
 			"cdp protocol exec Runtime.evaluate --target <target-id> --params '{\"expression\":\"document.title\",\"returnByValue\":true}' --json",
+			"cdp protocol exec Page.captureScreenshot --target <target-id> --params '{\"format\":\"png\"}' --save tmp/page.png --json",
 			"cdp protocol exec DOM.getDocument --url-contains localhost --json",
 		},
 		"cdp workflow verify": {

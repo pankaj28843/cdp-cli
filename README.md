@@ -29,6 +29,7 @@ cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
 cdp protocol search screenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
+cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
 ```
 
 ## Daemon Keepalive

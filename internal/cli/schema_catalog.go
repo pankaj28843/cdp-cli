@@ -313,6 +313,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "target", Type: "page", Required: false, Description: "Selected page target for target-scoped execution."},
 				{Name: "session_id", Type: "string", Required: false, Description: "Temporary CDP session id used for target-scoped execution."},
 				{Name: "result", Type: "object", Required: true, Description: "Raw CDP result payload."},
+				{Name: "artifact", Type: "artifact", Required: false, Description: "Artifact metadata when --save writes a base64 data field to disk."},
+				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
 			},
 		},
 		"protocol-examples": {
