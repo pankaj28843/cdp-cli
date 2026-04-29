@@ -144,6 +144,36 @@ func exitCodeRows(catalog []errorInfo) []map[string]any {
 	return rows
 }
 
+func (a *app) newSchemaCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "schema [name]",
+		Short: "Print stable JSON output schemas",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			catalog := schemaCatalog()
+			if len(args) == 1 {
+				schema, ok := catalog[args[0]]
+				if !ok {
+					return commandError(
+						"unknown_schema",
+						"usage",
+						fmt.Sprintf("unknown schema %q", args[0]),
+						ExitUsage,
+						[]string{"cdp schema --json", "cdp describe --json"},
+					)
+				}
+				return a.render(ctx, fmt.Sprintf("%s: %s", schema.Name, schema.Description), map[string]any{"ok": true, "schema": schema})
+			}
+
+			names := schemaNames()
+			return a.render(ctx, strings.Join(names, "\n"), map[string]any{"ok": true, "schemas": names})
+		},
+	}
+}
+
 func (a *app) newDaemonCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
