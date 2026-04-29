@@ -37,7 +37,15 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
+"$binary" schema describe --json | jq -e '.ok == true and .schema.name == "describe" and (.schema.fields | map(.name) | index("commands"))' >/dev/null
+"$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities"))' >/dev/null
+"$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
+"$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages"))' >/dev/null
+"$binary" schema targets --json | jq -e '.ok == true and .schema.name == "targets" and (.schema.fields | map(.name) | index("targets"))' >/dev/null
+"$binary" schema open --json | jq -e '.ok == true and .schema.name == "open" and (.schema.fields | map(.name) | index("page"))' >/dev/null
+"$binary" schema eval --json | jq -e '.ok == true and .schema.name == "eval" and (.schema.fields | map(.name) | index("result"))' >/dev/null
+"$binary" schema page-action --json | jq -e '.ok == true and .schema.name == "page-action" and (.schema.fields | map(.name) | index("action"))' >/dev/null
 "$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot"' >/dev/null
 "$binary" schema connection-add --json | jq -e '.ok == true and .schema.name == "connection-add" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
 "$binary" schema connection-list --json | jq -e '.ok == true and .schema.name == "connection-list" and (.schema.fields | map(.name) | index("connections"))' >/dev/null
