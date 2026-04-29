@@ -44,10 +44,12 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
+"$binary" describe --command "network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--failed")))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
 "$binary" schema console --json | jq -e '.ok == true and .schema.name == "console"' >/dev/null
+"$binary" schema network --json | jq -e '.ok == true and .schema.name == "network"' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text"' >/dev/null
 "$binary" schema html --json | jq -e '.ok == true and .schema.name == "html"' >/dev/null
 "$binary" schema dom-query --json | jq -e '.ok == true and .schema.name == "dom-query"' >/dev/null
@@ -200,3 +202,15 @@ if [[ "$console_code" -ne 3 ]]; then
 fi
 
 printf '%s\n' "$console_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null
+
+set +e
+network_output="$("$binary" network --state-dir "$state_dir" --wait 0s --json 2>/tmp/cdp-cli-network.err)"
+network_code=$?
+set -e
+
+if [[ "$network_code" -ne 3 ]]; then
+  echo "network exit code = $network_code, want 3 without a browser connection" >&2
+  exit 1
+fi
+
+printf '%s\n' "$network_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null

@@ -2954,7 +2954,241 @@ func (a *app) newConsoleCommand() *cobra.Command {
 }
 
 func (a *app) newNetworkCommand() *cobra.Command {
-	return planned("network", "Inspect network requests")
+	var targetID string
+	var urlContains string
+	var wait time.Duration
+	var limit int
+	var failedOnly bool
+	cmd := &cobra.Command{
+		Use:   "network",
+		Short: "Inspect network requests from a page target",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			if wait < 0 {
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp network --wait 2s --json"})
+			}
+			if limit < 0 {
+				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp network --limit 50 --json"})
+			}
+
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			requests, truncated, err := collectNetworkRequests(ctx, client, session.SessionID, wait, limit, failedOnly)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("capture network target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			lines := networkRequestLines(requests)
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":       true,
+				"target":   pageRow(target),
+				"requests": requests,
+				"network": map[string]any{
+					"count":       len(requests),
+					"wait":        durationString(wait),
+					"limit":       limit,
+					"truncated":   truncated,
+					"failed_only": failedOnly,
+				},
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect network events after attaching")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of requests to return; use 0 for no limit")
+	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only return failed requests and HTTP 4xx/5xx responses")
+	return cmd
+}
+
+type networkRequest struct {
+	ID                string  `json:"id"`
+	URL               string  `json:"url,omitempty"`
+	Method            string  `json:"method,omitempty"`
+	ResourceType      string  `json:"resource_type,omitempty"`
+	Status            int     `json:"status,omitempty"`
+	StatusText        string  `json:"status_text,omitempty"`
+	MimeType          string  `json:"mime_type,omitempty"`
+	Failed            bool    `json:"failed"`
+	ErrorText         string  `json:"error_text,omitempty"`
+	Canceled          bool    `json:"canceled,omitempty"`
+	EncodedDataLength float64 `json:"encoded_data_length,omitempty"`
+}
+
+func collectNetworkRequests(ctx context.Context, client *cdp.Client, sessionID string, wait time.Duration, limit int, failedOnly bool) ([]networkRequest, bool, error) {
+	if err := client.CallSession(ctx, sessionID, "Network.enable", map[string]any{}, nil); err != nil {
+		return nil, false, err
+	}
+
+	requestsByID := map[string]*networkRequest{}
+	var order []string
+	addEvent := func(event cdp.Event) {
+		if event.SessionID != "" && event.SessionID != sessionID {
+			return
+		}
+		req, ok := networkRequestFromEvent(event)
+		if !ok || req.ID == "" {
+			return
+		}
+		existing, ok := requestsByID[req.ID]
+		if !ok {
+			copyReq := req
+			requestsByID[req.ID] = &copyReq
+			order = append(order, req.ID)
+			return
+		}
+		mergeNetworkRequest(existing, req)
+	}
+	for _, event := range client.DrainEvents() {
+		addEvent(event)
+	}
+	if wait > 0 {
+		eventCtx, cancel := context.WithTimeout(ctx, wait)
+		defer cancel()
+		for {
+			event, err := client.ReadEvent(eventCtx)
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(eventCtx.Err(), context.DeadlineExceeded) {
+					break
+				}
+				return nil, false, err
+			}
+			addEvent(event)
+		}
+	}
+
+	var requests []networkRequest
+	for _, id := range order {
+		req := *requestsByID[id]
+		if failedOnly && !requestFailed(req) {
+			continue
+		}
+		requests = append(requests, req)
+	}
+	truncated := false
+	if limit > 0 && len(requests) > limit {
+		requests = requests[:limit]
+		truncated = true
+	}
+	return requests, truncated, nil
+}
+
+func networkRequestFromEvent(event cdp.Event) (networkRequest, bool) {
+	switch event.Method {
+	case "Network.requestWillBeSent":
+		var params struct {
+			RequestID string `json:"requestId"`
+			Type      string `json:"type"`
+			Request   struct {
+				URL    string `json:"url"`
+				Method string `json:"method"`
+			} `json:"request"`
+		}
+		if err := json.Unmarshal(event.Params, &params); err != nil {
+			return networkRequest{}, false
+		}
+		return networkRequest{ID: params.RequestID, URL: params.Request.URL, Method: params.Request.Method, ResourceType: params.Type}, true
+	case "Network.responseReceived":
+		var params struct {
+			RequestID string `json:"requestId"`
+			Type      string `json:"type"`
+			Response  struct {
+				URL        string `json:"url"`
+				Status     int    `json:"status"`
+				StatusText string `json:"statusText"`
+				MimeType   string `json:"mimeType"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(event.Params, &params); err != nil {
+			return networkRequest{}, false
+		}
+		return networkRequest{ID: params.RequestID, URL: params.Response.URL, ResourceType: params.Type, Status: params.Response.Status, StatusText: params.Response.StatusText, MimeType: params.Response.MimeType}, true
+	case "Network.loadingFailed":
+		var params struct {
+			RequestID string `json:"requestId"`
+			Type      string `json:"type"`
+			ErrorText string `json:"errorText"`
+			Canceled  bool   `json:"canceled"`
+		}
+		if err := json.Unmarshal(event.Params, &params); err != nil {
+			return networkRequest{}, false
+		}
+		return networkRequest{ID: params.RequestID, ResourceType: params.Type, Failed: true, ErrorText: params.ErrorText, Canceled: params.Canceled}, true
+	case "Network.loadingFinished":
+		var params struct {
+			RequestID         string  `json:"requestId"`
+			EncodedDataLength float64 `json:"encodedDataLength"`
+		}
+		if err := json.Unmarshal(event.Params, &params); err != nil {
+			return networkRequest{}, false
+		}
+		return networkRequest{ID: params.RequestID, EncodedDataLength: params.EncodedDataLength}, true
+	default:
+		return networkRequest{}, false
+	}
+}
+
+func mergeNetworkRequest(dst *networkRequest, src networkRequest) {
+	if src.URL != "" {
+		dst.URL = src.URL
+	}
+	if src.Method != "" {
+		dst.Method = src.Method
+	}
+	if src.ResourceType != "" {
+		dst.ResourceType = src.ResourceType
+	}
+	if src.Status != 0 {
+		dst.Status = src.Status
+	}
+	if src.StatusText != "" {
+		dst.StatusText = src.StatusText
+	}
+	if src.MimeType != "" {
+		dst.MimeType = src.MimeType
+	}
+	if src.Failed {
+		dst.Failed = true
+	}
+	if src.ErrorText != "" {
+		dst.ErrorText = src.ErrorText
+	}
+	if src.Canceled {
+		dst.Canceled = true
+	}
+	if src.EncodedDataLength != 0 {
+		dst.EncodedDataLength = src.EncodedDataLength
+	}
+}
+
+func requestFailed(req networkRequest) bool {
+	return req.Failed || req.Status >= 400
+}
+
+func networkRequestLines(requests []networkRequest) []string {
+	lines := make([]string, 0, len(requests))
+	for _, req := range requests {
+		status := "pending"
+		if req.Failed {
+			status = "failed"
+		} else if req.Status > 0 {
+			status = fmt.Sprint(req.Status)
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s", req.ID, status, req.Method, req.URL))
+	}
+	return lines
 }
 
 type consoleMessage struct {
@@ -3794,6 +4028,10 @@ func commandExamples(path string) []string {
 			"cdp console --json",
 			"cdp console --errors --wait 2s --json",
 			"cdp console --url-contains localhost --types error,warning --json",
+		},
+		"cdp network": {
+			"cdp network --wait 2s --json",
+			"cdp network --failed --url-contains localhost --json",
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",

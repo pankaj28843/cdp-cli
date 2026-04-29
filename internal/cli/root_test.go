@@ -69,7 +69,7 @@ func TestDescribeJSON(t *testing.T) {
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"network", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "perf", "https://example.test", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitNotImplemented {
 		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
 	}
@@ -593,6 +593,65 @@ func TestWaitSelectorJSON(t *testing.T) {
 	}
 	if !got.OK || got.Wait.Kind != "selector" || got.Wait.Selector != "main" || !got.Wait.Matched {
 		t.Fatalf("wait selector output = %+v, want matched selector", got)
+	}
+}
+
+func TestNetworkJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"network", "--browser-url", server.URL, "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("network exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Requests []struct {
+			ID     string `json:"id"`
+			URL    string `json:"url"`
+			Status int    `json:"status"`
+			Failed bool   `json:"failed"`
+		} `json:"requests"`
+		Network struct {
+			Count int `json:"count"`
+		} `json:"network"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("network output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Network.Count != 2 || len(got.Requests) != 2 || got.Requests[0].Status != 200 {
+		t.Fatalf("network output = %+v, want two requests", got)
+	}
+}
+
+func TestNetworkFailedFilterJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"network", "--browser-url", server.URL, "--failed", "--wait", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("network --failed exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Requests []struct {
+			ID        string `json:"id"`
+			Failed    bool   `json:"failed"`
+			ErrorText string `json:"error_text"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("network --failed output is invalid JSON: %v", err)
+	}
+	if len(got.Requests) != 1 || got.Requests[0].ID != "request-failed" || !got.Requests[0].Failed {
+		t.Fatalf("network --failed output = %+v, want failed request only", got)
 	}
 }
 
@@ -1935,6 +1994,46 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Page.navigateToHistoryEntry" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "Network.enable" {
+				resp["result"] = map[string]any{}
+				events = append(events,
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.requestWillBeSent",
+						"params": map[string]any{
+							"requestId": "request-ok",
+							"type":      "Document",
+							"request":   map[string]any{"url": "https://example.test/app", "method": "GET"},
+						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.responseReceived",
+						"params": map[string]any{
+							"requestId": "request-ok",
+							"type":      "Document",
+							"response":  map[string]any{"url": "https://example.test/app", "status": 200, "statusText": "OK", "mimeType": "text/html"},
+						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.requestWillBeSent",
+						"params": map[string]any{
+							"requestId": "request-failed",
+							"type":      "Fetch",
+							"request":   map[string]any{"url": "https://example.test/api", "method": "POST"},
+						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.loadingFailed",
+						"params": map[string]any{
+							"requestId": "request-failed",
+							"type":      "Fetch",
+							"errorText": "net::ERR_FAILED",
+						},
+					},
+				)
 			} else if req.Method == "Runtime.enable" {
 				resp["result"] = map[string]any{}
 				events = append(events, map[string]any{

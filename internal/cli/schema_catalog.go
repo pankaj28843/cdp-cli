@@ -165,6 +165,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "console", Type: "console_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
 			},
 		},
+		"network": {
+			Name:        "network",
+			Description: "Network requests captured from a page target.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when network capture completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Request rows with id, URL, method, status, failure state, and size metadata."},
+				{Name: "network", Type: "network_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
+			},
+		},
 		"workflow-visible-posts": {
 			Name:        "workflow-visible-posts",
 			Description: "Open a feed page and return visible post-like text items.",
