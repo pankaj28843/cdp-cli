@@ -11,7 +11,10 @@ import (
 	"nhooyr.io/websocket/wsjson"
 )
 
-const maxBufferedEvents = 500
+const (
+	maxBufferedEvents = 500
+	maxReadBytes      = 64 << 20
+)
 
 type Client struct {
 	conn         *websocket.Conn
@@ -63,6 +66,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect websocket: %w", err)
 	}
+	conn.SetReadLimit(maxReadBytes)
 	readCtx, cancel := context.WithCancel(context.Background())
 	client := &Client{
 		conn:        conn,

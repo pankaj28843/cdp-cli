@@ -134,8 +134,22 @@ fi
 require_artifact "$state_dir/page-load.local.json"
 "$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null
+"$binary" snapshot --selector article --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .snapshot.selector == "article" and (.snapshot.items | length >= 1)' >/dev/null
 "$binary" click "#action" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action"' >/dev/null
+"$binary" fill "#agent-input" "filled value" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.value == "filled value"' >/dev/null
+"$binary" type "#agent-input" " plus typed" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "typed" and .type.typing == true and .type.typed == " plus typed"' >/dev/null
+"$binary" press Enter --selector "#agent-input" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "pressed" and .press.dispatched == true and .press.key == "Enter"' >/dev/null
+"$binary" hover "#action" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "hovered" and .hover.hovered == true and .hover.count >= 1' >/dev/null
+"$binary" drag "#drag-target" 8 12 --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "dragged" and .drag.dragged == true and .drag.delta_x == 8 and .drag.delta_y == 12' >/dev/null
+"$binary" frames --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and (.frames | length >= 1)' >/dev/null
 "$binary" dom query button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.nodes | length >= 1)' >/dev/null
 "$binary" css inspect main --state-dir "$state_dir/cdp-state" --json \

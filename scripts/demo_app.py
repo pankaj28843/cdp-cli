@@ -43,6 +43,9 @@ DEMO_HTML = """<!doctype html>
     body { font-family: sans-serif; margin: 32px; }
     main { max-width: 720px; }
     .card { border: 1px solid #ccd; border-radius: 12px; padding: 16px; }
+    .agent-form { display: grid; gap: 8px; margin-top: 12px; }
+    #agent-input { max-width: 320px; padding: 8px; }
+    #drag-target { display: inline-block; margin-top: 12px; padding: 8px 12px; background: #f0f4ff; border: 1px solid #99a; cursor: grab; }
     .overflow { width: 160px; white-space: nowrap; overflow: hidden; }
   </style>
 </head>
@@ -53,6 +56,11 @@ DEMO_HTML = """<!doctype html>
       <h2>Agent-visible post</h2>
       <p>Stable text for snapshot, text extraction, and workflow checks.</p>
       <button id="action">Click target</button>
+      <label class="agent-form">
+        Agent input
+        <input id="agent-input" value="initial" autocomplete="off">
+      </label>
+      <div id="drag-target" draggable="true">Drag target</div>
     </article>
     <p class="overflow">This sentence intentionally overflows its box for layout diagnostics.</p>
     <output id="status">booting</output>
