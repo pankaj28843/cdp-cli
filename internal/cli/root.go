@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/output"
 	"github.com/spf13/cobra"
@@ -19,12 +21,14 @@ type BuildInfo struct {
 }
 
 type options struct {
-	json    bool
-	jq      string
-	debug   bool
-	timeout time.Duration
-	profile string
-	config  string
+	json        bool
+	jq          string
+	debug       bool
+	timeout     time.Duration
+	profile     string
+	config      string
+	browserURL  string
+	autoConnect bool
 }
 
 type app struct {
@@ -77,6 +81,10 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.PersistentFlags().DurationVar(&a.opts.timeout, "timeout", 0, "ceiling-bound command execution, such as 30s or 2m")
 	root.PersistentFlags().StringVar(&a.opts.profile, "profile", config.DefaultProfile, "named cdp-cli profile to use")
 	root.PersistentFlags().StringVar(&a.opts.config, "config", "", "path to config file")
+	root.PersistentFlags().StringVar(&a.opts.browserURL, "browser-url", os.Getenv("CDP_BROWSER_URL"), "Chrome DevTools browser URL; can also be set with CDP_BROWSER_URL")
+	root.PersistentFlags().StringVar(&a.opts.browserURL, "browserUrl", os.Getenv("CDP_BROWSER_URL"), "alias for --browser-url")
+	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "auto-connect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "request Chrome's default-profile remote debugging flow when supported")
+	root.PersistentFlags().BoolVar(&a.opts.autoConnect, "autoConnect", os.Getenv("CDP_AUTO_CONNECT") == "1" || os.Getenv("CDP_AUTO_CONNECT") == "true", "alias for --auto-connect")
 
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
@@ -98,6 +106,10 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newMCPCommand())
 
 	return root
+}
+
+func (a *app) browserProbe(ctx context.Context) (browser.ProbeResult, error) {
+	return browser.Probe(ctx, a.opts.browserURL)
 }
 
 func (a *app) commandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {

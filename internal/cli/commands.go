@@ -51,7 +51,18 @@ func (a *app) newDescribeCommand() *cobra.Command {
 			data := map[string]any{
 				"ok":       true,
 				"commands": describeCommand(target),
-				"globals":  []string{"--json", "--jq", "--debug", "--timeout", "--profile", "--config"},
+				"globals": []string{
+					"--json",
+					"--jq",
+					"--debug",
+					"--timeout",
+					"--profile",
+					"--config",
+					"--browser-url",
+					"--browserUrl",
+					"--auto-connect",
+					"--autoConnect",
+				},
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)
 		},
@@ -69,15 +80,57 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
 
-			data := map[string]any{
-				"ok": true,
-				"checks": []map[string]any{
-					{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
-					{"name": "daemon", "status": "pending", "message": "attach daemon is not implemented yet"},
-					{"name": "browser", "status": "pending", "message": "browser checks are not implemented yet"},
-				},
+			checks := []map[string]any{
+				{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
+				{"name": "daemon", "status": "pending", "message": "attach daemon is not implemented yet"},
 			}
-			return a.render(ctx, "cli: pass\ndaemon: pending\nbrowser: pending", data)
+
+			probe, err := a.browserProbe(ctx)
+			if err != nil {
+				return commandError(
+					"invalid_browser_url",
+					"usage",
+					err.Error(),
+					ExitUsage,
+					[]string{"cdp doctor --browser-url <browser-url> --json"},
+				)
+			}
+			connectionMode := "browser_url"
+			if a.opts.autoConnect {
+				connectionMode = "auto_connect"
+			}
+
+			status := "pending"
+			switch probe.State {
+			case "cdp_available":
+				status = "pass"
+			case "not_configured":
+				status = "pending"
+			case "listening_not_cdp", "missing_browser_websocket", "invalid_response":
+				status = "warn"
+				if a.opts.autoConnect && probe.State == "listening_not_cdp" {
+					status = "pending"
+					probe.Message = "auto-connect endpoint is listening, but a CDP session is not established yet"
+				}
+			default:
+				status = "fail"
+			}
+			checks = append(checks, map[string]any{
+				"name":                 "browser_debug_endpoint",
+				"status":               status,
+				"message":              probe.Message,
+				"connection_mode":      connectionMode,
+				"requires_user_allow":  a.opts.autoConnect,
+				"default_profile_flow": a.opts.autoConnect,
+				"details":              probe,
+				"remediation_commands": probe.RemediationCommands,
+			})
+
+			data := map[string]any{
+				"ok":     status != "fail",
+				"checks": checks,
+			}
+			return a.render(ctx, "cli: pass\ndaemon: pending\nbrowser: "+status, data)
 		},
 	}
 }

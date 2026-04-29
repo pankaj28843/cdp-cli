@@ -18,6 +18,16 @@ fi
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
 
+if [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
+  if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true" ]]; then
+    "$binary" doctor --auto-connect --browser-url "$CDP_E2E_BROWSER_URL" --json \
+      | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .connection_mode == "auto_connect" and (.status == "pass" or .status == "pending"))' >/dev/null
+  else
+    "$binary" doctor --browser-url "$CDP_E2E_BROWSER_URL" --json \
+      | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .connection_mode == "browser_url" and (.status == "pass" or .status == "warn"))' >/dev/null
+  fi
+fi
+
 set +e
 daemon_output="$("$binary" daemon status --json 2>/tmp/cdp-cli-daemon-status.err)"
 daemon_code=$?

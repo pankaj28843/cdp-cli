@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -159,4 +161,75 @@ func TestDescribeCommandJSON(t *testing.T) {
 	if !got.OK || got.Commands.Name != "status" || !strings.Contains(got.Commands.Use, "daemon status") || len(got.Commands.Examples) == 0 {
 		t.Fatalf("describe --command = %+v, want daemon status command", got)
 	}
+}
+
+func TestDoctorBrowserURLWarnsForNonCDPEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Checks []struct {
+			Name    string `json:"name"`
+			Status  string `json:"status"`
+			Details struct {
+				State      string `json:"state"`
+				HTTPStatus int    `json:"http_status"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	for _, check := range got.Checks {
+		if check.Name == "browser_debug_endpoint" {
+			if check.Status != "warn" || check.Details.State != "listening_not_cdp" || check.Details.HTTPStatus != http.StatusNotFound {
+				t.Fatalf("browser check = %+v, want listening_not_cdp warning", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
+}
+
+func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--auto-connect", "--browserUrl", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Checks []struct {
+			Name               string `json:"name"`
+			Status             string `json:"status"`
+			ConnectionMode     string `json:"connection_mode"`
+			RequiresUserAllow  bool   `json:"requires_user_allow"`
+			DefaultProfileFlow bool   `json:"default_profile_flow"`
+			Details            struct {
+				State string `json:"state"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	for _, check := range got.Checks {
+		if check.Name == "browser_debug_endpoint" {
+			if check.Status != "pending" || check.ConnectionMode != "auto_connect" || !check.RequiresUserAllow || !check.DefaultProfileFlow || check.Details.State != "listening_not_cdp" {
+				t.Fatalf("browser check = %+v, want auto_connect pending permission flow", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
 }
