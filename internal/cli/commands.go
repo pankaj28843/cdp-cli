@@ -1167,6 +1167,8 @@ func (a *app) newTargetsCommand() *cobra.Command {
 func (a *app) newPagesCommand() *cobra.Command {
 	var limit int
 	var urlContains string
+	var includeURL string
+	var excludeURL string
 	cmd := &cobra.Command{
 		Use:   "pages",
 		Short: "List open pages and tabs",
@@ -1179,7 +1181,8 @@ func (a *app) newPagesCommand() *cobra.Command {
 				return err
 			}
 			pages := pageRows(targets)
-			pages = filterRowsContains(pages, "url", urlContains)
+			pages = filterRowsContains(pages, "url", firstNonEmpty(urlContains, includeURL))
+			pages = filterRowsExcludes(pages, "url", excludeURL)
 			pages = limitRows(pages, limit)
 			var lines []string
 			for _, page := range pages {
@@ -1190,6 +1193,8 @@ func (a *app) newPagesCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of pages to return; use 0 for no limit")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "only return pages whose URL contains this text")
+	cmd.Flags().StringVar(&includeURL, "include-url", "", "only return pages whose URL contains this text")
+	cmd.Flags().StringVar(&excludeURL, "exclude-url", "", "exclude pages whose URL contains this text")
 	return cmd
 }
 
@@ -1267,6 +1272,30 @@ func filterRowsContains(rows []map[string]any, key, needle string) []map[string]
 		}
 	}
 	return filtered
+}
+
+func filterRowsExcludes(rows []map[string]any, key, needle string) []map[string]any {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return rows
+	}
+	filtered := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		value, _ := row[key].(string)
+		if !strings.Contains(value, needle) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func pageRows(targets []cdp.TargetInfo) []map[string]any {
@@ -4216,7 +4245,7 @@ func commandExamples(path string) []string {
 		"cdp pages": {
 			"cdp pages --json",
 			"cdp pages --limit 10 --json",
-			"cdp pages --url-contains localhost --json",
+			"cdp pages --include-url localhost --exclude-url admin --json",
 			"cdp pages --browser-url <browser-url> --json",
 		},
 		"cdp page reload": {
