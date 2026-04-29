@@ -29,6 +29,8 @@ const (
 	RPCMethodFetchProtocol = "Daemon.fetchProtocol"
 )
 
+var fetchProtocolFallback = cdp.FetchOfficialProtocol
+
 type Runtime struct {
 	PID               int    `json:"pid"`
 	StartedAt         string `json:"started_at"`
@@ -571,7 +573,18 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 		}
 		protocol, err := cdp.FetchProtocol(callCtx, protocolURL)
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+			var httpErr cdp.ProtocolHTTPError
+			if !errors.As(err, &httpErr) {
+				_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+				return
+			}
+			protocol, err = fetchProtocolFallback(callCtx)
+			if err != nil {
+				_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: fmt.Sprintf("fetch protocol metadata: live endpoint returned %d; fallback failed: %v", httpErr.StatusCode, err)})
+				return
+			}
+			protocol.Source = "daemon-fallback"
+			writeRPCResult(conn, protocol)
 			return
 		}
 		protocol.Source = "daemon"
