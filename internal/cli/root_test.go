@@ -458,6 +458,35 @@ func TestConnectionRemoveJSON(t *testing.T) {
 	}
 }
 
+func TestConnectionPruneJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	missingProject := filepath.Join(t.TempDir(), "missing")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "stale", "--browser-url", "http://example.invalid", "--project", missingProject, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add stale exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "prune", "--missing-projects", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection prune exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK      bool `json:"ok"`
+		Removed []struct {
+			Name string `json:"name"`
+		} `json:"removed"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection prune output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Removed) != 1 || got.Removed[0].Name != "stale" {
+		t.Fatalf("connection prune = %+v, want stale removed", got)
+	}
+}
+
 func TestConnectionResolveJSON(t *testing.T) {
 	stateDir := t.TempDir()
 	var out, errOut bytes.Buffer

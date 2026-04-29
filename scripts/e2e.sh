@@ -28,6 +28,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" connection list --state-dir "$state_dir" --json | jq -e '.ok == true and (.connections | length == 1)' >/dev/null
 "$binary" connection add extra --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "extra"' >/dev/null
 "$binary" connection remove extra --state-dir "$state_dir" --json | jq -e '.ok == true and .removed == "extra" and (.connections | length == 1)' >/dev/null
+"$binary" connection add stale --browser-url http://example.invalid --project "$state_dir/missing-project" --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "stale"' >/dev/null
+"$binary" connection prune --missing-projects --state-dir "$state_dir" --json | jq -e '.ok == true and (.removed | length == 1)' >/dev/null
 
 if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true" ]]; then
   "$binary" connection add default --auto-connect --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null

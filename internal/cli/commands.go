@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -322,6 +323,7 @@ func (a *app) newConnectionCommand() *cobra.Command {
 	cmd.AddCommand(a.newConnectionListCommand())
 	cmd.AddCommand(a.newConnectionSelectCommand())
 	cmd.AddCommand(a.newConnectionRemoveCommand())
+	cmd.AddCommand(a.newConnectionPruneCommand())
 	cmd.AddCommand(a.newConnectionCurrentCommand())
 	cmd.AddCommand(a.newConnectionResolveCommand())
 	return cmd
@@ -532,6 +534,59 @@ func (a *app) newConnectionRemoveCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+func (a *app) newConnectionPruneCommand() *cobra.Command {
+	var missingProjects bool
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Prune stale saved browser connections",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			if !missingProjects {
+				return commandError(
+					"missing_prune_criteria",
+					"usage",
+					"connection prune requires --missing-projects",
+					ExitUsage,
+					[]string{"cdp connection prune --missing-projects --json"},
+				)
+			}
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			file, err := store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			prunedFile, removed := state.PruneMissingProjects(file, pathExists)
+			if !dryRun {
+				if err := store.Save(ctx, prunedFile); err != nil {
+					return err
+				}
+			}
+			return a.render(ctx, fmt.Sprintf("pruned %d connections", len(removed)), map[string]any{
+				"ok":          true,
+				"dry_run":     dryRun,
+				"removed":     removed,
+				"connections": prunedFile.Connections,
+				"selected":    prunedFile.Selected,
+				"state_path":  store.Path(),
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&missingProjects, "missing-projects", false, "remove connections whose project path no longer exists")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report stale connections without writing state")
+	return cmd
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (a *app) newConnectionCurrentCommand() *cobra.Command {
@@ -1149,6 +1204,9 @@ func commandExamples(path string) []string {
 		},
 		"cdp connection remove": {
 			"cdp connection remove stale --json",
+		},
+		"cdp connection prune": {
+			"cdp connection prune --missing-projects --dry-run --json",
 		},
 		"cdp connection resolve": {
 			"cdp connection resolve --json",

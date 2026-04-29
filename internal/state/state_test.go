@@ -62,6 +62,23 @@ func TestRemoveConnection(t *testing.T) {
 	}
 }
 
+func TestPruneMissingProjects(t *testing.T) {
+	existing := filepath.Join(t.TempDir(), "repo")
+	file := state.File{
+		Selected: "missing",
+		Connections: []state.Connection{
+			{Name: "keep", Mode: "browser_url", Project: existing},
+			{Name: "missing", Mode: "browser_url", Project: filepath.Join(existing, "missing")},
+		},
+	}
+	got, removed := state.PruneMissingProjects(file, func(path string) bool {
+		return path == existing
+	})
+	if len(removed) != 1 || removed[0].Name != "missing" || len(got.Connections) != 1 || got.Selected != "keep" {
+		t.Fatalf("PruneMissingProjects() = %+v removed=%+v, want missing removed and keep selected", got, removed)
+	}
+}
+
 func TestConnectionByName(t *testing.T) {
 	file := state.File{Connections: []state.Connection{
 		{Name: "default", Mode: "auto_connect"},

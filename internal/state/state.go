@@ -137,6 +137,33 @@ func RemoveConnection(file File, name string) (File, bool) {
 	return file, true
 }
 
+func PruneMissingProjects(file File, exists func(string) bool) (File, []Connection) {
+	var removed []Connection
+	conns := file.Connections[:0]
+	for _, conn := range file.Connections {
+		if conn.Project != "" && !exists(conn.Project) {
+			removed = append(removed, conn)
+			continue
+		}
+		conns = append(conns, conn)
+	}
+	if len(removed) == 0 {
+		return file, nil
+	}
+	file.Connections = conns
+	for _, conn := range removed {
+		if file.Selected == conn.Name {
+			file.Selected = ""
+			break
+		}
+	}
+	if file.Selected == "" && len(file.Connections) == 1 {
+		file.Selected = file.Connections[0].Name
+	}
+	sortConnections(file.Connections)
+	return file, removed
+}
+
 func CurrentConnection(file File) (Connection, bool) {
 	if file.Selected != "" {
 		for _, conn := range file.Connections {
