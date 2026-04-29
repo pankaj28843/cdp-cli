@@ -42,6 +42,14 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "pages", Type: "array<page>", Required: true, Description: "Page rows with id, type, title, url, and attachment state."},
 			},
 		},
+		"targets": {
+			Name:        "targets",
+			Description: "Browser targets from the selected browser connection.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when targets were listed."},
+				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with id, type, title, url, and attachment state."},
+			},
+		},
 		"error-envelope": {
 			Name:        "error-envelope",
 			Description: "Stable JSON shape emitted when a command fails with --json or --jq.",

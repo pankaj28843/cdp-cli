@@ -31,6 +31,15 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
   "$binary" doctor --json | jq -e '.checks[] | select(.name == "daemon" and (.state == "connected" or .state == "permission_pending"))' >/dev/null
   "$binary" daemon status --json | jq -e '.daemon.connection_mode == "auto_connect" and (.daemon.state == "connected" or .daemon.state == "permission_pending")' >/dev/null
   set +e
+  live_targets_output="$("$binary" --timeout 5s targets --json 2>/tmp/cdp-cli-live-targets.err)"
+  live_targets_code=$?
+  set -e
+  if [[ "$live_targets_code" -eq 0 ]]; then
+    printf '%s\n' "$live_targets_output" | jq -e '.ok == true and (.targets | type == "array")' >/dev/null
+  else
+    printf '%s\n' "$live_targets_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+  fi
+  set +e
   live_pages_output="$("$binary" --timeout 5s pages --json 2>/tmp/cdp-cli-live-pages.err)"
   live_pages_code=$?
   set -e
@@ -47,13 +56,13 @@ fi
 "$binary" daemon status --state-dir "$state_dir" --json | jq -e '.ok == true and .daemon.state' >/dev/null
 
 set +e
-targets_output="$("$binary" targets --json 2>/tmp/cdp-cli-targets.err)"
-targets_code=$?
+snapshot_output="$("$binary" snapshot --json 2>/tmp/cdp-cli-snapshot.err)"
+snapshot_code=$?
 set -e
 
-if [[ "$targets_code" -ne 8 ]]; then
-  echo "targets exit code = $targets_code, want 8 while targets is planned" >&2
+if [[ "$snapshot_code" -ne 8 ]]; then
+  echo "snapshot exit code = $snapshot_code, want 8 while snapshot is planned" >&2
   exit 1
 fi
 
-printf '%s\n' "$targets_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null
+printf '%s\n' "$snapshot_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null

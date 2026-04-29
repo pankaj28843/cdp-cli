@@ -53,7 +53,7 @@ func TestDescribeJSON(t *testing.T) {
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"targets", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"snapshot", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitNotImplemented {
 		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
 	}
@@ -68,6 +68,34 @@ func TestPlannedCommandJSONError(t *testing.T) {
 	}
 	if got.OK || got.Code != "not_implemented" || got.ErrClass != "not_implemented" {
 		t.Fatalf("error envelope = %+v, want not_implemented", got)
+	}
+}
+
+func TestTargetsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+		{"targetId": "worker-1", "type": "service_worker", "title": "Worker", "url": "https://example.test/sw.js", "attached": true},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"targets", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("targets exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK      bool `json:"ok"`
+		Targets []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("targets output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Targets) != 2 || got.Targets[0].ID != "page-1" || got.Targets[1].Type != "service_worker" {
+		t.Fatalf("targets output = %+v, want page and service worker targets", got)
 	}
 }
 

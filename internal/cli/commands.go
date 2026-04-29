@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -499,7 +500,25 @@ func (a *app) newConnectionCurrentCommand() *cobra.Command {
 }
 
 func (a *app) newTargetsCommand() *cobra.Command {
-	return planned("targets", "List browser targets")
+	return &cobra.Command{
+		Use:   "targets",
+		Short: "List browser targets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			targets, err := a.listTargets(ctx)
+			if err != nil {
+				return err
+			}
+			rows := targetRows(targets)
+			var lines []string
+			for _, target := range rows {
+				lines = append(lines, fmt.Sprintf("%s\t%s\t%s", target["id"], target["type"], target["title"]))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "targets": rows})
+		},
+	}
 }
 
 func (a *app) newPagesCommand() *cobra.Command {
@@ -510,25 +529,9 @@ func (a *app) newPagesCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			endpoint, err := a.browserEndpoint(ctx)
+			targets, err := a.listTargets(ctx)
 			if err != nil {
-				return commandError(
-					"connection_not_configured",
-					"connection",
-					err.Error(),
-					ExitConnection,
-					[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
-				)
-			}
-			targets, err := cdp.ListTargets(ctx, endpoint)
-			if err != nil {
-				return commandError(
-					"connection_failed",
-					"connection",
-					fmt.Sprintf("list pages: %v", err),
-					ExitConnection,
-					[]string{"cdp doctor --json", "cdp daemon status --json"},
-				)
+				return err
 			}
 			pages := pageRows(targets)
 			var lines []string
@@ -538,6 +541,44 @@ func (a *app) newPagesCommand() *cobra.Command {
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "pages": pages})
 		},
 	}
+}
+
+func (a *app) listTargets(ctx context.Context) ([]cdp.TargetInfo, error) {
+	endpoint, err := a.browserEndpoint(ctx)
+	if err != nil {
+		return nil, commandError(
+			"connection_not_configured",
+			"connection",
+			err.Error(),
+			ExitConnection,
+			[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
+		)
+	}
+	targets, err := cdp.ListTargets(ctx, endpoint)
+	if err != nil {
+		return nil, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("list targets: %v", err),
+			ExitConnection,
+			[]string{"cdp doctor --json", "cdp daemon status --json"},
+		)
+	}
+	return targets, nil
+}
+
+func targetRows(targets []cdp.TargetInfo) []map[string]any {
+	rows := make([]map[string]any, 0, len(targets))
+	for _, target := range targets {
+		rows = append(rows, map[string]any{
+			"id":       target.TargetID,
+			"type":     target.Type,
+			"title":    target.Title,
+			"url":      target.URL,
+			"attached": target.Attached,
+		})
+	}
+	return rows
 }
 
 func pageRows(targets []cdp.TargetInfo) []map[string]any {
@@ -680,6 +721,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp daemon status": {
 			"cdp daemon status --json",
+		},
+		"cdp targets": {
+			"cdp targets --json",
+			"cdp targets --browser-url <browser-url> --json",
 		},
 		"cdp pages": {
 			"cdp pages --json",
