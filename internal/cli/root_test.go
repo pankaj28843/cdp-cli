@@ -1212,6 +1212,22 @@ func TestWorkflowHackerNewsJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowHackerNewsHumanTable(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "hacker-news", "https://news.ycombinator.com/", "--browser-url", server.URL, "--wait", "0s"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow hacker-news exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	want := "rank  points  comments  title\n#1    42 pts 7 comments  Synthetic HN story\n"
+	if out.String() != want {
+		t.Fatalf("workflow hacker-news human output = %q, want %q", out.String(), want)
+	}
+}
+
 func TestDaemonStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 

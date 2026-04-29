@@ -4109,19 +4109,29 @@ func hackerNewsExpression(limit int) string {
 }
 
 func hackerNewsStoryLines(stories []hackerNewsStory) []string {
-	lines := make([]string, 0, len(stories))
+	lines := make([]string, 0, len(stories)+1)
+	lines = append(lines, fmt.Sprintf("%-4s %7s %9s  %s", "rank", "points", "comments", "title"))
 	for _, story := range stories {
-		parts := []string{fmt.Sprintf("#%d", story.Rank)}
-		if story.Score > 0 {
-			parts = append(parts, fmt.Sprintf("%d pts", story.Score))
-		}
-		if story.Comments > 0 {
-			parts = append(parts, fmt.Sprintf("%d comments", story.Comments))
-		}
-		parts = append(parts, story.Title)
-		lines = append(lines, strings.Join(parts, "\t"))
+		lines = append(lines, fmt.Sprintf(
+			"#%-3d %7s %9s  %s",
+			story.Rank,
+			hackerNewsCountLabel(story.Score, "pt", "pts"),
+			hackerNewsCountLabel(story.Comments, "comment", "comments"),
+			story.Title,
+		))
 	}
 	return lines
+}
+
+func hackerNewsCountLabel(count int, singular, plural string) string {
+	if count == 0 {
+		return "-"
+	}
+	label := plural
+	if count == 1 {
+		label = singular
+	}
+	return fmt.Sprintf("%d %s", count, label)
 }
 
 func (a *app) newWorkflowConsoleErrorsCommand() *cobra.Command {
