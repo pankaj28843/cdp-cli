@@ -1817,6 +1817,42 @@ func TestDescribeCommandJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExamplesSchemaJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"schema", "protocol-examples", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Schema struct {
+			Name   string `json:"name"`
+			Fields []struct {
+				Name string `json:"name"`
+			} `json:"fields"`
+		} `json:"schema"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("schema protocol-examples output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Schema.Name != "protocol-examples" || !schemaHasField(got.Schema.Fields, "examples") {
+		t.Fatalf("schema protocol-examples = %+v, want examples field", got)
+	}
+}
+
+func schemaHasField(fields []struct {
+	Name string `json:"name"`
+}, name string) bool {
+	for _, field := range fields {
+		if field.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDoctorBrowserURLWarnsForNonCDPEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()

@@ -252,6 +252,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "result", Type: "object", Required: true, Description: "Raw CDP result payload."},
 			},
 		},
+		"protocol-examples": {
+			Name:        "protocol-examples",
+			Description: "Generated raw CDP exec examples for a protocol command.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when examples were generated."},
+				{Name: "entity", Type: "protocol_entity", Required: true, Description: "Protocol command metadata and raw schema."},
+				{Name: "examples", Type: "array<protocol_exec_example>", Required: true, Description: "Runnable cdp protocol exec command examples with scope and params."},
+				{Name: "source", Type: "string", Required: true, Description: "Protocol source endpoint."},
+			},
+		},
 		"error-envelope": {
 			Name:        "error-envelope",
 			Description: "Stable JSON shape emitted when a command fails with --json or --jq.",

@@ -29,6 +29,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
 "$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot"' >/dev/null
 "$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.fields | map(.name) | index("scope"))' >/dev/null
+"$binary" schema protocol-examples --json | jq -e '.ok == true and .schema.name == "protocol-examples" and (.schema.fields | map(.name) | index("examples"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page reload" --json | jq -e '.ok == true and .commands.name == "reload" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page back" --json | jq -e '.ok == true and .commands.name == "back" and (.commands.examples | length > 0)' >/dev/null
