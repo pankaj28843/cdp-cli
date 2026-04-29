@@ -4,20 +4,32 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
 
+const maxBufferedEvents = 500
+
 type Client struct {
-	conn *websocket.Conn
-	next atomic.Int64
+	conn     *websocket.Conn
+	endpoint string
+	next     atomic.Int64
+	eventMu  sync.Mutex
+	eventBuf []Event
 }
 
 type CommandClient interface {
 	Call(ctx context.Context, method string, params any, result any) error
 	CallSession(ctx context.Context, sessionID, method string, params any, result any) error
+}
+
+type Event struct {
+	SessionID string          `json:"sessionId,omitempty"`
+	Method    string          `json:"method"`
+	Params    json.RawMessage `json:"params,omitempty"`
 }
 
 type cdpError struct {
@@ -28,6 +40,8 @@ type cdpError struct {
 type response struct {
 	ID        int64           `json:"id,omitempty"`
 	SessionID string          `json:"sessionId,omitempty"`
+	Method    string          `json:"method,omitempty"`
+	Params    json.RawMessage `json:"params,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     *cdpError       `json:"error,omitempty"`
 }
@@ -37,7 +51,11 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect websocket: %w", err)
 	}
-	return &Client{conn: conn}, nil
+	return &Client{conn: conn, endpoint: endpoint}, nil
+}
+
+func (c *Client) Endpoint() string {
+	return c.endpoint
 }
 
 func (c *Client) Close(status websocket.StatusCode, reason string) error {
@@ -75,6 +93,9 @@ func (c *Client) CallSession(ctx context.Context, sessionID, method string, para
 			return fmt.Errorf("read cdp response %s: %w", method, err)
 		}
 		if resp.ID != id {
+			if event, ok := resp.event(); ok {
+				c.bufferEvent(event)
+			}
 			continue
 		}
 		if resp.Error != nil {
@@ -88,4 +109,50 @@ func (c *Client) CallSession(ctx context.Context, sessionID, method string, para
 		}
 		return nil
 	}
+}
+
+func (c *Client) DrainEvents() []Event {
+	c.eventMu.Lock()
+	defer c.eventMu.Unlock()
+	if len(c.eventBuf) == 0 {
+		return nil
+	}
+	events := append([]Event(nil), c.eventBuf...)
+	c.eventBuf = nil
+	return events
+}
+
+func (c *Client) ReadEvent(ctx context.Context) (Event, error) {
+	for {
+		var resp response
+		if err := wsjson.Read(ctx, c.conn, &resp); err != nil {
+			return Event{}, err
+		}
+		if event, ok := resp.event(); ok {
+			return event, nil
+		}
+	}
+}
+
+func (c *Client) bufferEvent(event Event) {
+	if event.Method == "" {
+		return
+	}
+	c.eventMu.Lock()
+	defer c.eventMu.Unlock()
+	c.eventBuf = append(c.eventBuf, event)
+	if len(c.eventBuf) > maxBufferedEvents {
+		c.eventBuf = c.eventBuf[len(c.eventBuf)-maxBufferedEvents:]
+	}
+}
+
+func (r response) event() (Event, bool) {
+	if r.Method == "" {
+		return Event{}, false
+	}
+	return Event{
+		SessionID: r.SessionID,
+		Method:    r.Method,
+		Params:    r.Params,
+	}, true
 }

@@ -31,9 +31,11 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
+"$binary" schema console --json | jq -e '.ok == true and .schema.name == "console"' >/dev/null
 
 mkdir -p "$state_dir/user-data"
 set +e
@@ -168,3 +170,15 @@ if [[ "$screenshot_code" -ne 3 ]]; then
 fi
 
 printf '%s\n' "$screenshot_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null
+
+set +e
+console_output="$("$binary" console --state-dir "$state_dir" --wait 0s --json 2>/tmp/cdp-cli-console.err)"
+console_code=$?
+set -e
+
+if [[ "$console_code" -ne 3 ]]; then
+  echo "console exit code = $console_code, want 3 without a browser connection" >&2
+  exit 1
+fi
+
+printf '%s\n' "$console_output" | jq -e '.ok == false and .code == "connection_not_configured"' >/dev/null

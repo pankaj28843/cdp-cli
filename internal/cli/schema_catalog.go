@@ -88,6 +88,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Artifact references for agent workflows."},
 			},
 		},
+		"console": {
+			Name:        "console",
+			Description: "Console and browser log messages captured from a page target.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when console capture completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console/log entries with id, source, type or level, text, timestamp, and optional location."},
+				{Name: "console", Type: "console_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
+			},
+		},
 		"workflow-visible-posts": {
 			Name:        "workflow-visible-posts",
 			Description: "Open a feed page and return visible post-like text items.",

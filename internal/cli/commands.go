@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -1280,6 +1281,39 @@ func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(con
 	}, nil
 }
 
+func (a *app) browserEventCDPClient(ctx context.Context) (*cdp.Client, func(context.Context) error, error) {
+	opts, err := a.browserOptions(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if runtime, ok := a.runningRuntimeForOptions(ctx, opts); ok {
+		if runtime.Endpoint == "" {
+			return nil, nil, fmt.Errorf("running daemon does not expose an event-capable browser endpoint; restart it with `cdp daemon stop --json` then `cdp daemon start --auto-connect --json`")
+		}
+		client, err := cdp.Dial(ctx, runtime.Endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		return client, func(context.Context) error {
+			return client.CloseNormal()
+		}, nil
+	}
+	if opts.AutoConnect && !opts.ActiveProbe {
+		return nil, nil, fmt.Errorf("auto-connect browser attach is passive by default to avoid Chrome prompts; run `cdp daemon start --auto-connect --json` once, or pass --active-browser-probe to attach directly")
+	}
+	endpoint, err := browser.ResolveEndpoint(ctx, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := cdp.Dial(ctx, endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, func(context.Context) error {
+		return client.CloseNormal()
+	}, nil
+}
+
 func (a *app) runningRuntimeForOptions(ctx context.Context, opts browser.ProbeOptions) (daemon.Runtime, bool) {
 	if !opts.AutoConnect || opts.BrowserURL != "" {
 		return daemon.Runtime{}, false
@@ -1332,6 +1366,36 @@ func (a *app) attachPageSession(ctx context.Context, targetID, urlContains strin
 		)
 	}
 	return session, target, nil
+}
+
+func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains string) (*cdp.Client, *cdp.PageSession, cdp.TargetInfo, error) {
+	client, closeClient, err := a.browserEventCDPClient(ctx)
+	if err != nil {
+		return nil, nil, cdp.TargetInfo{}, commandError(
+			"connection_not_configured",
+			"connection",
+			err.Error(),
+			ExitConnection,
+			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+		)
+	}
+	target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+	if err != nil {
+		_ = closeClient(ctx)
+		return nil, nil, cdp.TargetInfo{}, err
+	}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+	if err != nil {
+		_ = closeClient(ctx)
+		return nil, nil, cdp.TargetInfo{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+			ExitConnection,
+			[]string{"cdp pages --json", "cdp doctor --json"},
+		)
+	}
+	return client, session, target, nil
 }
 
 func (a *app) resolvePageTarget(ctx context.Context, targetID, urlContains string) (cdp.TargetInfo, error) {
@@ -1920,11 +1984,319 @@ func writeArtifactFile(path string, data []byte) (string, error) {
 }
 
 func (a *app) newConsoleCommand() *cobra.Command {
-	return planned("console", "Read console messages")
+	var targetID string
+	var urlContains string
+	var wait time.Duration
+	var limit int
+	var errorsOnly bool
+	var types string
+	cmd := &cobra.Command{
+		Use:   "console",
+		Short: "Capture console and browser log messages from a page target",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			if wait < 0 {
+				return commandError(
+					"usage",
+					"usage",
+					"--wait must be non-negative",
+					ExitUsage,
+					[]string{"cdp console --wait 2s --json"},
+				)
+			}
+			if limit < 0 {
+				return commandError(
+					"usage",
+					"usage",
+					"--limit must be non-negative",
+					ExitUsage,
+					[]string{"cdp console --limit 50 --json"},
+				)
+			}
+
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			typeSet := parseCSVSet(types)
+			messages, truncated, err := collectConsoleMessages(ctx, client, session.SessionID, wait, limit, errorsOnly, typeSet)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("capture console target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			lines := consoleMessageLines(messages)
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":       true,
+				"target":   pageRow(target),
+				"messages": messages,
+				"console": map[string]any{
+					"count":       len(messages),
+					"wait":        durationString(wait),
+					"limit":       limit,
+					"truncated":   truncated,
+					"errors_only": errorsOnly,
+					"types":       setKeys(typeSet),
+				},
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect console/log events after attaching")
+	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of messages to return; use 0 for no limit")
+	cmd.Flags().BoolVar(&errorsOnly, "errors", false, "only return warnings, errors, assertions, and exceptions")
+	cmd.Flags().StringVar(&types, "types", "", "comma-separated console types or log levels to keep, such as error,warning")
+	return cmd
 }
 
 func (a *app) newNetworkCommand() *cobra.Command {
 	return planned("network", "Inspect network requests")
+}
+
+type consoleMessage struct {
+	ID               int                 `json:"id"`
+	Source           string              `json:"source"`
+	Type             string              `json:"type,omitempty"`
+	Level            string              `json:"level,omitempty"`
+	Text             string              `json:"text"`
+	Timestamp        float64             `json:"timestamp,omitempty"`
+	URL              string              `json:"url,omitempty"`
+	LineNumber       int                 `json:"line_number,omitempty"`
+	NetworkRequestID string              `json:"network_request_id,omitempty"`
+	Args             []consoleMessageArg `json:"args,omitempty"`
+	StackTrace       json.RawMessage     `json:"stack_trace,omitempty"`
+}
+
+type consoleMessageArg struct {
+	Type        string          `json:"type"`
+	Subtype     string          `json:"subtype,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Value       json.RawMessage `json:"value,omitempty"`
+}
+
+func collectConsoleMessages(ctx context.Context, client *cdp.Client, sessionID string, wait time.Duration, limit int, errorsOnly bool, typeSet map[string]bool) ([]consoleMessage, bool, error) {
+	if err := client.CallSession(ctx, sessionID, "Runtime.enable", map[string]any{}, nil); err != nil {
+		return nil, false, err
+	}
+	if err := client.CallSession(ctx, sessionID, "Log.enable", map[string]any{}, nil); err != nil {
+		return nil, false, err
+	}
+
+	var messages []consoleMessage
+	truncated := false
+	addEventMessages := func(events []cdp.Event) {
+		for _, event := range events {
+			if event.SessionID != "" && event.SessionID != sessionID {
+				continue
+			}
+			msg, ok := consoleMessageFromEvent(event)
+			if !ok || !keepConsoleMessage(msg, errorsOnly, typeSet) {
+				continue
+			}
+			if limit > 0 && len(messages) >= limit {
+				truncated = true
+				continue
+			}
+			msg.ID = len(messages)
+			messages = append(messages, msg)
+		}
+	}
+	addEventMessages(client.DrainEvents())
+
+	if wait > 0 {
+		eventCtx, cancel := context.WithTimeout(ctx, wait)
+		defer cancel()
+		for {
+			event, err := client.ReadEvent(eventCtx)
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(eventCtx.Err(), context.DeadlineExceeded) {
+					break
+				}
+				return nil, false, err
+			}
+			addEventMessages([]cdp.Event{event})
+		}
+	}
+
+	return messages, truncated, nil
+}
+
+func consoleMessageFromEvent(event cdp.Event) (consoleMessage, bool) {
+	switch event.Method {
+	case "Runtime.consoleAPICalled":
+		var params struct {
+			Type       string              `json:"type"`
+			Args       []consoleMessageArg `json:"args"`
+			Timestamp  float64             `json:"timestamp"`
+			StackTrace json.RawMessage     `json:"stackTrace"`
+		}
+		if err := json.Unmarshal(event.Params, &params); err != nil {
+			return consoleMessage{}, false
+		}
+		return consoleMessage{
+			Source:     "runtime",
+			Type:       params.Type,
+			Level:      runtimeConsoleLevel(params.Type),
+			Text:       consoleArgsText(params.Args),
+			Timestamp:  params.Timestamp,
+			Args:       params.Args,
+			StackTrace: params.StackTrace,
+		}, true
+	case "Runtime.exceptionThrown":
+		var params struct {
+			Timestamp        float64 `json:"timestamp"`
+			ExceptionDetails struct {
+				Text       string            `json:"text"`
+				URL        string            `json:"url"`
+				LineNumber int               `json:"lineNumber"`
+				StackTrace json.RawMessage   `json:"stackTrace"`
+				Exception  consoleMessageArg `json:"exception"`
+			} `json:"exceptionDetails"`
+		}
+		if err := json.Unmarshal(event.Params, &params); err != nil {
+			return consoleMessage{}, false
+		}
+		text := params.ExceptionDetails.Text
+		if text == "" {
+			text = consoleArgText(params.ExceptionDetails.Exception)
+		}
+		return consoleMessage{
+			Source:     "runtime",
+			Type:       "exception",
+			Level:      "error",
+			Text:       text,
+			Timestamp:  params.Timestamp,
+			URL:        params.ExceptionDetails.URL,
+			LineNumber: params.ExceptionDetails.LineNumber,
+			StackTrace: params.ExceptionDetails.StackTrace,
+		}, true
+	case "Log.entryAdded":
+		var params struct {
+			Entry struct {
+				Source           string              `json:"source"`
+				Level            string              `json:"level"`
+				Text             string              `json:"text"`
+				Timestamp        float64             `json:"timestamp"`
+				URL              string              `json:"url"`
+				LineNumber       int                 `json:"lineNumber"`
+				NetworkRequestID string              `json:"networkRequestId"`
+				Args             []consoleMessageArg `json:"args"`
+				StackTrace       json.RawMessage     `json:"stackTrace"`
+			} `json:"entry"`
+		}
+		if err := json.Unmarshal(event.Params, &params); err != nil {
+			return consoleMessage{}, false
+		}
+		text := params.Entry.Text
+		if text == "" {
+			text = consoleArgsText(params.Entry.Args)
+		}
+		return consoleMessage{
+			Source:           params.Entry.Source,
+			Level:            params.Entry.Level,
+			Text:             text,
+			Timestamp:        params.Entry.Timestamp,
+			URL:              params.Entry.URL,
+			LineNumber:       params.Entry.LineNumber,
+			NetworkRequestID: params.Entry.NetworkRequestID,
+			Args:             params.Entry.Args,
+			StackTrace:       params.Entry.StackTrace,
+		}, true
+	default:
+		return consoleMessage{}, false
+	}
+}
+
+func runtimeConsoleLevel(consoleType string) string {
+	switch consoleType {
+	case "error", "assert":
+		return "error"
+	case "warning":
+		return "warning"
+	case "debug":
+		return "verbose"
+	default:
+		return "info"
+	}
+}
+
+func consoleArgsText(args []consoleMessageArg) string {
+	texts := make([]string, 0, len(args))
+	for _, arg := range args {
+		if text := consoleArgText(arg); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return strings.Join(texts, " ")
+}
+
+func consoleArgText(arg consoleMessageArg) string {
+	if len(arg.Value) > 0 {
+		var value any
+		if err := json.Unmarshal(arg.Value, &value); err == nil {
+			return fmt.Sprint(value)
+		}
+		return string(arg.Value)
+	}
+	if arg.Description != "" {
+		return arg.Description
+	}
+	return arg.Type
+}
+
+func keepConsoleMessage(msg consoleMessage, errorsOnly bool, typeSet map[string]bool) bool {
+	if errorsOnly && msg.Level != "error" && msg.Level != "warning" && msg.Type != "exception" && msg.Type != "assert" {
+		return false
+	}
+	if len(typeSet) == 0 {
+		return true
+	}
+	return typeSet[strings.ToLower(msg.Type)] || typeSet[strings.ToLower(msg.Level)] || typeSet[strings.ToLower(msg.Source)]
+}
+
+func consoleMessageLines(messages []consoleMessage) []string {
+	lines := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		label := msg.Level
+		if label == "" {
+			label = msg.Type
+		}
+		if label == "" {
+			label = msg.Source
+		}
+		lines = append(lines, fmt.Sprintf("%d\t%s\t%s", msg.ID, label, msg.Text))
+	}
+	return lines
+}
+
+func parseCSVSet(value string) map[string]bool {
+	set := map[string]bool{}
+	for _, part := range strings.Split(value, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part != "" {
+			set[part] = true
+		}
+	}
+	return set
+}
+
+func setKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (a *app) newCDPCommand() *cobra.Command {
@@ -2479,6 +2851,11 @@ func commandExamples(path string) []string {
 			"cdp screenshot --out tmp/page.png --json",
 			"cdp screenshot --target <target-id> --full-page --out tmp/page.png --json",
 			"cdp screenshot --url-contains localhost --out tmp/page.png --json",
+		},
+		"cdp console": {
+			"cdp console --json",
+			"cdp console --errors --wait 2s --json",
+			"cdp console --url-contains localhost --types error,warning --json",
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",

@@ -69,7 +69,7 @@ func TestDescribeJSON(t *testing.T) {
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"console", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"network", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitNotImplemented {
 		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
 	}
@@ -561,6 +561,49 @@ func TestEvalJSON(t *testing.T) {
 	}
 	if !got.OK || got.Target.ID != "page-1" || got.Result.Type != "string" || got.Result.Value != "Example App" {
 		t.Fatalf("eval output = %+v, want document title result", got)
+	}
+}
+
+func TestConsoleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"console", "--errors", "--wait", "50ms", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("console exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Messages []struct {
+			ID     int    `json:"id"`
+			Source string `json:"source"`
+			Type   string `json:"type"`
+			Level  string `json:"level"`
+			Text   string `json:"text"`
+		} `json:"messages"`
+		Console struct {
+			Count      int  `json:"count"`
+			ErrorsOnly bool `json:"errors_only"`
+		} `json:"console"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("console output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "page-1" || got.Console.Count != 2 || !got.Console.ErrorsOnly {
+		t.Fatalf("console output = %+v, want two error messages", got)
+	}
+	if got.Messages[0].ID != 0 || got.Messages[0].Source != "runtime" || got.Messages[0].Type != "error" || got.Messages[0].Text != "Synthetic console error" {
+		t.Fatalf("first console message = %+v, want runtime error", got.Messages[0])
+	}
+	if got.Messages[1].Source != "network" || got.Messages[1].Level != "error" || got.Messages[1].Text != "Synthetic network failure" {
+		t.Fatalf("second console message = %+v, want network log error", got.Messages[1])
 	}
 }
 
@@ -1551,6 +1594,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			resp := map[string]any{
 				"id": req.ID,
 			}
+			var events []map[string]any
 			if req.SessionID != "" {
 				resp["sessionId"] = req.SessionID
 			}
@@ -1564,6 +1608,35 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.navigate" {
 				resp["result"] = map[string]any{"frameId": "frame-1"}
+			} else if req.Method == "Runtime.enable" {
+				resp["result"] = map[string]any{}
+				events = append(events, map[string]any{
+					"sessionId": req.SessionID,
+					"method":    "Runtime.consoleAPICalled",
+					"params": map[string]any{
+						"type":      "error",
+						"timestamp": 12.25,
+						"args": []map[string]any{
+							{"type": "string", "value": "Synthetic console error"},
+						},
+					},
+				})
+			} else if req.Method == "Log.enable" {
+				resp["result"] = map[string]any{}
+				events = append(events, map[string]any{
+					"sessionId": req.SessionID,
+					"method":    "Log.entryAdded",
+					"params": map[string]any{
+						"entry": map[string]any{
+							"source":           "network",
+							"level":            "error",
+							"text":             "Synthetic network failure",
+							"timestamp":        12.5,
+							"url":              "https://example.test/api",
+							"networkRequestId": "request-1",
+						},
+					},
+				})
 			} else if req.Method == "Runtime.evaluate" {
 				resp["result"] = fakeRuntimeEvaluateResult(req.Params)
 			} else if req.Method == "Page.captureScreenshot" {
@@ -1577,6 +1650,11 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			}
 			if err := wsjson.Write(r.Context(), conn, resp); err != nil {
 				return
+			}
+			for _, event := range events {
+				if err := wsjson.Write(r.Context(), conn, event); err != nil {
+					return
+				}
 			}
 		}
 	})

@@ -26,6 +26,17 @@ type Runtime struct {
 	ConnectionMode    string `json:"connection_mode"`
 	ReconnectInterval string `json:"reconnect_interval,omitempty"`
 	SocketPath        string `json:"socket_path,omitempty"`
+	Endpoint          string `json:"-"`
+	UserDataDir       string `json:"user_data_dir,omitempty"`
+}
+
+type runtimeFile struct {
+	PID               int    `json:"pid"`
+	StartedAt         string `json:"started_at"`
+	ConnectionMode    string `json:"connection_mode"`
+	ReconnectInterval string `json:"reconnect_interval,omitempty"`
+	SocketPath        string `json:"socket_path,omitempty"`
+	Endpoint          string `json:"endpoint,omitempty"`
 	UserDataDir       string `json:"user_data_dir,omitempty"`
 }
 
@@ -68,11 +79,11 @@ func LoadRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 		}
 		return Runtime{}, false, fmt.Errorf("read daemon runtime state: %w", err)
 	}
-	var runtime Runtime
-	if err := json.Unmarshal(b, &runtime); err != nil {
+	var file runtimeFile
+	if err := json.Unmarshal(b, &file); err != nil {
 		return Runtime{}, false, fmt.Errorf("parse daemon runtime state: %w", err)
 	}
-	return runtime, true, nil
+	return runtimeFromFile(file), true, nil
 }
 
 func SaveRuntime(ctx context.Context, stateDir string, runtime Runtime) error {
@@ -84,7 +95,7 @@ func SaveRuntime(ctx context.Context, stateDir string, runtime Runtime) error {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create daemon state directory: %w", err)
 	}
-	b, err := json.MarshalIndent(runtime, "", "  ")
+	b, err := json.MarshalIndent(runtimeFileFromRuntime(runtime), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal daemon runtime state: %w", err)
 	}
@@ -93,6 +104,30 @@ func SaveRuntime(ctx context.Context, stateDir string, runtime Runtime) error {
 		return fmt.Errorf("write daemon runtime state: %w", err)
 	}
 	return nil
+}
+
+func runtimeFromFile(file runtimeFile) Runtime {
+	return Runtime{
+		PID:               file.PID,
+		StartedAt:         file.StartedAt,
+		ConnectionMode:    file.ConnectionMode,
+		ReconnectInterval: file.ReconnectInterval,
+		SocketPath:        file.SocketPath,
+		Endpoint:          file.Endpoint,
+		UserDataDir:       file.UserDataDir,
+	}
+}
+
+func runtimeFileFromRuntime(runtime Runtime) runtimeFile {
+	return runtimeFile{
+		PID:               runtime.PID,
+		StartedAt:         runtime.StartedAt,
+		ConnectionMode:    runtime.ConnectionMode,
+		ReconnectInterval: runtime.ReconnectInterval,
+		SocketPath:        runtime.SocketPath,
+		Endpoint:          runtime.Endpoint,
+		UserDataDir:       runtime.UserDataDir,
+	}
 }
 
 func ClearRuntime(ctx context.Context, stateDir string, pid int) error {
@@ -356,6 +391,7 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 		ConnectionMode:    connectionMode,
 		ReconnectInterval: durationString(reconnect),
 		SocketPath:        socketPath,
+		Endpoint:          client.Endpoint(),
 		UserDataDir:       os.Getenv("CDP_DAEMON_USER_DATA_DIR"),
 	}
 	if err := SaveRuntime(ctx, stateDir, runtime); err != nil {
