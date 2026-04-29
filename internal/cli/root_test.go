@@ -221,6 +221,41 @@ func TestPagesUsesRunningDaemonByDefaultJSON(t *testing.T) {
 	if !got.OK || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" {
 		t.Fatalf("pages output = %+v, want daemon-backed page target", got)
 	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"doctor", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var doctor struct {
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			State  string `json:"state"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doctor); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	var sawDaemon, sawBrowser bool
+	for _, check := range doctor.Checks {
+		if check.Name == "daemon" {
+			sawDaemon = true
+			if check.Status != "pass" || check.State != "running" {
+				t.Fatalf("daemon check = %+v, want running pass", check)
+			}
+		}
+		if check.Name == "browser_debug_endpoint" {
+			sawBrowser = true
+			if check.Status != "pass" {
+				t.Fatalf("browser check = %+v, want pass when daemon is running", check)
+			}
+		}
+	}
+	if !sawDaemon || !sawBrowser {
+		t.Fatalf("doctor checks = %+v, want daemon and browser checks", doctor.Checks)
+	}
 }
 
 func TestPagesURLFilterJSON(t *testing.T) {

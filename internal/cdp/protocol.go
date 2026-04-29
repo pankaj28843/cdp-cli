@@ -12,6 +12,7 @@ import (
 type Protocol struct {
 	Version ProtocolVersion `json:"version"`
 	Domains []Domain        `json:"domains"`
+	Source  string          `json:"source,omitempty"`
 }
 
 type ProtocolVersion struct {
@@ -67,7 +68,55 @@ type EntityDescription struct {
 	Schema       json.RawMessage `json:"schema"`
 }
 
+const (
+	OfficialBrowserProtocolURL = "https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/json/browser_protocol.json"
+	OfficialJSProtocolURL      = "https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/json/js_protocol.json"
+)
+
+type ProtocolHTTPError struct {
+	URL        string
+	StatusCode int
+}
+
+func (e ProtocolHTTPError) Error() string {
+	return fmt.Sprintf("fetch protocol metadata: http status %d", e.StatusCode)
+}
+
 func FetchProtocol(ctx context.Context, protocolURL string) (Protocol, error) {
+	protocol, err := fetchProtocolURL(ctx, protocolURL)
+	if err != nil {
+		return Protocol{}, err
+	}
+	protocol.Source = protocolURL
+	return protocol, nil
+}
+
+func FetchOfficialProtocol(ctx context.Context) (Protocol, error) {
+	return FetchProtocolSnapshot(ctx, OfficialBrowserProtocolURL, OfficialJSProtocolURL)
+}
+
+func FetchProtocolSnapshot(ctx context.Context, urls ...string) (Protocol, error) {
+	if len(urls) == 0 {
+		urls = []string{OfficialBrowserProtocolURL, OfficialJSProtocolURL}
+	}
+	var merged Protocol
+	var sources []string
+	for _, protocolURL := range urls {
+		protocol, err := fetchProtocolURL(ctx, protocolURL)
+		if err != nil {
+			return Protocol{}, err
+		}
+		if merged.Version.Major == "" && merged.Version.Minor == "" {
+			merged.Version = protocol.Version
+		}
+		merged.Domains = append(merged.Domains, protocol.Domains...)
+		sources = append(sources, protocolURL)
+	}
+	merged.Source = strings.Join(sources, ",")
+	return merged, nil
+}
+
+func fetchProtocolURL(ctx context.Context, protocolURL string) (Protocol, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, protocolURL, nil)
 	if err != nil {
 		return Protocol{}, fmt.Errorf("create protocol request: %w", err)
@@ -78,7 +127,7 @@ func FetchProtocol(ctx context.Context, protocolURL string) (Protocol, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Protocol{}, fmt.Errorf("fetch protocol metadata: http status %d", resp.StatusCode)
+		return Protocol{}, ProtocolHTTPError{URL: protocolURL, StatusCode: resp.StatusCode}
 	}
 
 	var protocol Protocol

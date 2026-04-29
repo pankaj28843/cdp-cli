@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -37,6 +38,41 @@ func TestFetchProtocol(t *testing.T) {
 	summaries := cdp.SummarizeDomains(protocol.Domains)
 	if protocol.Version.Major != "1" || len(summaries) != 1 || summaries[0].CommandCount != 2 || summaries[0].EventCount != 1 {
 		t.Fatalf("protocol summary = %+v version=%+v, want Page counts", summaries, protocol.Version)
+	}
+	if protocol.Source != server.URL {
+		t.Fatalf("protocol source = %q, want server URL", protocol.Source)
+	}
+}
+
+func TestFetchProtocolSnapshotMergesDomains(t *testing.T) {
+	browserServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"version": map[string]string{"major": "1", "minor": "3"},
+			"domains": []map[string]any{
+				{"domain": "Page", "commands": []map[string]any{{"name": "navigate"}}},
+			},
+		})
+	}))
+	defer browserServer.Close()
+	jsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"version": map[string]string{"major": "1", "minor": "3"},
+			"domains": []map[string]any{
+				{"domain": "Runtime", "commands": []map[string]any{{"name": "evaluate"}}},
+			},
+		})
+	}))
+	defer jsServer.Close()
+
+	protocol, err := cdp.FetchProtocolSnapshot(context.Background(), browserServer.URL, jsServer.URL)
+	if err != nil {
+		t.Fatalf("FetchProtocolSnapshot returned error: %v", err)
+	}
+	if protocol.Version.Major != "1" || len(protocol.Domains) != 2 || protocol.Domains[0].Domain != "Page" || protocol.Domains[1].Domain != "Runtime" {
+		t.Fatalf("protocol = %+v, want merged Page and Runtime domains", protocol)
+	}
+	if !strings.Contains(protocol.Source, browserServer.URL) || !strings.Contains(protocol.Source, jsServer.URL) {
+		t.Fatalf("protocol source = %q, want both URLs", protocol.Source)
 	}
 }
 

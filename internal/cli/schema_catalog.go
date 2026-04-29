@@ -91,7 +91,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
-			Description: "Summarized live CDP protocol metadata.",
+			Description: "Summarized CDP protocol metadata.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol metadata was fetched."},
 				{Name: "protocol", Type: "protocol_summary", Required: true, Description: "Version, domain count, and compact domain summaries."},
@@ -99,10 +99,10 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"protocol-domains": {
 			Name:        "protocol-domains",
-			Description: "Compact list of live CDP domains.",
+			Description: "Compact list of CDP domains.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol domains were fetched."},
-				{Name: "domain_count", Type: "number", Required: true, Description: "Number of domains returned by the browser."},
+				{Name: "domain_count", Type: "number", Required: true, Description: "Number of protocol domains returned."},
 				{Name: "domains", Type: "array<domain_summary>", Required: true, Description: "Compact domain summaries."},
 			},
 		},

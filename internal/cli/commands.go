@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +111,13 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			browserStatus := browserDoctorStatus(a.opts.autoConnect, &probe)
 			daemonStatus := a.daemonStatus(ctx, probe)
 			daemonCheckStatus := daemonDoctorStatus(daemonStatus.State)
+			browserMessage := probe.Message
+			browserRemediation := probe.RemediationCommands
+			if a.opts.autoConnect && daemonStatus.State == "running" {
+				browserStatus = "pass"
+				browserMessage = "daemon keepalive process is running; active browser probing was skipped"
+				browserRemediation = daemonStatus.NextCommands
+			}
 			checks := []map[string]any{
 				{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
 				{
@@ -123,12 +132,12 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			checks = append(checks, map[string]any{
 				"name":                 "browser_debug_endpoint",
 				"status":               browserStatus,
-				"message":              probe.Message,
+				"message":              browserMessage,
 				"connection_mode":      a.connectionMode(),
 				"requires_user_allow":  a.opts.autoConnect,
 				"default_profile_flow": a.opts.autoConnect,
 				"details":              probe,
-				"remediation_commands": probe.RemediationCommands,
+				"remediation_commands": browserRemediation,
 			})
 			if checkName != "" {
 				checks = filterChecksByName(checks, checkName)
@@ -1783,7 +1792,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 func (a *app) newProtocolMetadataCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "metadata",
-		Short: "Print the live protocol metadata",
+		Short: "Print CDP protocol metadata",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -1799,6 +1808,7 @@ func (a *app) newProtocolMetadataCommand() *cobra.Command {
 					"version":      protocol.Version,
 					"domain_count": len(domains),
 					"domains":      domains,
+					"source":       protocol.Source,
 				},
 			}
 			human := fmt.Sprintf("CDP %s.%s, %d domains", protocol.Version.Major, protocol.Version.Minor, len(domains))
@@ -1831,6 +1841,7 @@ func (a *app) newProtocolDomainsCommand() *cobra.Command {
 				"ok":           true,
 				"domain_count": len(domains),
 				"domains":      domains,
+				"source":       protocol.Source,
 			})
 		},
 	}
@@ -1881,6 +1892,7 @@ func (a *app) newProtocolSearchCommand() *cobra.Command {
 				"ok":      true,
 				"query":   args[0],
 				"matches": results,
+				"source":  protocol.Source,
 			})
 		},
 	}
@@ -1916,6 +1928,7 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 			return a.render(ctx, human, map[string]any{
 				"ok":     true,
 				"entity": desc,
+				"source": protocol.Source,
 			})
 		},
 	}
@@ -1983,14 +1996,16 @@ func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
 		return cdp.Protocol{}, err
 	}
 	var protocolURL string
+	allowOfficialFallback := true
 	if opts.AutoConnect && !opts.ActiveProbe {
 		if _, ok := a.runningRuntimeForOptions(ctx, opts); ok {
 			protocolURL, err = browser.ResolveProtocolURL(ctx, opts)
 		} else {
-			err = fmt.Errorf("auto-connect protocol discovery is passive by default to avoid Chrome prompts; run `cdp daemon start --auto-connect --json` once, or pass --active-browser-probe to query Chrome directly")
+			err = nil
 		}
 	} else {
 		protocolURL, err = browser.ResolveProtocolURL(ctx, opts)
+		allowOfficialFallback = opts.BrowserURL == "" && !opts.ActiveProbe
 	}
 	if err != nil {
 		return cdp.Protocol{}, commandError(
@@ -2001,14 +2016,30 @@ func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
 			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 		)
 	}
-	protocol, err := cdp.FetchProtocol(ctx, protocolURL)
+	if protocolURL != "" {
+		protocol, err := cdp.FetchProtocol(ctx, protocolURL)
+		if err == nil {
+			return protocol, nil
+		}
+		var httpErr cdp.ProtocolHTTPError
+		if !allowOfficialFallback || !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
+			return cdp.Protocol{}, commandError(
+				"connection_failed",
+				"connection",
+				fmt.Sprintf("fetch protocol metadata: %v", err),
+				ExitConnection,
+				[]string{"cdp doctor --json", "cdp daemon status --json"},
+			)
+		}
+	}
+	protocol, err := cdp.FetchOfficialProtocol(ctx)
 	if err != nil {
 		return cdp.Protocol{}, commandError(
 			"connection_failed",
 			"connection",
-			fmt.Sprintf("fetch protocol metadata: %v", err),
+			fmt.Sprintf("fetch official protocol metadata: %v", err),
 			ExitConnection,
-			[]string{"cdp doctor --json", "cdp daemon status --json"},
+			[]string{"cdp doctor --json", "cdp daemon status --json", "cdp protocol exec Browser.getVersion --json"},
 		)
 	}
 	return protocol, nil
