@@ -141,7 +141,7 @@ func probeBrowserURL(ctx context.Context, rawURL string) (ProbeResult, error) {
 			HTTPStatus:     resp.StatusCode,
 			RemediationCommands: []string{
 				"cdp doctor --browser-url <browser-url> --json",
-				"cdp mcp claude print-config --help",
+				"cdp --help",
 			},
 		}, nil
 	}

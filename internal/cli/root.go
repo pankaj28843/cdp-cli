@@ -128,7 +128,6 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newStorageCommand())
 	root.AddCommand(a.newCDPCommand())
 	root.AddCommand(a.newWorkflowCommand())
-	root.AddCommand(a.newMCPCommand())
 
 	return root
 }

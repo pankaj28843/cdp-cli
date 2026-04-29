@@ -47,42 +47,37 @@ the behavior is stable and covered by E2E checks.
 27. Add `cdp daemon logs` with redaction and no page content by default.
 28. Add typed error codes for invalid JSON, artifact failures, and unsupported
     browser capabilities instead of generic `usage` or `internal`.
-29. Add `cdp mcp claude print-config`.
-30. Add `cdp mcp claude status`.
-
-## DevTools Parity Queue
-
-31. Add viewport emulation.
-32. Add media/color-scheme emulation.
-33. Add user-agent emulation.
-34. Add geolocation emulation.
-35. Add network throttling presets.
-36. Add CPU throttling.
-37. Add click/fill/type/press/hover input commands.
-38. Add dialog observe/accept/dismiss commands.
-39. Add file upload.
-40. Add frame listing and `--frame` selection.
-41. Add accessibility-tree snapshots.
-42. Add screenshot device presets.
-43. Add full-page screenshot tiling for very tall pages.
-44. Add HAR export.
-45. Add request/response body artifact saving.
-46. Add WebSocket frame observation.
-47. Add request blocking.
-48. Add response mocking.
-49. Add performance trace start/stop.
-50. Add performance insight summaries for LCP, CLS, long tasks, and blocking
+29. Add viewport emulation.
+30. Add media/color-scheme emulation.
+31. Add user-agent emulation.
+32. Add geolocation emulation.
+33. Add network throttling presets.
+34. Add CPU throttling.
+35. Add click/fill/type/press/hover input commands.
+36. Add dialog observe/accept/dismiss commands.
+37. Add file upload.
+38. Add frame listing and `--frame` selection.
+39. Add accessibility-tree snapshots.
+40. Add screenshot device presets.
+41. Add full-page screenshot tiling for very tall pages.
+42. Add HAR export.
+43. Add request/response body artifact saving.
+44. Add WebSocket frame observation.
+45. Add request blocking.
+46. Add response mocking.
+47. Add performance trace start/stop.
+48. Add performance insight summaries for LCP, CLS, long tasks, and blocking
     requests.
-51. Add Lighthouse wrapper with report artifacts.
-52. Add JS heap snapshot artifact capture.
-53. Add CPU and heap metric probes.
-54. Add storage inspection with redaction.
-55. Add storage clear with explicit confirmation.
-56. Add ServiceWorker inspection and unregister/reload workflows.
-57. Add extension list/reload/action support where Chrome permits it.
-58. Add isolated browser context support for safe test flows.
-59. Add replayable workflow transcripts that reference artifact paths.
-60. Add comparison/diff support for two debug bundles.
+49. Add Lighthouse wrapper with report artifacts.
+50. Add JS heap snapshot artifact capture.
+51. Add CPU and heap metric probes.
+52. Add storage inspection with redaction.
+53. Add storage clear with explicit confirmation.
+54. Add ServiceWorker inspection and unregister/reload workflows.
+55. Add extension list/reload/action support where Chrome permits it.
+56. Add isolated browser context support for safe test flows.
+57. Add replayable workflow transcripts that reference artifact paths.
+58. Add comparison/diff support for two debug bundles.
 
 ## Research Signals
 

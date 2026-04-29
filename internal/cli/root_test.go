@@ -74,6 +74,68 @@ func TestDescribeJSON(t *testing.T) {
 	}
 }
 
+func TestDescribeJSONHasNoMCPCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"describe", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Commands struct {
+			Name     string         `json:"name"`
+			Children []describeNode `json:"children"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("describe output is invalid JSON: %v", err)
+	}
+	if !got.OK {
+		t.Fatalf("describe output indicates failure: %s", out.String())
+	}
+
+	commandPath, found := findCommandPath(got.Commands.Name, got.Commands.Children, "cdp")
+	if found {
+		t.Fatalf("describe command tree contains disallowed command %q", commandPath)
+	}
+}
+
+func TestHelpDoesNotContainMCPHints(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"--help"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	if strings.Contains(strings.ToLower(out.String()), "mcp") {
+		t.Fatalf("help output unexpectedly mentions MCP: %s", out.String())
+	}
+}
+
+type describeNode struct {
+	Name     string         `json:"name"`
+	Children []describeNode `json:"children"`
+}
+
+func findCommandPath(name string, children []describeNode, prefix string) (string, bool) {
+	if strings.EqualFold(name, "mcp") {
+		return strings.TrimSpace(prefix + " " + name), true
+	}
+
+	for _, child := range children {
+		childPath := prefix
+		if child.Name != "" {
+			childPath = strings.TrimSpace(prefix + " " + child.Name)
+		}
+		if foundPath, found := findCommandPath(child.Name, child.Children, childPath); found {
+			return foundPath, true
+		}
+	}
+	return "", false
+}
+
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 

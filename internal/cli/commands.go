@@ -8171,23 +8171,6 @@ func waitForSnapshotItems(ctx context.Context, session *cdp.PageSession, selecto
 	}
 }
 
-func (a *app) newMCPCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "mcp",
-		Short: "Inspect and generate MCP integration config",
-	}
-	claude := &cobra.Command{
-		Use:   "claude",
-		Short: "Inspect and generate Claude MCP config",
-	}
-	claude.AddCommand(planned("status", "Inspect Claude MCP configuration"))
-	claude.AddCommand(planned("print-config", "Print suggested Claude MCP configuration"))
-	claude.AddCommand(planned("install", "Install cdp-cli MCP integration"))
-	claude.AddCommand(planned("restore-chrome-devtools", "Print restoration commands for official Chrome DevTools MCP"))
-	cmd.AddCommand(claude)
-	return cmd
-}
-
 func planned(use, short string) *cobra.Command {
 	return &cobra.Command{
 		Use:   use,
