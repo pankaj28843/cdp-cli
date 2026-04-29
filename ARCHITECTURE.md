@@ -44,6 +44,12 @@ make install
 make e2e-installed
 ```
 
+Browser-facing changes also need the synthetic live-site check:
+
+```bash
+make e2e-demo-installed
+```
+
 Then exercise the installed binary like an agent:
 
 ```bash

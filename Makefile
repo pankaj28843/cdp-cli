@@ -1,4 +1,4 @@
-.PHONY: build clean e2e e2e-installed fmt fmt-check install leak-check test verify vet
+.PHONY: build clean e2e e2e-demo e2e-demo-installed e2e-installed fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
 PREFIX ?= $(HOME)/.local
@@ -25,6 +25,9 @@ leak-check:
 e2e: build
 	bash scripts/e2e.sh ./$(BINARY)
 
+e2e-demo: build
+	bash scripts/e2e_demo.sh ./$(BINARY)
+
 install: build
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 "$(BINARY)" "$(DESTDIR)$(PREFIX)/bin/cdp"
@@ -32,6 +35,10 @@ install: build
 e2e-installed:
 	@command -v cdp >/dev/null || { echo "cdp is not on PATH; run make install or add Go bin to PATH" >&2; exit 2; }
 	bash scripts/e2e.sh "$$(command -v cdp)"
+
+e2e-demo-installed:
+	@command -v cdp >/dev/null || { echo "cdp is not on PATH; run make install or add Go bin to PATH" >&2; exit 2; }
+	bash scripts/e2e_demo.sh "$$(command -v cdp)"
 
 verify: fmt-check test vet build e2e leak-check
 

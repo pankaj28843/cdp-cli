@@ -25,6 +25,12 @@ make install
 make e2e-installed
 ```
 
+For browser-facing changes, also run the synthetic live-site loop:
+
+```bash
+make e2e-demo-installed
+```
+
 ## Design
 
 - The CLI is for agents first: strong `--help`, `--json`, `--jq`, `--debug`, `--timeout`, concise defaults, and stable error envelopes.
