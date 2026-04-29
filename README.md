@@ -30,6 +30,17 @@ cdp workflow console-errors --json
 ## Development
 
 ```bash
+make verify
+make install
+make e2e-installed
+```
+
+`make install` copies the binary to `$(HOME)/.local/bin` by default. Override
+with `PREFIX=/usr/local` or another install prefix.
+
+Individual checks:
+
+```bash
 make test
 make vet
 make build
