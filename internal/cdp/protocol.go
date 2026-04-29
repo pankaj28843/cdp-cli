@@ -136,6 +136,20 @@ func SearchProtocol(protocol Protocol, query string, limit int) []SearchResult {
 	return results
 }
 
+func FilterSearchResultsByKind(results []SearchResult, kind string) []SearchResult {
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return results
+	}
+	filtered := make([]SearchResult, 0, len(results))
+	for _, result := range results {
+		if result.Kind == kind {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
+}
+
 func DescribeEntity(protocol Protocol, selector string) (EntityDescription, bool) {
 	selector = strings.TrimSpace(selector)
 	for _, domain := range protocol.Domains {

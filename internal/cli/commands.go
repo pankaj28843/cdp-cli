@@ -897,6 +897,7 @@ func (a *app) newProtocolDomainsCommand() *cobra.Command {
 
 func (a *app) newProtocolSearchCommand() *cobra.Command {
 	var limit int
+	var kind string
 	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search CDP domains, methods, events, and types",
@@ -910,6 +911,7 @@ func (a *app) newProtocolSearchCommand() *cobra.Command {
 				return err
 			}
 			results := cdp.SearchProtocol(protocol, args[0], limit)
+			results = cdp.FilterSearchResultsByKind(results, kind)
 			var lines []string
 			for _, result := range results {
 				lines = append(lines, fmt.Sprintf("%s\t%s", result.Kind, result.Path))
@@ -922,6 +924,7 @@ func (a *app) newProtocolSearchCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum number of search results")
+	cmd.Flags().StringVar(&kind, "kind", "", "only return matches of this kind: domain, command, event, or type")
 	return cmd
 }
 
@@ -1150,6 +1153,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp protocol search": {
 			"cdp protocol search screenshot --json",
+			"cdp protocol search console --kind event --json",
 		},
 		"cdp protocol describe": {
 			"cdp protocol describe Page.captureScreenshot --json",

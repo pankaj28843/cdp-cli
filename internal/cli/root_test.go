@@ -264,6 +264,30 @@ func TestProtocolSearchJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolSearchKindFilterJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "search", "console", "--kind", "event", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol search exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Matches []struct {
+			Kind string `json:"kind"`
+			Path string `json:"path"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol search output is invalid JSON: %v", err)
+	}
+	if len(got.Matches) != 1 || got.Matches[0].Kind != "event" || got.Matches[0].Path != "Runtime.consoleAPICalled" {
+		t.Fatalf("protocol search = %+v, want console event", got)
+	}
+}
+
 func TestProtocolDescribeJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

@@ -65,6 +65,17 @@ func TestSearchProtocol(t *testing.T) {
 	}
 }
 
+func TestFilterSearchResultsByKind(t *testing.T) {
+	results := []cdp.SearchResult{
+		{Kind: "command", Path: "Page.navigate"},
+		{Kind: "event", Path: "Runtime.consoleAPICalled"},
+	}
+	got := cdp.FilterSearchResultsByKind(results, "event")
+	if len(got) != 1 || got[0].Path != "Runtime.consoleAPICalled" {
+		t.Fatalf("FilterSearchResultsByKind() = %+v, want event only", got)
+	}
+}
+
 func TestDescribeEntity(t *testing.T) {
 	protocol := cdp.Protocol{
 		Domains: []cdp.Domain{
