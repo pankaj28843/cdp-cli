@@ -136,24 +136,59 @@ func findCommandPath(name string, children []describeNode, prefix string) (strin
 	return "", false
 }
 
-func TestPlannedCommandJSONError(t *testing.T) {
+func TestWorkflowA11yJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"workflow", "perf", "https://example.test", "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitNotImplemented {
-		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
+	code := cli.Execute(context.Background(), []string{"workflow", "a11y", "https://example.test/app", "--wait", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow a11y exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
 
 	var got struct {
-		OK       bool   `json:"ok"`
-		Code     string `json:"code"`
-		ErrClass string `json:"err_class"`
+		OK       bool `json:"ok"`
+		Requests []struct {
+			ID string `json:"id"`
+		} `json:"requests"`
+		Messages []struct {
+			ID int `json:"id"`
+		} `json:"messages"`
+		Signals struct {
+			ImagesWithoutAlt        int `json:"images_without_alt"`
+			FormControlsWithoutName int `json:"form_controls_without_name"`
+			HeadingSkips            int `json:"heading_skips"`
+			FocusableWithoutLabel   int `json:"focusable_without_label"`
+		} `json:"a11y"`
+		Workflow struct {
+			Name         string `json:"name"`
+			IssueCount   int    `json:"issue_count"`
+			RequestedURL string `json:"requested_url"`
+			Partial      bool   `json:"partial"`
+		} `json:"workflow"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("error output is invalid JSON: %v", err)
+		t.Fatalf("workflow a11y output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "not_implemented" || got.ErrClass != "not_implemented" {
-		t.Fatalf("error envelope = %+v, want not_implemented", got)
+	if !got.OK || got.Workflow.Name != "a11y" || got.Workflow.RequestedURL != "https://example.test/app" {
+		t.Fatalf("workflow a11y = %+v, want complete workflow output", got)
+	}
+	if len(got.Requests) != 1 {
+		t.Fatalf("workflow a11y requests = %+v, want one failed request", got.Requests)
+	}
+	if len(got.Messages) == 0 {
+		t.Fatalf("workflow a11y messages = %+v, want at least one issue message", got.Messages)
+	}
+	if got.Workflow.Partial {
+		t.Fatalf("workflow a11y = %+v, want no collector errors for synthetic page", got)
+	}
+	if got.Signals.ImagesWithoutAlt < 0 || got.Signals.FormControlsWithoutName < 0 || got.Signals.HeadingSkips < 0 || got.Signals.FocusableWithoutLabel < 0 {
+		t.Fatalf("workflow a11y signals = %+v", got.Signals)
+	}
+	if got.Workflow.IssueCount != got.Signals.ImagesWithoutAlt+got.Signals.FormControlsWithoutName+got.Signals.HeadingSkips+got.Signals.FocusableWithoutLabel {
+		t.Fatalf("workflow a11y summary = %+v, want issue_count to match signal sum", got)
 	}
 }
 
@@ -570,6 +605,39 @@ func TestTextCommandJSON(t *testing.T) {
 	}
 	if !got.OK || got.Text.Selector != "main" || got.Text.Text != "Synthetic main text" || len(got.Text.Items) != 1 {
 		t.Fatalf("text output = %+v, want compact text result", got)
+	}
+}
+
+func TestClickJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "main", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Click struct {
+			Selector string `json:"selector"`
+			Count    int    `json:"count"`
+			Clicked  bool   `json:"clicked"`
+		} `json:"click"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "clicked" || got.Target.ID != "page-1" || got.Click.Selector != "main" || got.Click.Count != 1 || !got.Click.Clicked {
+		t.Fatalf("click output = %+v, want clicked main", got)
 	}
 }
 
@@ -1147,6 +1215,208 @@ func TestWorkflowNetworkFailuresJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowDebugBundleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "debug-bundle", "--url", "https://example.test/app", "--since", "250ms", "--out-dir", outDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow debug-bundle exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID    string `json:"id"`
+			Type  string `json:"type"`
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		Requests []struct {
+			ID     string `json:"id"`
+			Failed bool   `json:"failed"`
+		} `json:"requests"`
+		Messages []struct {
+			ID int `json:"id"`
+		} `json:"messages"`
+		Snapshot struct {
+			Count int    `json:"count"`
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"snapshot"`
+		Evidence struct {
+			Requests int `json:"requests"`
+			Messages int `json:"messages"`
+		} `json:"evidence"`
+		Artifacts []struct {
+			Type string `json:"type"`
+			Path string `json:"path"`
+		} `json:"artifacts"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+		Workflow struct {
+			Name              string `json:"name"`
+			RequestedURL      string `json:"requested_url"`
+			RequestCount      int    `json:"request_count"`
+			MessageCount      int    `json:"message_count"`
+			RequestsTruncated bool   `json:"requests_truncated"`
+			MessagesTruncated bool   `json:"messages_truncated"`
+			Partial           bool   `json:"partial"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow debug-bundle output is invalid JSON: %v", err)
+	}
+
+	expectedURL, err := url.Parse("https://example.test/app")
+	if err != nil {
+		t.Fatalf("invalid expected URL: %v", err)
+	}
+	targetURL, err := url.Parse(got.Target.URL)
+	if err != nil {
+		t.Fatalf("invalid target URL %q: %v", got.Target.URL, err)
+	}
+	if !got.OK || got.Target.ID == "" || got.Target.Type != "page" || got.Target.Title == "" || targetURL.Host != expectedURL.Host || targetURL.Scheme != expectedURL.Scheme {
+		t.Fatalf("workflow debug-bundle target = %+v, want selected page target", got.Target)
+	}
+	if got.Workflow.Name != "debug-bundle" || got.Workflow.RequestedURL != "https://example.test/app" {
+		t.Fatalf("workflow debug-bundle metadata = %+v, want debug-bundle workflow metadata", got.Workflow)
+	}
+	if len(got.Requests) < 2 || len(got.Messages) == 0 || got.Evidence.Requests == 0 || got.Evidence.Messages == 0 || got.Snapshot.Count == 0 {
+		t.Fatalf("workflow debug-bundle evidence = %+v, want requests, messages, and snapshot", got)
+	}
+	hasFailed := false
+	for _, request := range got.Requests {
+		if request.Failed {
+			hasFailed = true
+			break
+		}
+	}
+	if !hasFailed {
+		t.Fatalf("workflow debug-bundle requests = %+v, want at least one failed request", got.Requests)
+	}
+	if len(got.Requests) != got.Workflow.RequestCount {
+		t.Fatalf("workflow request_count = %d, got %d requests", got.Workflow.RequestCount, len(got.Requests))
+	}
+	if len(got.Messages) != got.Workflow.MessageCount {
+		t.Fatalf("workflow message_count = %d, got %d messages", got.Workflow.MessageCount, len(got.Messages))
+	}
+	if got.Workflow.RequestsTruncated || got.Workflow.MessagesTruncated {
+		t.Fatalf("workflow debug-bundle = %+v, expect no truncation in synthetic window", got.Workflow)
+	}
+	if got.Workflow.Partial {
+		t.Fatalf("workflow debug-bundle = %+v, expect zero collector errors with synthetic events", got.Workflow)
+	}
+	snapshotURL, err := url.Parse(got.Snapshot.URL)
+	if err != nil {
+		t.Fatalf("invalid snapshot URL %q: %v", got.Snapshot.URL, err)
+	}
+	if snapshotURL.Host != targetURL.Host {
+		t.Fatalf("workflow snapshot url = %q, want same host as target %q", got.Snapshot.URL, got.Target.URL)
+	}
+	if got.Snapshot.Title != got.Target.Title {
+		t.Fatalf("workflow snapshot title = %q, want %q", got.Snapshot.Title, got.Target.Title)
+	}
+	if len(got.Artifacts) < 5 {
+		t.Fatalf("workflow artifacts = %+v, want artifact list with bundle + evidence", got.Artifacts)
+	}
+	if got.Artifact.Path == "" {
+		t.Fatalf("workflow artifact path = %q, want non-empty", got.Artifact.Path)
+	}
+	if filepath.Dir(got.Artifact.Path) != filepath.Clean(outDir) {
+		t.Fatalf("workflow artifact path = %s, want inside %q", got.Artifact.Path, outDir)
+	}
+	if _, err := os.Stat(got.Artifact.Path); err != nil {
+		t.Fatalf("workflow artifact file was not written: %v", err)
+	}
+	requiredArtifacts := map[string]struct{}{
+		"workflow-debug-bundle-bundle":        {},
+		"workflow-debug-bundle-network":       {},
+		"workflow-debug-bundle-console":       {},
+		"workflow-debug-bundle-page-metadata": {},
+		"workflow-debug-bundle-snapshot":      {},
+		"workflow-debug-bundle-workflow":      {},
+	}
+	seenArtifacts := map[string]struct{}{}
+	artifactInBundleList := false
+	for _, artifact := range got.Artifacts {
+		if artifact.Path == "" || artifact.Type == "" {
+			t.Fatalf("workflow artifacts = %+v, want typed file metadata", got.Artifacts)
+		}
+		if artifact.Path == got.Artifact.Path {
+			artifactInBundleList = true
+		}
+		seenArtifacts[artifact.Type] = struct{}{}
+		if _, err := os.Stat(artifact.Path); err != nil {
+			t.Fatalf("workflow artifact %s was not written: %v", artifact.Path, err)
+		}
+		if filepath.Dir(artifact.Path) != filepath.Clean(outDir) {
+			t.Fatalf("workflow artifact %q path %q, want inside %q", artifact.Type, artifact.Path, outDir)
+		}
+	}
+	if !artifactInBundleList {
+		t.Fatalf("workflow artifacts = %+v, want bundle path included in artifacts", got.Artifacts)
+	}
+	for artifactType := range requiredArtifacts {
+		if _, ok := seenArtifacts[artifactType]; !ok {
+			t.Fatalf("workflow artifacts = %+v, missing required type %q", got.Artifacts, artifactType)
+		}
+	}
+}
+
+func TestWorkflowVerifyJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "verify.local.json")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "verify", "https://example.test/app", "--wait", "250ms", "--out", outPath, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow verify exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Requests []struct {
+			ID     string `json:"id"`
+			Failed bool   `json:"failed"`
+		} `json:"requests"`
+		Messages []struct {
+			Level string `json:"level"`
+		} `json:"messages"`
+		Workflow struct {
+			Name         string `json:"name"`
+			RequestedURL string `json:"requested_url"`
+		} `json:"workflow"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow verify output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "verify" || got.Workflow.RequestedURL != "https://example.test/app" {
+		t.Fatalf("workflow verify = %+v, want ok verification workflow result", got)
+	}
+	if len(got.Requests) != 1 || got.Requests[0].ID != "request-failed" || !got.Requests[0].Failed {
+		t.Fatalf("workflow verify requests = %+v, want one failed request", got.Requests)
+	}
+	if len(got.Messages) == 0 {
+		t.Fatalf("workflow verify messages = %+v, want at least one console/network message", got.Messages)
+	}
+	if got.Artifact.Path != outPath {
+		t.Fatalf("workflow verify artifact = %+v, want artifact at %s", got.Artifact, outPath)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("workflow verify artifact was not written: %v", err)
+	}
+}
+
 func TestWorkflowPageLoadJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -1198,6 +1468,53 @@ func TestWorkflowPageLoadJSON(t *testing.T) {
 	}
 	if _, err := os.Stat(outPath); err != nil {
 		t.Fatalf("page-load artifact was not written: %v", err)
+	}
+}
+
+func TestWorkflowPerfJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "perf.local.json")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "perf", "https://example.test/app", "--wait", "250ms", "--trace", outPath, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow perf exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK          bool `json:"ok"`
+		Performance struct {
+			Metrics []struct {
+				Name  string  `json:"name"`
+				Value float64 `json:"value"`
+			} `json:"metrics"`
+		} `json:"performance"`
+		Workflow struct {
+			Name         string `json:"name"`
+			RequestedURL string `json:"requested_url"`
+			MetricCount  int    `json:"metric_count"`
+			Partial      bool   `json:"partial"`
+		} `json:"workflow"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow perf output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "perf" || got.Workflow.RequestedURL != "https://example.test/app" {
+		t.Fatalf("workflow perf = %+v, want complete perf workflow result", got)
+	}
+	if len(got.Performance.Metrics) != got.Workflow.MetricCount {
+		t.Fatalf("workflow perf = %+v, want metric count to match performance.metrics", got)
+	}
+	if got.Workflow.MetricCount == 0 || got.Artifact.Path != outPath || got.Workflow.Partial {
+		t.Fatalf("workflow perf = %+v, want captured performance metrics and trace artifact", got)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("workflow perf artifact was not written: %v", err)
 	}
 }
 
@@ -3250,6 +3567,20 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 						"text_length": 19,
 						"rect":        map[string]any{"x": 0, "y": 0, "width": 600, "height": 200},
 					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_click__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "main",
+					"count":    1,
+					"clicked":  true,
 				},
 			},
 		}

@@ -37,6 +37,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("lock"))' >/dev/null
 "$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("entries"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "click" --json | jq -e '.ok == true and .commands.name == "click" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("--url-contains")))' >/dev/null
 "$binary" describe --command "page reload" --json | jq -e '.ok == true and .commands.name == "reload" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page back" --json | jq -e '.ok == true and .commands.name == "back" and (.commands.examples | length > 0)' >/dev/null
@@ -67,9 +68,13 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow hacker-news" --json | jq -e '.ok == true and .commands.name == "hacker-news" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "workflow a11y" --json | jq -e '.ok == true and .commands.name == "a11y" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow console-errors" --json | jq -e '.ok == true and .commands.name == "console-errors" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow network-failures" --json | jq -e '.ok == true and .commands.name == "network-failures" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow page-load" --json | jq -e '.ok == true and .commands.name == "page-load" and (.commands.examples | any(contains("--reload")))' >/dev/null
+"$binary" describe --command "workflow verify" --json | jq -e '.ok == true and .commands.name == "verify" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "workflow perf" --json | jq -e '.ok == true and .commands.name == "perf" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "workflow debug-bundle" --json | jq -e '.ok == true and .commands.name == "debug-bundle" and (.commands.examples | length > 0)' >/dev/null
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
 "$binary" schema console --json | jq -e '.ok == true and .schema.name == "console"' >/dev/null
 "$binary" schema network --json | jq -e '.ok == true and .schema.name == "network"' >/dev/null
@@ -90,7 +95,12 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema workflow-hacker-news --json | jq -e '.ok == true and .schema.name == "workflow-hacker-news" and (.schema.fields | map(.name) | index("organization"))' >/dev/null
 "$binary" schema workflow-console-errors --json | jq -e '.ok == true and .schema.name == "workflow-console-errors"' >/dev/null
 "$binary" schema workflow-network-failures --json | jq -e '.ok == true and .schema.name == "workflow-network-failures"' >/dev/null
+"$binary" schema workflow-a11y --json | jq -e '.ok == true and .schema.name == "workflow-a11y" and (.schema.fields | map(.name) | index("a11y"))' >/dev/null
 "$binary" schema workflow-page-load --json | jq -e '.ok == true and .schema.name == "workflow-page-load" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
+"$binary" schema workflow-verify --json | jq -e '.ok == true and .schema.name == "workflow-verify" and (.schema.fields | map(.name) | index("requests"))' >/dev/null
+"$binary" schema workflow-perf --json | jq -e '.ok == true and .schema.name == "workflow-perf" and (.schema.fields | map(.name) | index("performance"))' >/dev/null
+"$binary" schema workflow-debug-bundle --json | jq -e '.ok == true and .schema.name == "workflow-debug-bundle" and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
+"$binary" schema click --json | jq -e '.ok == true and .schema.name == "click" and (.schema.fields | map(.name) | index("click"))' >/dev/null
 
 mkdir -p "$state_dir/user-data"
 set +e

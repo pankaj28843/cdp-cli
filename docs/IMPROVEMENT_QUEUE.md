@@ -32,8 +32,9 @@ the behavior is stable and covered by E2E checks.
 14. Add `cdp workflow console-errors`.
 15. Add `cdp workflow network-failures`.
 16. Add `cdp workflow verify <url>`.
-17. Add `cdp workflow debug-bundle` with console, network, snapshot,
-    screenshot, page metadata, and artifact references.
+17. ✅ Add `cdp workflow debug-bundle` with console, network, snapshot,
+    screenshot, page metadata, and artifact references. (implemented and covered
+    with unit + e2e checks)
 18. Add `cdp protocol examples <Domain.method>`.
 19. Add `cdp doctor --capabilities`.
 20. Add schema catalog entries for every new JSON shape.

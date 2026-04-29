@@ -116,6 +116,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newOpenCommand())
 	root.AddCommand(a.newEvalCommand())
 	root.AddCommand(a.newTextCommand())
+	root.AddCommand(a.newClickCommand())
 	root.AddCommand(a.newHTMLCommand())
 	root.AddCommand(a.newDOMCommand())
 	root.AddCommand(a.newCSSCommand())

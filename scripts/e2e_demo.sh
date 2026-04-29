@@ -18,6 +18,32 @@ app_log="$state_dir/demo-app.log"
 chrome_log="$state_dir/chrome.log"
 app_pid=""
 chrome_pid=""
+app_url=""
+
+require_artifact() {
+  local path=$1
+  if [[ ! -e "$path" ]]; then
+    echo "missing artifact: $path" >&2
+    return 2
+  fi
+  if [[ ! -s "$path" ]]; then
+    echo "empty artifact: $path" >&2
+    return 2
+  fi
+}
+
+extract_demo_url() {
+  local source_file=$1
+  local line
+  while IFS= read -r line; do
+    line="${line//$'\r'/}"
+    if [[ "$line" =~ ^[[:space:]]*(https?://[^[:space:]]+)[[:space:]]*$ ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done <"$source_file"
+  return 1
+}
 
 cleanup() {
   if [[ -n "$chrome_pid" ]]; then
@@ -39,15 +65,20 @@ trap cleanup EXIT
 
 python3 scripts/demo_app.py 0 >"$app_log" 2>&1 &
 app_pid=$!
-for _ in {1..50}; do
-  if [[ -s "$app_log" ]]; then
+for _ in {1..60}; do
+  if app_url="$(extract_demo_url "$app_log")"; then
     break
+  fi
+  if ! kill -0 "$app_pid" 2>/dev/null; then
+    echo "demo app exited before publishing URL" >&2
+    sed -n '1,80p' "$app_log" >&2
+    exit 1
   fi
   sleep 0.1
 done
-app_url="$(head -n 1 "$app_log")"
 if [[ -z "$app_url" ]]; then
   echo "demo app did not start" >&2
+  sed -n '1,80p' "$app_log" >&2
   exit 1
 fi
 
@@ -65,9 +96,17 @@ chrome_pid=$!
 browser_url=""
 for _ in {1..100}; do
   if [[ -f "$state_dir/chrome-profile/DevToolsActivePort" ]]; then
-    port="$(head -n 1 "$state_dir/chrome-profile/DevToolsActivePort")"
-    browser_url="http://127.0.0.1:$port"
-    break
+    read -r port < "$state_dir/chrome-profile/DevToolsActivePort"
+    port="${port//$'\r'/}"
+    if [[ "$port" =~ ^[0-9]+$ ]]; then
+      browser_url="http://127.0.0.1:$port"
+      break
+    fi
+  fi
+  if ! kill -0 "$chrome_pid" 2>/dev/null; then
+    echo "chrome exited before DevToolsActivePort became available" >&2
+    sed -n '1,80p' "$chrome_log" >&2
+    exit 1
   fi
   sleep 0.1
 done
@@ -92,8 +131,11 @@ fi
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
   | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
+require_artifact "$state_dir/page-load.local.json"
 "$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null
+"$binary" click "#action" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action"' >/dev/null
 "$binary" dom query button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.nodes | length >= 1)' >/dev/null
 "$binary" css inspect main --state-dir "$state_dir/cdp-state" --json \
@@ -110,9 +152,11 @@ sleep 0.2
 "$binary" eval "fetch('$app_url/api/fail?probe=$probe_id').then(r => r.status)" --state-dir "$state_dir/cdp-state" --await-promise --json \
   | jq -e '.ok == true and .result.value == 503' >/dev/null
 wait "$network_pid"
+require_artifact "$network_output"
 jq -e --arg probe "$probe_id" '.ok == true and (.requests[] | select((.url | contains($probe)) and .status == 503))' "$network_output" >/dev/null
 capture_output="$state_dir/network-capture.json"
 "$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$state_dir/network-capture.local.json" --json >"$capture_output"
+require_artifact "$capture_output"
 jq -e --arg path "$state_dir/network-capture.local.json" '.ok == true and .artifact.path == $path and .capture.trigger == "reload" and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\""))))' "$capture_output" >/dev/null
 "$binary" storage list --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
   | jq -e '.ok == true and (.storage.local_storage.entries[] | select(.key == "feature" and .value == "enabled")) and (.storage.session_storage.keys | index("nonce")) and (.storage.cookies | length >= 1)' >/dev/null
@@ -128,6 +172,7 @@ jq -e --arg path "$state_dir/network-capture.local.json" '.ok == true and .artif
   | jq -e '.ok == true and .cookie.name == "cdp_demo"' >/dev/null
 "$binary" storage snapshot --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --include localStorage,sessionStorage,cookies,indexeddb,cache,serviceWorkers,quota --redact safe --out "$state_dir/storage.local.json" --json \
   | jq -e --arg path "$state_dir/storage.local.json" --arg scope "$app_url/" '.ok == true and .artifact.path == $path and .storage.redact == "safe" and (.snapshot.local_storage.entries[] | select(.key == "feature" and .value == "disabled")) and (.snapshot.indexeddb[] | select(.name == "cdp-demo-db" and (.stores[] | select(.name == "settings")))) and (.snapshot.cache_storage[] | select(.name == "cdp-demo-cache")) and (.snapshot.service_workers[] | select(.scope_url == $scope))' >/dev/null
+require_artifact "$state_dir/storage.local.json"
 "$binary" storage indexeddb list --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
   | jq -e '.ok == true and (.storage.databases[] | select(.name == "cdp-demo-db" and (.stores[] | select(.name == "settings" and .count >= 1))))' >/dev/null
 "$binary" storage indexeddb get cdp-demo-db settings feature --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
@@ -154,7 +199,22 @@ jq -e --arg path "$state_dir/network-capture.local.json" '.ok == true and .artif
   | jq -e --arg scope "$app_url/" '.ok == true and .storage.found == true and (.storage.unregistered[] | select(.scope_url == $scope and .result == true))' >/dev/null
 "$binary" screenshot --state-dir "$state_dir/cdp-state" --out "$state_dir/demo.png" --json \
   | jq -e --arg path "$state_dir/demo.png" '.ok == true and .screenshot.path == $path and .screenshot.bytes > 0' >/dev/null
+require_artifact "$state_dir/demo.png"
+mkdir -p "$state_dir/debug-bundle"
+"$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url" --since 2s --out-dir "$state_dir/debug-bundle" --json \
+  | jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.artifacts | length >= 6)' >/dev/null
+require_artifact "$state_dir/debug-bundle/debug-bundle.bundle.json"
 "$binary" protocol exec Page.captureScreenshot --url-contains "$app_url" --params '{"format":"png"}' --save "$state_dir/protocol-shot.png" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg path "$state_dir/protocol-shot.png" '.ok == true and .artifact.path == $path and .artifact.bytes > 0 and .result.data.omitted == true' >/dev/null
+require_artifact "$state_dir/protocol-shot.png"
+
+if [[ -n "${CDP_E2E_REAL_BUNDLE_URL:-}" ]]; then
+  real_bundle_dir="$state_dir/real-bundle"
+  real_bundle_path="$real_bundle_dir/debug-bundle.bundle.json"
+  mkdir -p "$real_bundle_dir"
+  "$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "${CDP_E2E_REAL_BUNDLE_URL}" --since 2s --out-dir "$real_bundle_dir" --json \
+    | jq -e --arg path "$real_bundle_path" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle"' >/dev/null
+  require_artifact "$real_bundle_path"
+fi
 
 printf 'demo e2e passed: %s\n' "$app_url"

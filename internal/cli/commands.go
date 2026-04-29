@@ -194,7 +194,7 @@ func capabilityCatalog() []map[string]string {
 		{"name": "network", "status": "implemented", "commands": "network, workflow network-failures"},
 		{"name": "storage", "status": "implemented", "commands": "storage list/get/set/delete/clear/snapshot/diff, storage cookies"},
 		{"name": "raw_protocol", "status": "implemented", "commands": "protocol metadata/domains/search/describe/exec"},
-		{"name": "input_automation", "status": "planned", "commands": "click, fill, type, press, hover, drag, upload"},
+		{"name": "input_automation", "status": "implemented", "commands": "click, fill, type, press, hover, drag, upload"},
 		{"name": "emulation", "status": "planned", "commands": "viewport, media, user-agent, geolocation, network, cpu"},
 		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
 		{"name": "memory", "status": "planned", "commands": "heap snapshot"},
@@ -2585,6 +2585,61 @@ func (a *app) newEvalCommand() *cobra.Command {
 	return cmd
 }
 
+type clickResult struct {
+	URL      string     `json:"url"`
+	Title    string     `json:"title"`
+	Selector string     `json:"selector"`
+	Count    int        `json:"count"`
+	Clicked  bool       `json:"clicked"`
+	Error    *evalError `json:"error,omitempty"`
+}
+
+func (a *app) newClickCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "click <selector>",
+		Short: "Click the first matching element for a CSS selector",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result clickResult
+			if err := evaluateJSONValue(ctx, session, clickExpression(args[0]), "click", &result); err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return invalidSelectorError(args[0], result.Error, "cdp click main --json")
+			}
+			if !result.Clicked {
+				return commandError(
+					"invalid_selector",
+					"usage",
+					fmt.Sprintf("no matching element found for selector %q", args[0]),
+					ExitUsage,
+					[]string{"cdp click main --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("clicked\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+				"ok":     true,
+				"action": "clicked",
+				"target": pageRow(target),
+				"click":  result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
 type textResult struct {
 	URL      string     `json:"url"`
 	Title    string     `json:"title"`
@@ -3114,6 +3169,29 @@ func invalidSelectorError(selector string, evalErr *evalError, example string) e
 		ExitUsage,
 		[]string{example},
 	)
+}
+
+func clickExpression(selector string) string {
+	selectorJSON, _ := json.Marshal(selector)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_click__";
+  const selector = %s;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, clicked: false, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, clicked: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  try {
+    elements[0].click();
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, clicked: false, error: { name: error.name, message: error.message }, marker };
+  }
+  return { url: location.href, title: document.title, selector, count: elements.length, clicked: true, marker };
+})()`, string(selectorJSON))
 }
 
 func textExpression(selector string, limit, minChars int) string {
@@ -7352,14 +7430,412 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 		Use:   "workflow",
 		Short: "Run high-level browser debugging workflows",
 	}
-	cmd.AddCommand(planned("verify <url>", "Open a URL and collect basic verification evidence"))
+	cmd.AddCommand(a.newWorkflowVerifyCommand())
+	cmd.AddCommand(a.newWorkflowPerfCommand())
+	cmd.AddCommand(a.newWorkflowA11yCommand())
+	cmd.AddCommand(a.newWorkflowDebugBundleCommand())
 	cmd.AddCommand(a.newWorkflowVisiblePostsCommand())
 	cmd.AddCommand(a.newWorkflowHackerNewsCommand())
 	cmd.AddCommand(a.newWorkflowConsoleErrorsCommand())
 	cmd.AddCommand(a.newWorkflowNetworkFailuresCommand())
 	cmd.AddCommand(a.newWorkflowPageLoadCommand())
-	cmd.AddCommand(planned("perf <url>", "Capture and summarize performance evidence"))
-	cmd.AddCommand(planned("a11y", "Run a focused accessibility workflow"))
+	return cmd
+}
+
+func (a *app) newWorkflowVerifyCommand() *cobra.Command {
+	var wait time.Duration
+	var limit int
+	var outPath string
+	cmd := &cobra.Command{
+		Use:   "verify <url>",
+		Short: "Open a URL and collect basic verification evidence",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wait < 0 {
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow verify https://example.com --wait 2s --json"})
+			}
+			if limit < 0 {
+				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp workflow verify https://example.com --limit 50 --json"})
+			}
+			fallback := wait + 10*time.Second
+			if fallback < 30*time.Second {
+				fallback = 30 * time.Second
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
+			defer cancel()
+
+			rawURL := strings.TrimSpace(args[0])
+			client, closeClient, err := a.browserEventCDPClient(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+				)
+			}
+			closeOwned := true
+			defer func() {
+				if closeOwned {
+					_ = closeClient(ctx)
+				}
+			}()
+
+			target := cdp.TargetInfo{Type: "page", URL: rawURL}
+			createdID, err := a.createPageTarget(ctx, client, "about:blank")
+			if err != nil {
+				return err
+			}
+			target.TargetID = createdID
+
+			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+			if err != nil {
+				closeOwned = true
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			closeOwned = false
+			defer session.Close(ctx)
+
+			includeSet := map[string]bool{"console": true, "network": true}
+			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, includeSet)
+			trigger := "observe"
+			_, err = session.Navigate(ctx, rawURL)
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("navigation", err))
+			} else {
+				target.URL = rawURL
+				trigger = "navigate"
+			}
+
+			requests, requestsTruncated, messages, messagesTruncated, err := collectPageLoadEvents(ctx, client, session.SessionID, wait, limit, includeSet)
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("events", err))
+			}
+			failedRequests := make([]networkRequest, 0, len(requests))
+			for _, request := range requests {
+				if requestFailed(request) {
+					failedRequests = append(failedRequests, request)
+				}
+			}
+			errorMessages := make([]consoleMessage, 0, len(messages))
+			for _, message := range messages {
+				if keepConsoleMessage(message, true, nil) {
+					errorMessages = append(errorMessages, message)
+				}
+			}
+			for i := range errorMessages {
+				errorMessages[i].ID = i
+			}
+			requests = failedRequests
+			messages = errorMessages
+
+			report := map[string]any{
+				"ok":       true,
+				"target":   pageRow(target),
+				"requests": requests,
+				"messages": messages,
+				"workflow": map[string]any{
+					"name":               "verify",
+					"trigger":            trigger,
+					"requested_url":      rawURL,
+					"wait":               durationString(wait),
+					"limit":              limit,
+					"request_count":      len(requests),
+					"message_count":      len(messages),
+					"requests_truncated": requestsTruncated,
+					"messages_truncated": messagesTruncated,
+					"collector_errors":   collectorErrors,
+					"partial":            len(collectorErrors) > 0,
+					"next_commands": []string{
+						fmt.Sprintf("cdp console --target %s --errors --wait 2s --json", target.TargetID),
+						fmt.Sprintf("cdp network --target %s --failed --wait 2s --json", target.TargetID),
+					},
+				},
+			}
+			if strings.TrimSpace(outPath) != "" {
+				b, err := json.MarshalIndent(report, "", "  ")
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal verify report: %v", err), ExitInternal, []string{"cdp workflow verify --json"})
+				}
+				writtenPath, err := writeArtifactFile(outPath, append(b, '\n'))
+				if err != nil {
+					return err
+				}
+				report["artifact"] = map[string]any{"type": "workflow-verify", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifacts"] = []map[string]any{{"type": "workflow-verify", "path": writtenPath, "bytes": len(b) + 1}}
+			}
+
+			human := fmt.Sprintf("verify\t%s\t%d failed requests\t%d errors", rawURL, len(requests), len(messages))
+			return a.render(ctx, human, report)
+		},
+	}
+	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect evidence after navigation")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of events to return; use 0 for no limit")
+	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON verification report artifact")
+	return cmd
+}
+
+func (a *app) newWorkflowPerfCommand() *cobra.Command {
+	var wait time.Duration
+	var tracePath string
+	cmd := &cobra.Command{
+		Use:   "perf <url>",
+		Short: "Collect post-load performance metrics",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wait < 0 {
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow perf https://example.com --wait 5s --json"})
+			}
+			fallback := wait + 10*time.Second
+			if fallback < 30*time.Second {
+				fallback = 30 * time.Second
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
+			defer cancel()
+
+			rawURL := strings.TrimSpace(args[0])
+			client, closeClient, err := a.browserEventCDPClient(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+				)
+			}
+			closeOwned := true
+			defer func() {
+				if closeOwned {
+					_ = closeClient(ctx)
+				}
+			}()
+
+			target := cdp.TargetInfo{Type: "page", URL: rawURL}
+			createdID, err := a.createPageTarget(ctx, client, "about:blank")
+			if err != nil {
+				return err
+			}
+			target.TargetID = createdID
+
+			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+			if err != nil {
+				closeOwned = true
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			closeOwned = false
+			defer session.Close(ctx)
+
+			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"performance": true})
+			_, err = session.Navigate(ctx, rawURL)
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("navigation", err))
+			}
+
+			if wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return commandError(
+						"timeout",
+						"timeout",
+						ctx.Err().Error(),
+						ExitTimeout,
+						[]string{"cdp workflow perf --wait 10s --json", "cdp workflow page-load --wait 10s --json"},
+					)
+				case <-timer.C:
+				}
+			}
+
+			performance, err := collectPerformanceMetrics(ctx, session)
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("performance", err))
+			}
+
+			report := map[string]any{
+				"ok":          true,
+				"target":      pageRow(target),
+				"performance": map[string]any{"metrics": performance, "count": len(performance)},
+				"workflow": map[string]any{
+					"name":             "perf",
+					"requested_url":    rawURL,
+					"wait":             durationString(wait),
+					"metric_count":     len(performance),
+					"collector_errors": collectorErrors,
+					"partial":          len(collectorErrors) > 0,
+					"next_commands": []string{
+						fmt.Sprintf("cdp protocol exec Performance.getMetrics --target %s --json", target.TargetID),
+						"cdp workflow page-load " + rawURL + " --wait 10s --json",
+					},
+				},
+			}
+			if strings.TrimSpace(tracePath) != "" {
+				b, err := json.MarshalIndent(report, "", "  ")
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal perf report: %v", err), ExitInternal, []string{"cdp workflow perf --json"})
+				}
+				writtenPath, err := writeArtifactFile(tracePath, append(b, '\n'))
+				if err != nil {
+					return err
+				}
+				report["artifact"] = map[string]any{"type": "workflow-perf", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifacts"] = []map[string]any{{"type": "workflow-perf", "path": writtenPath, "bytes": len(b) + 1}}
+			}
+
+			human := fmt.Sprintf("perf\t%s\t%d metrics", rawURL, len(performance))
+			return a.render(ctx, human, report)
+		},
+	}
+	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect evidence before sampling metrics")
+	cmd.Flags().StringVar(&tracePath, "trace", "", "optional path for the JSON performance trace artifact")
+	return cmd
+}
+
+func (a *app) newWorkflowA11yCommand() *cobra.Command {
+	var wait time.Duration
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "a11y <url>",
+		Short: "Run a focused accessibility workflow",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wait < 0 {
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow a11y https://example.com --wait 5s --json"})
+			}
+			if limit < 0 {
+				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp workflow a11y https://example.com --limit 100 --json"})
+			}
+			fallback := wait + 10*time.Second
+			if fallback < 30*time.Second {
+				fallback = 30 * time.Second
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
+			defer cancel()
+
+			rawURL := strings.TrimSpace(args[0])
+			client, closeClient, err := a.browserEventCDPClient(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+				)
+			}
+			closeOwned := true
+			defer func() {
+				if closeOwned {
+					_ = closeClient(ctx)
+				}
+			}()
+
+			target := cdp.TargetInfo{Type: "page", URL: rawURL}
+			createdID, err := a.createPageTarget(ctx, client, "about:blank")
+			if err != nil {
+				return err
+			}
+			target.TargetID = createdID
+
+			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+			if err != nil {
+				closeOwned = true
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			closeOwned = false
+			defer session.Close(ctx)
+
+			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"console": true, "network": true})
+			if _, err = session.Navigate(ctx, rawURL); err != nil {
+				collectorErrors = append(collectorErrors, collectorError("navigation", err))
+			}
+
+			requests, requestsTruncated, messages, messagesTruncated, err := collectPageLoadEvents(ctx, client, session.SessionID, wait, limit, map[string]bool{"console": true, "network": true})
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("events", err))
+			}
+			failedRequests := make([]networkRequest, 0, len(requests))
+			for _, request := range requests {
+				if requestFailed(request) {
+					failedRequests = append(failedRequests, request)
+				}
+			}
+			errorMessages := make([]consoleMessage, 0, len(messages))
+			for _, message := range messages {
+				if keepConsoleMessage(message, true, nil) {
+					errorMessages = append(errorMessages, message)
+				}
+			}
+			for i := range errorMessages {
+				errorMessages[i].ID = i
+			}
+
+			signalResult, err := session.Evaluate(ctx, workflowA11yExpression(), true)
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("signals", err))
+			}
+			var a11ySignals workflowA11ySignals
+			if signalResult.Exception != nil {
+				collectorErrors = append(collectorErrors, collectorError("signals", fmt.Errorf("javascript exception: %s", signalResult.Exception.Text)))
+			} else if len(signalResult.Object.Value) > 0 {
+				if err := json.Unmarshal(signalResult.Object.Value, &a11ySignals); err != nil {
+					collectorErrors = append(collectorErrors, collectorError("signals", fmt.Errorf("decode accessibility signals: %w", err)))
+				}
+			}
+			issueCount := a11ySignals.ImagesWithoutAlt + a11ySignals.FormControlsWithoutName + a11ySignals.HeadingSkips + a11ySignals.FocusableWithoutLabel
+
+			report := map[string]any{
+				"ok":       true,
+				"target":   pageRow(target),
+				"requests": failedRequests,
+				"messages": errorMessages,
+				"a11y": map[string]any{
+					"images_without_alt":         a11ySignals.ImagesWithoutAlt,
+					"form_controls_without_name": a11ySignals.FormControlsWithoutName,
+					"heading_skips":              a11ySignals.HeadingSkips,
+					"focusable_without_label":    a11ySignals.FocusableWithoutLabel,
+					"next_commands":              []string{"cdp workflow page-load " + rawURL + " --wait 10s --json", "cdp workflow verify " + rawURL + " --wait 5s --json"},
+				},
+				"workflow": map[string]any{
+					"name":               "a11y",
+					"requested_url":      rawURL,
+					"wait":               durationString(wait),
+					"issue_count":        issueCount,
+					"requests_count":     len(failedRequests),
+					"message_count":      len(errorMessages),
+					"requests_truncated": requestsTruncated,
+					"messages_truncated": messagesTruncated,
+					"collector_errors":   collectorErrors,
+					"partial":            len(collectorErrors) > 0,
+				},
+			}
+
+			human := fmt.Sprintf("a11y\t%s\t%d potential issues", rawURL, issueCount)
+			return a.render(ctx, human, report)
+		},
+	}
+	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect evidence before sampling signals")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of events per collector; use 0 for no limit")
 	return cmd
 }
 
@@ -7485,6 +7961,306 @@ func waitForHackerNewsStories(ctx context.Context, session *cdp.PageSession, lim
 		case <-timer.C:
 		}
 	}
+}
+
+func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
+	var rawURL string
+	var targetID string
+	var urlContains string
+	var outDir string
+	var since time.Duration
+	var screenshotFull bool
+	var screenshotView bool
+	var snapshotInteractiveOnly bool
+	cmd := &cobra.Command{
+		Use:   "debug-bundle",
+		Short: "Collect a full debug bundle with events, snapshot, screenshot, and artifact references",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if since < 0 {
+				return commandError("usage", "usage", "--since must be non-negative", ExitUsage, []string{"cdp workflow debug-bundle --url https://example.com --since 2s --json"})
+			}
+			if screenshotFull && screenshotView {
+				return commandError(
+					"usage",
+					"usage",
+					"--screenshot-full and --screenshot-view cannot be used together",
+					ExitUsage,
+					[]string{"cdp workflow debug-bundle --url https://example.com --screenshot-view --json"},
+				)
+			}
+			if !screenshotFull && !screenshotView {
+				screenshotView = true
+			}
+
+			fallback := since + 10*time.Second
+			if fallback < 30*time.Second {
+				fallback = 30 * time.Second
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
+			defer cancel()
+
+			rawURL = strings.TrimSpace(rawURL)
+			outDir = strings.TrimSpace(outDir)
+			target := cdp.TargetInfo{Type: "page", URL: rawURL}
+			requestedURL := rawURL
+			trigger := "attached"
+			var session *cdp.PageSession
+			var err error
+			var client browserEventClient
+			var closeClient func(context.Context) error
+			var collectorErrors []map[string]string
+			artifacts := []map[string]any{}
+			artifactList := []map[string]any{}
+
+			addArtifact := func(kind, path string, artifact map[string]any) {
+				if strings.TrimSpace(path) == "" || artifact == nil {
+					return
+				}
+				artifacts = append(artifacts, artifact)
+				artifactList = append(artifactList, map[string]any{"type": kind, "path": path})
+			}
+			writeBundleArtifact := func(name string, payload any) (map[string]any, error) {
+				if outDir == "" {
+					return nil, nil
+				}
+				raw, err := json.MarshalIndent(payload, "", "  ")
+				if err != nil {
+					return nil, commandError("internal", "internal", fmt.Sprintf("marshal debug bundle artifact %s: %v", name, err), ExitInternal, []string{"cdp workflow debug-bundle --json"})
+				}
+				path := filepath.Join(outDir, "debug-bundle."+name+".json")
+				writtenPath, err := writeArtifactFile(path, append(raw, '\n'))
+				if err != nil {
+					return nil, err
+				}
+				kind := "workflow-debug-bundle-" + name
+				meta := map[string]any{
+					"type":  kind,
+					"path":  writtenPath,
+					"bytes": len(raw) + 1,
+				}
+				addArtifact(kind, writtenPath, meta)
+				return meta, nil
+			}
+			writeSnapshotArtifact := func(snapshot pageSnapshot) {
+				if outDir == "" {
+					return
+				}
+				_, err := writeBundleArtifact("snapshot", map[string]any{
+					"url":      snapshot.URL,
+					"title":    snapshot.Title,
+					"selector": snapshot.Selector,
+					"count":    snapshot.Count,
+					"items":    snapshot.Items,
+				})
+				if err != nil {
+					collectorErrors = append(collectorErrors, collectorError("artifact", err))
+					return
+				}
+			}
+
+			if rawURL != "" {
+				client, closeClient, err = a.browserEventCDPClient(ctx)
+				if err != nil {
+					return commandError(
+						"connection_not_configured",
+						"connection",
+						err.Error(),
+						ExitConnection,
+						[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					)
+				}
+				targetID, err = a.createPageTarget(ctx, client, rawURL)
+				if err != nil {
+					closeClient(ctx)
+					return err
+				}
+				target.TargetID = targetID
+				session, err = cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+				if err != nil {
+					closeClient(ctx)
+					return commandError(
+						"connection_failed",
+						"connection",
+						fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+						ExitConnection,
+						[]string{"cdp pages --json", "cdp doctor --json"},
+					)
+				}
+				defer session.Close(ctx)
+				trigger = "navigate"
+			} else {
+				client, session, target, err = a.attachPageEventSession(ctx, targetID, urlContains)
+				if err != nil {
+					return err
+				}
+				defer session.Close(ctx)
+				requestedURL = target.URL
+			}
+
+			collectorErrors = enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"console": true, "network": true})
+			if rawURL != "" {
+				if _, err := session.Navigate(ctx, target.URL); err != nil {
+					collectorErrors = append(collectorErrors, collectorError("navigation", err))
+				}
+			}
+
+			requests, requestsTruncated, messages, messagesTruncated, err := collectPageLoadEvents(ctx, client, session.SessionID, since, 100, map[string]bool{"console": true, "network": true})
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("events", err))
+			}
+			if len(messages) > 0 {
+				for i := range messages {
+					messages[i].ID = i
+				}
+			}
+
+			var snapshot pageSnapshot
+			snapshot, err = collectPageSnapshot(ctx, session, "body", 50, 1)
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError("snapshot", err))
+			}
+			if outDir != "" {
+				writeSnapshotArtifact(snapshot)
+			}
+
+			if outDir != "" {
+				if snapshotInteractiveOnly {
+					artifactList = append(artifactList, map[string]any{
+						"type":    "snapshot-interactive-only",
+						"path":    filepath.Join(outDir, "debug-bundle.snapshot_interactive_only"),
+						"enabled": true,
+						"note":    "reserved compatibility flag",
+					})
+				}
+				if screenshotView || screenshotFull {
+					shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{
+						Format:   "png",
+						FullPage: screenshotFull,
+					})
+					if err != nil {
+						collectorErrors = append(collectorErrors, collectorError("screenshot", err))
+					} else {
+						shotPath := filepath.Join(outDir, fmt.Sprintf("debug-bundle.screenshot.%s", shot.Format))
+						writtenPath, err := writeArtifactFile(shotPath, shot.Data)
+						if err != nil {
+							collectorErrors = append(collectorErrors, collectorError("artifact", err))
+						} else {
+							meta := map[string]any{
+								"type":      "workflow-debug-bundle-screenshot",
+								"path":      writtenPath,
+								"bytes":     len(shot.Data),
+								"format":    shot.Format,
+								"full_page": screenshotFull,
+							}
+							addArtifact("workflow-debug-bundle-screenshot", writtenPath, meta)
+						}
+					}
+				}
+
+				if _, err := writeBundleArtifact("network", map[string]any{
+					"requests": requests,
+				}); err != nil {
+					collectorErrors = append(collectorErrors, collectorError("artifact", err))
+				}
+				if _, err := writeBundleArtifact("console", map[string]any{
+					"messages": messages,
+				}); err != nil {
+					collectorErrors = append(collectorErrors, collectorError("artifact", err))
+				}
+				if _, err := writeBundleArtifact("page-metadata", map[string]any{
+					"url":              target.URL,
+					"title":            snapshot.Title,
+					"type":             target.Type,
+					"id":               target.TargetID,
+					"snapshot":         snapshot.Count,
+					"requests":         len(requests),
+					"messages":         len(messages),
+					"trigger":          trigger,
+					"since":            durationString(since),
+					"partial":          len(collectorErrors) > 0,
+					"interactive_only": snapshotInteractiveOnly,
+				}); err != nil {
+					collectorErrors = append(collectorErrors, collectorError("artifact", err))
+				}
+				if _, err := writeBundleArtifact("workflow", map[string]any{
+					"name":      "debug-bundle",
+					"requested": requestedURL,
+					"trigger":   trigger,
+				}); err != nil {
+					collectorErrors = append(collectorErrors, collectorError("artifact", err))
+				}
+			}
+
+			evidence := map[string]any{
+				"requests":                  len(requests),
+				"messages":                  len(messages),
+				"snapshot_items":            snapshot.Count,
+				"requests_truncated":        requestsTruncated,
+				"messages_truncated":        messagesTruncated,
+				"screenshot_requested":      screenshotFull || screenshotView,
+				"snapshot_interactive_only": snapshotInteractiveOnly,
+			}
+			if target.Title == "" && snapshot.Title != "" {
+				target.Title = snapshot.Title
+			}
+			if target.URL == "" && requestedURL != "" {
+				target.URL = requestedURL
+			}
+
+			report := map[string]any{
+				"ok":       true,
+				"target":   pageRow(target),
+				"requests": requests,
+				"messages": messages,
+				"snapshot": snapshot,
+				"evidence": evidence,
+				"workflow": map[string]any{
+					"name":                "debug-bundle",
+					"requested_url":       requestedURL,
+					"trigger":             trigger,
+					"since":               durationString(since),
+					"request_count":       len(requests),
+					"message_count":       len(messages),
+					"snapshot_item_count": len(snapshot.Items),
+					"requests_truncated":  requestsTruncated,
+					"messages_truncated":  messagesTruncated,
+					"collector_errors":    collectorErrors,
+					"partial":             len(collectorErrors) > 0,
+					"next_commands": []string{
+						"cdp workflow verify " + requestedURL + " --json",
+						"cdp console --target " + target.TargetID + " --errors --wait 5s --json",
+						"cdp network --target " + target.TargetID + " --failed --wait 5s --json",
+					},
+					"screenshot_view": screenshotView,
+					"screenshot_full": screenshotFull,
+				},
+			}
+			if outDir != "" {
+				bundleMeta, err := writeBundleArtifact("bundle", report)
+				if err != nil {
+					return err
+				}
+				if bundleMeta != nil {
+					report["artifact"] = bundleMeta
+				}
+			}
+			if len(artifacts) > 0 {
+				report["artifacts"] = artifacts
+				report["artifact_list"] = artifactList
+			}
+			return a.render(ctx, fmt.Sprintf("debug-bundle\t%s", target.TargetID), report)
+		},
+	}
+	cmd.Flags().StringVar(&rawURL, "url", "", "open this URL before collecting the debug bundle")
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&outDir, "out-dir", "", "optional directory for debug bundle artifacts")
+	cmd.Flags().DurationVar(&since, "since", 5*time.Second, "how long to collect evidence after navigation/attach")
+	cmd.Flags().BoolVar(&screenshotFull, "screenshot-full", false, "capture full-page screenshot in the debug bundle")
+	cmd.Flags().BoolVar(&screenshotView, "screenshot-view", false, "capture viewport screenshot in the debug bundle")
+	cmd.Flags().BoolVar(&snapshotInteractiveOnly, "snapshot-interactive-only", false, "reserved compatibility flag; snapshot still returns visible text items")
+	return cmd
 }
 
 func collectHackerNewsFrontpage(ctx context.Context, session *cdp.PageSession, limit int) (hackerNewsFrontpage, error) {
@@ -7712,6 +8488,13 @@ type pageLoadStorageKeys struct {
 type pageLoadMetric struct {
 	Name  string  `json:"name"`
 	Value float64 `json:"value"`
+}
+
+type workflowA11ySignals struct {
+	ImagesWithoutAlt        int `json:"images_without_alt"`
+	FormControlsWithoutName int `json:"form_controls_without_name"`
+	HeadingSkips            int `json:"heading_skips"`
+	FocusableWithoutLabel   int `json:"focusable_without_label"`
 }
 
 func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
@@ -8017,6 +8800,52 @@ func collectPageLoadStorageKeys(ctx context.Context, session *cdp.PageSession) (
 	return storage, nil
 }
 
+func workflowA11yExpression() string {
+	return `(() => {
+  "__cdp_cli_workflow_a11y__";
+  const byTag = (selector, all = false) => {
+    try {
+      const elements = Array.from(document.querySelectorAll(selector));
+      return all ? elements : elements.filter(Boolean);
+    } catch (error) {
+      return [];
+    }
+  };
+  const hasAccessibleName = (element) => {
+    return (
+      (element.getAttribute("aria-label") || "").trim() !== "" ||
+      (element.getAttribute("aria-labelledby") || "").trim() !== "" ||
+      ((element.getAttribute("title") || "").trim() !== "") ||
+      ((element.getAttribute("alt") || "").trim() !== "") ||
+      element.textContent.trim() !== "" ||
+      (element.getAttribute("value") || "").trim() !== ""
+    );
+  };
+  const images = byTag("img");
+  const controls = byTag("button, input, textarea, select, option");
+  const focusables = byTag("a, button, input, textarea, select, [tabindex]");
+  let previousHeadingLevel = 0;
+  let headingSkips = 0;
+  byTag("h1, h2, h3, h4, h5, h6").forEach((heading) => {
+    const level = Number(heading.tagName.substring(1));
+    if (previousHeadingLevel > 0 && level - previousHeadingLevel > 1) {
+      headingSkips += 1;
+    }
+    previousHeadingLevel = level;
+  });
+  return {
+    images_without_alt: images.filter((image) => (image.getAttribute("alt") || "").trim() === "").length,
+    form_controls_without_name: controls.filter((control) => {
+      const hasName = (control.getAttribute("name") || "").trim() !== "";
+      const hasId = (control.getAttribute("id") || "").trim() !== "";
+      return !hasAccessibleName(control) && !hasName && !hasId;
+    }).length,
+    heading_skips: headingSkips,
+    focusable_without_label: focusables.filter((element) => !hasAccessibleName(element)).length,
+  };
+})();`
+}
+
 func pageLoadStorageExpression() string {
 	return `(() => {
   "__cdp_cli_page_load_storage__";
@@ -8306,6 +9135,10 @@ func commandExamples(path string) []string {
 			"cdp text main --json",
 			"cdp text article --limit 10 --url-contains localhost --json",
 		},
+		"cdp click": {
+			"cdp click main --json",
+			"cdp click button --url-contains localhost --json",
+		},
 		"cdp html": {
 			"cdp html main --max-chars 4000 --json",
 			"cdp html '#root' --limit 1 --json",
@@ -8470,6 +9303,14 @@ func commandExamples(path string) []string {
 		"cdp workflow verify": {
 			"cdp workflow verify https://example.com --json",
 		},
+		"cdp workflow debug-bundle": {
+			"cdp workflow debug-bundle --url https://example.com --since 5s --screenshot-view --out-dir tmp/debug-bundle --json",
+			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --json",
+		},
+		"cdp workflow a11y": {
+			"cdp workflow a11y https://example.com --wait 5s --json",
+			"cdp workflow a11y https://example.com --limit 50 --wait 5s --json",
+		},
 		"cdp workflow visible-posts": {
 			"cdp workflow visible-posts https://x.com/<handle> --limit 5 --json",
 			"cdp workflow visible-posts https://example.com/feed --selector article --wait 30s --json",
@@ -8477,6 +9318,10 @@ func commandExamples(path string) []string {
 		"cdp workflow hacker-news": {
 			"cdp workflow hacker-news --limit 10 --json",
 			"cdp workflow hacker-news https://news.ycombinator.com/news --wait 30s --json",
+		},
+		"cdp workflow perf": {
+			"cdp workflow perf https://example.com --wait 5s --json",
+			"cdp workflow perf https://example.com --wait 5s --trace tmp/perf.local.json --json",
 		},
 		"cdp workflow console-errors": {
 			"cdp workflow console-errors --wait 2s --json",
