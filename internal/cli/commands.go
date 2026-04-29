@@ -870,7 +870,9 @@ func (a *app) newProtocolMetadataCommand() *cobra.Command {
 }
 
 func (a *app) newProtocolDomainsCommand() *cobra.Command {
-	return &cobra.Command{
+	var experimentalOnly bool
+	var deprecatedOnly bool
+	cmd := &cobra.Command{
 		Use:   "domains",
 		Short: "List CDP domains",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -882,6 +884,7 @@ func (a *app) newProtocolDomainsCommand() *cobra.Command {
 				return err
 			}
 			domains := cdp.SummarizeDomains(protocol.Domains)
+			domains = filterDomainSummaries(domains, experimentalOnly, deprecatedOnly)
 			var lines []string
 			for _, domain := range domains {
 				lines = append(lines, fmt.Sprintf("%s\tcommands=%d\tevents=%d", domain.Name, domain.CommandCount, domain.EventCount))
@@ -893,6 +896,26 @@ func (a *app) newProtocolDomainsCommand() *cobra.Command {
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&experimentalOnly, "experimental", false, "only return experimental domains")
+	cmd.Flags().BoolVar(&deprecatedOnly, "deprecated", false, "only return deprecated domains")
+	return cmd
+}
+
+func filterDomainSummaries(domains []cdp.DomainSummary, experimentalOnly, deprecatedOnly bool) []cdp.DomainSummary {
+	if !experimentalOnly && !deprecatedOnly {
+		return domains
+	}
+	filtered := make([]cdp.DomainSummary, 0, len(domains))
+	for _, domain := range domains {
+		if experimentalOnly && !domain.Experimental {
+			continue
+		}
+		if deprecatedOnly && !domain.Deprecated {
+			continue
+		}
+		filtered = append(filtered, domain)
+	}
+	return filtered
 }
 
 func (a *app) newProtocolSearchCommand() *cobra.Command {
@@ -1149,6 +1172,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp protocol domains": {
 			"cdp protocol domains --json",
+			"cdp protocol domains --experimental --json",
 			"cdp protocol domains --browser-url <browser-url> --json",
 		},
 		"cdp protocol search": {

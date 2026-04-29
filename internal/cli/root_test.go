@@ -238,6 +238,30 @@ func TestProtocolDomainsJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolDomainsExperimentalFilterJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "domains", "--experimental", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol domains exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Domains []struct {
+			Name         string `json:"name"`
+			Experimental bool   `json:"experimental"`
+		} `json:"domains"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol domains output is invalid JSON: %v", err)
+	}
+	if len(got.Domains) != 1 || got.Domains[0].Name != "Runtime" || !got.Domains[0].Experimental {
+		t.Fatalf("protocol domains = %+v, want experimental Runtime only", got)
+	}
+}
+
 func TestProtocolSearchJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -937,7 +961,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					},
 				},
 				{
-					"domain": "Runtime",
+					"domain":       "Runtime",
+					"experimental": true,
 					"events": []map[string]any{
 						{"name": "consoleAPICalled"},
 					},
