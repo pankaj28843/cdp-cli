@@ -120,6 +120,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newDOMCommand())
 	root.AddCommand(a.newCSSCommand())
 	root.AddCommand(a.newLayoutCommand())
+	root.AddCommand(a.newWaitCommand())
 	root.AddCommand(a.newSnapshotCommand())
 	root.AddCommand(a.newScreenshotCommand())
 	root.AddCommand(a.newConsoleCommand())

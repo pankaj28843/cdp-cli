@@ -2049,6 +2049,17 @@ type layoutOverflowItem struct {
 	ScrollHeight int          `json:"scroll_height"`
 }
 
+type waitResult struct {
+	Kind         string     `json:"kind"`
+	Needle       string     `json:"needle,omitempty"`
+	Selector     string     `json:"selector,omitempty"`
+	Matched      bool       `json:"matched"`
+	Count        int        `json:"count,omitempty"`
+	ElapsedMS    int64      `json:"elapsed_ms"`
+	PollInterval string     `json:"poll_interval"`
+	Error        *evalError `json:"error,omitempty"`
+}
+
 type evalError struct {
 	Name    string `json:"name"`
 	Message string `json:"message"`
@@ -2306,6 +2317,137 @@ func (a *app) newLayoutOverflowCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newWaitCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "wait",
+		Short: "Wait for page conditions",
+	}
+	cmd.AddCommand(a.newWaitTextCommand())
+	cmd.AddCommand(a.newWaitSelectorCommand())
+	return cmd
+}
+
+func (a *app) newWaitTextCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var poll time.Duration
+	cmd := &cobra.Command{
+		Use:   "text <needle>",
+		Short: "Wait until visible page text contains a string",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait text Ready --poll 250ms --json"})
+			}
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			start := time.Now()
+			result, err := waitForPageCondition(ctx, session, poll, func() (waitResult, error) {
+				var result waitResult
+				err := evaluateJSONValue(ctx, session, waitTextExpression(args[0]), "wait text", &result)
+				return result, err
+			})
+			if err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, []string{"cdp wait text Ready --json"})
+			}
+			result.ElapsedMS = time.Since(start).Milliseconds()
+			result.PollInterval = poll.String()
+			return a.render(ctx, fmt.Sprintf("matched text\t%s", args[0]), map[string]any{
+				"ok":     true,
+				"target": pageRow(target),
+				"wait":   result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
+	return cmd
+}
+
+func (a *app) newWaitSelectorCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var poll time.Duration
+	cmd := &cobra.Command{
+		Use:   "selector <css>",
+		Short: "Wait until a CSS selector matches at least one element",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait selector main --poll 250ms --json"})
+			}
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			start := time.Now()
+			result, err := waitForPageCondition(ctx, session, poll, func() (waitResult, error) {
+				var result waitResult
+				err := evaluateJSONValue(ctx, session, waitSelectorExpression(args[0]), "wait selector", &result)
+				return result, err
+			})
+			if err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return invalidSelectorError(args[0], result.Error, "cdp wait selector main --json")
+			}
+			result.ElapsedMS = time.Since(start).Milliseconds()
+			result.PollInterval = poll.String()
+			return a.render(ctx, fmt.Sprintf("matched selector\t%s", args[0]), map[string]any{
+				"ok":     true,
+				"target": pageRow(target),
+				"wait":   result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
+	return cmd
+}
+
+func waitForPageCondition(ctx context.Context, session *cdp.PageSession, poll time.Duration, check func() (waitResult, error)) (waitResult, error) {
+	for {
+		result, err := check()
+		if err != nil {
+			return waitResult{}, err
+		}
+		if result.Matched || result.Error != nil {
+			return result, nil
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return waitResult{}, commandError(
+				"timeout",
+				"timeout",
+				fmt.Sprintf("wait condition not met for target %s: %v", session.TargetID, ctx.Err()),
+				ExitTimeout,
+				[]string{"cdp wait text <needle> --timeout 15s --json", "cdp wait selector <css> --timeout 15s --json"},
+			)
+		case <-timer.C:
+		}
+	}
+}
+
 func evaluateJSONValue(ctx context.Context, session *cdp.PageSession, expression, label string, out any) error {
 	result, err := session.Evaluate(ctx, expression, true)
 	if err != nil {
@@ -2510,6 +2652,30 @@ func layoutOverflowExpression(selector string, limit int) string {
   }
   return { url: location.href, title: document.title, selector, count: items.length, items, marker };
 })()`, string(selectorJSON), limit)
+}
+
+func waitTextExpression(needle string) string {
+	needleJSON, _ := json.Marshal(needle)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_wait_text__";
+  const needle = %s;
+  const text = (document.body && (document.body.innerText || document.body.textContent) || "");
+  return { kind: "text", needle, matched: text.includes(needle), count: text.includes(needle) ? 1 : 0, marker };
+})()`, string(needleJSON))
+}
+
+func waitSelectorExpression(selector string) string {
+	selectorJSON, _ := json.Marshal(selector)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_wait_selector__";
+  const selector = %s;
+  try {
+    const count = document.querySelectorAll(selector).length;
+    return { kind: "selector", selector, matched: count > 0, count, marker };
+  } catch (error) {
+    return { kind: "selector", selector, matched: false, count: 0, error: { name: error.name, message: error.message }, marker };
+  }
+})()`, string(selectorJSON))
 }
 
 func (a *app) newSnapshotCommand() *cobra.Command {
@@ -3606,6 +3772,14 @@ func commandExamples(path string) []string {
 		"cdp layout overflow": {
 			"cdp layout overflow --json",
 			"cdp layout overflow --selector 'body *' --limit 20 --json",
+		},
+		"cdp wait text": {
+			"cdp wait text Ready --timeout 10s --json",
+			"cdp wait text 'Dashboard loaded' --url-contains localhost --json",
+		},
+		"cdp wait selector": {
+			"cdp wait selector main --timeout 10s --json",
+			"cdp wait selector '[data-ready=\"true\"]' --poll 500ms --json",
 		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",

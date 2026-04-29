@@ -39,6 +39,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "dom query" --json | jq -e '.ok == true and .commands.name == "query" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "css inspect" --json | jq -e '.ok == true and .commands.name == "inspect" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "layout overflow" --json | jq -e '.ok == true and .commands.name == "overflow" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "wait text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "wait selector" --json | jq -e '.ok == true and .commands.name == "selector" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
@@ -51,6 +53,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema dom-query --json | jq -e '.ok == true and .schema.name == "dom-query"' >/dev/null
 "$binary" schema css-inspect --json | jq -e '.ok == true and .schema.name == "css-inspect"' >/dev/null
 "$binary" schema layout-overflow --json | jq -e '.ok == true and .schema.name == "layout-overflow"' >/dev/null
+"$binary" schema wait --json | jq -e '.ok == true and .schema.name == "wait"' >/dev/null
 
 mkdir -p "$state_dir/user-data"
 set +e

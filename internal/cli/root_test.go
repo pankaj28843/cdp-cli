@@ -540,6 +540,62 @@ func TestLayoutOverflowJSON(t *testing.T) {
 	}
 }
 
+func TestWaitTextJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "text", "Ready", "--browser-url", server.URL, "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait text exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind    string `json:"kind"`
+			Needle  string `json:"needle"`
+			Matched bool   `json:"matched"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait text output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "text" || got.Wait.Needle != "Ready" || !got.Wait.Matched {
+		t.Fatalf("wait text output = %+v, want matched text", got)
+	}
+}
+
+func TestWaitSelectorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "selector", "main", "--browser-url", server.URL, "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait selector exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind     string `json:"kind"`
+			Selector string `json:"selector"`
+			Matched  bool   `json:"matched"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait selector output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "selector" || got.Wait.Selector != "main" || !got.Wait.Matched {
+		t.Fatalf("wait selector output = %+v, want matched selector", got)
+	}
+}
+
 func TestProtocolMetadataJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -2043,6 +2099,32 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 						"client_height": 20,
 						"scroll_height": 20,
 					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_wait_text__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"kind":    "text",
+					"needle":  "Ready",
+					"matched": true,
+					"count":   1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_wait_selector__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"kind":     "selector",
+					"selector": "main",
+					"matched":  true,
+					"count":    1,
 				},
 			},
 		}

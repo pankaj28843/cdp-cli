@@ -126,6 +126,15 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "items", Type: "array<layout_overflow_item>", Required: true, Description: "Overflow items duplicated for jq convenience."},
 			},
 		},
+		"wait": {
+			Name:        "wait",
+			Description: "Page condition wait result for text or selector checks.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition, match status, count, elapsed time, and poll interval."},
+			},
+		},
 		"snapshot": {
 			Name:        "snapshot",
 			Description: "Visible text extracted from selected page elements.",
