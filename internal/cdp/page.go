@@ -153,6 +153,21 @@ func (s *PageSession) Evaluate(ctx context.Context, expression string, awaitProm
 	return EvaluateResult{Object: result.Result, Exception: result.ExceptionDetails}, nil
 }
 
+func (s *PageSession) Exec(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return nil, fmt.Errorf("method is required")
+	}
+	if len(params) == 0 {
+		params = json.RawMessage(`{}`)
+	}
+	var raw json.RawMessage
+	if err := s.client.CallSession(ctx, s.SessionID, method, params, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 func (s *PageSession) CaptureScreenshot(ctx context.Context, opts ScreenshotOptions) (ScreenshotResult, error) {
 	format := strings.TrimSpace(opts.Format)
 	if format == "" {

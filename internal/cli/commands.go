@@ -2088,9 +2088,11 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 
 func (a *app) newProtocolExecCommand() *cobra.Command {
 	var params string
+	var targetID string
+	var urlContains string
 	cmd := &cobra.Command{
 		Use:   "exec <Domain.method>",
-		Short: "Execute a raw CDP method",
+		Short: "Execute a raw browser-scoped or target-scoped CDP method",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.browserCommandContext(cmd)
@@ -2108,6 +2110,32 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					ExitUsage,
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
+			}
+			if targetID != "" || urlContains != "" {
+				session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+				if err != nil {
+					return err
+				}
+				defer session.Close(ctx)
+
+				result, err := session.Exec(ctx, args[0], rawParams)
+				if err != nil {
+					return commandError(
+						"connection_failed",
+						"connection",
+						fmt.Sprintf("execute %s in target %s: %v", args[0], target.TargetID, err),
+						ExitConnection,
+						[]string{"cdp pages --json", "cdp protocol describe " + args[0] + " --json"},
+					)
+				}
+				return a.render(ctx, fmt.Sprintf("%s ok", args[0]), map[string]any{
+					"ok":         true,
+					"scope":      "target",
+					"method":     args[0],
+					"target":     pageRow(target),
+					"session_id": session.SessionID,
+					"result":     result,
+				})
 			}
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
@@ -2133,12 +2161,15 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 			}
 			return a.render(ctx, fmt.Sprintf("%s ok", args[0]), map[string]any{
 				"ok":     true,
+				"scope":  "browser",
 				"method": args[0],
 				"result": result,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&params, "params", "{}", "JSON params object for the CDP method")
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix for target-scoped execution")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text for target-scoped execution")
 	return cmd
 }
 
@@ -2467,6 +2498,8 @@ func commandExamples(path string) []string {
 		},
 		"cdp protocol exec": {
 			"cdp protocol exec Browser.getVersion --params '{}' --json",
+			"cdp protocol exec Runtime.evaluate --target <target-id> --params '{\"expression\":\"document.title\",\"returnByValue\":true}' --json",
+			"cdp protocol exec DOM.getDocument --url-contains localhost --json",
 		},
 		"cdp workflow verify": {
 			"cdp workflow verify https://example.com --json",

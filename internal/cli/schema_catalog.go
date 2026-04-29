@@ -138,7 +138,10 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Raw CDP method execution result.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the CDP method completed."},
+				{Name: "scope", Type: "string", Required: true, Description: "Either browser or target."},
 				{Name: "method", Type: "string", Required: true, Description: "Executed CDP method."},
+				{Name: "target", Type: "page", Required: false, Description: "Selected page target for target-scoped execution."},
+				{Name: "session_id", Type: "string", Required: false, Description: "Temporary CDP session id used for target-scoped execution."},
 				{Name: "result", Type: "object", Required: true, Description: "Raw CDP result payload."},
 			},
 		},

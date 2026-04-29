@@ -454,6 +454,7 @@ func TestProtocolExecJSON(t *testing.T) {
 
 	var got struct {
 		OK     bool   `json:"ok"`
+		Scope  string `json:"scope"`
 		Method string `json:"method"`
 		Result struct {
 			Product string `json:"product"`
@@ -462,8 +463,48 @@ func TestProtocolExecJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("protocol exec output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Method != "Browser.getVersion" || got.Result.Product != "Chrome/Test" {
+	if !got.OK || got.Scope != "browser" || got.Method != "Browser.getVersion" || got.Result.Product != "Chrome/Test" {
 		t.Fatalf("protocol exec = %+v, want Browser.getVersion result", got)
+	}
+}
+
+func TestProtocolExecTargetScopedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"protocol", "exec", "Runtime.evaluate",
+		"--target", "page",
+		"--params", `{"expression":"document.title","returnByValue":true}`,
+		"--browser-url", server.URL,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol exec target exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Scope  string `json:"scope"`
+		Method string `json:"method"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		SessionID string `json:"session_id"`
+		Result    struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol exec target output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Scope != "target" || got.Method != "Runtime.evaluate" || got.Target.ID != "page-1" || got.SessionID != "session-1" || got.Result.Result.Value != "Example App" {
+		t.Fatalf("protocol exec target = %+v, want target-scoped Runtime.evaluate", got)
 	}
 }
 

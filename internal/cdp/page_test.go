@@ -92,6 +92,21 @@ func TestCreateTargetAttachAndEvaluate(t *testing.T) {
 	if string(result.Object.Value) != `"Example App"` {
 		t.Fatalf("Evaluate value = %s, want Example App", result.Object.Value)
 	}
+	raw, err := session.Exec(context.Background(), "Runtime.evaluate", json.RawMessage(`{"expression":"document.title","returnByValue":true}`))
+	if err != nil {
+		t.Fatalf("Exec returned error: %v", err)
+	}
+	var execResult struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &execResult); err != nil {
+		t.Fatalf("Unmarshal Exec result returned error: %v", err)
+	}
+	if execResult.Result.Value != "Example App" {
+		t.Fatalf("Exec value = %q, want Example App", execResult.Result.Value)
+	}
 	shot, err := session.CaptureScreenshot(context.Background(), cdp.ScreenshotOptions{Format: "png", FullPage: true})
 	if err != nil {
 		t.Fatalf("CaptureScreenshot returned error: %v", err)

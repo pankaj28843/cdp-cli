@@ -25,6 +25,7 @@ cdp screenshot --out tmp/page.png --json
 cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
 cdp protocol search screenshot --json
 cdp protocol exec Browser.getVersion --json
+cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
 ```
 
 ## Principles
