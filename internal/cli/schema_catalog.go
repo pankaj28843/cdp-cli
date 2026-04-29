@@ -22,7 +22,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Command-tree metadata for agent discovery.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when metadata was generated."},
-				{Name: "commands", Type: "command", Required: true, Description: "Recursive command tree."},
+				{Name: "commands", Type: "command", Required: true, Description: "Recursive command tree with command-local flags and examples."},
 				{Name: "globals", Type: "array<string>", Required: true, Description: "Global flags accepted by every command."},
 			},
 		},

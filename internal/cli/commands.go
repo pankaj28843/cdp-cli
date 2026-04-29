@@ -20,6 +20,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type commandInfo struct {
@@ -28,7 +29,16 @@ type commandInfo struct {
 	Short    string        `json:"short,omitempty"`
 	Aliases  []string      `json:"aliases,omitempty"`
 	Examples []string      `json:"examples,omitempty"`
+	Flags    []flagInfo    `json:"flags,omitempty"`
 	Children []commandInfo `json:"children,omitempty"`
+}
+
+type flagInfo struct {
+	Name      string `json:"name"`
+	Shorthand string `json:"shorthand,omitempty"`
+	Type      string `json:"type"`
+	Default   string `json:"default,omitempty"`
+	Usage     string `json:"usage"`
 }
 
 func (a *app) newVersionCommand() *cobra.Command {
@@ -9698,6 +9708,7 @@ func describeCommand(cmd *cobra.Command) commandInfo {
 		Short:    cmd.Short,
 		Aliases:  cmd.Aliases,
 		Examples: commandExamples(cmd.CommandPath()),
+		Flags:    commandFlags(cmd),
 	}
 
 	for _, child := range cmd.Commands() {
@@ -9708,6 +9719,26 @@ func describeCommand(cmd *cobra.Command) commandInfo {
 	}
 
 	return info
+}
+
+func commandFlags(cmd *cobra.Command) []flagInfo {
+	flags := []flagInfo{}
+	cmd.LocalFlags().VisitAll(func(flag *pflag.Flag) {
+		if flag.Hidden {
+			return
+		}
+		flags = append(flags, flagInfo{
+			Name:      flag.Name,
+			Shorthand: flag.Shorthand,
+			Type:      flag.Value.Type(),
+			Default:   flag.DefValue,
+			Usage:     flag.Usage,
+		})
+	})
+	sort.Slice(flags, func(i, j int) bool {
+		return flags[i].Name < flags[j].Name
+	})
+	return flags
 }
 
 func commandExamples(path string) []string {

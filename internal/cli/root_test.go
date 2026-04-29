@@ -2961,6 +2961,38 @@ func TestDescribeCommandJSON(t *testing.T) {
 	}
 }
 
+func TestDescribeCommandIncludesLocalFlagsJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"describe", "--command", "pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("describe pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Commands struct {
+			Name  string `json:"name"`
+			Flags []struct {
+				Name    string `json:"name"`
+				Default string `json:"default,omitempty"`
+				Usage   string `json:"usage"`
+			} `json:"flags"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("describe pages output is invalid JSON: %v", err)
+	}
+	for _, flag := range got.Commands.Flags {
+		if flag.Name == "title-contains" {
+			if !got.OK || got.Commands.Name != "pages" || !strings.Contains(flag.Usage, "title") {
+				t.Fatalf("title-contains flag = %+v in output %+v, want pages local flag", flag, got)
+			}
+			return
+		}
+	}
+	t.Fatalf("describe pages flags = %+v, want title-contains", got.Commands.Flags)
+}
+
 func TestDescribeProtocolExamplesCommandJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
