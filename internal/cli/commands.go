@@ -321,6 +321,7 @@ func (a *app) newConnectionCommand() *cobra.Command {
 	cmd.AddCommand(a.newConnectionAddCommand())
 	cmd.AddCommand(a.newConnectionListCommand())
 	cmd.AddCommand(a.newConnectionSelectCommand())
+	cmd.AddCommand(a.newConnectionRemoveCommand())
 	cmd.AddCommand(a.newConnectionCurrentCommand())
 	return cmd
 }
@@ -486,6 +487,47 @@ func (a *app) newConnectionSelectCommand() *cobra.Command {
 				"ok":         true,
 				"selected":   file.Selected,
 				"state_path": store.Path(),
+			})
+		},
+	}
+}
+
+func (a *app) newConnectionRemoveCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a saved browser connection",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			file, err := store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			file, ok := state.RemoveConnection(file, args[0])
+			if !ok {
+				return commandError(
+					"unknown_connection",
+					"usage",
+					fmt.Sprintf("unknown connection %q", args[0]),
+					ExitUsage,
+					[]string{"cdp connection list --json"},
+				)
+			}
+			if err := store.Save(ctx, file); err != nil {
+				return err
+			}
+			return a.render(ctx, fmt.Sprintf("connection %s removed", args[0]), map[string]any{
+				"ok":          true,
+				"removed":     args[0],
+				"selected":    file.Selected,
+				"connections": file.Connections,
+				"state_path":  store.Path(),
 			})
 		},
 	}
@@ -941,6 +983,9 @@ func commandExamples(path string) []string {
 		},
 		"cdp daemon status": {
 			"cdp daemon status --json",
+		},
+		"cdp connection remove": {
+			"cdp connection remove stale --json",
 		},
 		"cdp targets": {
 			"cdp targets --json",

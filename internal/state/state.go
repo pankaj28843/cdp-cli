@@ -113,6 +113,30 @@ func SelectConnection(file File, name string) (File, bool) {
 	return file, false
 }
 
+func RemoveConnection(file File, name string) (File, bool) {
+	removed := false
+	conns := file.Connections[:0]
+	for _, conn := range file.Connections {
+		if conn.Name == name {
+			removed = true
+			continue
+		}
+		conns = append(conns, conn)
+	}
+	if !removed {
+		return file, false
+	}
+	file.Connections = conns
+	if file.Selected == name {
+		file.Selected = ""
+		if len(file.Connections) == 1 {
+			file.Selected = file.Connections[0].Name
+		}
+	}
+	sortConnections(file.Connections)
+	return file, true
+}
+
 func CurrentConnection(file File) (Connection, bool) {
 	if file.Selected != "" {
 		for _, conn := range file.Connections {

@@ -48,6 +48,20 @@ func TestSelectMissingConnection(t *testing.T) {
 	}
 }
 
+func TestRemoveConnection(t *testing.T) {
+	file := state.File{
+		Selected: "local",
+		Connections: []state.Connection{
+			{Name: "default", Mode: "auto_connect"},
+			{Name: "local", Mode: "browser_url"},
+		},
+	}
+	got, ok := state.RemoveConnection(file, "local")
+	if !ok || len(got.Connections) != 1 || got.Connections[0].Name != "default" || got.Selected != "default" {
+		t.Fatalf("RemoveConnection() = %+v ok=%v, want default selected", got, ok)
+	}
+}
+
 func TestConnectionByName(t *testing.T) {
 	file := state.File{Connections: []state.Connection{
 		{Name: "default", Mode: "auto_connect"},
