@@ -76,6 +76,8 @@ func TestReadLogsTailsJSONLines(t *testing.T) {
 	}
 }
 
+const largeCDPResponseSize = 70 << 20
+
 func TestRuntimeClientEventAndProtocolRPC(t *testing.T) {
 	server := newRuntimeRPCFakeServer(t)
 	defer server.Close()
@@ -127,6 +129,55 @@ func TestRuntimeClientEventAndProtocolRPC(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientReadsVeryLargeCDPResponsesAndStaysRunning(t *testing.T) {
+	server := newRuntimeRPCLargeFakeServer(t)
+	defer server.Close()
+
+	stateDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	runtime := waitForRuntime(t, ctx, stateDir)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	client := daemon.RuntimeClient{Runtime: runtime}
+	var screenshot struct {
+		Data string `json:"data"`
+	}
+	if err := client.CallSession(ctx, "session-1", "Page.captureScreenshot", map[string]any{"format": "png"}, &screenshot); err != nil {
+		t.Fatalf("CallSession Page.captureScreenshot returned error: %v", err)
+	}
+	if len(screenshot.Data) != largeCDPResponseSize {
+		t.Fatalf("screenshot data length = %d, want %d", len(screenshot.Data), largeCDPResponseSize)
+	}
+
+	var targets struct {
+		TargetInfos []cdp.TargetInfo `json:"targetInfos"`
+	}
+	if err := client.Call(ctx, "Target.getTargets", map[string]any{}, &targets); err != nil {
+		t.Fatalf("follow-up Target.getTargets returned error: %v", err)
+	}
+	if len(targets.TargetInfos) != 1 || targets.TargetInfos[0].TargetID != "page-1" {
+		t.Fatalf("Target.getTargets = %+v, want page-1", targets.TargetInfos)
+	}
+	if !daemon.RuntimeRunning(runtime) || !daemon.RuntimeSocketReady(ctx, runtime) {
+		t.Fatalf("daemon runtime stopped after large response")
+	}
+}
+
 func newRuntimeRPCFakeServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -168,6 +219,43 @@ func newRuntimeRPCFakeServer(t *testing.T) *httptest.Server {
 				}
 			}
 			resp := map[string]any{"id": req.ID, "result": map[string]any{}}
+			if req.SessionID != "" {
+				resp["sessionId"] = req.SessionID
+			}
+			if err := wsjson.Write(r.Context(), conn, resp); err != nil {
+				return
+			}
+		}
+	})
+	return httptest.NewServer(mux)
+}
+
+func newRuntimeRPCLargeFakeServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		for {
+			var req struct {
+				ID        int64  `json:"id"`
+				SessionID string `json:"sessionId"`
+				Method    string `json:"method"`
+			}
+			if err := wsjson.Read(r.Context(), conn, &req); err != nil {
+				return
+			}
+			result := map[string]any{}
+			switch req.Method {
+			case "Page.captureScreenshot":
+				result["data"] = strings.Repeat("x", largeCDPResponseSize)
+			case "Target.getTargets":
+				result["targetInfos"] = []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/"}}
+			}
+			resp := map[string]any{"id": req.ID, "result": result}
 			if req.SessionID != "" {
 				resp["sessionId"] = req.SessionID
 			}

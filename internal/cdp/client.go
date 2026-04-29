@@ -13,7 +13,7 @@ import (
 
 const (
 	maxBufferedEvents = 500
-	maxReadBytes      = 64 << 20
+	maxReadBytes      = 100 << 20
 )
 
 type Client struct {
