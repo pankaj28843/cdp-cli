@@ -26,9 +26,18 @@ type Connection struct {
 	Project     string `json:"project,omitempty"`
 }
 
+type PageSelection struct {
+	Connection string `json:"connection"`
+	TargetID   string `json:"target_id"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
+	SelectedAt string `json:"selected_at"`
+}
+
 type File struct {
-	Connections []Connection `json:"connections"`
-	Selected    string       `json:"selected,omitempty"`
+	Connections    []Connection    `json:"connections"`
+	Selected       string          `json:"selected,omitempty"`
+	PageSelections []PageSelection `json:"page_selections,omitempty"`
 }
 
 func NewStore(dir string) (Store, error) {
@@ -66,6 +75,7 @@ func (s Store) Load(ctx context.Context) (File, error) {
 		return File{}, fmt.Errorf("parse connection state: %w", err)
 	}
 	sortConnections(file.Connections)
+	sortPageSelections(file.PageSelections)
 	return file, nil
 }
 
@@ -77,6 +87,7 @@ func (s Store) Save(ctx context.Context, file File) error {
 	}
 
 	sortConnections(file.Connections)
+	sortPageSelections(file.PageSelections)
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
@@ -128,6 +139,7 @@ func RemoveConnection(file File, name string) (File, bool) {
 		return file, false
 	}
 	file.Connections = conns
+	file = RemovePageSelection(file, name)
 	if file.Selected == name {
 		file.Selected = ""
 		if len(file.Connections) == 1 {
@@ -199,6 +211,40 @@ func ProjectConnection(file File, cwd string) (Connection, bool) {
 	return best, bestLen >= 0
 }
 
+func UpsertPageSelection(file File, selection PageSelection) File {
+	for i, existing := range file.PageSelections {
+		if existing.Connection == selection.Connection {
+			file.PageSelections[i] = selection
+			sortPageSelections(file.PageSelections)
+			return file
+		}
+	}
+	file.PageSelections = append(file.PageSelections, selection)
+	sortPageSelections(file.PageSelections)
+	return file
+}
+
+func PageSelectionForConnection(file File, connection string) (PageSelection, bool) {
+	for _, selection := range file.PageSelections {
+		if selection.Connection == connection {
+			return selection, true
+		}
+	}
+	return PageSelection{}, false
+}
+
+func RemovePageSelection(file File, connection string) File {
+	filtered := file.PageSelections[:0]
+	for _, selection := range file.PageSelections {
+		if selection.Connection == connection {
+			continue
+		}
+		filtered = append(filtered, selection)
+	}
+	file.PageSelections = filtered
+	return file
+}
+
 func ConnectionByName(file File, name string) (Connection, bool) {
 	for _, conn := range file.Connections {
 		if conn.Name == name {
@@ -211,5 +257,11 @@ func ConnectionByName(file File, name string) (Connection, bool) {
 func sortConnections(conns []Connection) {
 	sort.Slice(conns, func(i, j int) bool {
 		return conns[i].Name < conns[j].Name
+	})
+}
+
+func sortPageSelections(selections []PageSelection) {
+	sort.Slice(selections, func(i, j int) bool {
+		return selections[i].Connection < selections[j].Connection
 	})
 }

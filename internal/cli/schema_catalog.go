@@ -96,6 +96,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "history", Type: "object", Required: false, Description: "History metadata for back and forward actions."},
 			},
 		},
+		"page-select": {
+			Name:        "page-select",
+			Description: "Selected default page target for the effective browser connection.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page selection was saved."},
+				{Name: "selected_page", Type: "page_selection", Required: true, Description: "Connection-scoped selected target id, url, title, and timestamp."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "state_path", Type: "string", Required: true, Description: "Local state file path where the selection was saved."},
+			},
+		},
 		"eval": {
 			Name:        "eval",
 			Description: "Page-scoped JavaScript evaluation result.",

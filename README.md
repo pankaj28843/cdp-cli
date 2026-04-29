@@ -19,6 +19,7 @@ cdp daemon start --auto-connect --json
 cdp daemon status --json
 cdp daemon keepalive --auto-connect --display :0 --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
+cdp page select --url-contains example.com --json
 cdp open https://example.com --json
 cdp eval 'document.title' --json
 cdp snapshot --interactive-only --limit 50 --json

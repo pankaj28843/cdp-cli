@@ -84,6 +84,8 @@ fi
   | jq -e '.ok == true and .state == "healthy" and .action == "none"' >/dev/null
 "$binary" pages --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
+"$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
 "$binary" wait text "Ready from demo app" --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \

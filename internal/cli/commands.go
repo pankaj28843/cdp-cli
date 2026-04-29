@@ -836,7 +836,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			connectionName := a.keepaliveConnectionName(ctx)
+			connectionName := a.connectionStateName(ctx)
 			mode := a.connectionMode()
 			lockName := "daemon-keepalive-" + mode + "-" + connectionName
 			lock, acquired, existingLock, err := daemon.AcquireLock(ctx, store.Dir, lockName, lockTimeout, staleLockAfter, daemon.LockMetadata{
@@ -1007,7 +1007,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) keepaliveConnectionName(ctx context.Context) string {
+func (a *app) connectionStateName(ctx context.Context) string {
 	if strings.TrimSpace(a.opts.connection) != "" {
 		return strings.TrimSpace(a.opts.connection)
 	}
@@ -1015,7 +1015,15 @@ func (a *app) keepaliveConnectionName(ctx context.Context) string {
 	if err == nil {
 		if file, loadErr := store.Load(ctx); loadErr == nil {
 			if conn, ok := state.CurrentConnection(file); ok && strings.TrimSpace(conn.Name) != "" {
-				return conn.Name
+				if strings.TrimSpace(a.opts.browserURL) == "" && !a.opts.autoConnect {
+					return conn.Name
+				}
+				if a.opts.autoConnect && (conn.AutoConnect || conn.Mode == "auto_connect") {
+					return conn.Name
+				}
+				if strings.TrimSpace(a.opts.browserURL) != "" && conn.BrowserURL == a.opts.browserURL {
+					return conn.Name
+				}
 			}
 		}
 	}
@@ -1735,11 +1743,83 @@ func (a *app) newPageCommand() *cobra.Command {
 		Use:   "page",
 		Short: "Control an open page target",
 	}
+	cmd.AddCommand(a.newPageSelectCommand())
 	cmd.AddCommand(a.newPageReloadCommand())
 	cmd.AddCommand(a.newPageHistoryCommand("back", "Navigate the selected page back in history", -1))
 	cmd.AddCommand(a.newPageHistoryCommand("forward", "Navigate the selected page forward in history", 1))
 	cmd.AddCommand(a.newPageActivateCommand())
 	cmd.AddCommand(a.newPageCloseCommand())
+	return cmd
+}
+
+func (a *app) newPageSelectCommand() *cobra.Command {
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "select [target-id]",
+		Short: "Select the default page target for subsequent commands",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targetID := ""
+			if len(args) == 1 {
+				targetID = args[0]
+			}
+			if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" {
+				return commandError(
+					"missing_page_selector",
+					"usage",
+					"page select requires a target id/prefix or --url-contains",
+					ExitUsage,
+					[]string{"cdp page select <target-id> --json", "cdp page select --url-contains localhost --json"},
+				)
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			client, closeClient, err := a.browserCDPClient(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+				)
+			}
+			defer closeClient(ctx)
+
+			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			selection := state.PageSelection{
+				Connection: a.connectionStateName(ctx),
+				TargetID:   target.TargetID,
+				URL:        target.URL,
+				Title:      target.Title,
+				SelectedAt: time.Now().UTC().Format(time.RFC3339),
+			}
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			file, err := store.Load(ctx)
+			if err != nil {
+				return err
+			}
+			file = state.UpsertPageSelection(file, selection)
+			if err := store.Save(ctx, file); err != nil {
+				return err
+			}
+			return a.render(ctx, fmt.Sprintf("selected\t%s", target.TargetID), map[string]any{
+				"ok":            true,
+				"selected_page": selection,
+				"target":        pageRow(target),
+				"state_path":    store.Path(),
+			})
+		},
+	}
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "select the first page whose URL contains this text")
 	return cmd
 }
 
@@ -2059,6 +2139,11 @@ func (a *app) resolvePageTarget(ctx context.Context, targetID, urlContains strin
 }
 
 func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.CommandClient, targetID, urlContains string) (cdp.TargetInfo, error) {
+	if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" {
+		if target, ok := a.selectedPageTarget(ctx, client); ok {
+			return target, nil
+		}
+	}
 	targets, err := cdp.ListTargetsWithClient(ctx, client)
 	if err != nil {
 		return cdp.TargetInfo{}, commandError(
@@ -2070,6 +2155,26 @@ func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.Comman
 		)
 	}
 	return resolvePageTarget(targets, targetID, urlContains)
+}
+
+func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) (cdp.TargetInfo, bool) {
+	store, err := a.stateStore()
+	if err != nil {
+		return cdp.TargetInfo{}, false
+	}
+	file, err := store.Load(ctx)
+	if err != nil {
+		return cdp.TargetInfo{}, false
+	}
+	selection, ok := state.PageSelectionForConnection(file, a.connectionStateName(ctx))
+	if !ok || strings.TrimSpace(selection.TargetID) == "" {
+		return cdp.TargetInfo{}, false
+	}
+	target, err := cdp.TargetInfoWithClient(ctx, client, selection.TargetID)
+	if err != nil || target.Type != "page" {
+		return cdp.TargetInfo{}, false
+	}
+	return target, true
 }
 
 func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, rawURL string) (string, error) {
@@ -5228,6 +5333,10 @@ func commandExamples(path string) []string {
 			"cdp pages --json",
 			"cdp pages --limit 10 --json",
 			"cdp pages --include-url localhost --exclude-url admin --json",
+		},
+		"cdp page select": {
+			"cdp page select <target-id> --json",
+			"cdp page select --url-contains localhost --json",
 		},
 		"cdp page reload": {
 			"cdp page reload --target <target-id> --json",

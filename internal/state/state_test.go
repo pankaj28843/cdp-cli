@@ -55,9 +55,12 @@ func TestRemoveConnection(t *testing.T) {
 			{Name: "default", Mode: "auto_connect"},
 			{Name: "local", Mode: "browser_url"},
 		},
+		PageSelections: []state.PageSelection{
+			{Connection: "local", TargetID: "page-1"},
+		},
 	}
 	got, ok := state.RemoveConnection(file, "local")
-	if !ok || len(got.Connections) != 1 || got.Connections[0].Name != "default" || got.Selected != "default" {
+	if !ok || len(got.Connections) != 1 || got.Connections[0].Name != "default" || got.Selected != "default" || len(got.PageSelections) != 0 {
 		t.Fatalf("RemoveConnection() = %+v ok=%v, want default selected", got, ok)
 	}
 }
@@ -100,5 +103,24 @@ func TestProjectConnectionUsesLongestPrefix(t *testing.T) {
 	got, ok := state.ProjectConnection(file, filepath.Join(nested, "cmd"))
 	if !ok || got.Name != "nested" {
 		t.Fatalf("ProjectConnection() = %+v ok=%v, want nested", got, ok)
+	}
+}
+
+func TestPageSelectionForConnection(t *testing.T) {
+	file := state.UpsertPageSelection(state.File{}, state.PageSelection{
+		Connection: "local",
+		TargetID:   "page-1",
+		URL:        "https://example.test/app",
+		Title:      "Example App",
+		SelectedAt: "2026-04-29T00:00:00Z",
+	})
+	file = state.UpsertPageSelection(file, state.PageSelection{
+		Connection: "local",
+		TargetID:   "page-2",
+		SelectedAt: "2026-04-29T00:01:00Z",
+	})
+	got, ok := state.PageSelectionForConnection(file, "local")
+	if !ok || got.TargetID != "page-2" || len(file.PageSelections) != 1 {
+		t.Fatalf("PageSelectionForConnection() = %+v ok=%v selections=%+v, want updated page-2", got, ok, file.PageSelections)
 	}
 }

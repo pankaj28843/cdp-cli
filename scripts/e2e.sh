@@ -35,6 +35,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema daemon-restart --json | jq -e '.ok == true and .schema.name == "daemon-restart" and (.schema.fields | map(.name) | index("restart"))' >/dev/null
 "$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("lock"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "page select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("--url-contains")))' >/dev/null
 "$binary" describe --command "page reload" --json | jq -e '.ok == true and .commands.name == "reload" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page back" --json | jq -e '.ok == true and .commands.name == "back" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page forward" --json | jq -e '.ok == true and .commands.name == "forward" and (.commands.examples | length > 0)' >/dev/null
@@ -61,6 +62,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
 "$binary" schema console --json | jq -e '.ok == true and .schema.name == "console"' >/dev/null
 "$binary" schema network --json | jq -e '.ok == true and .schema.name == "network"' >/dev/null
+"$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text"' >/dev/null
 "$binary" schema html --json | jq -e '.ok == true and .schema.name == "html"' >/dev/null
 "$binary" schema dom-query --json | jq -e '.ok == true and .schema.name == "dom-query"' >/dev/null

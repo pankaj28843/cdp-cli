@@ -184,6 +184,57 @@ func TestPagesJSON(t *testing.T) {
 	}
 }
 
+func TestPageSelectJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "First Page", "url": "https://example.test/first", "attached": false},
+		{"targetId": "page-2", "type": "page", "title": "Second Page", "url": "https://example.test/second", "attached": false},
+	})
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "select", "page-2", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("page select exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK           bool `json:"ok"`
+		SelectedPage struct {
+			Connection string `json:"connection"`
+			TargetID   string `json:"target_id"`
+			URL        string `json:"url"`
+		} `json:"selected_page"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("page select output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.SelectedPage.TargetID != "page-2" || got.SelectedPage.Connection != "default" || got.Target.ID != "page-2" {
+		t.Fatalf("page select = %+v, want default page-2 selection", got)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"eval", "document.title", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("eval exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var evalOut struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &evalOut); err != nil {
+		t.Fatalf("eval output is invalid JSON: %v", err)
+	}
+	if !evalOut.OK || evalOut.Target.ID != "page-2" {
+		t.Fatalf("eval target = %+v, want selected page-2", evalOut.Target)
+	}
+}
+
 func TestPagesUsesRunningDaemonByDefaultJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
