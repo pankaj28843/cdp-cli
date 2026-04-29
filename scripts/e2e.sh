@@ -35,6 +35,13 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
 "$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot"' >/dev/null
+"$binary" schema connection-add --json | jq -e '.ok == true and .schema.name == "connection-add" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
+"$binary" schema connection-list --json | jq -e '.ok == true and .schema.name == "connection-list" and (.schema.fields | map(.name) | index("connections"))' >/dev/null
+"$binary" schema connection-select --json | jq -e '.ok == true and .schema.name == "connection-select" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
+"$binary" schema connection-current --json | jq -e '.ok == true and .schema.name == "connection-current" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
+"$binary" schema connection-remove --json | jq -e '.ok == true and .schema.name == "connection-remove" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
+"$binary" schema connection-prune --json | jq -e '.ok == true and .schema.name == "connection-prune" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
+"$binary" schema connection-resolve --json | jq -e '.ok == true and .schema.name == "connection-resolve" and (.schema.fields | map(.name) | index("source"))' >/dev/null
 "$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.fields | map(.name) | index("scope")) and (.schema.fields | map(.name) | index("artifact"))' >/dev/null
 "$binary" schema protocol-examples --json | jq -e '.ok == true and .schema.name == "protocol-examples" and (.schema.fields | map(.name) | index("examples"))' >/dev/null
 "$binary" schema protocol-metadata --json | jq -e '.ok == true and .schema.name == "protocol-metadata"' >/dev/null
