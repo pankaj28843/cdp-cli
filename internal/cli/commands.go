@@ -3470,6 +3470,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 	cmd.AddCommand(a.newProtocolDomainsCommand())
 	cmd.AddCommand(a.newProtocolSearchCommand())
 	cmd.AddCommand(a.newProtocolDescribeCommand())
+	cmd.AddCommand(a.newProtocolExamplesCommand())
 	cmd.AddCommand(a.newProtocolExecCommand())
 	return cmd
 }
@@ -3616,6 +3617,112 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 				"source": protocol.Source,
 			})
 		},
+	}
+}
+
+func (a *app) newProtocolExamplesCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "examples <Domain.method>",
+		Short: "Generate example cdp protocol exec commands",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			protocol, err := a.fetchProtocol(ctx)
+			if err != nil {
+				return err
+			}
+			desc, ok := cdp.DescribeEntity(protocol, args[0])
+			if !ok || desc.Kind != "command" {
+				return commandError(
+					"unknown_protocol_entity",
+					"usage",
+					fmt.Sprintf("unknown protocol command %q", args[0]),
+					ExitUsage,
+					[]string{"cdp protocol search <query> --kind command --json", "cdp protocol domains --json"},
+				)
+			}
+			examples := protocolExecExamples(desc)
+			lines := make([]string, 0, len(examples))
+			for _, example := range examples {
+				lines = append(lines, example["command"])
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":       true,
+				"entity":   desc,
+				"examples": examples,
+				"source":   protocol.Source,
+			})
+		},
+	}
+}
+
+func protocolExecExamples(desc cdp.EntityDescription) []map[string]string {
+	params := sampleProtocolParams(desc.Schema)
+	paramsJSON, _ := json.Marshal(params)
+	scope := protocolCommandScope(desc.Domain)
+	command := fmt.Sprintf("cdp protocol exec %s --params '%s' --json", desc.Path, paramsJSON)
+	if scope == "target" {
+		command = fmt.Sprintf("cdp protocol exec %s --target <target-id> --params '%s' --json", desc.Path, paramsJSON)
+	}
+	return []map[string]string{{
+		"scope":   scope,
+		"command": command,
+		"params":  string(paramsJSON),
+	}}
+}
+
+func protocolCommandScope(domain string) string {
+	switch domain {
+	case "Browser", "Target", "Schema", "SystemInfo":
+		return "browser"
+	default:
+		return "target"
+	}
+}
+
+func sampleProtocolParams(schema json.RawMessage) map[string]any {
+	var command struct {
+		Parameters []struct {
+			Name     string   `json:"name"`
+			Type     string   `json:"type"`
+			Ref      string   `json:"$ref"`
+			Optional bool     `json:"optional"`
+			Enum     []string `json:"enum"`
+		} `json:"parameters"`
+	}
+	if len(schema) == 0 || json.Unmarshal(schema, &command) != nil {
+		return map[string]any{}
+	}
+	params := map[string]any{}
+	for _, param := range command.Parameters {
+		if param.Optional {
+			continue
+		}
+		params[param.Name] = sampleProtocolValue(param.Type, param.Ref, param.Enum)
+	}
+	return params
+}
+
+func sampleProtocolValue(paramType, ref string, enum []string) any {
+	if len(enum) > 0 {
+		return enum[0]
+	}
+	if ref != "" {
+		return "<" + ref + ">"
+	}
+	switch paramType {
+	case "boolean":
+		return true
+	case "integer", "number":
+		return 0
+	case "array":
+		return []any{}
+	case "object":
+		return map[string]any{}
+	default:
+		return "<string>"
 	}
 }
 

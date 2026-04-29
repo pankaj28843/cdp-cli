@@ -873,6 +873,31 @@ func TestProtocolDescribeJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExamplesJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "examples", "Page.captureScreenshot", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol examples exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Examples []struct {
+			Command string `json:"command"`
+			Scope   string `json:"scope"`
+		} `json:"examples"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol examples output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Examples) == 0 || got.Examples[0].Scope != "target" || !strings.Contains(got.Examples[0].Command, "Page.captureScreenshot") {
+		t.Fatalf("protocol examples = %+v, want target-scoped example", got)
+	}
+}
+
 func TestProtocolExecJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
