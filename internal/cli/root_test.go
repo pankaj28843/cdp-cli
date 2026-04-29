@@ -3873,3 +3873,59 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		},
 	}
 }
+
+func TestPagesTitleContainsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Docs Home", "url": "https://example.test/docs", "attached": false},
+		{"targetId": "page-2", "type": "page", "title": "Admin", "url": "https://example.test/admin", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"pages", "--title-contains", "docs", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Pages []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages output is invalid JSON: %v", err)
+	}
+	if len(got.Pages) != 1 || got.Pages[0].ID != "page-1" || got.Pages[0].Title != "Docs Home" {
+		t.Fatalf("pages output = %+v, want Docs Home only", got.Pages)
+	}
+}
+
+func TestEvalTitleContainsSelectsPage(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Admin", "url": "https://example.test/app", "attached": false},
+		{"targetId": "page-2", "type": "page", "title": "Docs Portal", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--title-contains", "portal", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("eval exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Target struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("eval output is invalid JSON: %v", err)
+	}
+	if got.Target.ID != "page-2" || got.Target.Title != "Docs Portal" {
+		t.Fatalf("eval target = %+v, want Docs Portal page", got.Target)
+	}
+}

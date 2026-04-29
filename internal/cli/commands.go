@@ -1631,6 +1631,7 @@ func (a *app) newTargetsCommand() *cobra.Command {
 func (a *app) newPagesCommand() *cobra.Command {
 	var limit int
 	var urlContains string
+	var titleContains string
 	var includeURL string
 	var excludeURL string
 	cmd := &cobra.Command{
@@ -1646,6 +1647,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 			}
 			pages := pageRows(targets)
 			pages = filterRowsContains(pages, "url", firstNonEmpty(urlContains, includeURL))
+			pages = filterRowsContains(pages, "title", titleContains)
 			pages = filterRowsExcludes(pages, "url", excludeURL)
 			pages = limitRows(pages, limit)
 			var lines []string
@@ -1657,6 +1659,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of pages to return; use 0 for no limit")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "only return pages whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "only return pages whose title contains this text")
 	cmd.Flags().StringVar(&includeURL, "include-url", "", "only return pages whose URL contains this text")
 	cmd.Flags().StringVar(&excludeURL, "exclude-url", "", "exclude pages whose URL contains this text")
 	return cmd
@@ -1731,7 +1734,7 @@ func filterRowsContains(rows []map[string]any, key, needle string) []map[string]
 	filtered := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		value, _ := row[key].(string)
-		if strings.Contains(value, needle) {
+		if strings.Contains(strings.ToLower(value), strings.ToLower(needle)) {
 			filtered = append(filtered, row)
 		}
 	}
@@ -1799,6 +1802,7 @@ func (a *app) newPageCommand() *cobra.Command {
 
 func (a *app) newPageSelectCommand() *cobra.Command {
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "select [target-id]",
 		Short: "Select the default page target for subsequent commands",
@@ -1808,7 +1812,7 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 			if len(args) == 1 {
 				targetID = args[0]
 			}
-			if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" {
+			if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 				return commandError(
 					"missing_page_selector",
 					"usage",
@@ -1833,7 +1837,7 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -1865,12 +1869,14 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "select the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "select the first page whose title contains this text")
 	return cmd
 }
 
 func (a *app) newPageReloadCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var ignoreCache bool
 	cmd := &cobra.Command{
 		Use:   "reload",
@@ -1880,7 +1886,7 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -1905,6 +1911,7 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
 	return cmd
 }
@@ -1912,6 +1919,7 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   name,
 		Short: short,
@@ -1920,7 +1928,7 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -1971,6 +1979,7 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
@@ -1985,6 +1994,7 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 func (a *app) newPageTargetCommand(use, short, action string, run func(context.Context, cdp.CommandClient, string) error) *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
@@ -2005,7 +2015,7 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2027,6 +2037,7 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
@@ -2079,7 +2090,7 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 	return runtime, nil
 }
 
-func (a *app) attachPageSession(ctx context.Context, targetID, urlContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
+func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titleContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserCDPClient(ctx)
 	if err != nil {
 		return nil, cdp.TargetInfo{}, commandError(
@@ -2090,13 +2101,13 @@ func (a *app) attachPageSession(ctx context.Context, targetID, urlContains strin
 			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 		)
 	}
-	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" {
+	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 		session, target, handled, err := a.attachExactPageSession(ctx, client, closeClient, targetID)
 		if handled {
 			return session, target, err
 		}
 	}
-	target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+	target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
 	if err != nil {
 		_ = closeClient(ctx)
 		return nil, cdp.TargetInfo{}, err
@@ -2139,7 +2150,7 @@ func (a *app) attachExactPageSession(ctx context.Context, client cdp.CommandClie
 	return session, target, true, nil
 }
 
-func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains string) (browserEventClient, *cdp.PageSession, cdp.TargetInfo, error) {
+func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains, titleContains string) (browserEventClient, *cdp.PageSession, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		return nil, nil, cdp.TargetInfo{}, commandError(
@@ -2150,13 +2161,13 @@ func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains 
 			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 		)
 	}
-	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" {
+	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 		session, target, handled, err := a.attachExactPageSession(ctx, client, closeClient, targetID)
 		if handled {
 			return client, session, target, err
 		}
 	}
-	target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+	target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
 	if err != nil {
 		_ = closeClient(ctx)
 		return nil, nil, cdp.TargetInfo{}, err
@@ -2180,11 +2191,11 @@ func (a *app) resolvePageTarget(ctx context.Context, targetID, urlContains strin
 	if err != nil {
 		return cdp.TargetInfo{}, err
 	}
-	return resolvePageTarget(targets, targetID, urlContains)
+	return resolvePageTarget(targets, targetID, urlContains, "")
 }
 
-func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.CommandClient, targetID, urlContains string) (cdp.TargetInfo, error) {
-	if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" {
+func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.CommandClient, targetID, urlContains, titleContains string) (cdp.TargetInfo, error) {
+	if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 		if target, ok := a.selectedPageTarget(ctx, client); ok {
 			return target, nil
 		}
@@ -2199,7 +2210,7 @@ func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.Comman
 			[]string{"cdp doctor --json", "cdp daemon status --json"},
 		)
 	}
-	return resolvePageTarget(targets, targetID, urlContains)
+	return resolvePageTarget(targets, targetID, urlContains, titleContains)
 }
 
 func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) (cdp.TargetInfo, bool) {
@@ -2236,9 +2247,10 @@ func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, ra
 	return targetID, nil
 }
 
-func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains string) (cdp.TargetInfo, error) {
+func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleContains string) (cdp.TargetInfo, error) {
 	targetID = strings.TrimSpace(targetID)
 	urlContains = strings.TrimSpace(urlContains)
+	titleContains = strings.TrimSpace(titleContains)
 	var pages []cdp.TargetInfo
 	for _, target := range targets {
 		if target.Type == "page" {
@@ -2256,11 +2268,19 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains string) (
 	}
 	if urlContains != "" {
 		for _, page := range pages {
-			if strings.Contains(page.URL, urlContains) {
+			if strings.Contains(strings.ToLower(page.URL), strings.ToLower(urlContains)) {
 				return page, nil
 			}
 		}
 		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page URL contains %q", urlContains))
+	}
+	if titleContains != "" {
+		for _, page := range pages {
+			if strings.Contains(strings.ToLower(page.Title), strings.ToLower(titleContains)) {
+				return page, nil
+			}
+		}
+		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page title contains %q", titleContains))
 	}
 	return onePageTarget(pages, "default page")
 }
@@ -2448,6 +2468,7 @@ func snapshotTextLines(items []snapshotItem) []string {
 func (a *app) newOpenCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var newTab bool
 	cmd := &cobra.Command{
 		Use:   "open <url>",
@@ -2484,7 +2505,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 				}
 				target.TargetID = createdID
 			} else {
-				selected, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+				selected, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
 				if err != nil {
 					return err
 				}
@@ -2529,12 +2550,14 @@ func (a *app) newOpenCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&newTab, "new-tab", true, "open a new tab instead of navigating an existing page")
 	cmd.Flags().StringVar(&targetID, "target", "", "navigate a page target by exact id or unique prefix when --new-tab=false")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "navigate the first page whose URL contains this text when --new-tab=false")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "navigate the first page whose title contains this text when --new-tab=false")
 	return cmd
 }
 
 func (a *app) newEvalCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var awaitPromise bool
 	cmd := &cobra.Command{
 		Use:   "eval <expression>",
@@ -2544,7 +2567,7 @@ func (a *app) newEvalCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2582,6 +2605,7 @@ func (a *app) newEvalCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().BoolVar(&awaitPromise, "await-promise", true, "wait for promise results before returning")
 	return cmd
 }
@@ -2683,6 +2707,7 @@ type frameSummary struct {
 func (a *app) newClickCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "click <selector>",
 		Short: "Click the first matching element for a CSS selector",
@@ -2691,7 +2716,7 @@ func (a *app) newClickCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2723,12 +2748,14 @@ func (a *app) newClickCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
 func (a *app) newFillCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "fill <selector> <value>",
 		Short: "Set the value of the first matching form control",
@@ -2737,7 +2764,7 @@ func (a *app) newFillCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2775,12 +2802,14 @@ func (a *app) newFillCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
 func (a *app) newTypeCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "type <selector> <text>",
 		Short: "Type text into the first matching form control",
@@ -2789,7 +2818,7 @@ func (a *app) newTypeCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2827,12 +2856,14 @@ func (a *app) newTypeCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
 func (a *app) newPressCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var selector string
 	cmd := &cobra.Command{
 		Use:   "press <key>",
@@ -2842,7 +2873,7 @@ func (a *app) newPressCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2880,6 +2911,7 @@ func (a *app) newPressCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&selector, "selector", "", "optional selector to focus before pressing the key")
 	return cmd
 }
@@ -2887,6 +2919,7 @@ func (a *app) newPressCommand() *cobra.Command {
 func (a *app) newHoverCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "hover <selector>",
 		Short: "Dispatch pointer hover events over the first matching element",
@@ -2895,7 +2928,7 @@ func (a *app) newHoverCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2933,12 +2966,14 @@ func (a *app) newHoverCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
 func (a *app) newDragCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "drag <selector> <dx> <dy>",
 		Short: "Drag the first matching element by a delta",
@@ -2956,7 +2991,7 @@ func (a *app) newDragCommand() *cobra.Command {
 				return commandError("invalid_argument", "usage", "dy must be an integer", ExitUsage, []string{"cdp drag '.node' 10 20 --json"})
 			}
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -2994,12 +3029,14 @@ func (a *app) newDragCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
 func (a *app) newFramesCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "frames",
 		Short: "List the page frame tree for the selected target",
@@ -3008,7 +3045,7 @@ func (a *app) newFramesCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3034,6 +3071,7 @@ func (a *app) newFramesCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
@@ -3146,6 +3184,7 @@ type evalError struct {
 func (a *app) newTextCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var limit int
 	var minChars int
 	cmd := &cobra.Command{
@@ -3159,7 +3198,7 @@ func (a *app) newTextCommand() *cobra.Command {
 			if limit < 0 || minChars < 0 {
 				return commandError("usage", "usage", "--limit and --min-chars must be non-negative", ExitUsage, []string{"cdp text main --limit 20 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3182,6 +3221,7 @@ func (a *app) newTextCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().IntVar(&limit, "limit", 20, "maximum number of text elements to return; use 0 for no limit")
 	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")
 	return cmd
@@ -3190,6 +3230,7 @@ func (a *app) newTextCommand() *cobra.Command {
 func (a *app) newHTMLCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var limit int
 	var maxChars int
 	cmd := &cobra.Command{
@@ -3203,7 +3244,7 @@ func (a *app) newHTMLCommand() *cobra.Command {
 			if limit < 0 || maxChars < 0 {
 				return commandError("usage", "usage", "--limit and --max-chars must be non-negative", ExitUsage, []string{"cdp html main --max-chars 4000 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3229,6 +3270,7 @@ func (a *app) newHTMLCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().IntVar(&limit, "limit", 5, "maximum number of elements to return; use 0 for no limit")
 	cmd.Flags().IntVar(&maxChars, "max-chars", 4000, "maximum HTML characters per element; use 0 for no truncation")
 	return cmd
@@ -3246,6 +3288,7 @@ func (a *app) newDOMCommand() *cobra.Command {
 func (a *app) newDOMQueryCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var limit int
 	cmd := &cobra.Command{
 		Use:   "query <selector>",
@@ -3258,7 +3301,7 @@ func (a *app) newDOMQueryCommand() *cobra.Command {
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp dom query button --limit 20 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3285,6 +3328,7 @@ func (a *app) newDOMQueryCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum number of nodes to return; use 0 for no limit")
 	return cmd
 }
@@ -3301,6 +3345,7 @@ func (a *app) newCSSCommand() *cobra.Command {
 func (a *app) newCSSInspectCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "inspect <selector>",
 		Short: "Return computed style and box data for the first matching element",
@@ -3309,7 +3354,7 @@ func (a *app) newCSSInspectCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3335,6 +3380,7 @@ func (a *app) newCSSInspectCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
 }
 
@@ -3350,6 +3396,7 @@ func (a *app) newLayoutCommand() *cobra.Command {
 func (a *app) newLayoutOverflowCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var selector string
 	var limit int
 	cmd := &cobra.Command{
@@ -3363,7 +3410,7 @@ func (a *app) newLayoutOverflowCommand() *cobra.Command {
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp layout overflow --limit 20 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3390,6 +3437,7 @@ func (a *app) newLayoutOverflowCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&selector, "selector", "body *", "CSS selector to scan for overflow")
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum number of overflowing elements to return; use 0 for no limit")
 	return cmd
@@ -3408,6 +3456,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 func (a *app) newWaitTextCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "text <needle>",
@@ -3420,7 +3469,7 @@ func (a *app) newWaitTextCommand() *cobra.Command {
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait text Ready --poll 250ms --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3449,6 +3498,7 @@ func (a *app) newWaitTextCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	return cmd
 }
@@ -3456,6 +3506,7 @@ func (a *app) newWaitTextCommand() *cobra.Command {
 func (a *app) newWaitSelectorCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "selector <css>",
@@ -3468,7 +3519,7 @@ func (a *app) newWaitSelectorCommand() *cobra.Command {
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait selector main --poll 250ms --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -3497,6 +3548,7 @@ func (a *app) newWaitSelectorCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	return cmd
 }
@@ -3972,6 +4024,7 @@ func waitSelectorExpression(selector string) string {
 func (a *app) newSnapshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var selector string
 	var limit int
 	var minChars int
@@ -3983,7 +4036,7 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -4005,6 +4058,7 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract visible text from; use article for social feeds")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of text items to return; use 0 for no limit")
 	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")
@@ -4015,6 +4069,7 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 func (a *app) newScreenshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var outPath string
 	var format string
 	var quality int
@@ -4060,7 +4115,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				)
 			}
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -4106,6 +4161,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&outPath, "out", "", "required path to write the screenshot image")
 	cmd.Flags().StringVar(&format, "format", "", "screenshot format: png, jpeg, or webp; defaults to file extension or png")
 	cmd.Flags().IntVar(&quality, "quality", 0, "jpeg/webp quality from 1 to 100; 0 uses Chrome's default")
@@ -4171,6 +4227,7 @@ func writeArtifactFile(path string, data []byte) (string, error) {
 func (a *app) newConsoleCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var wait time.Duration
 	var limit int
 	var errorsOnly bool
@@ -4202,7 +4259,7 @@ func (a *app) newConsoleCommand() *cobra.Command {
 				)
 			}
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains)
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -4237,6 +4294,7 @@ func (a *app) newConsoleCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect console/log events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of messages to return; use 0 for no limit")
 	cmd.Flags().BoolVar(&errorsOnly, "errors", false, "only return warnings, errors, assertions, and exceptions")
@@ -4247,6 +4305,7 @@ func (a *app) newConsoleCommand() *cobra.Command {
 func (a *app) newNetworkCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var wait time.Duration
 	var limit int
 	var failedOnly bool
@@ -4265,7 +4324,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp network --limit 50 --json"})
 			}
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains)
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -4298,6 +4357,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect network events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of requests to return; use 0 for no limit")
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only return failed requests and HTTP 4xx/5xx responses")
@@ -4308,6 +4368,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var wait time.Duration
 	var limit int
 	var outPath string
@@ -4347,7 +4408,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains)
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -4425,6 +4486,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect network events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 0, "maximum requests to return; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON network capture artifact")
@@ -5195,6 +5257,7 @@ func (a *app) newStorageCommand() *cobra.Command {
 func (a *app) newStorageListCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var include string
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -5207,7 +5270,7 @@ func (a *app) newStorageListCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5234,6 +5297,7 @@ func (a *app) newStorageListCommand() *cobra.Command {
 func (a *app) newStorageGetCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "get <localStorage|sessionStorage> <key>",
 		Short: "Read one Web Storage value",
@@ -5245,7 +5309,7 @@ func (a *app) newStorageGetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5266,6 +5330,7 @@ func (a *app) newStorageGetCommand() *cobra.Command {
 func (a *app) newStorageSetCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "set <localStorage|sessionStorage> <key> <value|@file>",
 		Short: "Set one Web Storage value",
@@ -5281,7 +5346,7 @@ func (a *app) newStorageSetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5302,6 +5367,7 @@ func (a *app) newStorageSetCommand() *cobra.Command {
 func (a *app) newStorageDeleteCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:     "delete <localStorage|sessionStorage> <key>",
 		Aliases: []string{"rm"},
@@ -5314,7 +5380,7 @@ func (a *app) newStorageDeleteCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5335,6 +5401,7 @@ func (a *app) newStorageDeleteCommand() *cobra.Command {
 func (a *app) newStorageClearCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "clear <localStorage|sessionStorage>",
 		Short: "Clear one Web Storage area",
@@ -5346,7 +5413,7 @@ func (a *app) newStorageClearCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5367,6 +5434,7 @@ func (a *app) newStorageClearCommand() *cobra.Command {
 func (a *app) newStorageSnapshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var include string
 	var outPath string
 	var redact string
@@ -5388,7 +5456,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5487,6 +5555,7 @@ func (a *app) newStorageCookiesCommand() *cobra.Command {
 func (a *app) newStorageCookiesListCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var rawURL string
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -5495,7 +5564,7 @@ func (a *app) newStorageCookiesListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5521,6 +5590,7 @@ func (a *app) newStorageCookiesListCommand() *cobra.Command {
 func (a *app) newStorageCookiesSetCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var rawURL string
 	var name string
 	var value string
@@ -5540,7 +5610,7 @@ func (a *app) newStorageCookiesSetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5593,6 +5663,7 @@ func (a *app) newStorageCookiesSetCommand() *cobra.Command {
 func (a *app) newStorageCookiesDeleteCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var rawURL string
 	var name string
 	var domain string
@@ -5608,7 +5679,7 @@ func (a *app) newStorageCookiesDeleteCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5660,6 +5731,7 @@ func (a *app) newStorageIndexedDBCommand() *cobra.Command {
 func (a *app) newStorageIndexedDBListCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List IndexedDB databases, object stores, indexes, and counts",
@@ -5667,7 +5739,7 @@ func (a *app) newStorageIndexedDBListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5688,6 +5760,7 @@ func (a *app) newStorageIndexedDBListCommand() *cobra.Command {
 func (a *app) newStorageIndexedDBGetCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var keyJSON bool
 	cmd := &cobra.Command{
 		Use:   "get <database> <store> <key>",
@@ -5696,7 +5769,7 @@ func (a *app) newStorageIndexedDBGetCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5718,6 +5791,7 @@ func (a *app) newStorageIndexedDBGetCommand() *cobra.Command {
 func (a *app) newStorageIndexedDBPutCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var keyJSON bool
 	cmd := &cobra.Command{
 		Use:   "put <database> <store> <key> <value|@file>",
@@ -5730,7 +5804,7 @@ func (a *app) newStorageIndexedDBPutCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5753,6 +5827,7 @@ func (a *app) newStorageIndexedDBPutCommand() *cobra.Command {
 func (a *app) newStorageIndexedDBDeleteCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var keyJSON bool
 	cmd := &cobra.Command{
 		Use:     "delete <database> <store> <key>",
@@ -5762,7 +5837,7 @@ func (a *app) newStorageIndexedDBDeleteCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5784,6 +5859,7 @@ func (a *app) newStorageIndexedDBDeleteCommand() *cobra.Command {
 func (a *app) newStorageIndexedDBClearCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "clear <database> <store>",
 		Short: "Clear one IndexedDB object store",
@@ -5791,7 +5867,7 @@ func (a *app) newStorageIndexedDBClearCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5825,6 +5901,7 @@ func (a *app) newStorageCacheCommand() *cobra.Command {
 func (a *app) newStorageCacheListCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var cacheName string
 	var requestURLContains string
 	cmd := &cobra.Command{
@@ -5834,7 +5911,7 @@ func (a *app) newStorageCacheListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5857,6 +5934,7 @@ func (a *app) newStorageCacheListCommand() *cobra.Command {
 func (a *app) newStorageCacheGetCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var maxBodyBytes int
 	cmd := &cobra.Command{
 		Use:   "get <cache> <request-url>",
@@ -5868,7 +5946,7 @@ func (a *app) newStorageCacheGetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5890,6 +5968,7 @@ func (a *app) newStorageCacheGetCommand() *cobra.Command {
 func (a *app) newStorageCachePutCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var contentType string
 	var status int
 	cmd := &cobra.Command{
@@ -5906,7 +5985,7 @@ func (a *app) newStorageCachePutCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5930,6 +6009,7 @@ func (a *app) newStorageCachePutCommand() *cobra.Command {
 func (a *app) newStorageCacheDeleteCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:     "delete <cache> <request-url>",
 		Aliases: []string{"rm"},
@@ -5938,7 +6018,7 @@ func (a *app) newStorageCacheDeleteCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -5959,6 +6039,7 @@ func (a *app) newStorageCacheDeleteCommand() *cobra.Command {
 func (a *app) newStorageCacheClearCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "clear [cache]",
@@ -5974,7 +6055,7 @@ func (a *app) newStorageCacheClearCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -6007,6 +6088,7 @@ func (a *app) newStorageServiceWorkersCommand() *cobra.Command {
 func (a *app) newStorageServiceWorkersListCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List service worker registrations",
@@ -6014,7 +6096,7 @@ func (a *app) newStorageServiceWorkersListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -6035,6 +6117,7 @@ func (a *app) newStorageServiceWorkersListCommand() *cobra.Command {
 func (a *app) newStorageServiceWorkersUnregisterCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var scope string
 	var all bool
 	cmd := &cobra.Command{
@@ -6047,7 +6130,7 @@ func (a *app) newStorageServiceWorkersUnregisterCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -7820,6 +7903,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	var params string
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var savePath string
 	cmd := &cobra.Command{
 		Use:   "exec <Domain.method>",
@@ -7842,8 +7926,8 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
 			}
-			if targetID != "" || urlContains != "" {
-				session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if targetID != "" || urlContains != "" || titleContains != "" {
+				session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 				if err != nil {
 					return err
 				}
@@ -7921,6 +8005,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	cmd.Flags().StringVar(&params, "params", "{}", "JSON params object for the CDP method")
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix for target-scoped execution")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text for target-scoped execution")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text for target-scoped execution")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
 	return cmd
 }
@@ -8554,6 +8639,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	var rawURL string
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var outDir string
 	var since time.Duration
 	var screenshotFull bool
@@ -8677,7 +8763,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 				defer session.Close(ctx)
 				trigger = "navigate"
 			} else {
-				client, session, target, err = a.attachPageEventSession(ctx, targetID, urlContains)
+				client, session, target, err = a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
 				if err != nil {
 					return err
 				}
@@ -8842,6 +8928,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	cmd.Flags().StringVar(&rawURL, "url", "", "open this URL before collecting the debug bundle")
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "optional directory for debug bundle artifacts")
 	cmd.Flags().DurationVar(&since, "since", 5*time.Second, "how long to collect evidence after navigation/attach")
 	cmd.Flags().BoolVar(&screenshotFull, "screenshot-full", false, "capture full-page screenshot in the debug bundle")
@@ -8951,6 +9038,7 @@ func hackerNewsCountLabel(count int, singular, plural string) string {
 func (a *app) newWorkflowConsoleErrorsCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var wait time.Duration
 	var limit int
 	cmd := &cobra.Command{
@@ -8964,7 +9052,7 @@ func (a *app) newWorkflowConsoleErrorsCommand() *cobra.Command {
 			if wait < 0 || limit < 0 {
 				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow console-errors --wait 2s --json"})
 			}
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains)
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -9001,6 +9089,7 @@ func (a *app) newWorkflowConsoleErrorsCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect console/log events")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of messages to return; use 0 for no limit")
 	return cmd
@@ -9009,6 +9098,7 @@ func (a *app) newWorkflowConsoleErrorsCommand() *cobra.Command {
 func (a *app) newWorkflowNetworkFailuresCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var wait time.Duration
 	var limit int
 	cmd := &cobra.Command{
@@ -9022,7 +9112,7 @@ func (a *app) newWorkflowNetworkFailuresCommand() *cobra.Command {
 			if wait < 0 || limit < 0 {
 				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow network-failures --wait 2s --json"})
 			}
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains)
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -9059,6 +9149,7 @@ func (a *app) newWorkflowNetworkFailuresCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect network events")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of requests to return; use 0 for no limit")
 	return cmd
@@ -9087,6 +9178,7 @@ type workflowA11ySignals struct {
 func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
+	var titleContains string
 	var reload bool
 	var ignoreCache bool
 	var wait time.Duration
@@ -9131,14 +9223,14 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 			}()
 
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			if rawURL != "" && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" {
+			if rawURL != "" && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 				createdID, err := a.createPageTarget(ctx, client, "about:blank")
 				if err != nil {
 					return err
 				}
 				target.TargetID = createdID
 			} else {
-				selected, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+				selected, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
 				if err != nil {
 					return err
 				}
@@ -9254,6 +9346,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected page after attaching collectors")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect events after navigation or reload")
@@ -9689,6 +9782,7 @@ func commandExamples(path string) []string {
 			"cdp pages --json",
 			"cdp pages --limit 10 --json",
 			"cdp pages --include-url localhost --exclude-url admin --json",
+			"cdp pages --title-contains Example --json",
 		},
 		"cdp page select": {
 			"cdp page select <target-id> --json",
@@ -9717,6 +9811,7 @@ func commandExamples(path string) []string {
 		"cdp eval": {
 			"cdp eval 'document.title' --json",
 			"cdp eval 'Array.from(document.querySelectorAll(\"article\"), el => el.innerText)' --url-contains x.com --json",
+			"cdp eval 'document.title' --title-contains Example --json",
 		},
 		"cdp text": {
 			"cdp text main --json",
