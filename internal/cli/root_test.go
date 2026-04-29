@@ -79,7 +79,7 @@ func TestTargetsJSON(t *testing.T) {
 	defer server.Close()
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"targets", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"targets", "--browser-url", server.URL, "--limit", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("targets exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -94,8 +94,8 @@ func TestTargetsJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("targets output is invalid JSON: %v", err)
 	}
-	if !got.OK || len(got.Targets) != 2 || got.Targets[0].ID != "page-1" || got.Targets[1].Type != "service_worker" {
-		t.Fatalf("targets output = %+v, want page and service worker targets", got)
+	if !got.OK || len(got.Targets) != 1 || got.Targets[0].ID != "page-1" {
+		t.Fatalf("targets output = %+v, want one limited target", got)
 	}
 }
 

@@ -656,7 +656,8 @@ func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, 
 }
 
 func (a *app) newTargetsCommand() *cobra.Command {
-	return &cobra.Command{
+	var limit int
+	cmd := &cobra.Command{
 		Use:   "targets",
 		Short: "List browser targets",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -668,6 +669,7 @@ func (a *app) newTargetsCommand() *cobra.Command {
 				return err
 			}
 			rows := targetRows(targets)
+			rows = limitRows(rows, limit)
 			var lines []string
 			for _, target := range rows {
 				lines = append(lines, fmt.Sprintf("%s\t%s\t%s", target["id"], target["type"], target["title"]))
@@ -675,10 +677,13 @@ func (a *app) newTargetsCommand() *cobra.Command {
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "targets": rows})
 		},
 	}
+	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of targets to return; use 0 for no limit")
+	return cmd
 }
 
 func (a *app) newPagesCommand() *cobra.Command {
-	return &cobra.Command{
+	var limit int
+	cmd := &cobra.Command{
 		Use:   "pages",
 		Short: "List open pages and tabs",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -690,6 +695,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 				return err
 			}
 			pages := pageRows(targets)
+			pages = limitRows(pages, limit)
 			var lines []string
 			for _, page := range pages {
 				lines = append(lines, fmt.Sprintf("%s\t%s", page["id"], page["title"]))
@@ -697,6 +703,8 @@ func (a *app) newPagesCommand() *cobra.Command {
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "pages": pages})
 		},
 	}
+	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of pages to return; use 0 for no limit")
+	return cmd
 }
 
 func (a *app) listTargets(ctx context.Context) ([]cdp.TargetInfo, error) {
@@ -735,6 +743,13 @@ func targetRows(targets []cdp.TargetInfo) []map[string]any {
 		})
 	}
 	return rows
+}
+
+func limitRows(rows []map[string]any, limit int) []map[string]any {
+	if limit <= 0 || len(rows) <= limit {
+		return rows
+	}
+	return rows[:limit]
 }
 
 func pageRows(targets []cdp.TargetInfo) []map[string]any {
@@ -1080,10 +1095,12 @@ func commandExamples(path string) []string {
 		},
 		"cdp targets": {
 			"cdp targets --json",
+			"cdp targets --limit 10 --json",
 			"cdp targets --browser-url <browser-url> --json",
 		},
 		"cdp pages": {
 			"cdp pages --json",
+			"cdp pages --limit 10 --json",
 			"cdp pages --browser-url <browser-url> --json",
 		},
 		"cdp protocol metadata": {
