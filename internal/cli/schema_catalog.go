@@ -224,6 +224,39 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
 			},
 		},
+		"storage": {
+			Name:        "storage",
+			Description: "Application storage inspection and Web Storage mutation result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage command completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata for browser-backed commands."},
+				{Name: "storage", Type: "storage_result", Required: true, Description: "Storage area snapshot, operation result, or command metadata."},
+				{Name: "collector_errors", Type: "array<collector_error>", Required: false, Description: "Non-fatal collector errors for optional areas such as quota."},
+			},
+		},
+		"storage-snapshot": {
+			Name:        "storage-snapshot",
+			Description: "Local forensic storage snapshot with optional redaction and artifact output.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage snapshot completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, and quota data."},
+				{Name: "storage", Type: "storage_snapshot_summary", Required: true, Description: "Snapshot options, redaction mode, warning, and collector errors."},
+				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
+				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
+			},
+		},
+		"storage-diff": {
+			Name:        "storage-diff",
+			Description: "Difference between two storage snapshot artifacts.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when both snapshots were read and compared."},
+				{Name: "left", Type: "string", Required: true, Description: "Left/before snapshot path."},
+				{Name: "right", Type: "string", Required: true, Description: "Right/after snapshot path."},
+				{Name: "has_diff", Type: "boolean", Required: true, Description: "True when any added, removed, or changed storage entries were found."},
+				{Name: "diff", Type: "storage_diff", Required: true, Description: "Added, removed, and changed entries grouped by storage area."},
+			},
+		},
 		"workflow-visible-posts": {
 			Name:        "workflow-visible-posts",
 			Description: "Open a feed page and return visible post-like text items.",

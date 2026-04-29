@@ -858,6 +858,169 @@ func TestNetworkCaptureDefaultKeepsLocalCredentials(t *testing.T) {
 	}
 }
 
+func TestStorageListAndSnapshotJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"storage", "list", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("storage list exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK      bool `json:"ok"`
+		Storage struct {
+			LocalStorage struct {
+				Count   int `json:"count"`
+				Entries []struct {
+					Key   string `json:"key"`
+					Value string `json:"value"`
+				} `json:"entries"`
+			} `json:"local_storage"`
+			SessionStorage struct {
+				Keys []string `json:"keys"`
+			} `json:"session_storage"`
+			Cookies []map[string]any `json:"cookies"`
+			Quota   map[string]any   `json:"quota"`
+		} `json:"storage"`
+		CollectorErrors []map[string]string `json:"collector_errors"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("storage list output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Storage.LocalStorage.Count != 2 || got.Storage.LocalStorage.Entries[0].Key != "authToken" || got.Storage.LocalStorage.Entries[0].Value != "secret" || len(got.Storage.Cookies) != 1 || len(got.CollectorErrors) != 0 {
+		t.Fatalf("storage list = %+v, want unredacted local forensic storage", got)
+	}
+	if got.Storage.Quota["usage"] == nil || !containsString(got.Storage.SessionStorage.Keys, "nonce") {
+		t.Fatalf("storage list quota/session = %+v / %+v, want quota and session key", got.Storage.Quota, got.Storage.SessionStorage.Keys)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	outPath := filepath.Join(t.TempDir(), "storage.local.json")
+	code = cli.Execute(context.Background(), []string{"storage", "snapshot", "--redact", "safe", "--out", outPath, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("storage snapshot exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var snap struct {
+		Snapshot struct {
+			LocalStorage struct {
+				Entries []struct {
+					Key   string `json:"key"`
+					Value string `json:"value"`
+				} `json:"entries"`
+			} `json:"local_storage"`
+			Cookies []map[string]any `json:"cookies"`
+		} `json:"snapshot"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &snap); err != nil {
+		t.Fatalf("storage snapshot output is invalid JSON: %v", err)
+	}
+	if snap.Artifact.Path != outPath || snap.Snapshot.LocalStorage.Entries[0].Value != "<redacted>" || snap.Snapshot.Cookies[0]["value"] != "<redacted>" {
+		t.Fatalf("storage snapshot = %+v, want redacted artifact", snap)
+	}
+}
+
+func TestStorageWebStorageMutationJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "get", args: []string{"storage", "get", "localStorage", "feature", "--json"}},
+		{name: "set", args: []string{"storage", "set", "localStorage", "feature", "disabled", "--json"}},
+		{name: "delete", args: []string{"storage", "delete", "sessionStorage", "nonce", "--json"}},
+		{name: "clear", args: []string{"storage", "clear", "sessionStorage", "--json"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), tc.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitOK {
+				t.Fatalf("%s exit code = %d, want %d; stdout=%s stderr=%s", tc.name, code, cli.ExitOK, out.String(), errOut.String())
+			}
+			var got struct {
+				OK      bool `json:"ok"`
+				Storage struct {
+					Backend string `json:"backend"`
+				} `json:"storage"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("%s output is invalid JSON: %v", tc.name, err)
+			}
+			if !got.OK || got.Storage.Backend == "" {
+				t.Fatalf("%s output = %+v, want storage operation result", tc.name, got)
+			}
+		})
+	}
+}
+
+func TestStorageCookiesAndDiffJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	for _, args := range [][]string{
+		{"storage", "cookies", "list", "--json"},
+		{"storage", "cookies", "set", "--name", "feature", "--value", "enabled", "--json"},
+		{"storage", "cookies", "delete", "--name", "feature", "--json"},
+	} {
+		var out, errOut bytes.Buffer
+		code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+		if code != cli.ExitOK {
+			t.Fatalf("%v exit code = %d, want %d; stdout=%s stderr=%s", args, code, cli.ExitOK, out.String(), errOut.String())
+		}
+		var got struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+			t.Fatalf("%v output is invalid JSON: %v", args, err)
+		}
+		if !got.OK {
+			t.Fatalf("%v output = %+v, want ok", args, got)
+		}
+	}
+
+	dir := t.TempDir()
+	left := filepath.Join(dir, "left.json")
+	right := filepath.Join(dir, "right.json")
+	if err := os.WriteFile(left, []byte(`{"snapshot":{"local_storage":{"entries":[{"key":"feature","value":"enabled"}]},"session_storage":{"entries":[]},"cookies":[]}}`), 0o600); err != nil {
+		t.Fatalf("write left snapshot: %v", err)
+	}
+	if err := os.WriteFile(right, []byte(`{"snapshot":{"local_storage":{"entries":[{"key":"feature","value":"disabled"},{"key":"new","value":"yes"}]},"session_storage":{"entries":[]},"cookies":[]}}`), 0o600); err != nil {
+		t.Fatalf("write right snapshot: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"storage", "diff", "--left", left, "--right", right, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("storage diff exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var diff struct {
+		HasDiff bool `json:"has_diff"`
+		Diff    struct {
+			Summary map[string]int `json:"summary"`
+		} `json:"diff"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &diff); err != nil {
+		t.Fatalf("storage diff output is invalid JSON: %v", err)
+	}
+	if !diff.HasDiff || diff.Diff.Summary["added"] != 1 || diff.Diff.Summary["changed"] != 1 {
+		t.Fatalf("storage diff = %+v, want one added and one changed", diff)
+	}
+}
+
 func TestWorkflowConsoleErrorsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -2920,6 +3083,26 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				} else {
 					resp["error"] = map[string]any{"code": -32000, "message": "No resource with given identifier found"}
 				}
+			} else if req.Method == "Network.getCookies" {
+				resp["result"] = map[string]any{"cookies": []map[string]any{{
+					"name":     "session",
+					"value":    "secret",
+					"domain":   "example.test",
+					"path":     "/",
+					"httpOnly": true,
+					"secure":   true,
+				}}}
+			} else if req.Method == "Network.setCookie" {
+				resp["result"] = map[string]any{"success": true}
+			} else if req.Method == "Network.deleteCookies" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Storage.getUsageAndQuota" {
+				resp["result"] = map[string]any{
+					"usage":          128,
+					"quota":          4096,
+					"overrideActive": false,
+					"usageBreakdown": []map[string]any{{"storageType": "local_storage", "usage": 64}},
+				}
 			} else if req.Method == "Runtime.enable" {
 				resp["result"] = map[string]any{}
 				events = append(events, map[string]any{
@@ -3166,6 +3349,99 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 					"cookie_keys":          []string{"session"},
 					"local_storage_keys":   []string{"feature"},
 					"session_storage_keys": []string{"nonce"},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_storage_snapshot__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":    "https://example.test/app",
+					"origin": "https://example.test",
+					"local_storage": map[string]any{
+						"count": 2,
+						"keys":  []string{"authToken", "feature"},
+						"entries": []map[string]any{
+							{"key": "authToken", "value": "secret", "bytes": 6},
+							{"key": "feature", "value": "enabled", "bytes": 7},
+						},
+					},
+					"session_storage": map[string]any{
+						"count":   1,
+						"keys":    []string{"nonce"},
+						"entries": []map[string]any{{"key": "nonce", "value": "abc", "bytes": 3}},
+					},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_storage_page_info__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type":  "object",
+				"value": map[string]any{"url": "https://example.test/app", "origin": "https://example.test"},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_storage_get__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":     "https://example.test/app",
+					"origin":  "https://example.test",
+					"backend": "localStorage",
+					"key":     "feature",
+					"found":   true,
+					"value":   "enabled",
+					"bytes":   7,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_storage_set__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"origin":   "https://example.test",
+					"backend":  "localStorage",
+					"key":      "feature",
+					"found":    true,
+					"value":    "disabled",
+					"previous": "enabled",
+					"bytes":    8,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_storage_delete__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"origin":   "https://example.test",
+					"backend":  "sessionStorage",
+					"key":      "nonce",
+					"found":    true,
+					"previous": "abc",
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_storage_clear__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":     "https://example.test/app",
+					"origin":  "https://example.test",
+					"backend": "sessionStorage",
+					"cleared": 1,
 				},
 			},
 		}

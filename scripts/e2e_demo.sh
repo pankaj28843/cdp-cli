@@ -112,6 +112,20 @@ jq -e --arg probe "$probe_id" '.ok == true and (.requests[] | select((.url | con
 capture_output="$state_dir/network-capture.json"
 "$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$state_dir/network-capture.local.json" --json >"$capture_output"
 jq -e --arg path "$state_dir/network-capture.local.json" '.ok == true and .artifact.path == $path and .capture.trigger == "reload" and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\""))))' "$capture_output" >/dev/null
+"$binary" storage list --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and (.storage.local_storage.entries[] | select(.key == "feature" and .value == "enabled")) and (.storage.session_storage.keys | index("nonce")) and (.storage.cookies | length >= 1)' >/dev/null
+"$binary" storage set localStorage feature disabled --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.backend == "localStorage" and .storage.value == "disabled"' >/dev/null
+"$binary" storage get localStorage feature --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.found == true and .storage.value == "disabled"' >/dev/null
+"$binary" storage delete sessionStorage nonce --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.backend == "sessionStorage" and .storage.found == true' >/dev/null
+"$binary" storage cookies set --state-dir "$state_dir/cdp-state" --url "$app_url" --name cdp_demo --value enabled --json \
+  | jq -e '.ok == true and .cookie.name == "cdp_demo"' >/dev/null
+"$binary" storage cookies delete --state-dir "$state_dir/cdp-state" --url "$app_url" --name cdp_demo --json \
+  | jq -e '.ok == true and .cookie.name == "cdp_demo"' >/dev/null
+"$binary" storage snapshot --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --redact safe --out "$state_dir/storage.local.json" --json \
+  | jq -e --arg path "$state_dir/storage.local.json" '.ok == true and .artifact.path == $path and .storage.redact == "safe" and (.snapshot.local_storage.entries[] | select(.key == "feature" and .value == "disabled"))' >/dev/null
 "$binary" screenshot --state-dir "$state_dir/cdp-state" --out "$state_dir/demo.png" --json \
   | jq -e --arg path "$state_dir/demo.png" '.ok == true and .screenshot.path == $path and .screenshot.bytes > 0' >/dev/null
 "$binary" protocol exec Page.captureScreenshot --url-contains "$app_url" --params '{"format":"png"}' --save "$state_dir/protocol-shot.png" --state-dir "$state_dir/cdp-state" --json \

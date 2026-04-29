@@ -51,6 +51,9 @@ DEMO_HTML = """<!doctype html>
     <output id="status">booting</output>
   </main>
   <script>
+    localStorage.setItem('feature', 'enabled');
+    sessionStorage.setItem('nonce', 'demo-session');
+    document.cookie = 'demo_session=abc; SameSite=Lax; path=/';
     console.log('demo app booted');
     console.error('synthetic demo error');
     fetch('/api/ok').then(() => fetch('/api/fail'));

@@ -125,6 +125,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newScreenshotCommand())
 	root.AddCommand(a.newConsoleCommand())
 	root.AddCommand(a.newNetworkCommand())
+	root.AddCommand(a.newStorageCommand())
 	root.AddCommand(a.newCDPCommand())
 	root.AddCommand(a.newWorkflowCommand())
 	root.AddCommand(a.newMCPCommand())

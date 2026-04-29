@@ -192,11 +192,13 @@ func capabilityCatalog() []map[string]string {
 		{"name": "artifacts", "status": "implemented", "commands": "screenshot"},
 		{"name": "console", "status": "implemented", "commands": "console, workflow console-errors"},
 		{"name": "network", "status": "implemented", "commands": "network, workflow network-failures"},
+		{"name": "storage", "status": "implemented", "commands": "storage list/get/set/delete/clear/snapshot/diff, storage cookies"},
 		{"name": "raw_protocol", "status": "implemented", "commands": "protocol metadata/domains/search/describe/exec"},
 		{"name": "input_automation", "status": "planned", "commands": "click, fill, type, press, hover, drag, upload"},
 		{"name": "emulation", "status": "planned", "commands": "viewport, media, user-agent, geolocation, network, cpu"},
 		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
-		{"name": "memory_storage", "status": "planned", "commands": "heap snapshot, storage, service workers"},
+		{"name": "memory", "status": "planned", "commands": "heap snapshot"},
+		{"name": "advanced_storage", "status": "planned", "commands": "IndexedDB, Cache Storage, service workers"},
 	}
 }
 
@@ -4466,6 +4468,965 @@ func networkRequestLines(requests []networkRequest) []string {
 	return lines
 }
 
+func (a *app) newStorageCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "storage",
+		Short: "Inspect and mutate browser application storage",
+	}
+	cmd.AddCommand(a.newStorageListCommand())
+	cmd.AddCommand(a.newStorageGetCommand())
+	cmd.AddCommand(a.newStorageSetCommand())
+	cmd.AddCommand(a.newStorageDeleteCommand())
+	cmd.AddCommand(a.newStorageClearCommand())
+	cmd.AddCommand(a.newStorageSnapshotCommand())
+	cmd.AddCommand(a.newStorageDiffCommand())
+	cmd.AddCommand(a.newStorageCookiesCommand())
+	return cmd
+}
+
+func (a *app) newStorageListCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var include string
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List localStorage, sessionStorage, cookies, and quota for a page",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			includeSet, err := parseStorageInclude(include)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			snapshot, collectorErrors, err := collectStorageSnapshot(ctx, session, target, includeSet)
+			if err != nil {
+				return err
+			}
+			report := map[string]any{
+				"ok":               true,
+				"target":           pageRow(target),
+				"storage":          snapshot,
+				"collector_errors": collectorErrors,
+			}
+			human := fmt.Sprintf("storage\tlocal:%d\tsession:%d\tcookies:%d", snapshot.LocalStorage.Count, snapshot.SessionStorage.Count, len(snapshot.Cookies))
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,quota,all")
+	return cmd
+}
+
+func (a *app) newStorageGetCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "get <localStorage|sessionStorage> <key>",
+		Short: "Read one Web Storage value",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			backend, err := normalizeWebStorageBackend(args[0])
+			if err != nil {
+				return err
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runWebStorageOperation(ctx, session, "get", backend, args[1], "")
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("%s\t%s\tfound=%t", result.Backend, result.Key, result.Found)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	return cmd
+}
+
+func (a *app) newStorageSetCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "set <localStorage|sessionStorage> <key> <value|@file>",
+		Short: "Set one Web Storage value",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			backend, err := normalizeWebStorageBackend(args[0])
+			if err != nil {
+				return err
+			}
+			value, source, err := readStorageValueInput(args[2])
+			if err != nil {
+				return err
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runWebStorageOperation(ctx, session, "set", backend, args[1], value)
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result, "value_source": source}
+			human := fmt.Sprintf("%s\t%s\tset", result.Backend, result.Key)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	return cmd
+}
+
+func (a *app) newStorageDeleteCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:     "delete <localStorage|sessionStorage> <key>",
+		Aliases: []string{"rm"},
+		Short:   "Delete one Web Storage value",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			backend, err := normalizeWebStorageBackend(args[0])
+			if err != nil {
+				return err
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runWebStorageOperation(ctx, session, "delete", backend, args[1], "")
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("%s\t%s\tdeleted=%t", result.Backend, result.Key, result.Found)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	return cmd
+}
+
+func (a *app) newStorageClearCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   "clear <localStorage|sessionStorage>",
+		Short: "Clear one Web Storage area",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			backend, err := normalizeWebStorageBackend(args[0])
+			if err != nil {
+				return err
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runWebStorageOperation(ctx, session, "clear", backend, "", "")
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			human := fmt.Sprintf("%s\tcleared=%d", result.Backend, result.Cleared)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	return cmd
+}
+
+func (a *app) newStorageSnapshotCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var include string
+	var outPath string
+	var redact string
+	cmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Write a local forensic storage snapshot",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			includeSet, err := parseStorageInclude(include)
+			if err != nil {
+				return err
+			}
+			redact = strings.ToLower(strings.TrimSpace(redact))
+			if redact == "" {
+				redact = "none"
+			}
+			if redact != "none" && redact != "safe" {
+				return commandError("usage", "usage", "--redact must be none or safe", ExitUsage, []string{"cdp storage snapshot --redact safe --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			snapshot, collectorErrors, err := collectStorageSnapshot(ctx, session, target, includeSet)
+			if err != nil {
+				return err
+			}
+			applyStorageRedaction(&snapshot, redact)
+			meta := map[string]any{
+				"include":          setKeys(includeSet),
+				"redact":           redact,
+				"collector_errors": collectorErrors,
+			}
+			if strings.TrimSpace(outPath) != "" && redact == "none" {
+				meta["local_artifact_warning"] = "storage snapshot may include cookies, tokens, localStorage values, and sessionStorage values; keep this artifact local"
+			}
+			report := map[string]any{
+				"ok":       true,
+				"target":   pageRow(target),
+				"snapshot": snapshot,
+				"storage":  meta,
+			}
+			if strings.TrimSpace(outPath) != "" {
+				b, err := json.MarshalIndent(report, "", "  ")
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal storage snapshot: %v", err), ExitInternal, []string{"cdp storage snapshot --json"})
+				}
+				writtenPath, err := writeArtifactFile(outPath, append(b, '\n'))
+				if err != nil {
+					return err
+				}
+				report["artifact"] = map[string]any{"type": "storage-snapshot", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifacts"] = []map[string]any{{"type": "storage-snapshot", "path": writtenPath}}
+			}
+			human := fmt.Sprintf("storage-snapshot\tlocal:%d\tsession:%d\tcookies:%d", snapshot.LocalStorage.Count, snapshot.SessionStorage.Count, len(snapshot.Cookies))
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,quota,all")
+	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON storage snapshot artifact")
+	cmd.Flags().StringVar(&redact, "redact", "none", "redaction preset for output and artifacts: none or safe")
+	return cmd
+}
+
+func (a *app) newStorageDiffCommand() *cobra.Command {
+	var leftPath string
+	var rightPath string
+	cmd := &cobra.Command{
+		Use:   "diff --left before.json --right after.json",
+		Short: "Diff two storage snapshot artifacts",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(leftPath) == "" || strings.TrimSpace(rightPath) == "" {
+				return commandError("usage", "usage", "--left and --right are required", ExitUsage, []string{"cdp storage diff --left before.local.json --right after.local.json --json"})
+			}
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+			left, err := readStorageSnapshotFile(leftPath)
+			if err != nil {
+				return commandError("usage", "usage", fmt.Sprintf("read --left snapshot: %v", err), ExitUsage, []string{"cdp storage snapshot --out before.local.json --json"})
+			}
+			right, err := readStorageSnapshotFile(rightPath)
+			if err != nil {
+				return commandError("usage", "usage", fmt.Sprintf("read --right snapshot: %v", err), ExitUsage, []string{"cdp storage snapshot --out after.local.json --json"})
+			}
+			diff := diffStorageSnapshots(left, right)
+			report := map[string]any{
+				"ok":       true,
+				"left":     leftPath,
+				"right":    rightPath,
+				"diff":     diff,
+				"has_diff": storageDiffHasChanges(diff),
+			}
+			human := fmt.Sprintf("storage-diff\tchanged=%t", storageDiffHasChanges(diff))
+			return a.render(ctx, human, report)
+		},
+	}
+	cmd.Flags().StringVar(&leftPath, "left", "", "left/before storage snapshot JSON path")
+	cmd.Flags().StringVar(&rightPath, "right", "", "right/after storage snapshot JSON path")
+	return cmd
+}
+
+func (a *app) newStorageCookiesCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cookies",
+		Short: "List, set, and delete cookies",
+	}
+	cmd.AddCommand(a.newStorageCookiesListCommand())
+	cmd.AddCommand(a.newStorageCookiesSetCommand())
+	cmd.AddCommand(a.newStorageCookiesDeleteCommand())
+	return cmd
+}
+
+func (a *app) newStorageCookiesListCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var rawURL string
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List cookies for a URL or selected page",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			cookieURL, err := storageCommandURL(ctx, session, target, rawURL)
+			if err != nil {
+				return err
+			}
+			cookies, err := getStorageCookies(ctx, session, cookieURL)
+			if err != nil {
+				return storageCommandFailed("list cookies", target.TargetID, err)
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "url": cookieURL, "cookies": cookies, "storage": map[string]any{"count": len(cookies), "names": cookieNames(cookies)}}
+			human := fmt.Sprintf("cookies\t%d", len(cookies))
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&rawURL, "url", "", "URL whose applicable cookies should be listed; defaults to selected page URL")
+	return cmd
+}
+
+func (a *app) newStorageCookiesSetCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var rawURL string
+	var name string
+	var value string
+	var domain string
+	var path string
+	var secure bool
+	var httpOnly bool
+	var sameSite string
+	var expires float64
+	cmd := &cobra.Command{
+		Use:   "set --name <name> --value <value>",
+		Short: "Set one cookie",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(name) == "" {
+				return commandError("usage", "usage", "--name is required", ExitUsage, []string{"cdp storage cookies set --name feature_flag --value enabled --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			cookieURL, err := storageCommandURL(ctx, session, target, rawURL)
+			if err != nil {
+				return err
+			}
+			params := map[string]any{"name": name, "value": value, "url": cookieURL}
+			if strings.TrimSpace(domain) != "" {
+				params["domain"] = domain
+			}
+			if strings.TrimSpace(path) != "" {
+				params["path"] = path
+			}
+			if secure {
+				params["secure"] = true
+			}
+			if httpOnly {
+				params["httpOnly"] = true
+			}
+			if strings.TrimSpace(sameSite) != "" {
+				params["sameSite"] = sameSite
+			}
+			if expires > 0 {
+				params["expires"] = expires
+			}
+			var result map[string]any
+			if err := execSessionJSON(ctx, session, "Network.setCookie", params, &result); err != nil {
+				return storageCommandFailed("set cookie", target.TargetID, err)
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "url": cookieURL, "cookie": map[string]any{"name": name, "domain": domain, "path": path}, "result": result}
+			human := fmt.Sprintf("cookie\t%s\tset", name)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&rawURL, "url", "", "URL to associate with the cookie; defaults to selected page URL")
+	cmd.Flags().StringVar(&name, "name", "", "cookie name")
+	cmd.Flags().StringVar(&value, "value", "", "cookie value")
+	cmd.Flags().StringVar(&domain, "domain", "", "cookie domain")
+	cmd.Flags().StringVar(&path, "path", "", "cookie path")
+	cmd.Flags().BoolVar(&secure, "secure", false, "mark the cookie secure")
+	cmd.Flags().BoolVar(&httpOnly, "http-only", false, "mark the cookie HTTP-only")
+	cmd.Flags().StringVar(&sameSite, "same-site", "", "cookie SameSite value: Strict, Lax, or None")
+	cmd.Flags().Float64Var(&expires, "expires", 0, "cookie expiration as seconds since Unix epoch; 0 creates a session cookie")
+	return cmd
+}
+
+func (a *app) newStorageCookiesDeleteCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var rawURL string
+	var name string
+	var domain string
+	var path string
+	cmd := &cobra.Command{
+		Use:     "delete --name <name>",
+		Aliases: []string{"rm"},
+		Short:   "Delete matching cookies",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(name) == "" {
+				return commandError("usage", "usage", "--name is required", ExitUsage, []string{"cdp storage cookies delete --name feature_flag --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			cookieURL, err := storageCommandURL(ctx, session, target, rawURL)
+			if err != nil {
+				return err
+			}
+			params := map[string]any{"name": name}
+			if strings.TrimSpace(domain) != "" || strings.TrimSpace(path) != "" {
+				if strings.TrimSpace(domain) != "" {
+					params["domain"] = domain
+				}
+				if strings.TrimSpace(path) != "" {
+					params["path"] = path
+				}
+			} else {
+				params["url"] = cookieURL
+			}
+			if err := execSessionJSON(ctx, session, "Network.deleteCookies", params, nil); err != nil {
+				return storageCommandFailed("delete cookie", target.TargetID, err)
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "url": cookieURL, "cookie": map[string]any{"name": name, "domain": domain, "path": path}}
+			human := fmt.Sprintf("cookie\t%s\tdeleted", name)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&rawURL, "url", "", "URL whose matching cookie should be deleted; defaults to selected page URL")
+	cmd.Flags().StringVar(&name, "name", "", "cookie name")
+	cmd.Flags().StringVar(&domain, "domain", "", "cookie domain")
+	cmd.Flags().StringVar(&path, "path", "", "cookie path")
+	return cmd
+}
+
+type storageSnapshot struct {
+	URL            string              `json:"url,omitempty"`
+	Origin         string              `json:"origin,omitempty"`
+	LocalStorage   storageAreaSnapshot `json:"local_storage"`
+	SessionStorage storageAreaSnapshot `json:"session_storage"`
+	Cookies        []map[string]any    `json:"cookies,omitempty"`
+	Quota          map[string]any      `json:"quota,omitempty"`
+}
+
+type storageAreaSnapshot struct {
+	Count   int            `json:"count"`
+	Keys    []string       `json:"keys"`
+	Entries []storageEntry `json:"entries"`
+	Error   string         `json:"error,omitempty"`
+}
+
+type storageEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	Bytes int    `json:"bytes"`
+}
+
+type webStorageBackend struct {
+	JSName string
+	Output string
+}
+
+type webStorageOperationResult struct {
+	URL      string `json:"url,omitempty"`
+	Origin   string `json:"origin,omitempty"`
+	Backend  string `json:"backend"`
+	Key      string `json:"key,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Found    bool   `json:"found,omitempty"`
+	Bytes    int    `json:"bytes,omitempty"`
+	Cleared  int    `json:"cleared,omitempty"`
+	Previous string `json:"previous,omitempty"`
+}
+
+type storageDiffReport struct {
+	LocalStorage   storageAreaDiff `json:"local_storage"`
+	SessionStorage storageAreaDiff `json:"session_storage"`
+	Cookies        storageAreaDiff `json:"cookies"`
+	Summary        map[string]int  `json:"summary"`
+}
+
+type storageAreaDiff struct {
+	Added   []storageDiffItem `json:"added"`
+	Removed []storageDiffItem `json:"removed"`
+	Changed []storageDiffItem `json:"changed"`
+}
+
+type storageDiffItem struct {
+	Key    string `json:"key"`
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+}
+
+func addStorageTargetFlags(cmd *cobra.Command, targetID, urlContains *string) {
+	cmd.Flags().StringVar(targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(urlContains, "url-contains", "", "use the first page whose URL contains this text")
+}
+
+func parseStorageInclude(value string) (map[string]bool, error) {
+	set := parseCSVSet(value)
+	if len(set) == 0 || set["all"] {
+		return defaultStorageIncludeSet(), nil
+	}
+	out := map[string]bool{}
+	for key := range set {
+		switch strings.ToLower(key) {
+		case "localstorage", "local", "local_storage":
+			out["localStorage"] = true
+		case "sessionstorage", "session", "session_storage":
+			out["sessionStorage"] = true
+		case "cookies", "cookie":
+			out["cookies"] = true
+		case "quota", "usage":
+			out["quota"] = true
+		default:
+			return nil, commandError("usage", "usage", fmt.Sprintf("unknown storage include %q", key), ExitUsage, []string{"cdp storage list --include localStorage,sessionStorage,cookies --json"})
+		}
+	}
+	return out, nil
+}
+
+func defaultStorageIncludeSet() map[string]bool {
+	return map[string]bool{"localStorage": true, "sessionStorage": true, "cookies": true, "quota": true}
+}
+
+func normalizeWebStorageBackend(value string) (webStorageBackend, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "localstorage", "local", "local_storage":
+		return webStorageBackend{JSName: "localStorage", Output: "localStorage"}, nil
+	case "sessionstorage", "session", "session_storage":
+		return webStorageBackend{JSName: "sessionStorage", Output: "sessionStorage"}, nil
+	default:
+		return webStorageBackend{}, commandError("usage", "usage", "backend must be localStorage or sessionStorage", ExitUsage, []string{"cdp storage get localStorage feature --json"})
+	}
+}
+
+func collectStorageSnapshot(ctx context.Context, session *cdp.PageSession, target cdp.TargetInfo, includeSet map[string]bool) (storageSnapshot, []map[string]string, error) {
+	collectorErrors := []map[string]string{}
+	snapshot, err := collectWebStorageSnapshot(ctx, session)
+	if err != nil {
+		return storageSnapshot{}, nil, err
+	}
+	if snapshot.URL == "" {
+		snapshot.URL = target.URL
+	}
+	if snapshot.Origin == "" {
+		snapshot.Origin = originForURL(snapshot.URL)
+	}
+	if !includeSet["localStorage"] {
+		snapshot.LocalStorage = storageAreaSnapshot{}
+	}
+	if !includeSet["sessionStorage"] {
+		snapshot.SessionStorage = storageAreaSnapshot{}
+	}
+	if includeSet["cookies"] {
+		cookies, err := getStorageCookies(ctx, session, snapshot.URL)
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("cookies", err))
+		} else {
+			snapshot.Cookies = cookies
+		}
+	}
+	if includeSet["quota"] && snapshot.Origin != "" {
+		quota, err := getStorageQuota(ctx, session, snapshot.Origin)
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("quota", err))
+		} else {
+			snapshot.Quota = quota
+		}
+	}
+	return snapshot, collectorErrors, nil
+}
+
+func collectWebStorageSnapshot(ctx context.Context, session *cdp.PageSession) (storageSnapshot, error) {
+	result, err := session.Evaluate(ctx, storageSnapshotExpression(), false)
+	if err != nil {
+		return storageSnapshot{}, storageCommandFailed("inspect storage", session.TargetID, err)
+	}
+	if result.Exception != nil {
+		return storageSnapshot{}, commandError("javascript_exception", "runtime", fmt.Sprintf("storage javascript exception: %s", result.Exception.Text), ExitCheckFailed, []string{"cdp storage list --json"})
+	}
+	var snapshot storageSnapshot
+	if err := json.Unmarshal(result.Object.Value, &snapshot); err != nil {
+		return storageSnapshot{}, commandError("invalid_storage_result", "runtime", fmt.Sprintf("decode storage result: %v", err), ExitCheckFailed, []string{"cdp storage list --json"})
+	}
+	return snapshot, nil
+}
+
+func runWebStorageOperation(ctx context.Context, session *cdp.PageSession, op string, backend webStorageBackend, key, value string) (webStorageOperationResult, error) {
+	result, err := session.Evaluate(ctx, webStorageOperationExpression(op, backend.JSName, key, value), false)
+	if err != nil {
+		return webStorageOperationResult{}, storageCommandFailed(op+" storage", session.TargetID, err)
+	}
+	if result.Exception != nil {
+		return webStorageOperationResult{}, commandError("javascript_exception", "runtime", fmt.Sprintf("storage javascript exception: %s", result.Exception.Text), ExitCheckFailed, []string{"cdp storage list --json"})
+	}
+	var opResult webStorageOperationResult
+	if err := json.Unmarshal(result.Object.Value, &opResult); err != nil {
+		return webStorageOperationResult{}, commandError("invalid_storage_result", "runtime", fmt.Sprintf("decode storage operation result: %v", err), ExitCheckFailed, []string{"cdp storage get localStorage feature --json"})
+	}
+	opResult.Backend = backend.Output
+	return opResult, nil
+}
+
+func getStorageCookies(ctx context.Context, session *cdp.PageSession, rawURL string) ([]map[string]any, error) {
+	var result struct {
+		Cookies []map[string]any `json:"cookies"`
+	}
+	params := map[string]any{}
+	if strings.TrimSpace(rawURL) != "" {
+		params["urls"] = []string{rawURL}
+	}
+	if err := execSessionJSON(ctx, session, "Network.getCookies", params, &result); err != nil {
+		return nil, err
+	}
+	if result.Cookies == nil {
+		return []map[string]any{}, nil
+	}
+	return result.Cookies, nil
+}
+
+func getStorageQuota(ctx context.Context, session *cdp.PageSession, origin string) (map[string]any, error) {
+	var quota map[string]any
+	if err := execSessionJSON(ctx, session, "Storage.getUsageAndQuota", map[string]any{"origin": origin}, &quota); err != nil {
+		return nil, err
+	}
+	return quota, nil
+}
+
+func execSessionJSON(ctx context.Context, session *cdp.PageSession, method string, params any, out any) error {
+	b, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	raw, err := session.Exec(ctx, method, b)
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("decode %s response: %w", method, err)
+	}
+	return nil
+}
+
+func storageCommandURL(ctx context.Context, session *cdp.PageSession, target cdp.TargetInfo, rawURL string) (string, error) {
+	if strings.TrimSpace(rawURL) != "" {
+		return rawURL, nil
+	}
+	info, err := collectStoragePageInfo(ctx, session)
+	if err == nil && info.URL != "" {
+		return info.URL, nil
+	}
+	if strings.TrimSpace(target.URL) != "" {
+		return target.URL, nil
+	}
+	return "", commandError("usage", "usage", "--url is required when the selected page URL is unavailable", ExitUsage, []string{"cdp storage cookies list --url https://example.com --json"})
+}
+
+func collectStoragePageInfo(ctx context.Context, session *cdp.PageSession) (storageSnapshot, error) {
+	result, err := session.Evaluate(ctx, storagePageInfoExpression(), false)
+	if err != nil {
+		return storageSnapshot{}, err
+	}
+	var info storageSnapshot
+	if result.Exception != nil {
+		return storageSnapshot{}, fmt.Errorf("javascript exception: %s", result.Exception.Text)
+	}
+	if err := json.Unmarshal(result.Object.Value, &info); err != nil {
+		return storageSnapshot{}, err
+	}
+	return info, nil
+}
+
+func storageSnapshotExpression() string {
+	return `(() => {
+  "__cdp_cli_storage_snapshot__";
+  const bytes = (value) => new TextEncoder().encode(String(value ?? "")).length;
+  const readArea = (name) => {
+    try {
+      const store = window[name];
+      const entries = [];
+      for (let i = 0; i < store.length; i++) {
+        const key = store.key(i);
+        const value = store.getItem(key);
+        entries.push({key, value, bytes: bytes(value)});
+      }
+      entries.sort((a, b) => a.key.localeCompare(b.key));
+      return {count: entries.length, keys: entries.map((entry) => entry.key), entries};
+    } catch (error) {
+      return {count: 0, keys: [], entries: [], error: String(error && error.message || error)};
+    }
+  };
+  return {
+    url: location.href,
+    origin: location.origin,
+    local_storage: readArea("localStorage"),
+    session_storage: readArea("sessionStorage")
+  };
+})()`
+}
+
+func storagePageInfoExpression() string {
+	return `(() => {
+  "__cdp_cli_storage_page_info__";
+  return {url: location.href, origin: location.origin};
+})()`
+}
+
+func webStorageOperationExpression(op, area, key, value string) string {
+	return fmt.Sprintf(`(() => {
+  "__cdp_cli_storage_%s__";
+  const store = window[%s];
+  const key = %s;
+  const value = %s;
+  const bytes = (input) => new TextEncoder().encode(String(input ?? "")).length;
+  if (%q === "get") {
+    const current = store.getItem(key);
+    return {url: location.href, origin: location.origin, backend: %s, key, found: current !== null, value: current ?? "", bytes: current === null ? 0 : bytes(current)};
+  }
+  if (%q === "set") {
+    const previous = store.getItem(key);
+    store.setItem(key, value);
+    const current = store.getItem(key);
+    return {url: location.href, origin: location.origin, backend: %s, key, found: true, value: current ?? "", previous: previous ?? "", bytes: bytes(current)};
+  }
+  if (%q === "delete") {
+    const previous = store.getItem(key);
+    store.removeItem(key);
+    return {url: location.href, origin: location.origin, backend: %s, key, found: previous !== null, previous: previous ?? ""};
+  }
+  if (%q === "clear") {
+    const cleared = store.length;
+    store.clear();
+    return {url: location.href, origin: location.origin, backend: %s, cleared};
+  }
+  throw new Error("unsupported storage operation");
+})()`, op, jsStringLiteral(area), jsStringLiteral(key), jsStringLiteral(value), op, jsStringLiteral(area), op, jsStringLiteral(area), op, jsStringLiteral(area), op, jsStringLiteral(area))
+}
+
+func jsStringLiteral(value string) string {
+	b, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
+}
+
+func readStorageValueInput(input string) (string, string, error) {
+	if strings.HasPrefix(input, "@") {
+		path := strings.TrimPrefix(input, "@")
+		if strings.TrimSpace(path) == "" {
+			return "", "", commandError("usage", "usage", "@file value input requires a path", ExitUsage, []string{"cdp storage set localStorage key @tmp/value.json --json"})
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", "", commandError("usage", "usage", fmt.Sprintf("read value file: %v", err), ExitUsage, []string{"cdp storage set localStorage key @tmp/value.json --json"})
+		}
+		return string(b), "file", nil
+	}
+	return input, "inline", nil
+}
+
+func originForURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func applyStorageRedaction(snapshot *storageSnapshot, redact string) {
+	if redact == "" || redact == "none" {
+		return
+	}
+	redactStorageArea(&snapshot.LocalStorage, redact)
+	redactStorageArea(&snapshot.SessionStorage, redact)
+	redactStorageCookies(snapshot.Cookies, redact)
+}
+
+func redactStorageArea(area *storageAreaSnapshot, redact string) {
+	for i := range area.Entries {
+		if sensitiveName(area.Entries[i].Key) {
+			area.Entries[i].Value = "<redacted>"
+			continue
+		}
+		area.Entries[i].Value = redactBodyText(area.Entries[i].Value, redact)
+	}
+}
+
+func redactStorageCookies(cookies []map[string]any, redact string) {
+	for _, cookie := range cookies {
+		name, _ := cookie["name"].(string)
+		value, _ := cookie["value"].(string)
+		if sensitiveName(name) || sensitiveHeaderValue(value) {
+			cookie["value"] = "<redacted>"
+		} else if value != "" {
+			cookie["value"] = redactBodyText(value, redact)
+		}
+	}
+}
+
+func cookieNames(cookies []map[string]any) []string {
+	names := make([]string, 0, len(cookies))
+	for _, cookie := range cookies {
+		if name, ok := cookie["name"].(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func readStorageSnapshotFile(path string) (storageSnapshot, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return storageSnapshot{}, err
+	}
+	var envelope struct {
+		Snapshot storageSnapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(b, &envelope); err == nil && storageSnapshotHasData(envelope.Snapshot) {
+		return envelope.Snapshot, nil
+	}
+	var snapshot storageSnapshot
+	if err := json.Unmarshal(b, &snapshot); err != nil {
+		return storageSnapshot{}, err
+	}
+	if !storageSnapshotHasData(snapshot) {
+		return storageSnapshot{}, fmt.Errorf("file does not contain a storage snapshot")
+	}
+	return snapshot, nil
+}
+
+func storageSnapshotHasData(snapshot storageSnapshot) bool {
+	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0
+}
+
+func diffStorageSnapshots(left, right storageSnapshot) storageDiffReport {
+	local := diffStringMaps(storageEntryValues(left.LocalStorage), storageEntryValues(right.LocalStorage))
+	session := diffStringMaps(storageEntryValues(left.SessionStorage), storageEntryValues(right.SessionStorage))
+	cookies := diffStringMaps(cookieValues(left.Cookies), cookieValues(right.Cookies))
+	summary := map[string]int{
+		"added":   len(local.Added) + len(session.Added) + len(cookies.Added),
+		"removed": len(local.Removed) + len(session.Removed) + len(cookies.Removed),
+		"changed": len(local.Changed) + len(session.Changed) + len(cookies.Changed),
+	}
+	return storageDiffReport{LocalStorage: local, SessionStorage: session, Cookies: cookies, Summary: summary}
+}
+
+func storageEntryValues(area storageAreaSnapshot) map[string]string {
+	values := map[string]string{}
+	for _, entry := range area.Entries {
+		values[entry.Key] = entry.Value
+	}
+	return values
+}
+
+func cookieValues(cookies []map[string]any) map[string]string {
+	values := map[string]string{}
+	for _, cookie := range cookies {
+		key := cookieIdentity(cookie)
+		if key == "" {
+			continue
+		}
+		b, _ := json.Marshal(cookie)
+		values[key] = string(b)
+	}
+	return values
+}
+
+func cookieIdentity(cookie map[string]any) string {
+	name, _ := cookie["name"].(string)
+	domain, _ := cookie["domain"].(string)
+	path, _ := cookie["path"].(string)
+	if name == "" {
+		return ""
+	}
+	return name + "|" + domain + "|" + path
+}
+
+func diffStringMaps(left, right map[string]string) storageAreaDiff {
+	diff := storageAreaDiff{Added: []storageDiffItem{}, Removed: []storageDiffItem{}, Changed: []storageDiffItem{}}
+	keys := map[string]bool{}
+	for key := range left {
+		keys[key] = true
+	}
+	for key := range right {
+		keys[key] = true
+	}
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	for _, key := range ordered {
+		leftValue, leftOK := left[key]
+		rightValue, rightOK := right[key]
+		switch {
+		case !leftOK && rightOK:
+			diff.Added = append(diff.Added, storageDiffItem{Key: key, After: rightValue})
+		case leftOK && !rightOK:
+			diff.Removed = append(diff.Removed, storageDiffItem{Key: key, Before: leftValue})
+		case leftOK && rightOK && leftValue != rightValue:
+			diff.Changed = append(diff.Changed, storageDiffItem{Key: key, Before: leftValue, After: rightValue})
+		}
+	}
+	return diff
+}
+
+func storageDiffHasChanges(diff storageDiffReport) bool {
+	return diff.Summary["added"] > 0 || diff.Summary["removed"] > 0 || diff.Summary["changed"] > 0
+}
+
+func storageCommandFailed(action, targetID string, err error) error {
+	return commandError(
+		"connection_failed",
+		"connection",
+		fmt.Sprintf("%s target %s: %v", action, targetID, err),
+		ExitConnection,
+		[]string{"cdp pages --json", "cdp doctor --json"},
+	)
+}
+
 type consoleMessage struct {
 	ID               int                 `json:"id"`
 	Source           string              `json:"source"`
@@ -6185,6 +7146,46 @@ func commandExamples(path string) []string {
 		"cdp network capture": {
 			"cdp network capture --reload --wait 20s --out tmp/network.local.json --json",
 			"cdp network capture --url-contains localhost --redact safe --out tmp/network-shareable.json --json",
+		},
+		"cdp storage": {
+			"cdp storage list --url-contains localhost --json",
+			"cdp storage snapshot --out tmp/storage.local.json --json",
+		},
+		"cdp storage list": {
+			"cdp storage list --url-contains localhost --json",
+			"cdp storage list --include localStorage,sessionStorage,cookies --json",
+		},
+		"cdp storage get": {
+			"cdp storage get localStorage feature_flag --url-contains localhost --json",
+		},
+		"cdp storage set": {
+			"cdp storage set localStorage feature_flag enabled --url-contains localhost --json",
+			"cdp storage set sessionStorage seed @tmp/seed.json --json",
+		},
+		"cdp storage delete": {
+			"cdp storage delete localStorage feature_flag --url-contains localhost --json",
+		},
+		"cdp storage clear": {
+			"cdp storage clear sessionStorage --url-contains localhost --json",
+		},
+		"cdp storage snapshot": {
+			"cdp storage snapshot --out tmp/app-storage.local.json --json",
+			"cdp storage snapshot --redact safe --out tmp/app-storage-shareable.json --json",
+		},
+		"cdp storage diff": {
+			"cdp storage diff --left tmp/before.local.json --right tmp/after.local.json --json",
+		},
+		"cdp storage cookies": {
+			"cdp storage cookies list --url https://example.com --json",
+		},
+		"cdp storage cookies list": {
+			"cdp storage cookies list --url-contains localhost --json",
+		},
+		"cdp storage cookies set": {
+			"cdp storage cookies set --url https://example.com --name feature_flag --value enabled --json",
+		},
+		"cdp storage cookies delete": {
+			"cdp storage cookies delete --url https://example.com --name feature_flag --json",
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",
