@@ -28,8 +28,17 @@ trap 'rm -rf "$state_dir"' EXIT
 if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true" ]]; then
   "$binary" connection add default --auto-connect --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
   "$binary" connection current --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
-  "$binary" doctor --json | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .connection_mode == "auto_connect" and (.status == "pass" or .status == "pending"))' >/dev/null
+  "$binary" doctor --json | jq -e '.checks[] | select(.name == "daemon" and (.state == "connected" or .state == "permission_pending"))' >/dev/null
   "$binary" daemon status --json | jq -e '.daemon.connection_mode == "auto_connect" and (.daemon.state == "connected" or .daemon.state == "permission_pending")' >/dev/null
+  set +e
+  live_pages_output="$("$binary" --timeout 5s pages --json 2>/tmp/cdp-cli-live-pages.err)"
+  live_pages_code=$?
+  set -e
+  if [[ "$live_pages_code" -eq 0 ]]; then
+    printf '%s\n' "$live_pages_output" | jq -e '.ok == true and (.pages | type == "array")' >/dev/null
+  else
+    printf '%s\n' "$live_pages_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+  fi
 elif [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   "$binary" doctor --browser-url "$CDP_E2E_BROWSER_URL" --json \
     | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .connection_mode == "browser_url" and (.status == "pass" or .status == "warn"))' >/dev/null
@@ -38,13 +47,13 @@ fi
 "$binary" daemon status --state-dir "$state_dir" --json | jq -e '.ok == true and .daemon.state' >/dev/null
 
 set +e
-pages_output="$("$binary" pages --json 2>/tmp/cdp-cli-pages.err)"
-pages_code=$?
+targets_output="$("$binary" targets --json 2>/tmp/cdp-cli-targets.err)"
+targets_code=$?
 set -e
 
-if [[ "$pages_code" -ne 8 ]]; then
-  echo "pages exit code = $pages_code, want 8 while pages is planned" >&2
+if [[ "$targets_code" -ne 8 ]]; then
+  echo "targets exit code = $targets_code, want 8 while targets is planned" >&2
   exit 1
 fi
 
-printf '%s\n' "$pages_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null
+printf '%s\n' "$targets_output" | jq -e '.ok == false and .code == "not_implemented"' >/dev/null

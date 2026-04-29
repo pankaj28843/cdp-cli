@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/cli"
+	"nhooyr.io/websocket"
+	"nhooyr.io/websocket/wsjson"
 )
 
 func TestVersionJSON(t *testing.T) {
@@ -51,7 +53,7 @@ func TestDescribeJSON(t *testing.T) {
 func TestPlannedCommandJSONError(t *testing.T) {
 	var out, errOut bytes.Buffer
 
-	code := cli.Execute(context.Background(), []string{"pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"targets", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitNotImplemented {
 		t.Fatalf("Execute exit code = %d, want %d", code, cli.ExitNotImplemented)
 	}
@@ -66,6 +68,37 @@ func TestPlannedCommandJSONError(t *testing.T) {
 	}
 	if got.OK || got.Code != "not_implemented" || got.ErrClass != "not_implemented" {
 		t.Fatalf("error envelope = %+v, want not_implemented", got)
+	}
+}
+
+func TestPagesJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+		{"targetId": "worker-1", "type": "service_worker", "title": "Worker", "url": "https://example.test/sw.js", "attached": true},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"pages", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Pages []struct {
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Title    string `json:"title"`
+			URL      string `json:"url"`
+			Attached bool   `json:"attached"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" || got.Pages[0].Type != "page" {
+		t.Fatalf("pages output = %+v, want one page target", got)
 	}
 }
 
@@ -166,6 +199,47 @@ func TestDoctorUsesSelectedConnection(t *testing.T) {
 		}
 	}
 	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
+}
+
+func TestDoctorReportsDaemonConnectedWhenBrowserIsAvailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"Browser":              "Chrome/144.0",
+			"Protocol-Version":     "1.3",
+			"webSocketDebuggerUrl": "ws://example.test/devtools/browser/test",
+		})
+	}))
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			State  string `json:"state"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	for _, check := range got.Checks {
+		if check.Name == "daemon" {
+			if check.Status != "pass" || check.State != "connected" {
+				t.Fatalf("daemon check = %+v, want pass connected", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor checks = %+v, want daemon check", got.Checks)
 }
 
 func TestExplainErrorJSON(t *testing.T) {
@@ -330,4 +404,53 @@ func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
 		}
 	}
 	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
+}
+
+func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	var server *httptest.Server
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		if server == nil {
+			http.Error(w, "test server was not initialized", http.StatusInternalServerError)
+			return
+		}
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/test"
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"Browser":              "Chrome/144.0",
+			"Protocol-Version":     "1.3",
+			"webSocketDebuggerUrl": wsURL,
+		})
+	})
+	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+
+		for {
+			var req struct {
+				ID     int64  `json:"id"`
+				Method string `json:"method"`
+			}
+			if err := wsjson.Read(r.Context(), conn, &req); err != nil {
+				return
+			}
+			resp := map[string]any{
+				"id": req.ID,
+			}
+			if req.Method == "Target.getTargets" {
+				resp["result"] = map[string]any{"targetInfos": targets}
+			} else {
+				resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
+			}
+			if err := wsjson.Write(r.Context(), conn, resp); err != nil {
+				return
+			}
+		}
+	})
+	server = httptest.NewServer(mux)
+	return server
 }

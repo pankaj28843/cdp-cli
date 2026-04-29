@@ -118,15 +118,31 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 }
 
 func (a *app) browserProbe(ctx context.Context) (browser.ProbeResult, error) {
-	if err := a.applySelectedConnection(ctx); err != nil {
+	opts, err := a.browserOptions(ctx)
+	if err != nil {
 		return browser.ProbeResult{}, err
 	}
-	return browser.Probe(ctx, browser.ProbeOptions{
+	return browser.Probe(ctx, opts)
+}
+
+func (a *app) browserEndpoint(ctx context.Context) (string, error) {
+	opts, err := a.browserOptions(ctx)
+	if err != nil {
+		return "", err
+	}
+	return browser.ResolveEndpoint(ctx, opts)
+}
+
+func (a *app) browserOptions(ctx context.Context) (browser.ProbeOptions, error) {
+	if err := a.applySelectedConnection(ctx); err != nil {
+		return browser.ProbeOptions{}, err
+	}
+	return browser.ProbeOptions{
 		BrowserURL:  a.opts.browserURL,
 		AutoConnect: a.opts.autoConnect,
 		Channel:     a.opts.channel,
 		UserDataDir: a.opts.userDataDir,
-	})
+	}, nil
 }
 
 func (a *app) connectionMode() string {
@@ -176,11 +192,23 @@ func envDefault(key, fallback string) string {
 }
 
 func (a *app) commandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
+	return a.commandContextWithDefault(cmd, 0)
+}
+
+func (a *app) browserCommandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
+	return a.commandContextWithDefault(cmd, 10*time.Second)
+}
+
+func (a *app) commandContextWithDefault(cmd *cobra.Command, fallback time.Duration) (context.Context, context.CancelFunc) {
 	ctx := cmd.Context()
-	if a.opts.timeout <= 0 {
+	timeout := a.opts.timeout
+	if timeout <= 0 {
+		timeout = fallback
+	}
+	if timeout <= 0 {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, a.opts.timeout)
+	return context.WithTimeout(ctx, timeout)
 }
 
 func (a *app) render(ctx context.Context, human string, data any) error {

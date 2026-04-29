@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -79,15 +81,10 @@ func (a *app) newDoctorCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Run local readiness checks",
-		Long:  "Run readiness checks for the CLI. Browser and daemon checks will be added with the attach daemon.",
+		Long:  "Run readiness checks for the CLI, selected browser connection, and daemon path.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
+			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-
-			checks := []map[string]any{
-				{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
-				{"name": "daemon", "status": "pending", "message": "attach daemon is not implemented yet"},
-			}
 
 			probe, err := a.browserProbe(ctx)
 			if err != nil {
@@ -99,28 +96,23 @@ func (a *app) newDoctorCommand() *cobra.Command {
 					[]string{"cdp doctor --browser-url <browser-url> --json"},
 				)
 			}
-			status := "pending"
-			switch probe.State {
-			case "cdp_available":
-				status = "pass"
-			case "not_configured":
-				status = "pending"
-			case "permission_pending":
-				status = "pending"
-			case "listening_not_cdp", "missing_browser_websocket", "invalid_response":
-				status = "warn"
-				if a.opts.autoConnect && probe.State == "listening_not_cdp" {
-					status = "pending"
-					probe.Message = "auto-connect endpoint is listening, but a CDP session is not established yet"
-				}
-			case "stale_state":
-				status = "warn"
-			default:
-				status = "fail"
+			browserStatus := browserDoctorStatus(a.opts.autoConnect, &probe)
+			daemonStatus := a.daemonStatus(probe)
+			daemonCheckStatus := daemonDoctorStatus(daemonStatus.State)
+			checks := []map[string]any{
+				{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
+				{
+					"name":            "daemon",
+					"status":          daemonCheckStatus,
+					"state":           daemonStatus.State,
+					"message":         daemonStatus.Message,
+					"connection_mode": daemonStatus.ConnectionMode,
+					"details":         daemonStatus,
+				},
 			}
 			checks = append(checks, map[string]any{
 				"name":                 "browser_debug_endpoint",
-				"status":               status,
+				"status":               browserStatus,
 				"message":              probe.Message,
 				"connection_mode":      a.connectionMode(),
 				"requires_user_allow":  a.opts.autoConnect,
@@ -130,11 +122,44 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			})
 
 			data := map[string]any{
-				"ok":     status != "fail",
+				"ok":     browserStatus != "fail" && daemonCheckStatus != "fail",
 				"checks": checks,
 			}
-			return a.render(ctx, "cli: pass\ndaemon: pending\nbrowser: "+status, data)
+			human := fmt.Sprintf("cli: pass\ndaemon: %s\nbrowser: %s", daemonStatus.State, browserStatus)
+			return a.render(ctx, human, data)
 		},
+	}
+}
+
+func browserDoctorStatus(autoConnect bool, probe *browser.ProbeResult) string {
+	switch probe.State {
+	case "cdp_available":
+		return "pass"
+	case "not_configured", "permission_pending":
+		return "pending"
+	case "listening_not_cdp", "missing_browser_websocket", "invalid_response":
+		if autoConnect && probe.State == "listening_not_cdp" {
+			probe.Message = "auto-connect endpoint is listening, but a CDP session is not established yet"
+			return "pending"
+		}
+		return "warn"
+	case "stale_state":
+		return "warn"
+	default:
+		return "fail"
+	}
+}
+
+func daemonDoctorStatus(state string) string {
+	switch state {
+	case "connected":
+		return "pass"
+	case "not_running", "permission_pending":
+		return "pending"
+	case "chrome_unavailable", "disconnected":
+		return "warn"
+	default:
+		return "pending"
 	}
 }
 
@@ -260,7 +285,7 @@ func (a *app) newDaemonStatusCommand() *cobra.Command {
 		Use:   "status",
 		Short: "Show attach daemon status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
+			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			probe, err := a.browserProbe(ctx)
@@ -478,7 +503,58 @@ func (a *app) newTargetsCommand() *cobra.Command {
 }
 
 func (a *app) newPagesCommand() *cobra.Command {
-	return planned("pages", "List open pages and tabs")
+	return &cobra.Command{
+		Use:   "pages",
+		Short: "List open pages and tabs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			endpoint, err := a.browserEndpoint(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
+				)
+			}
+			targets, err := cdp.ListTargets(ctx, endpoint)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("list pages: %v", err),
+					ExitConnection,
+					[]string{"cdp doctor --json", "cdp daemon status --json"},
+				)
+			}
+			pages := pageRows(targets)
+			var lines []string
+			for _, page := range pages {
+				lines = append(lines, fmt.Sprintf("%s\t%s", page["id"], page["title"]))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "pages": pages})
+		},
+	}
+}
+
+func pageRows(targets []cdp.TargetInfo) []map[string]any {
+	pages := make([]map[string]any, 0, len(targets))
+	for _, target := range targets {
+		if target.Type != "page" {
+			continue
+		}
+		pages = append(pages, map[string]any{
+			"id":       target.TargetID,
+			"type":     target.Type,
+			"title":    target.Title,
+			"url":      target.URL,
+			"attached": target.Attached,
+		})
+	}
+	return pages
 }
 
 func (a *app) newOpenCommand() *cobra.Command {
@@ -604,6 +680,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp daemon status": {
 			"cdp daemon status --json",
+		},
+		"cdp pages": {
+			"cdp pages --json",
+			"cdp pages --browser-url <browser-url> --json",
 		},
 		"cdp protocol search": {
 			"cdp protocol search screenshot --json",

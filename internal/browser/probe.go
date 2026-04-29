@@ -49,6 +49,31 @@ func Probe(ctx context.Context, opts ProbeOptions) (ProbeResult, error) {
 	return probeBrowserURL(ctx, opts.BrowserURL)
 }
 
+func ResolveEndpoint(ctx context.Context, opts ProbeOptions) (string, error) {
+	if opts.AutoConnect {
+		channel := opts.Channel
+		if channel == "" {
+			channel = "stable"
+		}
+		port, path, err := activePort(opts.UserDataDir, channel)
+		if err != nil {
+			return "", fmt.Errorf("resolve auto-connect endpoint: %w", err)
+		}
+		return fmt.Sprintf("ws://%s%s", net.JoinHostPort("127.0.0.1", port), path), nil
+	}
+	if strings.TrimSpace(opts.BrowserURL) == "" {
+		return "", fmt.Errorf("browser endpoint is not configured")
+	}
+	version, err := fetchVersion(ctx, opts.BrowserURL)
+	if err != nil {
+		return "", err
+	}
+	if version.WebSocketDebuggerURL == "" {
+		return "", fmt.Errorf("browser endpoint responded without a browser WebSocket URL")
+	}
+	return version.WebSocketDebuggerURL, nil
+}
+
 func probeBrowserURL(ctx context.Context, rawURL string) (ProbeResult, error) {
 	if strings.TrimSpace(rawURL) == "" {
 		return ProbeResult{
@@ -137,6 +162,30 @@ func probeBrowserURL(ctx context.Context, rawURL string) (ProbeResult, error) {
 		HTTPStatus:           resp.StatusCode,
 		WebSocketDebuggerURL: true,
 	}, nil
+}
+
+func fetchVersion(ctx context.Context, rawURL string) (versionResponse, error) {
+	versionURL, err := versionEndpoint(rawURL)
+	if err != nil {
+		return versionResponse{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
+	if err != nil {
+		return versionResponse{}, fmt.Errorf("create browser version request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return versionResponse{}, fmt.Errorf("fetch browser version: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return versionResponse{}, fmt.Errorf("fetch browser version: http status %d", resp.StatusCode)
+	}
+	var version versionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+		return versionResponse{}, fmt.Errorf("decode browser version: %w", err)
+	}
+	return version, nil
 }
 
 func probeAutoConnect(ctx context.Context, opts ProbeOptions) (ProbeResult, error) {
@@ -266,7 +315,7 @@ func defaultUserDataDir(channel string) (string, error) {
 
 func websocketProbe(ctx context.Context, port, path string) (int, error) {
 	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort("localhost", port))
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", port))
 	if err != nil {
 		return 0, err
 	}

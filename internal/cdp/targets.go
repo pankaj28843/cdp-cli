@@ -1,0 +1,31 @@
+package cdp
+
+import (
+	"context"
+
+	"nhooyr.io/websocket"
+)
+
+type TargetInfo struct {
+	TargetID string `json:"targetId"`
+	Type     string `json:"type"`
+	Title    string `json:"title,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Attached bool   `json:"attached"`
+}
+
+func ListTargets(ctx context.Context, endpoint string) ([]TargetInfo, error) {
+	client, err := Dial(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close(websocket.StatusNormalClosure, "done")
+
+	var result struct {
+		TargetInfos []TargetInfo `json:"targetInfos"`
+	}
+	if err := client.Call(ctx, "Target.getTargets", map[string]any{}, &result); err != nil {
+		return nil, err
+	}
+	return result.TargetInfos, nil
+}
