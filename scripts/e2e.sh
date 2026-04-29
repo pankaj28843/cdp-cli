@@ -26,6 +26,8 @@ trap 'rm -rf "$state_dir"' EXIT
 
 if [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true" ]]; then
+    "$binary" connection add default --auto-connect --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
+    "$binary" connection current --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
     "$binary" doctor --auto-connect --browser-url "$CDP_E2E_BROWSER_URL" --json \
       | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .connection_mode == "auto_connect" and (.status == "pass" or .status == "pending"))' >/dev/null
   else
