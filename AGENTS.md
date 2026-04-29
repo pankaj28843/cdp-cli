@@ -38,6 +38,8 @@ make e2e-demo-installed
 - Use `context.Context` as the first parameter for cancelable work.
 - Return wrapped errors; log or return, never both.
 - Large browser artifacts should be written to files and referenced by path, not embedded in JSON.
+- Browser-facing commands must run through the local cdp daemon runtime. The daemon is the product boundary that holds the user-approved Chrome/default-profile session after one "Allow" click; do not add direct per-command browser WebSocket dialing as a fallback.
+- Disk-backed connection memory may select or start a daemon-backed connection, but it must not make browser commands bypass the daemon.
 - Keep tab discovery lazy and scoped. Listing pages must not attach to every page or wake discarded/background tabs.
 - Prefer raw CDP escape hatches plus focused high-level workflows over broad shallow wrappers.
 - New command JSON needs a schema entry, help examples, and E2E coverage in `scripts/e2e.sh`.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -762,6 +763,60 @@ func TestWorkflowNetworkFailuresJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowPageLoadJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "page-load.local.json")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "page-load", "https://example.test/app", "--wait", "250ms", "--out", outPath, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow page-load exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Requests []struct {
+			ID     string `json:"id"`
+			Status int    `json:"status"`
+		} `json:"requests"`
+		Messages []struct {
+			Text string `json:"text"`
+		} `json:"messages"`
+		Workflow struct {
+			Name         string `json:"name"`
+			Trigger      string `json:"trigger"`
+			RequestedURL string `json:"requested_url"`
+			Partial      bool   `json:"partial"`
+		} `json:"workflow"`
+		Storage struct {
+			LocalStorageKeys []string `json:"local_storage_keys"`
+		} `json:"storage"`
+		Performance struct {
+			Count int `json:"count"`
+		} `json:"performance"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow page-load output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "page-load" || got.Workflow.Trigger != "navigate" || got.Workflow.RequestedURL != "https://example.test/app" || got.Workflow.Partial {
+		t.Fatalf("workflow page-load metadata = %+v, want complete navigate workflow", got.Workflow)
+	}
+	if len(got.Requests) != 2 || got.Requests[0].Status != 200 || len(got.Messages) != 2 {
+		t.Fatalf("workflow page-load evidence requests=%+v messages=%+v, want network and console evidence", got.Requests, got.Messages)
+	}
+	if len(got.Storage.LocalStorageKeys) != 1 || got.Storage.LocalStorageKeys[0] != "feature" || got.Performance.Count != 2 || got.Artifact.Path != outPath {
+		t.Fatalf("workflow page-load storage/performance/artifact = storage=%+v performance=%+v artifact=%+v", got.Storage, got.Performance, got.Artifact)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("page-load artifact was not written: %v", err)
+	}
+}
+
 func TestProtocolMetadataJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -1072,6 +1127,72 @@ func TestEvalJSON(t *testing.T) {
 	}
 	if !got.OK || got.Target.ID != "page-1" || got.Result.Type != "string" || got.Result.Value != "Example App" {
 		t.Fatalf("eval output = %+v, want document title result", got)
+	}
+}
+
+func TestEvalExactTargetIDSkipsTargetListing(t *testing.T) {
+	var getTargetsCalled atomic.Bool
+	mux := http.NewServeMux()
+	var server *httptest.Server
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/test"
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"Browser":              "Chrome/144.0",
+			"Protocol-Version":     "1.3",
+			"webSocketDebuggerUrl": wsURL,
+		})
+	})
+	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		for {
+			var req struct {
+				ID        int64           `json:"id"`
+				SessionID string          `json:"sessionId"`
+				Method    string          `json:"method"`
+				Params    json.RawMessage `json:"params"`
+			}
+			if err := wsjson.Read(r.Context(), conn, &req); err != nil {
+				return
+			}
+			resp := map[string]any{"id": req.ID}
+			if req.SessionID != "" {
+				resp["sessionId"] = req.SessionID
+			}
+			switch req.Method {
+			case "Target.getTargets":
+				getTargetsCalled.Store(true)
+				resp["error"] = map[string]any{"code": -32000, "message": "target list should not be requested"}
+			case "Target.getTargetInfo":
+				resp["result"] = map[string]any{"targetInfo": map[string]any{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app"}}
+			case "Target.attachToTarget":
+				resp["result"] = map[string]any{"sessionId": "session-1"}
+			case "Target.detachFromTarget":
+				resp["result"] = map[string]any{}
+			case "Runtime.evaluate":
+				resp["result"] = map[string]any{"result": map[string]any{"type": "string", "value": "Example App"}}
+			default:
+				resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
+			}
+			if err := wsjson.Write(r.Context(), conn, resp); err != nil {
+				return
+			}
+		}
+	})
+	server = httptest.NewServer(mux)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--target", "page-1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("eval exact target exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	if getTargetsCalled.Load() {
+		t.Fatalf("eval exact target called Target.getTargets; want Target.getTargetInfo direct attach")
 	}
 }
 
@@ -2341,6 +2462,23 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			}
 			if req.Method == "Target.getTargets" {
 				resp["result"] = map[string]any{"targetInfos": targets}
+			} else if req.Method == "Target.getTargetInfo" {
+				var params struct {
+					TargetID string `json:"targetId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				var found map[string]any
+				for _, target := range targets {
+					if target["targetId"] == params.TargetID {
+						found = target
+						break
+					}
+				}
+				if found == nil {
+					resp["error"] = map[string]any{"code": -32000, "message": "target not found"}
+				} else {
+					resp["result"] = map[string]any{"targetInfo": found}
+				}
 			} else if req.Method == "Target.createTarget" {
 				resp["result"] = map[string]any{"targetId": "created-page"}
 			} else if req.Method == "Target.attachToTarget" {
@@ -2353,6 +2491,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{"success": true}
 			} else if req.Method == "Page.navigate" {
 				resp["result"] = map[string]any{"frameId": "frame-1"}
+			} else if req.Method == "Page.enable" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.reload" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.getNavigationHistory" {
@@ -2435,6 +2575,15 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						},
 					},
 				})
+			} else if req.Method == "Performance.enable" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Performance.getMetrics" {
+				resp["result"] = map[string]any{
+					"metrics": []map[string]any{
+						{"name": "Timestamp", "value": 123.5},
+						{"name": "DomContentLoaded", "value": 124.5},
+					},
+				}
 			} else if req.Method == "Runtime.evaluate" {
 				resp["result"] = fakeRuntimeEvaluateResult(req.Params)
 			} else if req.Method == "Page.captureScreenshot" {
@@ -2629,6 +2778,20 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 						"rank_selector":         ".rank",
 						"discussion_signal":     "score, author, age, and comment links live in the metadata row after each story row",
 					},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_page_load_storage__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":                  "https://example.test/app",
+					"origin":               "https://example.test",
+					"cookie_keys":          []string{"session"},
+					"local_storage_keys":   []string{"feature"},
+					"session_storage_keys": []string{"nonce"},
 				},
 			},
 		}

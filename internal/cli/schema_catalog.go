@@ -229,6 +229,20 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, truncation, and suggested next commands."},
 			},
 		},
+		"workflow-page-load": {
+			Name:        "workflow-page-load",
+			Description: "Page-load evidence bundle with console, network, storage-key, performance, and navigation signals.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the workflow completed, even if individual collectors are partial."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected or created page target metadata."},
+				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Network requests observed after collectors were attached."},
+				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console and log messages observed after collectors were attached."},
+				{Name: "storage", Type: "storage_keys", Required: false, Description: "Cookie, localStorage, and sessionStorage key names without values."},
+				{Name: "performance", Type: "performance_metrics", Required: false, Description: "Performance.getMetrics output after Performance.enable."},
+				{Name: "navigation", Type: "navigation_history", Required: false, Description: "Page navigation history after the load window."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Trigger, requested URL, wait, truncation, artifact, and partial collector metadata."},
+			},
+		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
 			Description: "Summarized CDP protocol metadata.",

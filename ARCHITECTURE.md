@@ -12,6 +12,9 @@ architecture is intentionally small: keep browser protocol mechanics in
 - Browser access is explicit. Default-profile auto-connect requires user
   approval and the CLI must not persist cookies, headers, screenshots, traces,
   page text, or private profile data.
+- Browser commands use the daemon as their only CDP entry point. The daemon owns
+  the approved browser WebSocket and local RPC socket; short CLI invocations
+  route through that socket instead of dialing Chrome directly.
 - Page listing stays lazy. Use browser target metadata for discovery; attach to
   a page only when a page-scoped command actually needs it.
 - Heavy outputs are artifacts. Screenshots, traces, heap snapshots, HAR files,

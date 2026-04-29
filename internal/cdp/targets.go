@@ -29,3 +29,13 @@ func ListTargetsWithClient(ctx context.Context, client CommandClient) ([]TargetI
 	}
 	return result.TargetInfos, nil
 }
+
+func TargetInfoWithClient(ctx context.Context, client CommandClient, targetID string) (TargetInfo, error) {
+	var result struct {
+		TargetInfo TargetInfo `json:"targetInfo"`
+	}
+	if err := client.Call(ctx, "Target.getTargetInfo", map[string]any{"targetId": targetID}, &result); err != nil {
+		return TargetInfo{}, err
+	}
+	return result.TargetInfo, nil
+}

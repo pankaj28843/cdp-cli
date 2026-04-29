@@ -57,3 +57,65 @@ func TestListTargets(t *testing.T) {
 		t.Fatalf("ListTargets() = %+v, want one attached page", got)
 	}
 }
+
+func TestTargetInfoWithClient(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+
+		var req struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				TargetID string `json:"targetId"`
+			} `json:"params"`
+		}
+		if err := wsjson.Read(r.Context(), conn, &req); err != nil {
+			t.Errorf("read CDP request: %v", err)
+			return
+		}
+		if req.Method != "Target.getTargetInfo" {
+			t.Errorf("method = %q, want Target.getTargetInfo", req.Method)
+			return
+		}
+		if req.Params.TargetID != "page-1" {
+			t.Errorf("targetId = %q, want page-1", req.Params.TargetID)
+			return
+		}
+		resp := map[string]any{
+			"id": req.ID,
+			"result": map[string]any{
+				"targetInfo": map[string]any{
+					"targetId": "page-1",
+					"type":     "page",
+					"title":    "Example App",
+					"url":      "https://example.test/app",
+				},
+			},
+		}
+		if err := wsjson.Write(r.Context(), conn, resp); err != nil {
+			t.Errorf("write CDP response: %v", err)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/test"
+	client, err := cdp.Dial(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("Dial returned error: %v", err)
+	}
+	defer client.CloseNormal()
+
+	got, err := cdp.TargetInfoWithClient(context.Background(), client, "page-1")
+	if err != nil {
+		t.Fatalf("TargetInfoWithClient returned error: %v", err)
+	}
+	if got.TargetID != "page-1" || got.Type != "page" || got.Title != "Example App" {
+		t.Fatalf("TargetInfoWithClient() = %+v, want page-1 info", got)
+	}
+}

@@ -34,6 +34,7 @@ cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":
 - Agent-first help: the CLI should teach agents how to use it without source inspection.
 - Machine-readable by default when asked: `--json` and `--jq` are first-class.
 - Safe default-profile access: never silently expose browser data; make attachment explicit and inspectable.
+- Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.
 
