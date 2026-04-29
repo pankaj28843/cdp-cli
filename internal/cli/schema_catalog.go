@@ -67,6 +67,15 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "domains", Type: "array<domain_summary>", Required: true, Description: "Compact domain summaries."},
 			},
 		},
+		"protocol-search": {
+			Name:        "protocol-search",
+			Description: "Search results across live CDP domains, commands, events, and types.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol search completed."},
+				{Name: "query", Type: "string", Required: true, Description: "Search query."},
+				{Name: "matches", Type: "array<protocol_match>", Required: true, Description: "Matching protocol entities."},
+			},
+		},
 		"error-envelope": {
 			Name:        "error-envelope",
 			Description: "Stable JSON shape emitted when a command fails with --json or --jq.",

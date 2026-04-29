@@ -50,6 +50,15 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_domains_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
     set +e
+    live_search_output="$("$binary" --active-browser-probe --timeout 5s protocol search screenshot --json 2>/tmp/cdp-cli-live-search.err)"
+    live_search_code=$?
+    set -e
+    if [[ "$live_search_code" -eq 0 ]]; then
+      printf '%s\n' "$live_search_output" | jq -e '.ok == true and (.matches | type == "array")' >/dev/null
+    else
+      printf '%s\n' "$live_search_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+    fi
+    set +e
     live_targets_output="$("$binary" --active-browser-probe --timeout 5s targets --json 2>/tmp/cdp-cli-live-targets.err)"
     live_targets_code=$?
     set -e

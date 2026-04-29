@@ -39,3 +39,38 @@ func TestFetchProtocol(t *testing.T) {
 		t.Fatalf("protocol summary = %+v version=%+v, want Page counts", summaries, protocol.Version)
 	}
 }
+
+func TestSearchProtocol(t *testing.T) {
+	protocol := cdp.Protocol{
+		Domains: []cdp.Domain{
+			{
+				Domain: "Page",
+				Commands: mustRawMessage(t, []map[string]any{
+					{"name": "navigate", "description": "Navigate the page"},
+					{"name": "captureScreenshot", "description": "Capture page pixels"},
+				}),
+			},
+			{
+				Domain: "Runtime",
+				Events: mustRawMessage(t, []map[string]any{
+					{"name": "consoleAPICalled", "description": "Issued when console API was called"},
+				}),
+			},
+		},
+	}
+
+	got := cdp.SearchProtocol(protocol, "page capture", 10)
+	if len(got) != 1 || got[0].Path != "Page.captureScreenshot" || got[0].Kind != "command" {
+		t.Fatalf("SearchProtocol() = %+v, want Page.captureScreenshot command", got)
+	}
+}
+
+func mustRawMessage(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+
+	b, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	return b
+}

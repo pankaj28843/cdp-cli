@@ -153,7 +153,7 @@ func TestProtocolMetadataJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("protocol metadata output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Protocol.DomainCount != 2 || got.Protocol.Domains[0].Name != "Page" || got.Protocol.Domains[0].CommandCount != 1 {
+	if !got.OK || got.Protocol.DomainCount != 2 || got.Protocol.Domains[0].Name != "Page" || got.Protocol.Domains[0].CommandCount != 2 {
 		t.Fatalf("protocol metadata = %+v, want compact domain summary", got)
 	}
 }
@@ -181,6 +181,32 @@ func TestProtocolDomainsJSON(t *testing.T) {
 	}
 	if !got.OK || got.DomainCount != 2 || got.Domains[1].Name != "Runtime" || got.Domains[1].EventCount != 1 {
 		t.Fatalf("protocol domains = %+v, want compact domains", got)
+	}
+}
+
+func TestProtocolSearchJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "search", "capture", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol search exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Query   string `json:"query"`
+		Matches []struct {
+			Kind string `json:"kind"`
+			Path string `json:"path"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol search output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Query != "capture" || len(got.Matches) != 1 || got.Matches[0].Path != "Page.captureScreenshot" {
+		t.Fatalf("protocol search = %+v, want captureScreenshot match", got)
 	}
 }
 
@@ -584,6 +610,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					"description": "Page domain",
 					"commands": []map[string]any{
 						{"name": "navigate"},
+						{"name": "captureScreenshot", "description": "Capture page pixels"},
 					},
 				},
 				{

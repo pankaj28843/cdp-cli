@@ -631,7 +631,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newProtocolMetadataCommand())
 	cmd.AddCommand(a.newProtocolDomainsCommand())
-	cmd.AddCommand(planned("search <query>", "Search CDP domains, methods, events, and types"))
+	cmd.AddCommand(a.newProtocolSearchCommand())
 	cmd.AddCommand(planned("describe <Domain.method>", "Describe a CDP method schema"))
 	cmd.AddCommand(planned("exec <Domain.method>", "Execute a raw CDP method"))
 	return cmd
@@ -688,6 +688,36 @@ func (a *app) newProtocolDomainsCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+func (a *app) newProtocolSearchCommand() *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search CDP domains, methods, events, and types",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			protocol, err := a.fetchProtocol(ctx)
+			if err != nil {
+				return err
+			}
+			results := cdp.SearchProtocol(protocol, args[0], limit)
+			var lines []string
+			for _, result := range results {
+				lines = append(lines, fmt.Sprintf("%s\t%s", result.Kind, result.Path))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":      true,
+				"query":   args[0],
+				"matches": results,
+			})
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 25, "maximum number of search results")
+	return cmd
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
