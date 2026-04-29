@@ -1,10 +1,6 @@
 package cdp
 
-import (
-	"context"
-
-	"nhooyr.io/websocket"
-)
+import "context"
 
 type TargetInfo struct {
 	TargetID string `json:"targetId"`
@@ -19,8 +15,12 @@ func ListTargets(ctx context.Context, endpoint string) ([]TargetInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close(websocket.StatusNormalClosure, "done")
+	defer client.CloseNormal()
 
+	return ListTargetsWithClient(ctx, client)
+}
+
+func ListTargetsWithClient(ctx context.Context, client CommandClient) ([]TargetInfo, error) {
 	var result struct {
 		TargetInfos []TargetInfo `json:"targetInfos"`
 	}

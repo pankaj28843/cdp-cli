@@ -15,6 +15,11 @@ type Client struct {
 	next atomic.Int64
 }
 
+type CommandClient interface {
+	Call(ctx context.Context, method string, params any, result any) error
+	CallSession(ctx context.Context, sessionID, method string, params any, result any) error
+}
+
 type cdpError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -37,6 +42,10 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 
 func (c *Client) Close(status websocket.StatusCode, reason string) error {
 	return c.conn.Close(status, reason)
+}
+
+func (c *Client) CloseNormal() error {
+	return c.Close(websocket.StatusNormalClosure, "done")
 }
 
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {

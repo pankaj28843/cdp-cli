@@ -348,15 +348,26 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 			}
 
 			var err error
+			if err := a.applySelectedConnection(ctx); err != nil {
+				return err
+			}
 			explicitConnection := a.opts.browserURL != "" || a.opts.autoConnect
-			if prime {
+			keepAlive := a.opts.autoConnect
+			if keepAlive || prime {
 				a.opts.activeProbe = true
 			}
 
 			var endpoint string
 			var runtime *daemon.Runtime
 			var alreadyRunning bool
-			keepAlive := a.opts.autoConnect && prime
+			var savedConnection *state.Connection
+			var statePath string
+			if keepAlive && explicitConnection && remember {
+				savedConnection, statePath, err = a.rememberDaemonConnection(ctx, connectionName)
+				if err != nil {
+					return err
+				}
+			}
 			if keepAlive {
 				endpoint, err = a.browserEndpoint(ctx)
 				if err != nil {
@@ -365,7 +376,7 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 						"permission",
 						err.Error(),
 						ExitPermission,
-						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --prime --json"},
+						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
 					)
 				}
 			}
@@ -392,9 +403,7 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 				}
 			}
 
-			var savedConnection *state.Connection
-			var statePath string
-			if explicitConnection && remember {
+			if savedConnection == nil && explicitConnection && remember {
 				savedConnection, statePath, err = a.rememberDaemonConnection(ctx, connectionName)
 				if err != nil {
 					return err
@@ -409,7 +418,7 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 						"permission",
 						fmt.Sprintf("start daemon keepalive: %v", err),
 						ExitPermission,
-						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --prime --json"},
+						[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
 					)
 				}
 				runtime = &r
@@ -459,7 +468,7 @@ func (a *app) newDaemonStartCommand() *cobra.Command {
 			return a.render(ctx, human, data)
 		},
 	}
-	cmd.Flags().BoolVar(&prime, "prime", false, "actively validate the browser connection before returning")
+	cmd.Flags().BoolVar(&prime, "prime", false, "compatibility flag; daemon start validates auto-connect by default")
 	cmd.Flags().DurationVar(&reconnect, "reconnect", 0, "requested daemon reconnect interval, such as 30s")
 	cmd.Flags().StringVar(&connectionName, "connection-name", "default", "connection name to save when --browser-url or --auto-connect is supplied")
 	cmd.Flags().BoolVar(&remember, "remember", true, "save supplied connection metadata for future on-demand commands")
@@ -491,6 +500,7 @@ func (a *app) rememberDaemonConnection(ctx context.Context, name string) (*state
 		Mode:        a.connectionMode(),
 		BrowserURL:  a.opts.browserURL,
 		AutoConnect: a.opts.autoConnect,
+		UserDataDir: a.opts.userDataDir,
 	}
 	if a.opts.autoConnect {
 		conn.Channel = a.opts.channel
@@ -606,7 +616,7 @@ func (a *app) startKeepAlive(ctx context.Context, endpoint string, reconnect tim
 	if err != nil {
 		return daemon.Runtime{}, false, err
 	}
-	return daemon.StartKeepAlive(ctx, executable, store.Dir, endpoint, a.connectionMode(), reconnect)
+	return daemon.StartKeepAlive(ctx, executable, store.Dir, endpoint, a.connectionMode(), a.opts.userDataDir, reconnect)
 }
 
 func (a *app) newDaemonStopCommand() *cobra.Command {
@@ -723,6 +733,7 @@ func (a *app) newConnectionAddCommand() *cobra.Command {
 				Mode:        mode,
 				BrowserURL:  browserURL,
 				AutoConnect: autoConnect,
+				UserDataDir: a.opts.userDataDir,
 				Project:     project,
 			}
 			conn.Project = projectPath
@@ -1036,6 +1047,7 @@ func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, 
 			Mode:        a.connectionMode(),
 			BrowserURL:  a.opts.browserURL,
 			AutoConnect: a.opts.autoConnect,
+			UserDataDir: a.opts.userDataDir,
 		}
 		if a.opts.autoConnect {
 			conn.Channel = a.opts.channel
@@ -1139,17 +1151,19 @@ func (a *app) newPagesCommand() *cobra.Command {
 }
 
 func (a *app) listTargets(ctx context.Context) ([]cdp.TargetInfo, error) {
-	endpoint, err := a.browserEndpoint(ctx)
+	client, closeClient, err := a.browserCDPClient(ctx)
 	if err != nil {
 		return nil, commandError(
 			"connection_not_configured",
 			"connection",
 			err.Error(),
 			ExitConnection,
-			[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
+			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 		)
 	}
-	targets, err := cdp.ListTargets(ctx, endpoint)
+	defer closeClient(ctx)
+
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
 	if err != nil {
 		return nil, commandError(
 			"connection_failed",
@@ -1233,31 +1247,73 @@ func pageRow(target cdp.TargetInfo) map[string]any {
 	}
 }
 
-func (a *app) pageEndpoint(ctx context.Context) (string, error) {
-	endpoint, err := a.browserEndpoint(ctx)
+func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(context.Context) error, error) {
+	opts, err := a.browserOptions(ctx)
 	if err != nil {
-		return "", commandError(
+		return nil, nil, err
+	}
+	if runtime, ok := a.runningRuntimeForOptions(ctx, opts); ok {
+		return daemon.RuntimeClient{Runtime: runtime}, func(context.Context) error { return nil }, nil
+	}
+	if opts.AutoConnect && !opts.ActiveProbe {
+		return nil, nil, fmt.Errorf("auto-connect browser attach is passive by default to avoid Chrome prompts; run `cdp daemon start --auto-connect --json` once, or pass --active-browser-probe to attach directly")
+	}
+	endpoint, err := browser.ResolveEndpoint(ctx, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := cdp.Dial(ctx, endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, func(context.Context) error {
+		return client.CloseNormal()
+	}, nil
+}
+
+func (a *app) runningRuntimeForOptions(ctx context.Context, opts browser.ProbeOptions) (daemon.Runtime, bool) {
+	if !opts.AutoConnect || opts.BrowserURL != "" {
+		return daemon.Runtime{}, false
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return daemon.Runtime{}, false
+	}
+	runtime, ok, err := daemon.LoadRuntime(ctx, store.Dir)
+	if err != nil || !ok {
+		return daemon.Runtime{}, false
+	}
+	if runtime.ConnectionMode != "auto_connect" {
+		return daemon.Runtime{}, false
+	}
+	if opts.UserDataDir != "" && runtime.UserDataDir != opts.UserDataDir {
+		return daemon.Runtime{}, false
+	}
+	if !daemon.RuntimeRunning(runtime) || !daemon.RuntimeSocketReady(ctx, runtime) {
+		return daemon.Runtime{}, false
+	}
+	return runtime, true
+}
+
+func (a *app) attachPageSession(ctx context.Context, targetID, urlContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
+	client, closeClient, err := a.browserCDPClient(ctx)
+	if err != nil {
+		return nil, cdp.TargetInfo{}, commandError(
 			"connection_not_configured",
 			"connection",
 			err.Error(),
 			ExitConnection,
-			[]string{"cdp connection current --json", "cdp doctor --active-browser-probe --json"},
+			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 		)
 	}
-	return endpoint, nil
-}
-
-func (a *app) attachPageSession(ctx context.Context, targetID, urlContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
-	endpoint, err := a.pageEndpoint(ctx)
+	target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
 	if err != nil {
+		_ = closeClient(ctx)
 		return nil, cdp.TargetInfo{}, err
 	}
-	target, err := a.resolvePageTarget(ctx, targetID, urlContains)
+	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
 	if err != nil {
-		return nil, cdp.TargetInfo{}, err
-	}
-	session, err := cdp.AttachToTarget(ctx, endpoint, target.TargetID)
-	if err != nil {
+		_ = closeClient(ctx)
 		return nil, cdp.TargetInfo{}, commandError(
 			"connection_failed",
 			"connection",
@@ -1275,6 +1331,34 @@ func (a *app) resolvePageTarget(ctx context.Context, targetID, urlContains strin
 		return cdp.TargetInfo{}, err
 	}
 	return resolvePageTarget(targets, targetID, urlContains)
+}
+
+func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.CommandClient, targetID, urlContains string) (cdp.TargetInfo, error) {
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
+		return cdp.TargetInfo{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("list targets: %v", err),
+			ExitConnection,
+			[]string{"cdp doctor --json", "cdp daemon status --json"},
+		)
+	}
+	return resolvePageTarget(targets, targetID, urlContains)
+}
+
+func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, rawURL string) (string, error) {
+	targetID, err := cdp.CreateTargetWithClient(ctx, client, rawURL)
+	if err != nil {
+		return "", commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("open page: %v", err),
+			ExitConnection,
+			[]string{"cdp doctor --json", "cdp pages --json"},
+		)
+	}
+	return targetID, nil
 }
 
 func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains string) (cdp.TargetInfo, error) {
@@ -1498,33 +1582,41 @@ func (a *app) newOpenCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			endpoint, err := a.pageEndpoint(ctx)
+			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
-				return err
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+				)
 			}
+			closeOwned := true
+			defer func() {
+				if closeOwned {
+					_ = closeClient(ctx)
+				}
+			}()
 			rawURL := strings.TrimSpace(args[0])
 			pageAction := "created"
 			frameID := ""
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
 			if newTab || (targetID == "" && urlContains == "") {
-				createdID, err := cdp.CreateTarget(ctx, endpoint, rawURL)
-				if err != nil {
-					return commandError(
-						"connection_failed",
-						"connection",
-						fmt.Sprintf("open page: %v", err),
-						ExitConnection,
-						[]string{"cdp doctor --json", "cdp pages --json"},
-					)
-				}
-				target.TargetID = createdID
-			} else {
-				selected, err := a.resolvePageTarget(ctx, targetID, urlContains)
+				createdID, err := a.createPageTarget(ctx, client, rawURL)
 				if err != nil {
 					return err
 				}
-				session, err := cdp.AttachToTarget(ctx, endpoint, selected.TargetID)
+				target.TargetID = createdID
+			} else {
+				selected, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
 				if err != nil {
+					return err
+				}
+				closeOwned = false
+				session, err := cdp.AttachToTargetWithClient(ctx, client, selected.TargetID, closeClient)
+				if err != nil {
+					closeOwned = true
 					return commandError(
 						"connection_failed",
 						"connection",
@@ -1852,17 +1944,19 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
 			}
-			endpoint, err := a.browserEndpoint(ctx)
+			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
 				return commandError(
 					"connection_not_configured",
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp connection current --json", "cdp doctor --active-browser-probe --json"},
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 				)
 			}
-			result, err := cdp.Exec(ctx, endpoint, args[0], rawParams)
+			defer closeClient(ctx)
+
+			result, err := cdp.ExecWithClient(ctx, client, args[0], rawParams)
 			if err != nil {
 				return commandError(
 					"connection_failed",
@@ -1884,14 +1978,27 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
-	protocolURL, err := a.browserProtocolURL(ctx)
+	opts, err := a.browserOptions(ctx)
+	if err != nil {
+		return cdp.Protocol{}, err
+	}
+	var protocolURL string
+	if opts.AutoConnect && !opts.ActiveProbe {
+		if _, ok := a.runningRuntimeForOptions(ctx, opts); ok {
+			protocolURL, err = browser.ResolveProtocolURL(ctx, opts)
+		} else {
+			err = fmt.Errorf("auto-connect protocol discovery is passive by default to avoid Chrome prompts; run `cdp daemon start --auto-connect --json` once, or pass --active-browser-probe to query Chrome directly")
+		}
+	} else {
+		protocolURL, err = browser.ResolveProtocolURL(ctx, opts)
+	}
 	if err != nil {
 		return cdp.Protocol{}, commandError(
 			"connection_not_configured",
 			"connection",
 			err.Error(),
 			ExitConnection,
-			[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
+			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 		)
 	}
 	protocol, err := cdp.FetchProtocol(ctx, protocolURL)
@@ -1934,23 +2041,25 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, 30*time.Second)
 			defer cancel()
 
-			endpoint, err := a.pageEndpoint(ctx)
-			if err != nil {
-				return err
-			}
-			rawURL := strings.TrimSpace(args[0])
-			targetID, err := cdp.CreateTarget(ctx, endpoint, rawURL)
+			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
 				return commandError(
-					"connection_failed",
+					"connection_not_configured",
 					"connection",
-					fmt.Sprintf("open page: %v", err),
+					err.Error(),
 					ExitConnection,
-					[]string{"cdp doctor --json", "cdp open <url> --json"},
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 				)
 			}
-			session, err := cdp.AttachToTarget(ctx, endpoint, targetID)
+			rawURL := strings.TrimSpace(args[0])
+			targetID, err := a.createPageTarget(ctx, client, rawURL)
 			if err != nil {
+				_ = closeClient(ctx)
+				return err
+			}
+			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
+			if err != nil {
+				_ = closeClient(ctx)
 				return commandError(
 					"connection_failed",
 					"connection",
@@ -2104,7 +2213,7 @@ func commandExamples(path string) []string {
 			"cdp schema error-envelope --json",
 		},
 		"cdp daemon start": {
-			"cdp daemon start --auto-connect --prime --reconnect 30s --json",
+			"cdp daemon start --auto-connect --json",
 			"cdp daemon start --browser-url <browser-url> --json",
 			"cdp daemon start --autoConnect --json",
 		},

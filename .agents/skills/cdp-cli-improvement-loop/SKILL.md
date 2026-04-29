@@ -90,7 +90,7 @@ For future browser/CDP changes, add the smallest real check that proves the
 behavior:
 
 ```bash
-cdp daemon start --auto-connect --prime --reconnect 30s --json
+cdp daemon start --auto-connect --json
 cdp daemon status --json
 cdp pages --json
 cdp protocol metadata --json
@@ -108,4 +108,3 @@ classified JSON error and recovery commands; that is still a valid E2E signal.
 - `git status --short` is clean after commit.
 - The commit is pushed.
 - No public-repo hygiene scan findings.
-

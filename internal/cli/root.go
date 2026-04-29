@@ -185,7 +185,23 @@ func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemo
 	if err != nil || !ok {
 		return status
 	}
-	return daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime))
+	if !a.runtimeMatchesConnection(runtime) {
+		return status
+	}
+	return daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime))
+}
+
+func (a *app) runtimeMatchesConnection(runtime daemon.Runtime) bool {
+	if runtime.ConnectionMode != a.connectionMode() {
+		return false
+	}
+	if a.opts.browserURL != "" {
+		return false
+	}
+	if a.opts.userDataDir != "" && runtime.UserDataDir != a.opts.userDataDir {
+		return false
+	}
+	return true
 }
 
 func signalContext(parent context.Context) (context.Context, context.CancelFunc) {
@@ -237,6 +253,9 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 	a.opts.autoConnect = conn.AutoConnect || conn.Mode == "auto_connect"
 	if conn.Channel != "" {
 		a.opts.channel = conn.Channel
+	}
+	if conn.UserDataDir != "" {
+		a.opts.userDataDir = conn.UserDataDir
 	}
 	return nil
 }

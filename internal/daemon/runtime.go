@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,16 +18,40 @@ import (
 )
 
 const RuntimeFileName = "daemon.json"
+const RuntimeSocketFileName = "daemon.sock"
 
 type Runtime struct {
 	PID               int    `json:"pid"`
 	StartedAt         string `json:"started_at"`
 	ConnectionMode    string `json:"connection_mode"`
 	ReconnectInterval string `json:"reconnect_interval,omitempty"`
+	SocketPath        string `json:"socket_path,omitempty"`
+	UserDataDir       string `json:"user_data_dir,omitempty"`
+}
+
+type RPCRequest struct {
+	Method        string          `json:"method"`
+	SessionID     string          `json:"session_id,omitempty"`
+	Params        json.RawMessage `json:"params,omitempty"`
+	TimeoutMillis int64           `json:"timeout_ms,omitempty"`
+}
+
+type RPCResponse struct {
+	OK     bool            `json:"ok"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+type RuntimeClient struct {
+	Runtime Runtime
 }
 
 func RuntimePath(stateDir string) string {
 	return filepath.Join(stateDir, RuntimeFileName)
+}
+
+func RuntimeSocketPath(stateDir string) string {
+	return filepath.Join(stateDir, RuntimeSocketFileName)
 }
 
 func LoadRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
@@ -97,19 +123,25 @@ func RuntimeRunning(runtime Runtime) bool {
 	return true
 }
 
-func StartKeepAlive(ctx context.Context, executable, stateDir, endpoint, connectionMode string, reconnect time.Duration) (Runtime, bool, error) {
+func StartKeepAlive(ctx context.Context, executable, stateDir, endpoint, connectionMode, userDataDir string, reconnect time.Duration) (Runtime, bool, error) {
 	if runtime, ok, err := LoadRuntime(ctx, stateDir); err != nil {
 		return Runtime{}, false, err
 	} else if ok && RuntimeRunning(runtime) {
-		return runtime, true, nil
+		if RuntimeSocketReady(ctx, runtime) {
+			return runtime, true, nil
+		}
+		_, _, _ = StopRuntime(ctx, stateDir)
 	}
 
 	cmd := exec.Command(executable, "daemon", "hold")
+	socketPath := RuntimeSocketPath(stateDir)
 	cmd.Env = append(os.Environ(),
 		"CDP_DAEMON_HOLD_ENDPOINT="+endpoint,
 		"CDP_DAEMON_STATE_DIR="+stateDir,
 		"CDP_DAEMON_CONNECTION_MODE="+connectionMode,
 		"CDP_DAEMON_RECONNECT="+reconnect.String(),
+		"CDP_DAEMON_SOCKET="+socketPath,
+		"CDP_DAEMON_USER_DATA_DIR="+userDataDir,
 	)
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -119,6 +151,7 @@ func StartKeepAlive(ctx context.Context, executable, stateDir, endpoint, connect
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		return Runtime{}, false, fmt.Errorf("start daemon keepalive process: %w", err)
@@ -143,10 +176,12 @@ func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 		return Runtime{}, false, err
 	}
 	if !RuntimeRunning(runtime) {
+		_ = os.Remove(runtime.SocketPath)
 		return runtime, false, ClearRuntime(ctx, stateDir, runtime.PID)
 	}
 	process, err := os.FindProcess(runtime.PID)
 	if err != nil {
+		_ = os.Remove(runtime.SocketPath)
 		return runtime, false, ClearRuntime(ctx, stateDir, runtime.PID)
 	}
 	if err := process.Signal(os.Interrupt); err != nil {
@@ -157,6 +192,7 @@ func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if !RuntimeRunning(runtime) {
+			_ = os.Remove(runtime.SocketPath)
 			return runtime, true, ClearRuntime(ctx, stateDir, runtime.PID)
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -164,6 +200,7 @@ func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 	if err := process.Kill(); err != nil {
 		return runtime, true, fmt.Errorf("kill daemon process: %w", err)
 	}
+	_ = os.Remove(runtime.SocketPath)
 	return runtime, true, ClearRuntime(ctx, stateDir, runtime.PID)
 }
 
@@ -177,20 +214,16 @@ func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconn
 	pid := os.Getpid()
 	defer ClearRuntime(context.Background(), stateDir, pid)
 
+	socketPath := os.Getenv("CDP_DAEMON_SOCKET")
+	if strings.TrimSpace(socketPath) == "" {
+		socketPath = RuntimeSocketPath(stateDir)
+	}
+
 	for {
 		client, err := cdp.Dial(ctx, endpoint)
 		if err == nil {
-			runtime := Runtime{
-				PID:               pid,
-				StartedAt:         time.Now().UTC().Format(time.RFC3339),
-				ConnectionMode:    connectionMode,
-				ReconnectInterval: durationString(reconnect),
-			}
-			if err := SaveRuntime(ctx, stateDir, runtime); err != nil {
-				_ = client.Close(websocket.StatusInternalError, "state write failed")
-				return err
-			}
-			err = keepAlive(ctx, client, reconnect)
+			err = holdConnection(ctx, stateDir, socketPath, client, pid, connectionMode, reconnect)
+			_ = ClearRuntime(context.Background(), stateDir, pid)
 		}
 		if reconnect <= 0 {
 			return err
@@ -211,6 +244,81 @@ func HoldFromEnv(ctx context.Context) error {
 	return Hold(ctx, os.Getenv("CDP_DAEMON_STATE_DIR"), os.Getenv("CDP_DAEMON_HOLD_ENDPOINT"), os.Getenv("CDP_DAEMON_CONNECTION_MODE"), reconnect)
 }
 
+func (c RuntimeClient) Call(ctx context.Context, method string, params any, result any) error {
+	return c.CallSession(ctx, "", method, params, result)
+}
+
+func (c RuntimeClient) CallSession(ctx context.Context, sessionID, method string, params any, result any) error {
+	raw, err := CallRuntime(ctx, c.Runtime, sessionID, method, params)
+	if err != nil {
+		return err
+	}
+	if result == nil {
+		return nil
+	}
+	if len(raw) == 0 {
+		raw = json.RawMessage(`null`)
+	}
+	if err := json.Unmarshal(raw, result); err != nil {
+		return fmt.Errorf("decode daemon rpc response %s: %w", method, err)
+	}
+	return nil
+}
+
+func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string, params any) (json.RawMessage, error) {
+	if strings.TrimSpace(runtime.SocketPath) == "" {
+		return nil, fmt.Errorf("daemon runtime does not expose an rpc socket; restart the daemon")
+	}
+	rawParams, err := marshalParams(params)
+	if err != nil {
+		return nil, err
+	}
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "unix", runtime.SocketPath)
+	if err != nil {
+		return nil, fmt.Errorf("connect daemon rpc socket: %w", err)
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	req := RPCRequest{
+		Method:        method,
+		SessionID:     sessionID,
+		Params:        rawParams,
+		TimeoutMillis: timeoutMillis(ctx),
+	}
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return nil, fmt.Errorf("write daemon rpc request %s: %w", method, err)
+	}
+	var resp RPCResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, fmt.Errorf("read daemon rpc response %s: %w", method, err)
+	}
+	if !resp.OK {
+		if resp.Error == "" {
+			resp.Error = "daemon rpc call failed"
+		}
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	return resp.Result, nil
+}
+
+func RuntimeSocketReady(ctx context.Context, runtime Runtime) bool {
+	if strings.TrimSpace(runtime.SocketPath) == "" {
+		return false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(checkCtx, "unix", runtime.SocketPath)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 func waitForRuntime(ctx context.Context, stateDir string, pid int) (Runtime, error) {
 	deadline := time.Now().Add(60 * time.Second)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
@@ -221,7 +329,7 @@ func waitForRuntime(ctx context.Context, stateDir string, pid int) (Runtime, err
 		if err != nil {
 			return Runtime{}, err
 		}
-		if ok && runtime.PID == pid && RuntimeRunning(runtime) {
+		if ok && runtime.PID == pid && RuntimeRunning(runtime) && RuntimeSocketReady(ctx, runtime) {
 			return runtime, nil
 		}
 		select {
@@ -233,7 +341,98 @@ func waitForRuntime(ctx context.Context, stateDir string, pid int) (Runtime, err
 	return Runtime{}, fmt.Errorf("daemon keepalive process did not become ready")
 }
 
-func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration) error {
+func holdConnection(ctx context.Context, stateDir, socketPath string, client *cdp.Client, pid int, connectionMode string, reconnect time.Duration) error {
+	listener, err := listenRuntimeSocket(socketPath)
+	if err != nil {
+		_ = client.Close(websocket.StatusInternalError, "rpc listen failed")
+		return err
+	}
+	defer listener.Close()
+	defer os.Remove(socketPath)
+
+	runtime := Runtime{
+		PID:               pid,
+		StartedAt:         time.Now().UTC().Format(time.RFC3339),
+		ConnectionMode:    connectionMode,
+		ReconnectInterval: durationString(reconnect),
+		SocketPath:        socketPath,
+		UserDataDir:       os.Getenv("CDP_DAEMON_USER_DATA_DIR"),
+	}
+	if err := SaveRuntime(ctx, stateDir, runtime); err != nil {
+		_ = client.Close(websocket.StatusInternalError, "state write failed")
+		return err
+	}
+
+	cycleCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var mu sync.Mutex
+	go serveRPC(cycleCtx, listener, client, &mu)
+	return keepAlive(cycleCtx, client, reconnect, &mu)
+}
+
+func listenRuntimeSocket(socketPath string) (net.Listener, error) {
+	if strings.TrimSpace(socketPath) == "" {
+		return nil, fmt.Errorf("daemon rpc socket path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create daemon socket directory: %w", err)
+	}
+	_ = os.Remove(socketPath)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("listen daemon rpc socket: %w", err)
+	}
+	_ = os.Chmod(socketPath, 0o600)
+	return listener, nil
+}
+
+func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, mu *sync.Mutex) {
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go handleRPC(ctx, conn, client, mu)
+	}
+}
+
+func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.Mutex) {
+	defer conn.Close()
+	var req RPCRequest
+	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+		return
+	}
+	req.Method = strings.TrimSpace(req.Method)
+	if req.Method == "" {
+		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: "daemon rpc method is required"})
+		return
+	}
+	var result json.RawMessage
+	params := any(req.Params)
+	if len(req.Params) == 0 {
+		params = map[string]any{}
+	}
+	callCtx := ctx
+	cancel := func() {}
+	if req.TimeoutMillis > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
+	}
+	defer cancel()
+	mu.Lock()
+	err := client.CallSession(callCtx, req.SessionID, req.Method, params, &result)
+	mu.Unlock()
+	if err != nil {
+		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+		return
+	}
+	_ = json.NewEncoder(conn).Encode(RPCResponse{OK: true, Result: result})
+}
+
+func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration, mu *sync.Mutex) error {
 	defer client.Close(websocket.StatusNormalClosure, "done")
 	tick := 30 * time.Second
 	if reconnect > 0 && reconnect < tick {
@@ -250,10 +449,55 @@ func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration)
 			return ctx.Err()
 		case <-ticker.C:
 			var result json.RawMessage
-			if err := client.Call(ctx, "Browser.getVersion", map[string]any{}, &result); err != nil {
+			mu.Lock()
+			err := client.Call(ctx, "Browser.getVersion", map[string]any{}, &result)
+			mu.Unlock()
+			if err != nil {
 				return err
 			}
 		}
+	}
+}
+
+func timeoutMillis(ctx context.Context) int64 {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 1
+	}
+	return remaining.Milliseconds()
+}
+
+func marshalParams(params any) (json.RawMessage, error) {
+	if params == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	switch typed := params.(type) {
+	case json.RawMessage:
+		if len(typed) == 0 {
+			return json.RawMessage(`{}`), nil
+		}
+		if !json.Valid(typed) {
+			return nil, fmt.Errorf("daemon rpc params must be valid JSON")
+		}
+		return typed, nil
+	case []byte:
+		if len(typed) == 0 {
+			return json.RawMessage(`{}`), nil
+		}
+		if !json.Valid(typed) {
+			return nil, fmt.Errorf("daemon rpc params must be valid JSON")
+		}
+		return json.RawMessage(typed), nil
+	default:
+		b, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("marshal daemon rpc params: %w", err)
+		}
+		return b, nil
 	}
 }
 

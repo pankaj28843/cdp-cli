@@ -22,6 +22,7 @@ type Connection struct {
 	BrowserURL  string `json:"browser_url,omitempty"`
 	AutoConnect bool   `json:"auto_connect"`
 	Channel     string `json:"channel,omitempty"`
+	UserDataDir string `json:"user_data_dir,omitempty"`
 	Project     string `json:"project,omitempty"`
 }
 

@@ -142,7 +142,7 @@ fi
 "$binary" daemon status --state-dir "$state_dir" --json | jq -e '.ok == true and .daemon.state' >/dev/null
 
 set +e
-snapshot_output="$("$binary" snapshot --json 2>/tmp/cdp-cli-snapshot.err)"
+snapshot_output="$("$binary" snapshot --state-dir "$state_dir" --json 2>/tmp/cdp-cli-snapshot.err)"
 snapshot_code=$?
 set -e
 

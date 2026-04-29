@@ -85,7 +85,7 @@ func WithRuntime(status Status, runtime Runtime, running bool) Status {
 		status.Message = "daemon runtime state exists but the process is not running"
 		status.NextCommands = []string{
 			"cdp daemon stop --json",
-			"cdp daemon start --auto-connect --prime --json",
+			"cdp daemon start --auto-connect --json",
 		}
 	}
 	return status

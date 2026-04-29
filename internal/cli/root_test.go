@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,6 +169,57 @@ func TestPagesJSON(t *testing.T) {
 	}
 	if !got.OK || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" || got.Pages[0].Type != "page" {
 		t.Fatalf("pages output = %+v, want one page target", got)
+	}
+}
+
+func TestPagesUsesRunningDaemonByDefaultJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	stateDir := t.TempDir()
+	var addOut, addErr bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "default", "--auto-connect", "--state-dir", stateDir, "--json"}, &addOut, &addErr, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit code = %d, want %d; stderr=%s", code, cli.ExitOK, addErr.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "auto_connect", 30*time.Second)
+	}()
+	waitForDaemonRuntime(t, ctx, stateDir)
+	defer func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	}()
+
+	var out, errOut bytes.Buffer
+	code = cli.Execute(context.Background(), []string{"pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK    bool `json:"ok"`
+		Pages []struct {
+			ID string `json:"id"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" {
+		t.Fatalf("pages output = %+v, want daemon-backed page target", got)
 	}
 }
 
@@ -514,17 +567,25 @@ func TestDaemonStatusJSON(t *testing.T) {
 
 func TestDaemonStatusReportsRuntimeJSON(t *testing.T) {
 	stateDir := t.TempDir()
+	socketPath := filepath.Join(stateDir, "daemon.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	defer listener.Close()
+
 	if err := daemon.SaveRuntime(context.Background(), stateDir, daemon.Runtime{
 		PID:               os.Getpid(),
 		StartedAt:         time.Now().UTC().Format(time.RFC3339),
 		ConnectionMode:    "auto_connect",
 		ReconnectInterval: "30s",
+		SocketPath:        socketPath,
 	}); err != nil {
 		t.Fatalf("SaveRuntime returned error: %v", err)
 	}
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"daemon", "status", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"daemon", "status", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon status exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
@@ -1278,6 +1339,33 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func fakeWebSocketEndpoint(t *testing.T, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse fake server URL: %v", err)
+	}
+	u.Scheme = "ws"
+	u.Path = "/devtools/browser/test"
+	return u.String()
+}
+
+func waitForDaemonRuntime(t *testing.T, ctx context.Context, stateDir string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime, ok, err := daemon.LoadRuntime(ctx, stateDir)
+		if err != nil {
+			t.Fatalf("LoadRuntime returned error: %v", err)
+		}
+		if ok && daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("daemon runtime did not become ready")
 }
 
 func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {

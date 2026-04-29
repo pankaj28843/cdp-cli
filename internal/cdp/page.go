@@ -10,7 +10,8 @@ import (
 )
 
 type PageSession struct {
-	client    *Client
+	client    CommandClient
+	close     func(context.Context) error
 	TargetID  string `json:"target_id"`
 	SessionID string `json:"session_id"`
 }
@@ -32,16 +33,20 @@ type EvaluateResult struct {
 }
 
 func CreateTarget(ctx context.Context, endpoint, rawURL string) (string, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return "", fmt.Errorf("url is required")
-	}
 	client, err := Dial(ctx, endpoint)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close(websocket.StatusNormalClosure, "done")
+	defer client.CloseNormal()
 
+	return CreateTargetWithClient(ctx, client, rawURL)
+}
+
+func CreateTargetWithClient(ctx context.Context, client CommandClient, rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", fmt.Errorf("url is required")
+	}
 	var result struct {
 		TargetID string `json:"targetId"`
 	}
@@ -55,13 +60,24 @@ func CreateTarget(ctx context.Context, endpoint, rawURL string) (string, error) 
 }
 
 func AttachToTarget(ctx context.Context, endpoint, targetID string) (*PageSession, error) {
-	targetID = strings.TrimSpace(targetID)
-	if targetID == "" {
-		return nil, fmt.Errorf("target id is required")
-	}
 	client, err := Dial(ctx, endpoint)
 	if err != nil {
 		return nil, err
+	}
+	session, err := AttachToTargetWithClient(ctx, client, targetID, func(context.Context) error {
+		return client.CloseNormal()
+	})
+	if err != nil {
+		_ = client.Close(websocket.StatusInternalError, "attach failed")
+		return nil, err
+	}
+	return session, nil
+}
+
+func AttachToTargetWithClient(ctx context.Context, client CommandClient, targetID string, close func(context.Context) error) (*PageSession, error) {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return nil, fmt.Errorf("target id is required")
 	}
 	var result struct {
 		SessionID string `json:"sessionId"`
@@ -70,14 +86,12 @@ func AttachToTarget(ctx context.Context, endpoint, targetID string) (*PageSessio
 		"targetId": targetID,
 		"flatten":  true,
 	}, &result); err != nil {
-		_ = client.Close(websocket.StatusInternalError, "attach failed")
 		return nil, err
 	}
 	if result.SessionID == "" {
-		_ = client.Close(websocket.StatusInternalError, "attach returned empty session")
 		return nil, fmt.Errorf("Target.attachToTarget returned an empty session id")
 	}
-	return &PageSession{client: client, TargetID: targetID, SessionID: result.SessionID}, nil
+	return &PageSession{client: client, close: close, TargetID: targetID, SessionID: result.SessionID}, nil
 }
 
 func (s *PageSession) Close(ctx context.Context) error {
@@ -87,7 +101,10 @@ func (s *PageSession) Close(ctx context.Context) error {
 	if s.SessionID != "" {
 		_ = s.client.Call(ctx, "Target.detachFromTarget", map[string]any{"sessionId": s.SessionID}, nil)
 	}
-	return s.client.Close(websocket.StatusNormalClosure, "done")
+	if s.close != nil {
+		return s.close(ctx)
+	}
+	return nil
 }
 
 func (s *PageSession) Navigate(ctx context.Context, rawURL string) (string, error) {
