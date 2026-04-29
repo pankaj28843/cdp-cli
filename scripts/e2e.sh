@@ -150,6 +150,22 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema drag --json | jq -e '.ok == true and .schema.name == "drag" and (.schema.fields | map(.name) | index("drag"))' >/dev/null
 "$binary" schema frames --json | jq -e '.ok == true and .schema.name == "frames" and (.schema.fields | map(.name) | index("frames"))' >/dev/null
 
+"$binary" describe --command "a11y tree" --json | jq -e '.ok == true and .commands.name == "tree" and (.commands.flags[] | select(.name == "depth"))' >/dev/null
+"$binary" describe --command "a11y find" --json | jq -e '.ok == true and .commands.name == "find" and (.commands.flags[] | select(.name == "role"))' >/dev/null
+"$binary" describe --command "emulate viewport" --json | jq -e '.ok == true and .commands.name == "viewport" and (.commands.examples | any(contains("--preset")))' >/dev/null
+"$binary" describe --command "dialog accept" --json | jq -e '.ok == true and .commands.name == "accept" and (.commands.flags[] | select(.name == "prompt-text"))' >/dev/null
+"$binary" describe --command "events tap" --json | jq -e '.ok == true and .commands.name == "tap" and (.commands.flags[] | select(.name == "max-events"))' >/dev/null
+"$binary" describe --command "protocol compat" --json | jq -e '.ok == true and .commands.name == "compat" and (.commands.examples | any(contains("--requires")))' >/dev/null
+"$binary" describe --command "wait load" --json | jq -e '.ok == true and .commands.name == "load"' >/dev/null
+"$binary" describe --command "network block" --json | jq -e '.ok == true and .commands.name == "block"' >/dev/null
+"$binary" describe --command "memory heap-snapshot" --json | jq -e '.ok == true and .commands.name == "heap-snapshot" and (.commands.flags[] | select(.name == "out"))' >/dev/null
+"$binary" describe --command "perf summary" --json | jq -e '.ok == true and .commands.name == "summary" and (.commands.flags[] | select(.name == "duration"))' >/dev/null
+"$binary" describe --command "workflow feeds" --json | jq -e '.ok == true and .commands.name == "feeds" and (.commands.examples | any(contains("--wait-load")))' >/dev/null
+"$binary" describe --command "workflow responsive-audit" --json | jq -e '.ok == true and .commands.name == "responsive-audit"' >/dev/null
+"$binary" schema protocol-compat --json | jq -e '.ok == true and .schema.name == "protocol-compat"' >/dev/null
+"$binary" schema a11y --json | jq -e '.ok == true and .schema.name == "a11y"' >/dev/null
+"$binary" schema workflow-feeds --json | jq -e '.ok == true and .schema.name == "workflow-feeds"' >/dev/null
+
 mkdir -p "$state_dir/user-data"
 set +e
 daemon_start_output="$("$binary" daemon start --autoConnect --user-data-dir "$state_dir/user-data" --state-dir "$state_dir" --json 2>/tmp/cdp-cli-daemon-start.err)"

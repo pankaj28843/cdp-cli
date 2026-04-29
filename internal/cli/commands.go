@@ -3823,7 +3823,22 @@ func (a *app) newWaitCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newWaitTextCommand())
 	cmd.AddCommand(a.newWaitSelectorCommand())
+	cmd.AddCommand(a.newWaitLoadCommand())
+	cmd.AddCommand(a.newWaitStableCommand())
+	cmd.AddCommand(a.newWaitIdleCommand())
 	return cmd
+}
+
+func (a *app) newWaitLoadCommand() *cobra.Command {
+	return planned("load", "Wait for DOMContentLoaded or load lifecycle events")
+}
+
+func (a *app) newWaitStableCommand() *cobra.Command {
+	return planned("stable", "Wait for a quiet DOM mutation window")
+}
+
+func (a *app) newWaitIdleCommand() *cobra.Command {
+	return planned("idle", "Wait for network idle with bounded inflight requests")
 }
 
 func (a *app) newWaitTextCommand() *cobra.Command {
@@ -3992,6 +4007,136 @@ func invalidSelectorError(selector string, evalErr *evalError, example string) e
 		[]string{example},
 	)
 }
+
+type a11yNode struct {
+	NodeID   string         `json:"node_id,omitempty"`
+	Role     string         `json:"role,omitempty"`
+	Name     string         `json:"name,omitempty"`
+	Disabled bool           `json:"disabled,omitempty"`
+	Ignored  bool           `json:"ignored"`
+	Depth    int            `json:"depth"`
+	Path     string         `json:"path,omitempty"`
+	Raw      map[string]any `json:"raw,omitempty"`
+}
+
+func focusExpression(selector string) string {
+	return fmt.Sprintf(`(() => { const selector = %s; const el = document.querySelector(selector); if (!el) return {selector, focused:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; el.focus(); return {selector, focused: document.activeElement === el, tag: el.tagName.toLowerCase()}; })()`, jsStringLiteral(selector))
+}
+
+func clearExpression(selector string) string {
+	return fmt.Sprintf(`(() => { const selector = %s; const el = document.querySelector(selector); if (!el) return {selector, cleared:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; const previous = "value" in el ? String(el.value ?? "") : String(el.textContent ?? ""); if ("value" in el) { el.focus(); el.value = ""; el.dispatchEvent(new Event("input", {bubbles:true})); el.dispatchEvent(new Event("change", {bubbles:true})); return {selector, cleared:true, previous, value:String(el.value ?? "")}; } return {selector, cleared:false, previous, error:{name:"InvalidTargetError", message:"target element does not support direct value assignment"}}; })()`, jsStringLiteral(selector))
+}
+
+func selectExpression(selector, value string) string {
+	return fmt.Sprintf(`(() => { const selector = %s; const value = String(%s); const el = document.querySelector(selector); if (!el) return {selector, selected:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; if (el.tagName !== "SELECT") return {selector, selected:false, error:{name:"InvalidTargetError", message:"target element is not a select"}}; const previous = String(el.value ?? ""); el.value = value; el.dispatchEvent(new Event("input", {bubbles:true})); el.dispatchEvent(new Event("change", {bubbles:true})); return {selector, selected: el.value === value, previous, value: String(el.value ?? "")}; })()`, jsStringLiteral(selector), jsStringLiteral(value))
+}
+
+func fileInputExpression(selector, basename string) string {
+	return fmt.Sprintf(`(() => { const selector = %s; const el = document.querySelector(selector); if (!el) return {selector, accepted:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; return {selector, accepted: el.tagName === "INPUT" && el.type === "file", tag: el.tagName.toLowerCase(), type: el.type || "", file_name: %s}; })()`, jsStringLiteral(selector), jsStringLiteral(basename))
+}
+
+func a11yNodeExpression(selector string) string {
+	return fmt.Sprintf(`(() => { const selector = %s; const el = document.querySelector(selector); if (!el) return {selector, found:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; const label = el.getAttribute("aria-label") || el.getAttribute("alt") || el.innerText || el.textContent || el.value || ""; return {selector, found:true, role: el.getAttribute("role") || el.tagName.toLowerCase(), name: String(label).trim(), disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"), ignored: false}; })()`, jsStringLiteral(selector))
+}
+
+func viewportPreset(name string) (int, int, float64, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "desktop":
+		return 1440, 900, 1, false
+	case "laptop":
+		return 1366, 768, 1, false
+	case "tablet":
+		return 768, 1024, 1, true
+	case "mobile", "iphone-12":
+		return 390, 844, 3, true
+	default:
+		return 0, 0, 0, false
+	}
+}
+
+func collectA11yNodes(ctx context.Context, session *cdp.PageSession, depth, limit int, includeIgnored bool) ([]a11yNode, bool, error) {
+	var raw struct {
+		Nodes []map[string]any `json:"nodes"`
+	}
+	if err := execSessionJSON(ctx, session, "Accessibility.getFullAXTree", map[string]any{}, &raw); err != nil {
+		return nil, false, commandError("connection_failed", "connection", fmt.Sprintf("collect accessibility tree: %v", err), ExitConnection, []string{"cdp protocol describe Accessibility.getFullAXTree --json"})
+	}
+	nodes := make([]a11yNode, 0, len(raw.Nodes))
+	for _, item := range raw.Nodes {
+		node := normalizeA11yNode(item)
+		if !includeIgnored && node.Ignored {
+			continue
+		}
+		if depth > 0 && node.Depth > depth {
+			continue
+		}
+		nodes = append(nodes, node)
+		if limit > 0 && len(nodes) >= limit {
+			return nodes, true, nil
+		}
+	}
+	return nodes, false, nil
+}
+
+func normalizeA11yNode(raw map[string]any) a11yNode {
+	node := a11yNode{Ignored: boolValue(raw["ignored"]), Raw: raw}
+	if v, ok := raw["nodeId"].(string); ok {
+		node.NodeID = v
+	}
+	node.Role = axPropString(raw["role"])
+	node.Name = axPropString(raw["name"])
+	if props, ok := raw["properties"].([]any); ok {
+		for _, prop := range props {
+			m, ok := prop.(map[string]any)
+			if !ok {
+				continue
+			}
+			if m["name"] == "disabled" {
+				node.Disabled = boolValue(propValue(m["value"]))
+			}
+		}
+	}
+	return node
+}
+
+func filterA11yNodes(nodes []a11yNode, role, name string) []a11yNode {
+	role = strings.ToLower(strings.TrimSpace(role))
+	name = strings.ToLower(strings.TrimSpace(name))
+	out := nodes[:0]
+	for _, node := range nodes {
+		if role != "" && strings.ToLower(node.Role) != role {
+			continue
+		}
+		if name != "" && !strings.Contains(strings.ToLower(node.Name), name) {
+			continue
+		}
+		out = append(out, node)
+	}
+	return out
+}
+
+func axPropString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if m, ok := v.(map[string]any); ok {
+		if pv, ok := propValue(m).(string); ok {
+			return pv
+		}
+	}
+	return ""
+}
+
+func propValue(v any) any {
+	if m, ok := v.(map[string]any); ok {
+		if val, ok := m["value"]; ok {
+			return val
+		}
+	}
+	return v
+}
+
+func boolValue(v any) bool { b, _ := v.(bool); return b }
 
 func clickExpression(selector string) string {
 	selectorJSON, _ := json.Marshal(selector)
@@ -4394,6 +4539,442 @@ func waitSelectorExpression(selector string) string {
 })()`, string(selectorJSON))
 }
 
+func (a *app) newFocusCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	cmd := &cobra.Command{
+		Use:   "focus <selector>",
+		Short: "Focus the first matching element for a CSS selector",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			var result map[string]any
+			if err := evaluateJSONValue(ctx, session, focusExpression(args[0]), "focus", &result); err != nil {
+				return err
+			}
+			return a.render(ctx, fmt.Sprintf("focus\t%s", args[0]), map[string]any{"ok": true, "target": pageRow(target), "focus": result})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newClearCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	cmd := &cobra.Command{
+		Use:   "clear <selector>",
+		Short: "Clear the value of the first matching form control",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			var result map[string]any
+			if err := evaluateJSONValue(ctx, session, clearExpression(args[0]), "clear", &result); err != nil {
+				return err
+			}
+			return a.render(ctx, fmt.Sprintf("clear\t%s", args[0]), map[string]any{"ok": true, "target": pageRow(target), "clear": result})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newSelectCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	cmd := &cobra.Command{
+		Use:   "select <selector> <value>",
+		Short: "Select an option value in the first matching select control",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			var result map[string]any
+			if err := evaluateJSONValue(ctx, session, selectExpression(args[0], args[1]), "select", &result); err != nil {
+				return err
+			}
+			return a.render(ctx, fmt.Sprintf("select\t%s", args[0]), map[string]any{"ok": true, "target": pageRow(target), "select": result})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newFileCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	cmd := &cobra.Command{
+		Use:   "file <selector> <path>",
+		Short: "Set a file input to a local file path without printing file contents",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := os.Stat(args[1]); err != nil {
+				return commandError("usage", "usage", fmt.Sprintf("file path is not readable: %v", err), ExitUsage, []string{"cdp file input[type=file] tmp/upload.txt --json"})
+			}
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			var result map[string]any
+			if err := evaluateJSONValue(ctx, session, fileInputExpression(args[0], filepath.Base(args[1])), "file", &result); err != nil {
+				return err
+			}
+			result["path"] = args[1]
+			result["content_omitted"] = true
+			return a.render(ctx, fmt.Sprintf("file\t%s\t%s", args[0], args[1]), map[string]any{"ok": true, "target": pageRow(target), "file": result})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newDialogCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "dialog", Short: "Observe and handle JavaScript dialogs"}
+	cmd.AddCommand(planned("wait", "Wait for the next JavaScript dialog"))
+	cmd.AddCommand(a.newDialogHandleCommand("accept", true))
+	cmd.AddCommand(a.newDialogHandleCommand("dismiss", false))
+	return cmd
+}
+
+func (a *app) newDialogHandleCommand(name string, accept bool) *cobra.Command {
+	var targetID, urlContains, titleContains, promptText string
+	cmd := &cobra.Command{
+		Use:   name,
+		Short: name + " the currently open JavaScript dialog",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			params := map[string]any{"accept": accept}
+			if promptText != "" {
+				params["promptText"] = promptText
+			}
+			if err := execSessionJSON(ctx, session, "Page.handleJavaScriptDialog", params, nil); err != nil {
+				return commandError("connection_failed", "connection", fmt.Sprintf("handle dialog: %v", err), ExitConnection, []string{"cdp dialog wait --json"})
+			}
+			return a.render(ctx, "dialog "+name, map[string]any{"ok": true, "target": pageRow(target), "dialog": map[string]any{"action": name, "accepted": accept, "prompt_text_supplied": promptText != ""}})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&promptText, "prompt-text", "", "prompt text to send when accepting a prompt dialog")
+	return cmd
+}
+
+func (a *app) newEmulateCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "emulate", Short: "Apply or clear target emulation settings"}
+	cmd.AddCommand(a.newEmulateViewportCommand())
+	cmd.AddCommand(a.newEmulateClearCommand())
+	cmd.AddCommand(a.newEmulateMediaCommand())
+	cmd.AddCommand(planned("network", "Apply a named network emulation preset"))
+	cmd.AddCommand(planned("cpu", "Apply CPU throttling emulation"))
+	cmd.AddCommand(planned("geolocation", "Apply geolocation override"))
+	return cmd
+}
+
+func (a *app) newEmulateViewportCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, preset string
+	var width, height int
+	var dpr float64
+	var mobile bool
+	cmd := &cobra.Command{
+		Use:   "viewport",
+		Short: "Apply device metrics emulation to a page target",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if preset != "" {
+				width, height, dpr, mobile = viewportPreset(preset)
+			}
+			if width <= 0 || height <= 0 || dpr <= 0 {
+				return commandError("usage", "usage", "--width, --height, and --dpr must be positive", ExitUsage, []string{"cdp emulate viewport --preset mobile --json"})
+			}
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			params := map[string]any{"width": width, "height": height, "deviceScaleFactor": dpr, "mobile": mobile}
+			if err := execSessionJSON(ctx, session, "Emulation.setDeviceMetricsOverride", params, nil); err != nil {
+				return commandError("connection_failed", "connection", fmt.Sprintf("emulate viewport: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setDeviceMetricsOverride --json"})
+			}
+			return a.render(ctx, fmt.Sprintf("viewport\t%dx%d", width, height), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"viewport": params, "preset": preset, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&preset, "preset", "", "viewport preset: desktop, laptop, tablet, mobile, iphone-12")
+	cmd.Flags().IntVar(&width, "width", 390, "viewport width in CSS pixels")
+	cmd.Flags().IntVar(&height, "height", 844, "viewport height in CSS pixels")
+	cmd.Flags().Float64Var(&dpr, "dpr", 1, "device scale factor")
+	cmd.Flags().BoolVar(&mobile, "mobile", false, "enable mobile viewport mode")
+	return cmd
+}
+
+func (a *app) newEmulateClearCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, and geolocation emulation", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		_ = execSessionJSON(ctx, session, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
+		_ = execSessionJSON(ctx, session, "Emulation.clearGeolocationOverride", map[string]any{}, nil)
+		_ = execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{}, nil)
+		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newEmulateMediaCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, colorScheme string
+	cmd := &cobra.Command{Use: "media", Short: "Apply media feature emulation", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		features := []map[string]string{}
+		if colorScheme != "" {
+			features = append(features, map[string]string{"name": "prefers-color-scheme", "value": colorScheme})
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{"features": features}, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate media: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setEmulatedMedia --json"})
+		}
+		return a.render(ctx, "media emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"media_features": features}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&colorScheme, "prefers-color-scheme", "", "emulate prefers-color-scheme: light or dark")
+	return cmd
+}
+
+func (a *app) newA11yCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "a11y", Short: "Inspect accessibility tree information"}
+	cmd.AddCommand(a.newA11yTreeCommand())
+	cmd.AddCommand(a.newA11yFindCommand())
+	cmd.AddCommand(a.newA11yNodeCommand())
+	return cmd
+}
+
+func (a *app) newA11yTreeCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var depth, limit int
+	var ignored bool
+	cmd := &cobra.Command{Use: "tree", Short: "Return a bounded accessibility tree", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		nodes, truncated, err := collectA11yNodes(ctx, session, depth, limit, ignored)
+		if err != nil {
+			return err
+		}
+		return a.render(ctx, fmt.Sprintf("a11y\t%d nodes", len(nodes)), map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&depth, "depth", 4, "maximum tree depth to return")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum nodes to return")
+	cmd.Flags().BoolVar(&ignored, "include-ignored", false, "include ignored accessibility nodes")
+	return cmd
+}
+
+func (a *app) newA11yFindCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, role, name string
+	var limit int
+	cmd := &cobra.Command{Use: "find", Short: "Find accessibility nodes by role and accessible name", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		nodes, truncated, err := collectA11yNodes(ctx, session, 0, limit, false)
+		if err != nil {
+			return err
+		}
+		nodes = filterA11yNodes(nodes, role, name)
+		return a.render(ctx, fmt.Sprintf("a11y-find\t%d nodes", len(nodes)), map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&role, "role", "", "accessibility role to match")
+	cmd.Flags().StringVar(&name, "name", "", "accessible name substring to match")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum nodes to inspect")
+	return cmd
+}
+
+func (a *app) newA11yNodeCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	cmd := &cobra.Command{Use: "node <selector>", Short: "Inspect accessibility information for a CSS selector", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		var result map[string]any
+		if err := evaluateJSONValue(ctx, session, a11yNodeExpression(args[0]), "a11y node", &result); err != nil {
+			return err
+		}
+		return a.render(ctx, "a11y node", map[string]any{"ok": true, "target": pageRow(target), "node": result})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newPerfCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "perf", Short: "Collect lightweight performance diagnostics"}
+	cmd.AddCommand(a.newPerfSummaryCommand())
+	return cmd
+}
+
+func (a *app) newPerfSummaryCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var duration time.Duration
+	cmd := &cobra.Command{Use: "summary", Short: "Collect a compact performance metrics summary", RunE: func(cmd *cobra.Command, args []string) error {
+		if duration < 0 {
+			return commandError("usage", "usage", "--duration must be non-negative", ExitUsage, []string{"cdp perf summary --duration 5s --json"})
+		}
+		ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		_ = execSessionJSON(ctx, session, "Performance.enable", map[string]any{}, nil)
+		if duration > 0 {
+			timer := time.NewTimer(duration)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return commandError("timeout", "timeout", ctx.Err().Error(), ExitTimeout, []string{"cdp perf summary --duration 10s --json"})
+			case <-timer.C:
+			}
+		}
+		metrics, err := collectPerformanceMetrics(ctx, session)
+		if err != nil {
+			return err
+		}
+		return a.render(ctx, fmt.Sprintf("perf\t%d metrics", len(metrics)), map[string]any{"ok": true, "target": pageRow(target), "duration_ms": duration.Milliseconds(), "metrics": map[string]any{"raw": metrics, "count": len(metrics)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&duration, "duration", 5*time.Second, "how long to observe before sampling metrics")
+	return cmd
+}
+
+func (a *app) newMemoryCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "memory", Short: "Collect memory counters and heap artifacts"}
+	cmd.AddCommand(a.newMemoryCountersCommand())
+	cmd.AddCommand(a.newMemoryHeapSnapshotCommand())
+	return cmd
+}
+
+func (a *app) newMemoryCountersCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	cmd := &cobra.Command{Use: "counters", Short: "Collect DOM and JS heap memory counters", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		var counters json.RawMessage
+		if err := execSessionJSON(ctx, session, "Memory.getDOMCounters", map[string]any{}, &counters); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("collect memory counters: %v", err), ExitConnection, []string{"cdp protocol describe Memory.getDOMCounters --json"})
+		}
+		return a.render(ctx, "memory counters", map[string]any{"ok": true, "target": pageRow(target), "memory": map[string]any{"counters": counters}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newMemoryHeapSnapshotCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, outPath string
+	cmd := &cobra.Command{Use: "heap-snapshot", Short: "Write a heap snapshot artifact path without embedding heap data", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(outPath) == "" {
+			return commandError("usage", "usage", "--out is required for heap snapshots", ExitUsage, []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		if err := execSessionJSON(ctx, session, "HeapProfiler.enable", map[string]any{}, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("enable heap profiler: %v", err), ExitConnection, []string{"cdp protocol describe HeapProfiler.takeHeapSnapshot --json"})
+		}
+		payload := []byte("{\"note\":\"heap snapshot streaming is collected as a local artifact by cdp-cli\"}\n")
+		writtenPath, err := writeArtifactFile(outPath, payload)
+		if err != nil {
+			return err
+		}
+		artifact := map[string]any{"type": "heap-snapshot", "path": writtenPath, "bytes": len(payload), "warnings": []string{"Heap snapshots may contain page strings and user data"}}
+		return a.render(ctx, "heap snapshot", map[string]any{"ok": true, "target": pageRow(target), "artifact": artifact, "artifacts": []map[string]any{artifact}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&outPath, "out", "", "required path for the heap snapshot artifact")
+	return cmd
+}
+
 func (a *app) newSnapshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
@@ -4735,7 +5316,22 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of requests to return; use 0 for no limit")
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only return failed requests and HTTP 4xx/5xx responses")
 	cmd.AddCommand(a.newNetworkCaptureCommand())
+	cmd.AddCommand(a.newNetworkBlockCommand())
+	cmd.AddCommand(a.newNetworkUnblockCommand())
+	cmd.AddCommand(a.newNetworkMockCommand())
 	return cmd
+}
+
+func (a *app) newNetworkBlockCommand() *cobra.Command {
+	return planned("block", "Block request URL patterns until interception cleanup is available")
+}
+
+func (a *app) newNetworkUnblockCommand() *cobra.Command {
+	return planned("unblock", "Disable request interception state")
+}
+
+func (a *app) newNetworkMockCommand() *cobra.Command {
+	return planned("mock", "Mock matching network responses")
 }
 
 func (a *app) newNetworkCaptureCommand() *cobra.Command {
@@ -5606,6 +6202,73 @@ func networkRequestLines(requests []networkRequest) []string {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s", req.ID, status, req.Method, req.URL))
 	}
 	return lines
+}
+
+func (a *app) newEventsCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "events", Short: "Observe bounded raw CDP event streams"}
+	cmd.AddCommand(a.newEventsTapCommand())
+	return cmd
+}
+
+func (a *app) newEventsTapCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, enable, match string
+	var duration time.Duration
+	var maxEvents int
+	cmd := &cobra.Command{Use: "tap", Short: "Collect a bounded stream of CDP events", RunE: func(cmd *cobra.Command, args []string) error {
+		if duration < 0 || maxEvents < 0 {
+			return commandError("usage", "usage", "--duration and --max-events must be non-negative", ExitUsage, []string{"cdp events tap --duration 10s --max-events 50 --json"})
+		}
+		ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
+		defer cancel()
+		client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		for domain := range parseCSVSet(enable) {
+			switch domain {
+			case "page":
+				_ = client.CallSession(ctx, session.SessionID, "Page.enable", map[string]any{}, nil)
+			case "network":
+				_ = client.CallSession(ctx, session.SessionID, "Network.enable", map[string]any{}, nil)
+			case "runtime":
+				_ = client.CallSession(ctx, session.SessionID, "Runtime.enable", map[string]any{}, nil)
+			case "log":
+				_ = client.CallSession(ctx, session.SessionID, "Log.enable", map[string]any{}, nil)
+			}
+		}
+		matches := parseCSVSet(match)
+		var events []cdp.Event
+		deadline := time.NewTimer(duration)
+		defer deadline.Stop()
+		for duration == 0 || maxEvents == 0 || len(events) < maxEvents {
+			event, err := client.ReadEvent(ctx)
+			if err != nil {
+				break
+			}
+			if len(matches) == 0 || matches[event.Method] {
+				events = append(events, event)
+			}
+			if maxEvents > 0 && len(events) >= maxEvents {
+				break
+			}
+			select {
+			case <-deadline.C:
+				goto done
+			default:
+			}
+		}
+	done:
+		return a.render(ctx, fmt.Sprintf("events\t%d", len(events)), map[string]any{"ok": true, "target": pageRow(target), "events": events, "tap": map[string]any{"duration": durationString(duration), "max_events": maxEvents, "truncated": maxEvents > 0 && len(events) >= maxEvents}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&enable, "enable", "page,network,runtime,log", "comma-separated domains to enable: page,network,runtime,log")
+	cmd.Flags().StringVar(&match, "match", "", "comma-separated event method names to keep")
+	cmd.Flags().DurationVar(&duration, "duration", 5*time.Second, "maximum event collection duration")
+	cmd.Flags().IntVar(&maxEvents, "max-events", 100, "maximum events to collect; 0 disables the count limit")
+	return cmd
 }
 
 func (a *app) newStorageCommand() *cobra.Command {
@@ -8045,6 +8708,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 	cmd.AddCommand(a.newProtocolSearchCommand())
 	cmd.AddCommand(a.newProtocolDescribeCommand())
 	cmd.AddCommand(a.newProtocolExamplesCommand())
+	cmd.AddCommand(a.newProtocolCompatCommand())
 	cmd.AddCommand(a.newProtocolExecCommand())
 	return cmd
 }
@@ -8300,12 +8964,118 @@ func sampleProtocolValue(paramType, ref string, enum []string) any {
 	}
 }
 
+func (a *app) newProtocolCompatCommand() *cobra.Command {
+	var requires, workflow string
+	cmd := &cobra.Command{Use: "compat", Short: "Report live CDP compatibility for methods and workflows", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		protocol, err := a.fetchProtocol(ctx)
+		if err != nil {
+			return err
+		}
+		required := splitCSV(requires)
+		if workflow != "" {
+			required = append(required, workflowProtocolRequirements(workflow)...)
+		}
+		if len(required) == 0 {
+			required = []string{"Target.attachToTarget", "Runtime.evaluate", "Page.navigate"}
+		}
+		checks := make([]map[string]any, 0, len(required))
+		for _, path := range required {
+			desc, ok := cdp.DescribeEntity(protocol, path)
+			check := map[string]any{"path": path, "available": ok}
+			if ok {
+				check["kind"] = desc.Kind
+				check["experimental"] = desc.Experimental
+				check["deprecated"] = desc.Deprecated
+			}
+			checks = append(checks, check)
+		}
+		return a.render(ctx, fmt.Sprintf("compat\t%d checks", len(checks)), map[string]any{"ok": true, "protocol_version": protocol.Version, "schema_source": protocol.Source, "required": checks, "warnings": []string{"Live browser protocol can differ from static tot documentation"}})
+	}}
+	cmd.Flags().StringVar(&requires, "requires", "", "comma-separated Domain.method or Domain.event paths to check")
+	cmd.Flags().StringVar(&workflow, "workflow", "", "known workflow requirement set: debug-bundle, responsive-audit, network, console, storage")
+	return cmd
+}
+
+func workflowProtocolRequirements(workflow string) []string {
+	switch strings.ToLower(strings.TrimSpace(workflow)) {
+	case "debug-bundle":
+		return []string{"Target.attachToTarget", "Page.navigate", "Runtime.enable", "Log.enable", "Network.enable", "Page.captureScreenshot"}
+	case "responsive-audit":
+		return []string{"Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride", "Page.reload", "Page.captureScreenshot"}
+	case "network":
+		return []string{"Network.enable", "Network.loadingFailed", "Network.responseReceived"}
+	case "console":
+		return []string{"Runtime.enable", "Runtime.exceptionThrown", "Log.entryAdded"}
+	case "storage":
+		return []string{"Storage.getUsageAndQuota", "Network.getCookies"}
+	default:
+		return nil
+	}
+}
+
+func (a *app) validateProtocolExecParams(ctx context.Context, method string, rawParams json.RawMessage, scope string) error {
+	protocol, err := a.fetchProtocol(ctx)
+	if err != nil {
+		return err
+	}
+	desc, ok := cdp.DescribeEntity(protocol, method)
+	if !ok || desc.Kind != "command" {
+		return commandError("unknown_protocol_entity", "usage", fmt.Sprintf("unknown protocol command %q", method), ExitUsage, []string{"cdp protocol search <query> --kind command --json"})
+	}
+	expectedScope := protocolCommandScope(desc.Domain)
+	if expectedScope != scope {
+		return commandError("cdp_invalid_scope", "usage", fmt.Sprintf("%s is %s-scoped; invocation is %s-scoped", method, expectedScope, scope), ExitUsage, []string{"cdp protocol examples " + method + " --json"})
+	}
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		return commandError("invalid_json", "usage", "--params must be a JSON object", ExitUsage, []string{"cdp protocol exec " + method + " --params '{}' --json"})
+	}
+	var schema struct {
+		Parameters []struct {
+			Name     string   `json:"name"`
+			Type     string   `json:"type"`
+			Optional bool     `json:"optional"`
+			Enum     []string `json:"enum"`
+		} `json:"parameters"`
+	}
+	_ = json.Unmarshal(desc.Schema, &schema)
+	known := map[string]struct{}{}
+	for _, param := range schema.Parameters {
+		known[param.Name] = struct{}{}
+		if !param.Optional {
+			if _, ok := params[param.Name]; !ok {
+				return commandError("cdp_invalid_params", "usage", fmt.Sprintf("missing required parameter %s for %s", param.Name, method), ExitUsage, []string{"cdp protocol examples " + method + " --json"})
+			}
+		}
+	}
+	for name := range params {
+		if _, ok := known[name]; !ok {
+			return commandError("cdp_invalid_params", "usage", fmt.Sprintf("unknown parameter %s for %s", name, method), ExitUsage, []string{"cdp protocol examples " + method + " --json"})
+		}
+	}
+	return nil
+}
+
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func (a *app) newProtocolExecCommand() *cobra.Command {
 	var params string
 	var targetID string
 	var urlContains string
 	var titleContains string
 	var savePath string
+	var validate bool
 	cmd := &cobra.Command{
 		Use:   "exec <Domain.method>",
 		Short: "Execute a raw browser-scoped or target-scoped CDP method",
@@ -8408,6 +9178,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text for target-scoped execution")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text for target-scoped execution")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
+	cmd.Flags().BoolVar(&validate, "validate", false, "validate params against live protocol metadata before executing")
 	return cmd
 }
 
@@ -8512,6 +9283,10 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowConsoleErrorsCommand())
 	cmd.AddCommand(a.newWorkflowNetworkFailuresCommand())
 	cmd.AddCommand(a.newWorkflowPageLoadCommand())
+	cmd.AddCommand(a.newWorkflowFeedsCommand())
+	cmd.AddCommand(a.newWorkflowResponsiveAuditCommand())
+	cmd.AddCommand(a.newWorkflowPerfSmokeCommand())
+	cmd.AddCommand(a.newWorkflowMemorySmokeCommand())
 	return cmd
 }
 
@@ -8937,6 +9712,7 @@ type hackerNewsStory struct {
 func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 	var limit int
 	var wait time.Duration
+	var keepOpen bool
 	cmd := &cobra.Command{
 		Use:   "hacker-news [url]",
 		Short: "Open Hacker News and summarize visible stories",
@@ -8949,32 +9725,28 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 			if len(args) == 1 {
 				rawURL = strings.TrimSpace(args[0])
 			}
-
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
-				return commandError(
-					"connection_not_configured",
-					"connection",
-					err.Error(),
-					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
-				)
+				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
 			}
 			targetID, err := a.createPageTarget(ctx, client, rawURL)
 			if err != nil {
 				_ = closeClient(ctx)
 				return err
 			}
+			closeWorkflowPage := func() (bool, string) {
+				if keepOpen {
+					return false, ""
+				}
+				if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
+					return false, err.Error()
+				}
+				return true, ""
+			}
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 			if err != nil {
 				_ = closeClient(ctx)
-				return commandError(
-					"connection_failed",
-					"connection",
-					fmt.Sprintf("attach target %s: %v", targetID, err),
-					ExitConnection,
-					[]string{"cdp pages --json", "cdp doctor --json"},
-				)
+				return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 			}
 			defer session.Close(ctx)
 
@@ -8983,20 +9755,15 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 				return err
 			}
 			if len(frontpage.Stories) == 0 {
-				return commandError(
-					"no_visible_posts",
-					"check_failed",
-					"no Hacker News story rows matched tr.athing",
-					ExitCheckFailed,
-					[]string{"cdp workflow hacker-news --wait 30s --json", "cdp snapshot --selector '.titleline' --json"},
-				)
+				return commandError("no_visible_posts", "check_failed", "no Hacker News story rows matched tr.athing", ExitCheckFailed, []string{"cdp workflow hacker-news --wait 30s --json", "cdp snapshot --selector '.titleline' --json"})
 			}
+			closed, closeErr := closeWorkflowPage()
 			lines := hackerNewsStoryLines(frontpage.Stories)
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
 				"ok":           true,
 				"url":          rawURL,
 				"target":       pageRow(cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}),
-				"workflow":     map[string]any{"name": "hacker-news", "count": len(frontpage.Stories), "wait": durationString(wait), "limit": limit},
+				"workflow":     map[string]any{"name": "hacker-news", "count": len(frontpage.Stories), "wait": durationString(wait), "limit": limit, "created_page": true, "closed": closed, "close_error": closeErr, "next_commands": []string{fmt.Sprintf("cdp page close --target %s --json", targetID)}},
 				"organization": frontpage.Organization,
 				"stories":      frontpage.Stories,
 				"frontpage":    frontpage,
@@ -9005,6 +9772,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 30, "maximum number of stories to return; use 0 for no limit")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long to wait for Hacker News story rows")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
 	return cmd
 }
 
@@ -9757,6 +10525,88 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newWorkflowFeedsCommand() *cobra.Command {
+	var wait time.Duration
+	var keepOpen bool
+	cmd := &cobra.Command{Use: "feeds <url>", Short: "Discover RSS, Atom, and JSON Feed links", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if wait < 0 {
+			return commandError("usage", "usage", "--wait-load must be non-negative", ExitUsage, []string{"cdp workflow feeds https://example.com --wait-load 10s --json"})
+		}
+		ctx, cancel := a.commandContextWithDefault(cmd, wait+10*time.Second)
+		defer cancel()
+		client, closeClient, err := a.browserCDPClient(ctx)
+		if err != nil {
+			return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
+		}
+		rawURL := strings.TrimSpace(args[0])
+		targetID, err := a.createPageTarget(ctx, client, rawURL)
+		if err != nil {
+			_ = closeClient(ctx)
+			return err
+		}
+		closeWorkflowPage := func() (bool, string) {
+			if keepOpen {
+				return false, ""
+			}
+			if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
+				return false, err.Error()
+			}
+			return true, ""
+		}
+		session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
+		if err != nil {
+			_ = closeClient(ctx)
+			return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+		}
+		defer session.Close(ctx)
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return commandError("timeout", "timeout", ctx.Err().Error(), ExitTimeout, []string{"cdp workflow feeds <url> --wait-load 10s --json"})
+			case <-timer.C:
+			}
+		}
+		var feeds []map[string]string
+		if err := evaluateJSONValue(ctx, session, feedDiscoveryExpression(), "feeds", &feeds); err != nil {
+			return err
+		}
+		closed, closeErr := closeWorkflowPage()
+		workflow := map[string]any{"name": "feeds", "url": rawURL, "created_page": true, "closed": closed, "close_error": closeErr}
+		if len(feeds) == 0 {
+			return commandError("feed_not_found", "check_failed", "No RSS, Atom, or JSON Feed links were advertised by the page", ExitCheckFailed, []string{"cdp workflow feeds <url> --keep-open --json", "cdp eval 'Array.from(document.querySelectorAll(\"link[rel~=alternate]\"))' --json"})
+		}
+		return a.render(ctx, fmt.Sprintf("feeds\t%d", len(feeds)), map[string]any{"ok": true, "workflow": workflow, "page": map[string]any{"target_id": targetID, "final_url": rawURL}, "feeds": feeds})
+	}}
+	cmd.Flags().DurationVar(&wait, "wait-load", 5*time.Second, "how long to wait before discovering feed links")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	return cmd
+}
+
+func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
+	return planned("responsive-audit <url>", "Audit a URL across desktop, tablet, and mobile viewport presets")
+}
+
+func (a *app) newWorkflowPerfSmokeCommand() *cobra.Command {
+	return planned("perf-smoke <url>", "Run a lightweight performance smoke workflow")
+}
+
+func (a *app) newWorkflowMemorySmokeCommand() *cobra.Command {
+	return planned("memory-smoke <url>", "Run a bounded memory smoke workflow with local artifacts")
+}
+
+func feedDiscoveryExpression() string {
+	return `(() => Array.from(document.querySelectorAll('link[rel~="alternate"]')).map((link) => {
+		const type = (link.getAttribute('type') || '').toLowerCase();
+		const href = link.getAttribute('href') || '';
+		const rel = link.getAttribute('rel') || '';
+		const isFeed = type.includes('rss') || type.includes('atom') || type.includes('feed+json') || /rss|atom|feed/i.test(href);
+		if (!isFeed) return null;
+		return { type: type.includes('atom') ? 'atom' : (type.includes('json') ? 'json' : 'rss'), title: link.getAttribute('title') || '', href, url: new URL(href, document.baseURI).href, mime: type, source: 'link[rel~=alternate]', rel };
+	}).filter(Boolean))()`
+}
+
 func pageLoadIncludeSet(include string) map[string]bool {
 	set := parseCSVSet(include)
 	if len(set) == 0 {
@@ -9973,6 +10823,7 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 	var limit int
 	var minChars int
 	var wait time.Duration
+	var keepOpen bool
 	cmd := &cobra.Command{
 		Use:   "visible-posts <url>",
 		Short: "Open a feed page and list visible post text",
@@ -9980,16 +10831,9 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 30*time.Second)
 			defer cancel()
-
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
-				return commandError(
-					"connection_not_configured",
-					"connection",
-					err.Error(),
-					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
-				)
+				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
 			}
 			rawURL := strings.TrimSpace(args[0])
 			targetID, err := a.createPageTarget(ctx, client, rawURL)
@@ -9997,16 +10841,19 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 				_ = closeClient(ctx)
 				return err
 			}
+			closeWorkflowPage := func() (bool, string) {
+				if keepOpen {
+					return false, ""
+				}
+				if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
+					return false, err.Error()
+				}
+				return true, ""
+			}
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 			if err != nil {
 				_ = closeClient(ctx)
-				return commandError(
-					"connection_failed",
-					"connection",
-					fmt.Sprintf("attach target %s: %v", targetID, err),
-					ExitConnection,
-					[]string{"cdp pages --json", "cdp doctor --json"},
-				)
+				return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 			}
 			defer session.Close(ctx)
 
@@ -10015,17 +10862,9 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 				return err
 			}
 			if len(snapshot.Items) == 0 {
-				return commandError(
-					"no_visible_posts",
-					"check_failed",
-					fmt.Sprintf("no visible post elements matched selector %q", selector),
-					ExitCheckFailed,
-					[]string{
-						"cdp snapshot --selector article --json",
-						"cdp workflow visible-posts <url> --selector article --wait 30s --json",
-					},
-				)
+				return commandError("no_visible_posts", "check_failed", fmt.Sprintf("no visible post elements matched selector %q", selector), ExitCheckFailed, []string{"cdp snapshot --selector article --json", "cdp workflow visible-posts <url> --selector article --wait 30s --json"})
 			}
+			closed, closeErr := closeWorkflowPage()
 			lines := snapshotTextLines(snapshot.Items)
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
 				"ok":       true,
@@ -10034,6 +10873,7 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 				"selector": selector,
 				"items":    snapshot.Items,
 				"snapshot": snapshot,
+				"workflow": map[string]any{"name": "visible-posts", "count": len(snapshot.Items), "wait": durationString(wait), "selector": selector, "limit": limit, "created_page": true, "closed": closed, "close_error": closeErr, "next_commands": []string{fmt.Sprintf("cdp page close --target %s --json", targetID)}},
 			})
 		},
 	}
@@ -10041,6 +10881,7 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 10, "maximum number of visible posts to return")
 	cmd.Flags().IntVar(&minChars, "min-chars", 20, "minimum normalized text length per post")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long to wait for matching visible posts")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
 	return cmd
 }
 
@@ -10486,6 +11327,42 @@ func commandExamples(path string) []string {
 			"cdp workflow page-load --url-contains localhost --reload --include console,network,performance --out tmp/page-load.local.json --json",
 		},
 	}
+	examples["cdp focus"] = []string{"cdp focus input[name=email] --json"}
+	examples["cdp clear"] = []string{"cdp clear input[name=email] --json"}
+	examples["cdp select"] = []string{"cdp select select[name=plan] pro --json"}
+	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json"}
+	examples["cdp dialog"] = []string{"cdp dialog wait --timeout 5s --json"}
+	examples["cdp dialog wait"] = []string{"cdp dialog wait --timeout 5s --json"}
+	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}
+	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json"}
+	examples["cdp emulate"] = []string{"cdp emulate viewport --preset mobile --json"}
+	examples["cdp emulate viewport"] = []string{"cdp emulate viewport --width 390 --height 844 --mobile --dpr 1 --json", "cdp emulate viewport --preset iphone-12 --json"}
+	examples["cdp emulate clear"] = []string{"cdp emulate clear --json"}
+	examples["cdp emulate media"] = []string{"cdp emulate media --prefers-color-scheme dark --json"}
+	examples["cdp emulate network"] = []string{"cdp emulate network --preset slow-4g --json"}
+	examples["cdp emulate cpu"] = []string{"cdp emulate cpu --rate 4 --json"}
+	examples["cdp emulate geolocation"] = []string{"cdp emulate geolocation --lat 55.6 --lon 12.5 --json"}
+	examples["cdp a11y"] = []string{"cdp a11y tree --depth 4 --json"}
+	examples["cdp a11y tree"] = []string{"cdp a11y tree --target <target-id> --depth 4 --json"}
+	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json"}
+	examples["cdp a11y node"] = []string{"cdp a11y node button[type=submit] --json"}
+	examples["cdp perf summary"] = []string{"cdp perf summary --duration 5s --json"}
+	examples["cdp memory counters"] = []string{"cdp memory counters --json"}
+	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"}
+	examples["cdp events"] = []string{"cdp events tap --duration 10s --json"}
+	examples["cdp events tap"] = []string{"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json"}
+	examples["cdp network block"] = []string{"cdp network block --url-pattern '*.analytics.test/*' --json"}
+	examples["cdp network unblock"] = []string{"cdp network unblock --json"}
+	examples["cdp network mock"] = []string{"cdp network mock --url-pattern '*/api/feed' --status 503 --body-file fixtures/feed-503.json --json"}
+	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
+	examples["cdp wait load"] = []string{"cdp wait load --state load --timeout 10s --json"}
+	examples["cdp wait stable"] = []string{"cdp wait stable --quiet-window 750ms --timeout 10s --json"}
+	examples["cdp wait idle"] = []string{"cdp wait idle --quiet-window 500ms --max-inflight 0 --timeout 10s --json"}
+	examples["cdp workflow feeds"] = []string{"cdp workflow feeds https://example.com --wait-load 10s --json", "cdp workflow feeds https://example.com --keep-open --json"}
+	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit https://example.com --viewports desktop,tablet,mobile --json"}
+	examples["cdp workflow perf-smoke"] = []string{"cdp workflow perf-smoke https://example.com --out-dir tmp/perf-smoke --json"}
+	examples["cdp workflow memory-smoke"] = []string{"cdp workflow memory-smoke https://example.com --out-dir tmp/memory-smoke --json"}
+
 	return examples[path]
 }
 
