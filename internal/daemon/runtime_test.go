@@ -49,6 +49,33 @@ func TestRuntimeEndpointPersistsButDoesNotMarshal(t *testing.T) {
 	}
 }
 
+func TestReadLogsTailsJSONLines(t *testing.T) {
+	stateDir := t.TempDir()
+	content := strings.Join([]string{
+		`{"time":"2026-04-29T00:00:00Z","level":"info","event":"hold_start","pid":123}`,
+		`{"time":"2026-04-29T00:00:01Z","level":"info","event":"rpc_listening","pid":123}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(daemon.RuntimeLogPath(stateDir), []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	entries, err := daemon.ReadLogs(context.Background(), stateDir, 1)
+	if err != nil {
+		t.Fatalf("ReadLogs returned error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event != "rpc_listening" {
+		t.Fatalf("ReadLogs = %+v, want last rpc_listening entry", entries)
+	}
+
+	empty, err := daemon.ReadLogs(context.Background(), t.TempDir(), 100)
+	if err != nil {
+		t.Fatalf("ReadLogs missing file returned error: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("ReadLogs missing file = %+v, want empty entries", empty)
+	}
+}
+
 func TestRuntimeClientEventAndProtocolRPC(t *testing.T) {
 	server := newRuntimeRPCFakeServer(t)
 	defer server.Close()

@@ -82,6 +82,8 @@ fi
   | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
 "$binary" daemon keepalive --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .state == "healthy" and .action == "none"' >/dev/null
+"$binary" daemon logs --state-dir "$state_dir/cdp-state" --tail 20 --json \
+  | jq -e '.ok == true and (.entries[] | select(.event == "rpc_listening"))' >/dev/null
 "$binary" pages --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \

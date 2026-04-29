@@ -21,6 +21,7 @@ import (
 
 const RuntimeFileName = "daemon.json"
 const RuntimeSocketFileName = "daemon.sock"
+const RuntimeLogFileName = "daemon.log"
 
 const (
 	RPCMethodDrainEvents   = "Daemon.drainEvents"
@@ -34,6 +35,7 @@ type Runtime struct {
 	ConnectionMode    string `json:"connection_mode"`
 	ReconnectInterval string `json:"reconnect_interval,omitempty"`
 	SocketPath        string `json:"socket_path,omitempty"`
+	LogPath           string `json:"log_path,omitempty"`
 	Endpoint          string `json:"-"`
 	UserDataDir       string `json:"user_data_dir,omitempty"`
 }
@@ -44,8 +46,17 @@ type runtimeFile struct {
 	ConnectionMode    string `json:"connection_mode"`
 	ReconnectInterval string `json:"reconnect_interval,omitempty"`
 	SocketPath        string `json:"socket_path,omitempty"`
+	LogPath           string `json:"log_path,omitempty"`
 	Endpoint          string `json:"endpoint,omitempty"`
 	UserDataDir       string `json:"user_data_dir,omitempty"`
+}
+
+type LogEntry struct {
+	Time    string `json:"time"`
+	Level   string `json:"level"`
+	Event   string `json:"event"`
+	Message string `json:"message,omitempty"`
+	PID     int    `json:"pid,omitempty"`
 }
 
 type RPCRequest struct {
@@ -71,6 +82,10 @@ func RuntimePath(stateDir string) string {
 
 func RuntimeSocketPath(stateDir string) string {
 	return filepath.Join(stateDir, RuntimeSocketFileName)
+}
+
+func RuntimeLogPath(stateDir string) string {
+	return filepath.Join(stateDir, RuntimeLogFileName)
 }
 
 func LoadRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
@@ -121,6 +136,7 @@ func runtimeFromFile(file runtimeFile) Runtime {
 		ConnectionMode:    file.ConnectionMode,
 		ReconnectInterval: file.ReconnectInterval,
 		SocketPath:        file.SocketPath,
+		LogPath:           file.LogPath,
 		Endpoint:          file.Endpoint,
 		UserDataDir:       file.UserDataDir,
 	}
@@ -133,6 +149,7 @@ func runtimeFileFromRuntime(runtime Runtime) runtimeFile {
 		ConnectionMode:    runtime.ConnectionMode,
 		ReconnectInterval: runtime.ReconnectInterval,
 		SocketPath:        runtime.SocketPath,
+		LogPath:           runtime.LogPath,
 		Endpoint:          runtime.Endpoint,
 		UserDataDir:       runtime.UserDataDir,
 	}
@@ -256,6 +273,7 @@ func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconn
 	}
 	pid := os.Getpid()
 	defer ClearRuntime(context.Background(), stateDir, pid)
+	appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "hold_start", Message: "daemon hold process starting", PID: pid})
 
 	socketPath := os.Getenv("CDP_DAEMON_SOCKET")
 	if strings.TrimSpace(socketPath) == "" {
@@ -265,16 +283,24 @@ func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconn
 	for {
 		client, err := cdp.Dial(ctx, endpoint)
 		if err == nil {
+			appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "browser_connected", Message: "connected to browser endpoint", PID: pid})
 			err = holdConnection(ctx, stateDir, socketPath, client, pid, connectionMode, reconnect)
+			if err != nil {
+				appendLog(context.Background(), stateDir, LogEntry{Level: "warn", Event: "hold_connection_ended", Message: err.Error(), PID: pid})
+			}
 			_ = ClearRuntime(context.Background(), stateDir, pid)
+		} else {
+			appendLog(context.Background(), stateDir, LogEntry{Level: "warn", Event: "browser_dial_failed", Message: err.Error(), PID: pid})
 		}
 		if reconnect <= 0 {
 			return err
 		}
 		select {
 		case <-ctx.Done():
+			appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "hold_stop", Message: ctx.Err().Error(), PID: pid})
 			return ctx.Err()
 		case <-time.After(reconnect):
+			appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "reconnect_wait_elapsed", Message: "attempting browser reconnect", PID: pid})
 		}
 	}
 }
@@ -446,10 +472,12 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 	listener, err := listenRuntimeSocket(socketPath)
 	if err != nil {
 		_ = client.Close(websocket.StatusInternalError, "rpc listen failed")
+		appendLog(context.Background(), stateDir, LogEntry{Level: "error", Event: "rpc_listen_failed", Message: err.Error(), PID: pid})
 		return err
 	}
 	defer listener.Close()
 	defer os.Remove(socketPath)
+	appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "rpc_listening", Message: "daemon rpc socket ready", PID: pid})
 
 	runtime := Runtime{
 		PID:               pid,
@@ -457,13 +485,16 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 		ConnectionMode:    connectionMode,
 		ReconnectInterval: durationString(reconnect),
 		SocketPath:        socketPath,
+		LogPath:           RuntimeLogPath(stateDir),
 		Endpoint:          client.Endpoint(),
 		UserDataDir:       os.Getenv("CDP_DAEMON_USER_DATA_DIR"),
 	}
 	if err := SaveRuntime(ctx, stateDir, runtime); err != nil {
 		_ = client.Close(websocket.StatusInternalError, "state write failed")
+		appendLog(context.Background(), stateDir, LogEntry{Level: "error", Event: "runtime_write_failed", Message: err.Error(), PID: pid})
 		return err
 	}
+	appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "runtime_saved", Message: "daemon runtime state saved", PID: pid})
 
 	cycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -597,6 +628,71 @@ func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration,
 			}
 		}
 	}
+}
+
+func appendLog(ctx context.Context, stateDir string, entry LogEntry) {
+	if strings.TrimSpace(stateDir) == "" {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	if entry.Time == "" {
+		entry.Time = time.Now().UTC().Format(time.RFC3339)
+	}
+	if entry.Level == "" {
+		entry.Level = "info"
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return
+	}
+	file, err := os.OpenFile(RuntimeLogPath(stateDir), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	b, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	_, _ = file.Write(append(b, '\n'))
+}
+
+func ReadLogs(ctx context.Context, stateDir string, tail int) ([]LogEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	b, err := os.ReadFile(RuntimeLogPath(stateDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []LogEntry{}, nil
+		}
+		return nil, fmt.Errorf("read daemon log: %w", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) == 1 && strings.TrimSpace(lines[0]) == "" {
+		lines = nil
+	}
+	if tail > 0 && len(lines) > tail {
+		lines = lines[len(lines)-tail:]
+	}
+	entries := make([]LogEntry, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			entries = append(entries, LogEntry{Level: "warn", Event: "unparseable_log_line", Message: line})
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }
 
 func timeoutMillis(ctx context.Context) int64 {

@@ -61,6 +61,15 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "lock", Type: "lock_metadata", Required: true, Description: "Keepalive lock metadata."},
 			},
 		},
+		"daemon-logs": {
+			Name:        "daemon-logs",
+			Description: "Daemon JSONL log entries from the local state directory.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the log file was read or found absent."},
+				{Name: "log", Type: "object", Required: true, Description: "Log path, requested tail, and returned count."},
+				{Name: "entries", Type: "array<daemon_log_entry>", Required: true, Description: "Log entries with time, level, event, message, and pid."},
+			},
+		},
 		"pages": {
 			Name:        "pages",
 			Description: "Open page targets from the selected browser connection.",

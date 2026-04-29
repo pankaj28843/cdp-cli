@@ -360,7 +360,7 @@ func (a *app) newDaemonCommand() *cobra.Command {
 	cmd.AddCommand(a.newDaemonRestartCommand())
 	cmd.AddCommand(a.newDaemonKeepaliveCommand())
 	cmd.AddCommand(a.newDaemonHoldCommand())
-	cmd.AddCommand(planned("logs", "Show attach daemon logs"))
+	cmd.AddCommand(a.newDaemonLogsCommand())
 	return cmd
 }
 
@@ -726,6 +726,46 @@ func (a *app) newDaemonStopCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+func (a *app) newDaemonLogsCommand() *cobra.Command {
+	var tail int
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "Show attach daemon logs",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if tail < 0 {
+				return commandError("usage", "usage", "--tail must be non-negative", ExitUsage, []string{"cdp daemon logs --tail 100 --json"})
+			}
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			entries, err := daemon.ReadLogs(ctx, store.Dir, tail)
+			if err != nil {
+				return commandError("internal", "internal", err.Error(), ExitInternal, []string{"cdp daemon logs --json"})
+			}
+			lines := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				line := strings.TrimSpace(strings.Join([]string{entry.Time, entry.Level, entry.Event, entry.Message}, "\t"))
+				lines = append(lines, line)
+			}
+			human := strings.Join(lines, "\n")
+			if human == "" {
+				human = "daemon log is empty"
+			}
+			return a.render(ctx, human, map[string]any{
+				"ok":      true,
+				"log":     map[string]any{"path": daemon.RuntimeLogPath(store.Dir), "tail": tail, "count": len(entries)},
+				"entries": entries,
+			})
+		},
+	}
+	cmd.Flags().IntVar(&tail, "tail", 100, "maximum log entries to return; use 0 for all")
+	return cmd
 }
 
 func (a *app) newDaemonRestartCommand() *cobra.Command {
@@ -7044,6 +7084,10 @@ func commandExamples(path string) []string {
 			"cdp daemon keepalive --auto-connect --display :0 --json",
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp daemon keepalive --connection default --probe auto --json",
+		},
+		"cdp daemon logs": {
+			"cdp daemon logs --tail 100 --json",
+			"cdp daemon logs --tail 0 --json",
 		},
 		"cdp connection remove": {
 			"cdp connection remove stale --json",
