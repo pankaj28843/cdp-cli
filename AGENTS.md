@@ -17,6 +17,14 @@ go vet ./...
 go build ./cmd/cdp
 ```
 
+Before committing feature work, run the full project loop:
+
+```bash
+make verify
+make install
+make e2e-installed
+```
+
 ## Design
 
 - The CLI is for agents first: strong `--help`, `--json`, `--jq`, `--debug`, `--timeout`, concise defaults, and stable error envelopes.
@@ -24,6 +32,10 @@ go build ./cmd/cdp
 - Use `context.Context` as the first parameter for cancelable work.
 - Return wrapped errors; log or return, never both.
 - Large browser artifacts should be written to files and referenced by path, not embedded in JSON.
+- Keep tab discovery lazy and scoped. Listing pages must not attach to every page or wake discarded/background tabs.
+- Prefer raw CDP escape hatches plus focused high-level workflows over broad shallow wrappers.
+- New command JSON needs a schema entry, help examples, and E2E coverage in `scripts/e2e.sh`.
+- See `ARCHITECTURE.md` for package boundaries and feature-shaping rules.
 
 ## Cross-Agent Layout
 
