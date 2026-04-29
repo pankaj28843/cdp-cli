@@ -93,7 +93,7 @@ func TestProbeAutoConnectAvailable(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	got, err := browser.Probe(context.Background(), browser.ProbeOptions{AutoConnect: true, Channel: "stable", UserDataDir: userDataDir})
+	got, err := browser.Probe(context.Background(), browser.ProbeOptions{AutoConnect: true, Channel: "stable", UserDataDir: userDataDir, ActiveProbe: true})
 	if err != nil {
 		t.Fatalf("Probe returned error: %v", err)
 	}
@@ -112,5 +112,20 @@ func TestProbeAutoConnectPermissionPending(t *testing.T) {
 	}
 	if got.State != "permission_pending" || got.ConnectionMode != "auto_connect" {
 		t.Fatalf("Probe() = %+v, want permission_pending auto_connect", got)
+	}
+}
+
+func TestProbeAutoConnectPassiveSkipsNetwork(t *testing.T) {
+	userDataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte("1\n/devtools/browser/test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	got, err := browser.Probe(context.Background(), browser.ProbeOptions{AutoConnect: true, UserDataDir: userDataDir})
+	if err != nil {
+		t.Fatalf("Probe returned error: %v", err)
+	}
+	if got.State != "active_probe_skipped" || got.ConnectionMode != "auto_connect" || got.WebSocketDebuggerURL {
+		t.Fatalf("Probe() = %+v, want passive auto-connect probe", got)
 	}
 }

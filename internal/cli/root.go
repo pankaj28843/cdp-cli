@@ -34,6 +34,7 @@ type options struct {
 	channel     string
 	userDataDir string
 	stateDir    string
+	activeProbe bool
 }
 
 type app struct {
@@ -93,6 +94,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.PersistentFlags().StringVar(&a.opts.channel, "channel", envDefault("CDP_CHANNEL", "stable"), "Chrome channel for --auto-connect: stable, beta, canary, or dev")
 	root.PersistentFlags().StringVar(&a.opts.userDataDir, "user-data-dir", os.Getenv("CDP_USER_DATA_DIR"), "Chrome user data directory for --auto-connect")
 	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
+	root.PersistentFlags().BoolVar(&a.opts.activeProbe, "active-browser-probe", os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "1" || os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "true", "actively connect to Chrome during auto-connect checks; may trigger a Chrome remote-debugging prompt")
 
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
@@ -130,6 +132,9 @@ func (a *app) browserEndpoint(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if opts.AutoConnect && !opts.ActiveProbe {
+		return "", fmt.Errorf("auto-connect browser attach is passive by default to avoid Chrome prompts; pass --active-browser-probe to attach directly")
+	}
 	return browser.ResolveEndpoint(ctx, opts)
 }
 
@@ -137,6 +142,9 @@ func (a *app) browserProtocolURL(ctx context.Context) (string, error) {
 	opts, err := a.browserOptions(ctx)
 	if err != nil {
 		return "", err
+	}
+	if opts.AutoConnect && !opts.ActiveProbe {
+		return "", fmt.Errorf("auto-connect protocol discovery is passive by default to avoid Chrome prompts; pass --active-browser-probe to query Chrome directly")
 	}
 	return browser.ResolveProtocolURL(ctx, opts)
 }
@@ -150,6 +158,7 @@ func (a *app) browserOptions(ctx context.Context) (browser.ProbeOptions, error) 
 		AutoConnect: a.opts.autoConnect,
 		Channel:     a.opts.channel,
 		UserDataDir: a.opts.userDataDir,
+		ActiveProbe: a.opts.activeProbe,
 	}, nil
 }
 

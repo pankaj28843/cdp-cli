@@ -28,34 +28,45 @@ trap 'rm -rf "$state_dir"' EXIT
 if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true" ]]; then
   "$binary" connection add default --auto-connect --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
   "$binary" connection current --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
-  "$binary" doctor --json | jq -e '.checks[] | select(.name == "daemon" and (.state == "connected" or .state == "permission_pending"))' >/dev/null
-  "$binary" daemon status --json | jq -e '.daemon.connection_mode == "auto_connect" and (.daemon.state == "connected" or .daemon.state == "permission_pending")' >/dev/null
-  set +e
-  live_protocol_output="$("$binary" --timeout 5s protocol metadata --json 2>/tmp/cdp-cli-live-protocol.err)"
-  live_protocol_code=$?
-  set -e
-  if [[ "$live_protocol_code" -eq 0 ]]; then
-    printf '%s\n' "$live_protocol_output" | jq -e '.ok == true and (.protocol.domain_count | type == "number")' >/dev/null
-  else
-    printf '%s\n' "$live_protocol_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
-  fi
-  set +e
-  live_targets_output="$("$binary" --timeout 5s targets --json 2>/tmp/cdp-cli-live-targets.err)"
-  live_targets_code=$?
-  set -e
-  if [[ "$live_targets_code" -eq 0 ]]; then
-    printf '%s\n' "$live_targets_output" | jq -e '.ok == true and (.targets | type == "array")' >/dev/null
-  else
-    printf '%s\n' "$live_targets_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
-  fi
-  set +e
-  live_pages_output="$("$binary" --timeout 5s pages --json 2>/tmp/cdp-cli-live-pages.err)"
-  live_pages_code=$?
-  set -e
-  if [[ "$live_pages_code" -eq 0 ]]; then
-    printf '%s\n' "$live_pages_output" | jq -e '.ok == true and (.pages | type == "array")' >/dev/null
-  else
-    printf '%s\n' "$live_pages_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+  "$binary" doctor --json | jq -e '.checks[] | select(.name == "daemon" and (.state == "passive" or .state == "permission_pending"))' >/dev/null
+  "$binary" daemon status --json | jq -e '.daemon.connection_mode == "auto_connect" and (.daemon.state == "passive" or .daemon.state == "permission_pending")' >/dev/null
+  if [[ "${CDP_E2E_ACTIVE_BROWSER:-}" == "1" || "${CDP_E2E_ACTIVE_BROWSER:-}" == "true" ]]; then
+    set +e
+    live_protocol_output="$("$binary" --active-browser-probe --timeout 5s protocol metadata --json 2>/tmp/cdp-cli-live-protocol.err)"
+    live_protocol_code=$?
+    set -e
+    if [[ "$live_protocol_code" -eq 0 ]]; then
+      printf '%s\n' "$live_protocol_output" | jq -e '.ok == true and (.protocol.domain_count | type == "number")' >/dev/null
+    else
+      printf '%s\n' "$live_protocol_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+    fi
+    set +e
+    live_domains_output="$("$binary" --active-browser-probe --timeout 5s protocol domains --json 2>/tmp/cdp-cli-live-domains.err)"
+    live_domains_code=$?
+    set -e
+    if [[ "$live_domains_code" -eq 0 ]]; then
+      printf '%s\n' "$live_domains_output" | jq -e '.ok == true and (.domains | type == "array")' >/dev/null
+    else
+      printf '%s\n' "$live_domains_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+    fi
+    set +e
+    live_targets_output="$("$binary" --active-browser-probe --timeout 5s targets --json 2>/tmp/cdp-cli-live-targets.err)"
+    live_targets_code=$?
+    set -e
+    if [[ "$live_targets_code" -eq 0 ]]; then
+      printf '%s\n' "$live_targets_output" | jq -e '.ok == true and (.targets | type == "array")' >/dev/null
+    else
+      printf '%s\n' "$live_targets_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+    fi
+    set +e
+    live_pages_output="$("$binary" --active-browser-probe --timeout 5s pages --json 2>/tmp/cdp-cli-live-pages.err)"
+    live_pages_code=$?
+    set -e
+    if [[ "$live_pages_code" -eq 0 ]]; then
+      printf '%s\n' "$live_pages_output" | jq -e '.ok == true and (.pages | type == "array")' >/dev/null
+    else
+      printf '%s\n' "$live_pages_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+    fi
   fi
 elif [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   "$binary" doctor --browser-url "$CDP_E2E_BROWSER_URL" --json \

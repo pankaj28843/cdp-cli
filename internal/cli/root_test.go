@@ -158,6 +158,32 @@ func TestProtocolMetadataJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolDomainsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "domains", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol domains exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK          bool `json:"ok"`
+		DomainCount int  `json:"domain_count"`
+		Domains     []struct {
+			Name       string `json:"name"`
+			EventCount int    `json:"event_count"`
+		} `json:"domains"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol domains output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.DomainCount != 2 || got.Domains[1].Name != "Runtime" || got.Domains[1].EventCount != 1 {
+		t.Fatalf("protocol domains = %+v, want compact domains", got)
+	}
+}
+
 func TestDaemonStatusJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
@@ -460,6 +486,76 @@ func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
 		}
 	}
 	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", got.Checks)
+}
+
+func TestDoctorAutoConnectPassiveSkipsActiveProbe(t *testing.T) {
+	userDataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte("1\n/devtools/browser/test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--auto-connect", "--user-data-dir", userDataDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Checks []struct {
+			Name    string `json:"name"`
+			Status  string `json:"status"`
+			State   string `json:"state"`
+			Details struct {
+				State string `json:"state"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	var sawDaemon, sawBrowser bool
+	for _, check := range got.Checks {
+		if check.Name == "daemon" {
+			sawDaemon = true
+			if check.Status != "pending" || check.State != "passive" {
+				t.Fatalf("daemon check = %+v, want passive pending", check)
+			}
+		}
+		if check.Name == "browser_debug_endpoint" {
+			sawBrowser = true
+			if check.Status != "pending" || check.Details.State != "active_probe_skipped" {
+				t.Fatalf("browser check = %+v, want active_probe_skipped pending", check)
+			}
+		}
+	}
+	if !sawDaemon || !sawBrowser {
+		t.Fatalf("doctor checks = %+v, want daemon and browser checks", got.Checks)
+	}
+}
+
+func TestAutoConnectPagesRequiresActiveProbe(t *testing.T) {
+	userDataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte("1\n/devtools/browser/test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"pages", "--auto-connect", "--user-data-dir", userDataDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitConnection {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitConnection, errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages error output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "--active-browser-probe") {
+		t.Fatalf("pages error = %+v, want active probe remediation", got)
+	}
 }
 
 func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {

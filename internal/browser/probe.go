@@ -22,6 +22,7 @@ type ProbeOptions struct {
 	AutoConnect bool
 	Channel     string
 	UserDataDir string
+	ActiveProbe bool
 }
 
 type ProbeResult struct {
@@ -44,6 +45,9 @@ type versionResponse struct {
 
 func Probe(ctx context.Context, opts ProbeOptions) (ProbeResult, error) {
 	if opts.AutoConnect {
+		if !opts.ActiveProbe {
+			return probeAutoConnectPassive(opts)
+		}
 		return probeAutoConnect(ctx, opts)
 	}
 	return probeBrowserURL(ctx, opts.BrowserURL)
@@ -247,6 +251,36 @@ func probeAutoConnect(ctx context.Context, opts ProbeOptions) (ProbeResult, erro
 		Channel:              channel,
 		HTTPStatus:           status,
 		WebSocketDebuggerURL: true,
+	}, nil
+}
+
+func probeAutoConnectPassive(opts ProbeOptions) (ProbeResult, error) {
+	channel := opts.Channel
+	if channel == "" {
+		channel = "stable"
+	}
+	_, _, err := activePort(opts.UserDataDir, channel)
+	if err != nil {
+		return ProbeResult{
+			State:          "permission_pending",
+			Message:        "Chrome auto-connect is not ready; enable remote debugging in Chrome and allow the prompt",
+			ConnectionMode: "auto_connect",
+			Channel:        channel,
+			RemediationCommands: []string{
+				"open chrome://inspect/#remote-debugging",
+				"cdp doctor --active-browser-probe --json",
+			},
+		}, nil
+	}
+	return ProbeResult{
+		State:          "active_probe_skipped",
+		Message:        "Chrome auto-connect state exists; active browser probing was skipped to avoid a remote-debugging prompt",
+		ConnectionMode: "auto_connect",
+		Channel:        channel,
+		RemediationCommands: []string{
+			"cdp doctor --active-browser-probe --json",
+			"cdp daemon status --active-browser-probe --json",
+		},
 	}, nil
 }
 

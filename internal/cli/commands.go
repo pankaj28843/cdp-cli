@@ -69,6 +69,7 @@ func (a *app) newDescribeCommand() *cobra.Command {
 					"--channel",
 					"--user-data-dir",
 					"--state-dir",
+					"--active-browser-probe",
 				},
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)
@@ -136,7 +137,7 @@ func browserDoctorStatus(autoConnect bool, probe *browser.ProbeResult) string {
 	switch probe.State {
 	case "cdp_available":
 		return "pass"
-	case "not_configured", "permission_pending":
+	case "not_configured", "permission_pending", "active_probe_skipped":
 		return "pending"
 	case "listening_not_cdp", "missing_browser_websocket", "invalid_response":
 		if autoConnect && probe.State == "listening_not_cdp" {
@@ -155,7 +156,7 @@ func daemonDoctorStatus(state string) string {
 	switch state {
 	case "connected":
 		return "pass"
-	case "not_running", "permission_pending":
+	case "not_running", "permission_pending", "passive":
 		return "pending"
 	case "chrome_unavailable", "disconnected":
 		return "warn"
@@ -629,7 +630,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 		Short:   "Discover and execute raw CDP methods",
 	}
 	cmd.AddCommand(a.newProtocolMetadataCommand())
-	cmd.AddCommand(planned("domains", "List CDP domains"))
+	cmd.AddCommand(a.newProtocolDomainsCommand())
 	cmd.AddCommand(planned("search <query>", "Search CDP domains, methods, events, and types"))
 	cmd.AddCommand(planned("describe <Domain.method>", "Describe a CDP method schema"))
 	cmd.AddCommand(planned("exec <Domain.method>", "Execute a raw CDP method"))
@@ -644,25 +645,9 @@ func (a *app) newProtocolMetadataCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			protocolURL, err := a.browserProtocolURL(ctx)
+			protocol, err := a.fetchProtocol(ctx)
 			if err != nil {
-				return commandError(
-					"connection_not_configured",
-					"connection",
-					err.Error(),
-					ExitConnection,
-					[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
-				)
-			}
-			protocol, err := cdp.FetchProtocol(ctx, protocolURL)
-			if err != nil {
-				return commandError(
-					"connection_failed",
-					"connection",
-					fmt.Sprintf("fetch protocol metadata: %v", err),
-					ExitConnection,
-					[]string{"cdp doctor --json", "cdp daemon status --json"},
-				)
+				return err
 			}
 			domains := cdp.SummarizeDomains(protocol.Domains)
 			data := map[string]any{
@@ -677,6 +662,56 @@ func (a *app) newProtocolMetadataCommand() *cobra.Command {
 			return a.render(ctx, human, data)
 		},
 	}
+}
+
+func (a *app) newProtocolDomainsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "domains",
+		Short: "List CDP domains",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			protocol, err := a.fetchProtocol(ctx)
+			if err != nil {
+				return err
+			}
+			domains := cdp.SummarizeDomains(protocol.Domains)
+			var lines []string
+			for _, domain := range domains {
+				lines = append(lines, fmt.Sprintf("%s\tcommands=%d\tevents=%d", domain.Name, domain.CommandCount, domain.EventCount))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":           true,
+				"domain_count": len(domains),
+				"domains":      domains,
+			})
+		},
+	}
+}
+
+func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
+	protocolURL, err := a.browserProtocolURL(ctx)
+	if err != nil {
+		return cdp.Protocol{}, commandError(
+			"connection_not_configured",
+			"connection",
+			err.Error(),
+			ExitConnection,
+			[]string{"cdp connection current --json", "cdp doctor --auto-connect --json"},
+		)
+	}
+	protocol, err := cdp.FetchProtocol(ctx, protocolURL)
+	if err != nil {
+		return cdp.Protocol{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("fetch protocol metadata: %v", err),
+			ExitConnection,
+			[]string{"cdp doctor --json", "cdp daemon status --json"},
+		)
+	}
+	return protocol, nil
 }
 
 func (a *app) newWorkflowCommand() *cobra.Command {
@@ -776,6 +811,10 @@ func commandExamples(path string) []string {
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",
 			"cdp protocol metadata --browser-url <browser-url> --json",
+		},
+		"cdp protocol domains": {
+			"cdp protocol domains --json",
+			"cdp protocol domains --browser-url <browser-url> --json",
 		},
 		"cdp protocol search": {
 			"cdp protocol search screenshot --json",

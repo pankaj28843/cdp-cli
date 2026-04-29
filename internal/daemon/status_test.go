@@ -20,3 +20,10 @@ func TestSnapshotBrowserURLConnected(t *testing.T) {
 		t.Fatalf("Snapshot() = %+v, want browser-url connected", got)
 	}
 }
+
+func TestSnapshotAutoConnectPassive(t *testing.T) {
+	got := daemon.Snapshot("auto_connect", true, browser.ProbeResult{State: "active_probe_skipped", Message: "skipped"})
+	if got.State != "passive" || !got.RequiresUserAllow || !got.DefaultProfileFlow {
+		t.Fatalf("Snapshot() = %+v, want auto-connect passive", got)
+	}
+}

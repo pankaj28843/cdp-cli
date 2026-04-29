@@ -48,7 +48,14 @@ func Snapshot(connectionMode string, autoConnect bool, probe browser.ProbeResult
 		status.Message = probe.Message
 		status.NextCommands = []string{
 			"cdp daemon start --auto-connect --help",
-			"cdp doctor --auto-connect --json",
+			"cdp doctor --active-browser-probe --json",
+		}
+	case "active_probe_skipped":
+		status.State = "passive"
+		status.Message = probe.Message
+		status.NextCommands = []string{
+			"cdp daemon start --help",
+			"cdp daemon status --active-browser-probe --json",
 		}
 	case "unreachable":
 		status.State = "chrome_unavailable"
