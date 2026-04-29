@@ -112,6 +112,7 @@ JSON output, jq-friendly filtering, and high-level browser debugging workflows.`
 	root.AddCommand(a.newConnectionCommand())
 	root.AddCommand(a.newTargetsCommand())
 	root.AddCommand(a.newPagesCommand())
+	root.AddCommand(a.newPageCommand())
 	root.AddCommand(a.newOpenCommand())
 	root.AddCommand(a.newEvalCommand())
 	root.AddCommand(a.newSnapshotCommand())

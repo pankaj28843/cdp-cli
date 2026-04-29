@@ -59,6 +59,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "page", Type: "page", Required: true, Description: "Page target metadata with id, url, and action fields."},
 			},
 		},
+		"page-action": {
+			Name:        "page-action",
+			Description: "Page target control result for reload, history navigation, activate, and close.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page action completed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name such as reloaded, back, forward, activated, or closed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "history", Type: "object", Required: false, Description: "History metadata for back and forward actions."},
+			},
+		},
 		"eval": {
 			Name:        "eval",
 			Description: "Page-scoped JavaScript evaluation result.",

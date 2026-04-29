@@ -44,6 +44,17 @@ type ScreenshotResult struct {
 	Format string
 }
 
+type NavigationEntry struct {
+	ID    int    `json:"id"`
+	URL   string `json:"url,omitempty"`
+	Title string `json:"title,omitempty"`
+}
+
+type NavigationHistory struct {
+	CurrentIndex int               `json:"current_index"`
+	Entries      []NavigationEntry `json:"entries"`
+}
+
 func CreateTarget(ctx context.Context, endpoint, rawURL string) (string, error) {
 	client, err := Dial(ctx, endpoint)
 	if err != nil {
@@ -69,6 +80,31 @@ func CreateTargetWithClient(ctx context.Context, client CommandClient, rawURL st
 		return "", fmt.Errorf("Target.createTarget returned an empty target id")
 	}
 	return result.TargetID, nil
+}
+
+func CloseTargetWithClient(ctx context.Context, client CommandClient, targetID string) error {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return fmt.Errorf("target id is required")
+	}
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err := client.Call(ctx, "Target.closeTarget", map[string]any{"targetId": targetID}, &result); err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("Target.closeTarget returned success=false")
+	}
+	return nil
+}
+
+func ActivateTargetWithClient(ctx context.Context, client CommandClient, targetID string) error {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return fmt.Errorf("target id is required")
+	}
+	return client.Call(ctx, "Target.activateTarget", map[string]any{"targetId": targetID}, nil)
 }
 
 func AttachToTarget(ctx context.Context, endpoint, targetID string) (*PageSession, error) {
@@ -131,6 +167,37 @@ func (s *PageSession) Navigate(ctx context.Context, rawURL string) (string, erro
 		return "", err
 	}
 	return result.FrameID, nil
+}
+
+func (s *PageSession) Reload(ctx context.Context, ignoreCache bool) error {
+	return s.client.CallSession(ctx, s.SessionID, "Page.reload", map[string]any{"ignoreCache": ignoreCache}, nil)
+}
+
+func (s *PageSession) NavigationHistory(ctx context.Context) (NavigationHistory, error) {
+	var result struct {
+		CurrentIndex int `json:"currentIndex"`
+		Entries      []struct {
+			ID    int    `json:"id"`
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"entries"`
+	}
+	if err := s.client.CallSession(ctx, s.SessionID, "Page.getNavigationHistory", map[string]any{}, &result); err != nil {
+		return NavigationHistory{}, err
+	}
+	history := NavigationHistory{CurrentIndex: result.CurrentIndex, Entries: make([]NavigationEntry, 0, len(result.Entries))}
+	for _, entry := range result.Entries {
+		history.Entries = append(history.Entries, NavigationEntry{
+			ID:    entry.ID,
+			URL:   entry.URL,
+			Title: entry.Title,
+		})
+	}
+	return history, nil
+}
+
+func (s *PageSession) NavigateToHistoryEntry(ctx context.Context, entryID int) error {
+	return s.client.CallSession(ctx, s.SessionID, "Page.navigateToHistoryEntry", map[string]any{"entryId": entryID}, nil)
 }
 
 func (s *PageSession) Evaluate(ctx context.Context, expression string, awaitPromise bool) (EvaluateResult, error) {

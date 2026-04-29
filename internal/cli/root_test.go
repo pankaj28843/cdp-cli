@@ -286,6 +286,114 @@ func TestPagesURLFilterJSON(t *testing.T) {
 	}
 }
 
+func TestPageReloadJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "reload", "--browser-url", server.URL, "--target", "page", "--ignore-cache", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("page reload exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("page reload output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "reloaded" || got.Target.ID != "page-1" {
+		t.Fatalf("page reload = %+v, want reloaded page-1", got)
+	}
+}
+
+func TestPageHistoryNavigationJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/current", "attached": false},
+	})
+	defer server.Close()
+
+	tests := []struct {
+		name   string
+		args   []string
+		action string
+		entry  int
+	}{
+		{"back", []string{"page", "back", "--browser-url", server.URL, "--target", "page", "--json"}, "back", 1},
+		{"forward", []string{"page", "forward", "--browser-url", server.URL, "--target", "page", "--json"}, "forward", 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), tt.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitOK {
+				t.Fatalf("%s exit code = %d, want %d; stderr=%s", tt.name, code, cli.ExitOK, errOut.String())
+			}
+
+			var got struct {
+				OK      bool   `json:"ok"`
+				Action  string `json:"action"`
+				History struct {
+					EntryID int `json:"entry_id"`
+				} `json:"history"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("%s output is invalid JSON: %v", tt.name, err)
+			}
+			if !got.OK || got.Action != tt.action || got.History.EntryID != tt.entry {
+				t.Fatalf("%s = %+v, want action %s entry %d", tt.name, got, tt.action, tt.entry)
+			}
+		})
+	}
+}
+
+func TestPageCloseAndActivateJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	tests := []struct {
+		name   string
+		args   []string
+		action string
+	}{
+		{"activate", []string{"page", "activate", "--browser-url", server.URL, "--target", "page", "--json"}, "activated"},
+		{"close", []string{"page", "close", "--browser-url", server.URL, "--target", "page", "--json"}, "closed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), tt.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitOK {
+				t.Fatalf("%s exit code = %d, want %d; stderr=%s", tt.name, code, cli.ExitOK, errOut.String())
+			}
+
+			var got struct {
+				OK     bool   `json:"ok"`
+				Action string `json:"action"`
+				Target struct {
+					ID string `json:"id"`
+				} `json:"target"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("%s output is invalid JSON: %v", tt.name, err)
+			}
+			if !got.OK || got.Action != tt.action || got.Target.ID != "page-1" {
+				t.Fatalf("%s = %+v, want action %s on page-1", tt.name, got, tt.action)
+			}
+		})
+	}
+}
+
 func TestProtocolMetadataJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -1606,8 +1714,25 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{"sessionId": "session-1"}
 			} else if req.Method == "Target.detachFromTarget" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "Target.activateTarget" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Target.closeTarget" {
+				resp["result"] = map[string]any{"success": true}
 			} else if req.Method == "Page.navigate" {
 				resp["result"] = map[string]any{"frameId": "frame-1"}
+			} else if req.Method == "Page.reload" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Page.getNavigationHistory" {
+				resp["result"] = map[string]any{
+					"currentIndex": 1,
+					"entries": []map[string]any{
+						{"id": 1, "url": "https://example.test/previous", "title": "Previous"},
+						{"id": 2, "url": "https://example.test/current", "title": "Current"},
+						{"id": 3, "url": "https://example.test/next", "title": "Next"},
+					},
+				}
+			} else if req.Method == "Page.navigateToHistoryEntry" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Runtime.enable" {
 				resp["result"] = map[string]any{}
 				events = append(events, map[string]any{

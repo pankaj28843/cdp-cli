@@ -1257,6 +1257,181 @@ func pageRow(target cdp.TargetInfo) map[string]any {
 	}
 }
 
+func (a *app) newPageCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "page",
+		Short: "Control an open page target",
+	}
+	cmd.AddCommand(a.newPageReloadCommand())
+	cmd.AddCommand(a.newPageHistoryCommand("back", "Navigate the selected page back in history", -1))
+	cmd.AddCommand(a.newPageHistoryCommand("forward", "Navigate the selected page forward in history", 1))
+	cmd.AddCommand(a.newPageActivateCommand())
+	cmd.AddCommand(a.newPageCloseCommand())
+	return cmd
+}
+
+func (a *app) newPageReloadCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var ignoreCache bool
+	cmd := &cobra.Command{
+		Use:   "reload",
+		Short: "Reload a page target",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			if err := session.Reload(ctx, ignoreCache); err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("reload target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("reloaded\t%s", target.TargetID), map[string]any{
+				"ok":           true,
+				"action":       "reloaded",
+				"target":       pageRow(target),
+				"ignore_cache": ignoreCache,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
+	return cmd
+}
+
+func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   name,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			history, err := session.NavigationHistory(ctx)
+			if err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("read navigation history for target %s: %v", target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			targetIndex := history.CurrentIndex + offset
+			if targetIndex < 0 || targetIndex >= len(history.Entries) {
+				return commandError(
+					"navigation_unavailable",
+					"usage",
+					fmt.Sprintf("page has no %s history entry", name),
+					ExitUsage,
+					[]string{"cdp page reload --json", "cdp open <url> --new-tab=false --target <target-id> --json"},
+				)
+			}
+			entry := history.Entries[targetIndex]
+			if err := session.NavigateToHistoryEntry(ctx, entry.ID); err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("navigate %s for target %s: %v", name, target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("%s\t%s\t%d", name, target.TargetID, entry.ID), map[string]any{
+				"ok":     true,
+				"action": name,
+				"target": pageRow(target),
+				"history": map[string]any{
+					"current_index": history.CurrentIndex,
+					"target_index":  targetIndex,
+					"entry_id":      entry.ID,
+					"entry":         entry,
+				},
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
+func (a *app) newPageActivateCommand() *cobra.Command {
+	return a.newPageTargetCommand("activate", "Bring a page target to the foreground", "activated", cdp.ActivateTargetWithClient)
+}
+
+func (a *app) newPageCloseCommand() *cobra.Command {
+	return a.newPageTargetCommand("close", "Close a page target", "closed", cdp.CloseTargetWithClient)
+}
+
+func (a *app) newPageTargetCommand(use, short, action string, run func(context.Context, cdp.CommandClient, string) error) *cobra.Command {
+	var targetID string
+	var urlContains string
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			client, closeClient, err := a.browserCDPClient(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+				)
+			}
+			defer closeClient(ctx)
+
+			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains)
+			if err != nil {
+				return err
+			}
+			if err := run(ctx, client, target.TargetID); err != nil {
+				return commandError(
+					"connection_failed",
+					"connection",
+					fmt.Sprintf("%s target %s: %v", use, target.TargetID, err),
+					ExitConnection,
+					[]string{"cdp pages --json", "cdp doctor --json"},
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("%s\t%s", action, target.TargetID), map[string]any{
+				"ok":     true,
+				"action": action,
+				"target": pageRow(target),
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	return cmd
+}
+
 func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(context.Context) error, error) {
 	opts, err := a.browserOptions(ctx)
 	if err != nil {
@@ -2834,6 +3009,22 @@ func commandExamples(path string) []string {
 			"cdp pages --limit 10 --json",
 			"cdp pages --url-contains localhost --json",
 			"cdp pages --browser-url <browser-url> --json",
+		},
+		"cdp page reload": {
+			"cdp page reload --target <target-id> --json",
+			"cdp page reload --url-contains localhost --ignore-cache --json",
+		},
+		"cdp page back": {
+			"cdp page back --target <target-id> --json",
+		},
+		"cdp page forward": {
+			"cdp page forward --target <target-id> --json",
+		},
+		"cdp page activate": {
+			"cdp page activate --target <target-id> --json",
+		},
+		"cdp page close": {
+			"cdp page close --target <target-id> --json",
 		},
 		"cdp open": {
 			"cdp open https://example.com --json",

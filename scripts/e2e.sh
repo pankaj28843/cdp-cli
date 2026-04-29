@@ -29,6 +29,11 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot"' >/dev/null
 "$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.fields | map(.name) | index("scope"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "page reload" --json | jq -e '.ok == true and .commands.name == "reload" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "page back" --json | jq -e '.ok == true and .commands.name == "back" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "page forward" --json | jq -e '.ok == true and .commands.name == "forward" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "page activate" --json | jq -e '.ok == true and .commands.name == "activate" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "page close" --json | jq -e '.ok == true and .commands.name == "close" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
