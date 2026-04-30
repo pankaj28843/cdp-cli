@@ -736,6 +736,43 @@ func TestHTMLCommandJSON(t *testing.T) {
 	}
 }
 
+func TestHTMLCommandEmptyDiagnosticsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"html", "empty", "--diagnose-empty", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("html exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK          bool                `json:"ok"`
+		Warnings    []string            `json:"warnings"`
+		HTML        struct{ Count int } `json:"html"`
+		Diagnostics struct {
+			SelectorMatched    bool     `json:"selector_matched"`
+			SelectorMatchCount int      `json:"selector_match_count"`
+			FrameCount         int      `json:"frame_count"`
+			ShadowRootCount    int      `json:"shadow_root_count"`
+			PossibleCauses     []string `json:"possible_causes"`
+			SuggestedCommands  []string `json:"suggested_commands"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("html output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.HTML.Count != 0 || len(got.Warnings) == 0 || !got.Diagnostics.SelectorMatched || got.Diagnostics.SelectorMatchCount != 1 || got.Diagnostics.FrameCount != 2 || got.Diagnostics.ShadowRootCount != 1 {
+		t.Fatalf("html empty diagnostics = %+v, want empty extraction diagnostics", got)
+	}
+	if !containsString(got.Diagnostics.PossibleCauses, "iframe_content") || !containsString(got.Diagnostics.SuggestedCommands, "cdp frames --target page-1 --json") {
+		t.Fatalf("html empty diagnostics = %+v, want causes and suggested commands", got.Diagnostics)
+	}
+}
+
 func TestDOMQueryJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -2126,6 +2163,42 @@ func TestSnapshotJSON(t *testing.T) {
 	}
 	if !got.OK || got.Snapshot.Selector != "article" || got.Snapshot.Count != 1 || len(got.Items) != 1 || got.Items[0].Text != "First visible synthetic post" {
 		t.Fatalf("snapshot output = %+v, want one article item", got)
+	}
+}
+
+func TestSnapshotEmptyDiagnosticsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"snapshot", "--selector", "empty", "--debug-empty", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("snapshot exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK          bool                `json:"ok"`
+		Warnings    []string            `json:"warnings"`
+		Snapshot    struct{ Count int } `json:"snapshot"`
+		Diagnostics struct {
+			SelectorMatched   bool     `json:"selector_matched"`
+			BodyTextLength    int      `json:"body_text_length"`
+			FrameCount        int      `json:"frame_count"`
+			PossibleCauses    []string `json:"possible_causes"`
+			SuggestedCommands []string `json:"suggested_commands"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("snapshot output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Snapshot.Count != 0 || len(got.Warnings) == 0 || !got.Diagnostics.SelectorMatched || got.Diagnostics.BodyTextLength != 0 || got.Diagnostics.FrameCount != 2 {
+		t.Fatalf("snapshot empty diagnostics = %+v, want empty extraction diagnostics", got)
+	}
+	if !containsString(got.Diagnostics.PossibleCauses, "shadow_dom") || !containsString(got.Diagnostics.SuggestedCommands, "cdp html body --target page-1 --diagnose-empty --json") {
+		t.Fatalf("snapshot empty diagnostics = %+v, want causes and suggested commands", got.Diagnostics)
 	}
 }
 
@@ -3761,6 +3834,26 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						{"name": "DomContentLoaded", "value": 124.5},
 					},
 				}
+			} else if req.Method == "Page.getFrameTree" {
+				resp["result"] = map[string]any{
+					"frameTree": map[string]any{
+						"frame": map[string]any{
+							"id":             "frame-main",
+							"url":            "https://example.test/app",
+							"securityOrigin": "https://example.test",
+							"mimeType":       "text/html",
+						},
+						"childFrames": []map[string]any{{
+							"frame": map[string]any{
+								"id":             "frame-child",
+								"parentId":       "frame-main",
+								"url":            "https://example.test/embed",
+								"securityOrigin": "https://example.test",
+								"mimeType":       "text/html",
+							},
+						}},
+					},
+				}
 			} else if req.Method == "Runtime.evaluate" {
 				if strings.Contains(string(req.Params), "document.visibilityState") {
 					hidden := strings.Contains(req.SessionID, "hidden")
@@ -3800,6 +3893,28 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		Expression string `json:"expression"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if strings.Contains(req.Expression, "__cdp_cli_empty_diagnostics__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"selector_matched":         true,
+					"selector_match_count":     1,
+					"selected_visible_count":   1,
+					"selected_text_length":     0,
+					"selected_html_length":     64,
+					"body_text_length":         0,
+					"body_inner_text_length":   0,
+					"body_text_content_length": 0,
+					"document_ready_state":     "complete",
+					"frame_count":              0,
+					"iframe_element_count":     1,
+					"shadow_root_count":        1,
+					"visible_text_candidates":  0,
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_text__") {
 		return map[string]any{
 			"result": map[string]any{
@@ -3836,6 +3951,20 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_html__") {
+		if strings.Contains(req.Expression, `"empty"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":      "https://example.test/app",
+						"title":    "Example App",
+						"selector": "empty",
+						"count":    0,
+						"items":    []map[string]any{},
+					},
+				},
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -4090,6 +4219,20 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		}
 	}
 	if strings.Contains(req.Expression, "querySelectorAll") {
+		if strings.Contains(req.Expression, `"empty"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":      "https://example.test/feed",
+						"title":    "Example Feed",
+						"selector": "empty",
+						"count":    0,
+						"items":    []map[string]any{},
+					},
+				},
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",

@@ -2694,6 +2694,26 @@ type pageSnapshot struct {
 	Error    *snapshotError `json:"error,omitempty"`
 }
 
+type extractionDiagnostics struct {
+	SelectorMatched        bool     `json:"selector_matched"`
+	SelectorMatchCount     int      `json:"selector_match_count"`
+	SelectedVisibleCount   int      `json:"selected_visible_count"`
+	SelectedTextLength     int      `json:"selected_text_length"`
+	SelectedHTMLLength     int      `json:"selected_html_length"`
+	BodyTextLength         int      `json:"body_text_length"`
+	BodyInnerTextLength    int      `json:"body_inner_text_length"`
+	BodyTextContentLength  int      `json:"body_text_content_length"`
+	DocumentReadyState     string   `json:"document_ready_state"`
+	FrameCount             int      `json:"frame_count"`
+	IFrameElementCount     int      `json:"iframe_element_count"`
+	ShadowRootCount        int      `json:"shadow_root_count"`
+	VisibleTextCandidates  int      `json:"visible_text_candidates"`
+	PossibleCauses         []string `json:"possible_causes"`
+	SuggestedCommands      []string `json:"suggested_commands"`
+	RuntimeDiagnosticError string   `json:"runtime_diagnostic_error,omitempty"`
+	FrameTreeError         string   `json:"frame_tree_error,omitempty"`
+}
+
 type snapshotItem struct {
 	Index      int          `json:"index"`
 	Tag        string       `json:"tag"`
@@ -2775,6 +2795,143 @@ func collectPageSnapshot(ctx context.Context, session *cdp.PageSession, selector
 		)
 	}
 	return snapshot, nil
+}
+
+func collectExtractionDiagnostics(ctx context.Context, session *cdp.PageSession, selector string) extractionDiagnostics {
+	diagnostics := extractionDiagnostics{}
+	result, err := session.Evaluate(ctx, extractionDiagnosticsExpression(selector), true)
+	if err != nil {
+		diagnostics.RuntimeDiagnosticError = err.Error()
+	} else if result.Exception != nil {
+		diagnostics.RuntimeDiagnosticError = result.Exception.Text
+	} else if err := json.Unmarshal(result.Object.Value, &diagnostics); err != nil {
+		diagnostics.RuntimeDiagnosticError = err.Error()
+	}
+
+	var frames frameTreeResponse
+	if err := execSessionJSON(ctx, session, "Page.getFrameTree", map[string]any{}, &frames); err != nil {
+		diagnostics.FrameTreeError = err.Error()
+	} else {
+		diagnostics.FrameCount = len(collectFrameSummaries(frames.FrameTree, ""))
+	}
+
+	if diagnostics.FrameCount == 0 && diagnostics.IFrameElementCount > 0 {
+		diagnostics.FrameCount = diagnostics.IFrameElementCount + 1
+	}
+	diagnostics.PossibleCauses = emptyExtractionPossibleCauses(diagnostics)
+	diagnostics.SuggestedCommands = emptyExtractionSuggestedCommands(session.TargetID)
+	return diagnostics
+}
+
+func emptyExtractionPossibleCauses(diagnostics extractionDiagnostics) []string {
+	causes := make([]string, 0, 6)
+	if !diagnostics.SelectorMatched {
+		causes = append(causes, "selector_matched_zero")
+	}
+	if diagnostics.SelectorMatched && diagnostics.SelectedVisibleCount == 0 {
+		causes = append(causes, "selector_not_visible")
+	}
+	if diagnostics.DocumentReadyState != "" && diagnostics.DocumentReadyState != "complete" {
+		causes = append(causes, "page_not_ready")
+	}
+	if diagnostics.FrameCount > 1 || diagnostics.IFrameElementCount > 0 {
+		causes = append(causes, "iframe_content")
+	}
+	if diagnostics.ShadowRootCount > 0 {
+		causes = append(causes, "shadow_dom")
+	}
+	if diagnostics.SelectorMatched && diagnostics.SelectedTextLength == 0 && diagnostics.SelectedHTMLLength > 0 {
+		causes = append(causes, "non_text_dom")
+	}
+	if diagnostics.VisibleTextCandidates == 0 {
+		causes = append(causes, "no_visible_text_candidates")
+	}
+	if diagnostics.SelectorMatched && diagnostics.BodyTextLength < 20 && diagnostics.SelectedHTMLLength > 0 {
+		causes = append(causes, "bot_or_consent_page")
+	}
+	if len(causes) == 0 {
+		causes = append(causes, "filtered_by_visibility_or_min_chars")
+	}
+	return causes
+}
+
+func emptyExtractionSuggestedCommands(targetID string) []string {
+	target := "<target-id>"
+	if strings.TrimSpace(targetID) != "" {
+		target = targetID
+	}
+	return []string{
+		fmt.Sprintf("cdp frames --target %s --json", target),
+		fmt.Sprintf("cdp snapshot --target %s --selector main --diagnose-empty --json", target),
+		fmt.Sprintf("cdp html body --target %s --diagnose-empty --json", target),
+		fmt.Sprintf("cdp dom query body --target %s --json", target),
+	}
+}
+
+func extractionDiagnosticsExpression(selector string) string {
+	selectorJSON, _ := json.Marshal(selector)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_empty_diagnostics__";
+  const selector = %s;
+  const normalize = (value) => (value || "").replace(/\s+/g, " ").trim();
+  const textLength = (value) => normalize(value).length;
+  const isVisible = (element) => {
+    if (!element || !element.getBoundingClientRect) return false;
+    const style = window.getComputedStyle(element);
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  let elements = [];
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { marker, selector_matched: false, selector_match_count: 0, selected_visible_count: 0, selected_text_length: 0, selected_html_length: 0, body_text_length: 0, body_inner_text_length: 0, body_text_content_length: 0, document_ready_state: document.readyState || "", frame_count: 0, iframe_element_count: 0, shadow_root_count: 0, visible_text_candidates: 0, runtime_diagnostic_error: error.name + ": " + error.message };
+  }
+  const body = document.body;
+  const bodyInnerText = body ? String(body.innerText || "") : "";
+  const bodyTextContent = body ? String(body.textContent || "") : "";
+  let selectedVisibleCount = 0;
+  let selectedTextLength = 0;
+  let selectedHTMLLength = 0;
+  for (const element of elements) {
+    if (isVisible(element)) selectedVisibleCount++;
+    selectedTextLength += textLength(element.innerText || element.textContent);
+    selectedHTMLLength += String(element.outerHTML || "").length;
+  }
+  let shadowRootCount = 0;
+  let visibleTextCandidates = 0;
+  const visitRoot = (root, depth) => {
+    if (!root || depth > 4) return;
+    const all = Array.from(root.querySelectorAll ? root.querySelectorAll("*") : []);
+    for (const element of all) {
+      if (element.shadowRoot) {
+        shadowRootCount++;
+        visitRoot(element.shadowRoot, depth + 1);
+      }
+      if (visibleTextCandidates < 1000 && isVisible(element) && textLength(element.innerText || element.textContent) > 0) {
+        visibleTextCandidates++;
+      }
+    }
+  };
+  visitRoot(document, 0);
+  return {
+    marker,
+    selector_matched: elements.length > 0,
+    selector_match_count: elements.length,
+    selected_visible_count: selectedVisibleCount,
+    selected_text_length: selectedTextLength,
+    selected_html_length: selectedHTMLLength,
+    body_text_length: textLength(bodyInnerText || bodyTextContent),
+    body_inner_text_length: textLength(bodyInnerText),
+    body_text_content_length: textLength(bodyTextContent),
+    document_ready_state: document.readyState || "",
+    frame_count: 0,
+    iframe_element_count: document.querySelectorAll("iframe,frame").length,
+    shadow_root_count: shadowRootCount,
+    visible_text_candidates: visibleTextCandidates
+  };
+})()`, string(selectorJSON))
 }
 
 func snapshotExpression(selector string, limit, minChars int) string {
@@ -3606,6 +3763,8 @@ func (a *app) newHTMLCommand() *cobra.Command {
 	var titleContains string
 	var limit int
 	var maxChars int
+	var diagnoseEmpty bool
+	var debugEmpty bool
 	cmd := &cobra.Command{
 		Use:   "html <selector>",
 		Short: "Extract compact HTML for a CSS selector",
@@ -3634,11 +3793,18 @@ func (a *app) newHTMLCommand() *cobra.Command {
 			for _, item := range result.Items {
 				lines = append(lines, fmt.Sprintf("%d\t%s", item.Index, item.HTML))
 			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+			report := map[string]any{
 				"ok":     true,
 				"target": pageRow(target),
 				"html":   result,
-			})
+			}
+			if result.Count == 0 {
+				report["warnings"] = []string{"selector produced zero HTML items; rerun with --diagnose-empty for page diagnostics"}
+				if diagnoseEmpty || debugEmpty {
+					report["diagnostics"] = collectExtractionDiagnostics(ctx, session, args[0])
+				}
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -3646,6 +3812,8 @@ func (a *app) newHTMLCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().IntVar(&limit, "limit", 5, "maximum number of elements to return; use 0 for no limit")
 	cmd.Flags().IntVar(&maxChars, "max-chars", 4000, "maximum HTML characters per element; use 0 for no truncation")
+	cmd.Flags().BoolVar(&diagnoseEmpty, "diagnose-empty", false, "include page diagnostics when extraction succeeds but returns zero items")
+	cmd.Flags().BoolVar(&debugEmpty, "debug-empty", false, "alias for --diagnose-empty")
 	return cmd
 }
 
@@ -4983,6 +5151,8 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 	var limit int
 	var minChars int
 	var interactiveOnly bool
+	var diagnoseEmpty bool
+	var debugEmpty bool
 	cmd := &cobra.Command{
 		Use:   "snapshot",
 		Short: "Print compact visible text from a page target",
@@ -5001,13 +5171,20 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 				return err
 			}
 			lines := snapshotTextLines(snapshot.Items)
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+			report := map[string]any{
 				"ok":               true,
 				"target":           pageRow(target),
 				"snapshot":         snapshot,
 				"items":            snapshot.Items,
 				"interactive_only": interactiveOnly,
-			})
+			}
+			if snapshot.Count == 0 {
+				report["warnings"] = []string{"selector matched zero visible text items; rerun with --diagnose-empty for page diagnostics"}
+				if diagnoseEmpty || debugEmpty {
+					report["diagnostics"] = collectExtractionDiagnostics(ctx, session, selector)
+				}
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -5017,6 +5194,8 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of text items to return; use 0 for no limit")
 	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")
 	cmd.Flags().BoolVar(&interactiveOnly, "interactive-only", false, "reserved compatibility flag; snapshot still returns visible text items")
+	cmd.Flags().BoolVar(&diagnoseEmpty, "diagnose-empty", false, "include page diagnostics when extraction succeeds but returns zero items")
+	cmd.Flags().BoolVar(&debugEmpty, "debug-empty", false, "alias for --diagnose-empty")
 	return cmd
 }
 
@@ -11133,6 +11312,7 @@ func commandExamples(path string) []string {
 		"cdp html": {
 			"cdp html main --max-chars 4000 --json",
 			"cdp html '#root' --limit 1 --json",
+			"cdp html body --diagnose-empty --json",
 		},
 		"cdp dom query": {
 			"cdp dom query button --json",
@@ -11157,6 +11337,7 @@ func commandExamples(path string) []string {
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",
+			"cdp snapshot --selector body --diagnose-empty --json",
 		},
 		"cdp screenshot": {
 			"cdp screenshot --out tmp/page.png --json",

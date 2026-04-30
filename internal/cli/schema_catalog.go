@@ -290,6 +290,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when HTML extraction completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
 				{Name: "html", Type: "html_result", Required: true, Description: "Selector and truncated HTML items."},
+				{Name: "warnings", Type: "array<string>", Required: false, Description: "Warnings emitted when extraction succeeds but returns zero items."},
+				{Name: "diagnostics", Type: "extraction_diagnostics", Required: false, Description: "Optional --diagnose-empty page facts for empty successful extractions."},
 			},
 		},
 		"dom-query": {
@@ -338,6 +340,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
 				{Name: "snapshot", Type: "snapshot", Required: true, Description: "Page URL, title, selector, count, and extracted items."},
 				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible text items duplicated for jq convenience."},
+				{Name: "warnings", Type: "array<string>", Required: false, Description: "Warnings emitted when extraction succeeds but returns zero items."},
+				{Name: "diagnostics", Type: "extraction_diagnostics", Required: false, Description: "Optional --diagnose-empty page facts for empty successful extractions."},
 			},
 		},
 		"screenshot": {

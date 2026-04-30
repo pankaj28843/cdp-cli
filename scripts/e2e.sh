@@ -46,7 +46,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema open --json | jq -e '.ok == true and .schema.name == "open" and (.schema.fields | map(.name) | index("page"))' >/dev/null
 "$binary" schema eval --json | jq -e '.ok == true and .schema.name == "eval" and (.schema.fields | map(.name) | index("result"))' >/dev/null
 "$binary" schema page-action --json | jq -e '.ok == true and .schema.name == "page-action" and (.schema.fields | map(.name) | index("action"))' >/dev/null
-"$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot"' >/dev/null
+"$binary" schema snapshot --json | jq -e '.ok == true and .schema.name == "snapshot" and (.schema.fields | map(.name) | index("warnings")) and (.schema.fields | map(.name) | index("diagnostics"))' >/dev/null
 "$binary" schema connection-add --json | jq -e '.ok == true and .schema.name == "connection-add" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
 "$binary" schema connection-list --json | jq -e '.ok == true and .schema.name == "connection-list" and (.schema.fields | map(.name) | index("connections"))' >/dev/null
 "$binary" schema connection-select --json | jq -e '.ok == true and .schema.name == "connection-select" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
@@ -87,13 +87,13 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "page cleanup" --json | jq -r '.commands.short' | rg -q 'cron cleanup'
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null
 "$binary" describe --command "text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
-"$binary" describe --command "html" --json | jq -e '.ok == true and .commands.name == "html" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "html" --json | jq -e '.ok == true and .commands.name == "html" and (.commands.examples | any(contains("--diagnose-empty"))) and (.commands.flags[] | select(.name == "diagnose-empty"))' >/dev/null
 "$binary" describe --command "dom query" --json | jq -e '.ok == true and .commands.name == "query" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "css inspect" --json | jq -e '.ok == true and .commands.name == "inspect" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "layout overflow" --json | jq -e '.ok == true and .commands.name == "overflow" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "wait text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "wait selector" --json | jq -e '.ok == true and .commands.name == "selector" and (.commands.examples | length > 0)' >/dev/null
-"$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | any(contains("--diagnose-empty"))) and (.commands.flags[] | select(.name == "debug-empty"))' >/dev/null
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--failed")))' >/dev/null
@@ -129,7 +129,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema storage-diff --json | jq -e '.ok == true and .schema.name == "storage-diff" and (.schema.fields | map(.name) | index("diff"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text"' >/dev/null
-"$binary" schema html --json | jq -e '.ok == true and .schema.name == "html"' >/dev/null
+"$binary" schema html --json | jq -e '.ok == true and .schema.name == "html" and (.schema.fields | map(.name) | index("diagnostics"))' >/dev/null
 "$binary" schema dom-query --json | jq -e '.ok == true and .schema.name == "dom-query"' >/dev/null
 "$binary" schema css-inspect --json | jq -e '.ok == true and .schema.name == "css-inspect"' >/dev/null
 "$binary" schema layout-overflow --json | jq -e '.ok == true and .schema.name == "layout-overflow"' >/dev/null
