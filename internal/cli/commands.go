@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
@@ -9465,6 +9466,7 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowPageLoadCommand())
 	cmd.AddCommand(a.newWorkflowFeedsCommand())
 	cmd.AddCommand(a.newWorkflowRenderedExtractCommand())
+	cmd.AddCommand(a.newWorkflowWebResearchCommand())
 	cmd.AddCommand(a.newWorkflowResponsiveAuditCommand())
 	cmd.AddCommand(a.newWorkflowPerfSmokeCommand())
 	cmd.AddCommand(a.newWorkflowMemorySmokeCommand())
@@ -10803,6 +10805,31 @@ type renderedExtractLink struct {
 	Type       string `json:"type,omitempty"`
 }
 
+type renderedExtractOptions struct {
+	WorkflowName       string
+	ArtifactTypePrefix string
+	UsageCommand       string
+	RawURL             string
+	Selector           string
+	Wait               time.Duration
+	WaitUntil          string
+	Formats            string
+	OutDir             string
+	Serp               string
+	Limit              int
+	MinVisibleWords    int
+	MinMarkdownWords   int
+	MinHTMLChars       int
+	KeepOpen           bool
+}
+
+type renderedExtractResult struct {
+	Report   map[string]any
+	Human    string
+	Links    renderedExtractLinks
+	Warnings []string
+}
+
 func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	var selector string
 	var wait time.Duration
@@ -10820,216 +10847,32 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 		Short: "Open a rendered page and write research extraction artifacts",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || limit < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
-				return commandError("usage", "usage", "--wait, --limit, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow rendered-extract https://example.com --json"})
+			options := renderedExtractOptions{
+				WorkflowName:       "rendered-extract",
+				ArtifactTypePrefix: "rendered-extract",
+				UsageCommand:       "cdp workflow rendered-extract",
+				RawURL:             args[0],
+				Selector:           selector,
+				Wait:               wait,
+				WaitUntil:          waitUntil,
+				Formats:            formats,
+				OutDir:             outDir,
+				Serp:               serp,
+				Limit:              limit,
+				MinVisibleWords:    minVisibleWords,
+				MinMarkdownWords:   minMarkdownWords,
+				MinHTMLChars:       minHTMLChars,
+				KeepOpen:           keepOpen,
 			}
-			waitUntil = strings.TrimSpace(waitUntil)
-			if waitUntil == "" {
-				waitUntil = "useful-content"
+			if strings.TrimSpace(options.OutDir) == "" {
+				options.OutDir = filepath.Join("tmp", "cdp-rendered-extract")
 			}
-			if waitUntil != "useful-content" && waitUntil != "load" && waitUntil != "dom-stable" {
-				return commandError("usage", "usage", "--wait-until must be useful-content, load, or dom-stable", ExitUsage, []string{"cdp workflow rendered-extract https://example.com --wait-until useful-content --json"})
-			}
-			serp = strings.TrimSpace(strings.ToLower(serp))
-			if serp == "" {
-				serp = "auto"
-			}
-			if serp != "auto" && serp != "google" && serp != "none" {
-				return commandError("usage", "usage", "--serp must be auto, google, or none", ExitUsage, []string{"cdp workflow rendered-extract 'https://www.google.com/search?q=test' --serp google --json"})
-			}
-
-			fallback := wait + 15*time.Second
-			if fallback < 30*time.Second {
-				fallback = 30 * time.Second
-			}
-			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
-			defer cancel()
-
-			rawURL := strings.TrimSpace(args[0])
-			if rawURL == "" {
-				return commandError("usage", "usage", "url is required", ExitUsage, []string{"cdp workflow rendered-extract https://example.com --json"})
-			}
-			if strings.TrimSpace(outDir) == "" {
-				outDir = filepath.Join("tmp", "cdp-rendered-extract")
-			}
-			formatSet := renderedExtractFormatSet(formats)
-			serpMode := renderedExtractSERPMode(rawURL, serp)
-
-			client, closeClient, err := a.browserEventCDPClient(ctx)
-			if err != nil {
-				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
-			}
-			createdID, err := a.createPageTarget(ctx, client, "about:blank")
-			if err != nil {
-				_ = closeClient(ctx)
-				return err
-			}
-			session, err := cdp.AttachToTargetWithClient(ctx, client, createdID, closeClient)
-			if err != nil {
-				_ = closeClient(ctx)
-				return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", createdID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
-			}
-			defer session.Close(ctx)
-
-			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
-			frameID, err := session.Navigate(ctx, rawURL)
-			if err != nil {
-				collectorErrors = append(collectorErrors, collectorError("navigation", err))
-			}
-
-			readiness, err := waitForRenderedExtractReadiness(ctx, session, selector, wait, waitUntil, minVisibleWords, minHTMLChars)
+			result, err := a.runRenderedExtractWorkflow(cmd, options)
 			if err != nil {
 				return err
 			}
-			finalURL := readiness.URL
-			if strings.TrimSpace(finalURL) == "" {
-				finalURL = rawURL
-			}
-			target := cdp.TargetInfo{TargetID: createdID, Type: "page", URL: finalURL}
-
-			snapshot, err := collectPageSnapshot(ctx, session, selector, limit, 1)
-			if err != nil {
-				return err
-			}
-			var htmlResult htmlResult
-			if err := evaluateJSONValue(ctx, session, htmlExpression(selector, 1, 0), "rendered-extract html", &htmlResult); err != nil {
-				return err
-			}
-			if htmlResult.Error != nil {
-				return invalidSelectorError(selector, htmlResult.Error, "cdp workflow rendered-extract https://example.com --selector body --json")
-			}
-			pageHTML := ""
-			htmlLength := 0
-			if len(htmlResult.Items) > 0 {
-				pageHTML = htmlResult.Items[0].HTML
-				htmlLength = htmlResult.Items[0].HTMLLength
-			}
-			visibleText := strings.Join(snapshotTextValues(snapshot.Items), "\n")
-			markdown := htmlToResearchMarkdown(pageHTML)
-			links, err := collectRenderedExtractLinks(ctx, session, rawURL, finalURL, serpMode)
-			if err != nil {
-				return err
-			}
-
-			visibleWordCount := wordCount(visibleText)
-			markdownWordCount := wordCount(markdown)
-			warnings := renderedExtractWarnings(readiness, snapshot.Count, visibleWordCount, htmlLength, markdownWordCount, len(links.Results), minVisibleWords, minHTMLChars, minMarkdownWords, serpMode)
-			artifactPaths := map[string]string{}
-			artifactList := []map[string]any{}
-			writeArtifact := func(key, artifactType, path string, payload []byte) error {
-				writtenPath, err := writeArtifactFile(path, payload)
-				if err != nil {
-					return err
-				}
-				artifactPaths[key] = writtenPath
-				artifactList = append(artifactList, map[string]any{"type": artifactType, "path": writtenPath, "bytes": len(payload)})
-				return nil
-			}
-			visibleJSONPayload, err := json.MarshalIndent(map[string]any{"snapshot": snapshot, "items": snapshot.Items}, "", "  ")
-			if err != nil {
-				return commandError("internal", "internal", fmt.Sprintf("marshal visible artifact: %v", err), ExitInternal, []string{"cdp workflow rendered-extract <url> --json"})
-			}
-			htmlJSONPayload, err := json.MarshalIndent(map[string]any{"html": htmlResult}, "", "  ")
-			if err != nil {
-				return commandError("internal", "internal", fmt.Sprintf("marshal html artifact: %v", err), ExitInternal, []string{"cdp workflow rendered-extract <url> --json"})
-			}
-			linksPayload, err := json.MarshalIndent(links, "", "  ")
-			if err != nil {
-				return commandError("internal", "internal", fmt.Sprintf("marshal links artifact: %v", err), ExitInternal, []string{"cdp workflow rendered-extract <url> --json"})
-			}
-			diagnostics := map[string]any{
-				"readiness":        readiness,
-				"warnings":         warnings,
-				"collector_errors": collectorErrors,
-				"suggested_commands": []string{
-					fmt.Sprintf("cdp snapshot --target %s --selector %s --diagnose-empty --json", createdID, selector),
-					fmt.Sprintf("cdp html %s --target %s --diagnose-empty --json", selector, createdID),
-					fmt.Sprintf("cdp workflow debug-bundle --target %s --out-dir %s --json", createdID, filepath.Join(outDir, "debug-bundle")),
-				},
-			}
-			diagnosticsPayload, err := json.MarshalIndent(diagnostics, "", "  ")
-			if err != nil {
-				return commandError("internal", "internal", fmt.Sprintf("marshal diagnostics artifact: %v", err), ExitInternal, []string{"cdp workflow rendered-extract <url> --json"})
-			}
-			if formatSet["snapshot"] {
-				if err := writeArtifact("visible_json", "rendered-extract-visible-json", filepath.Join(outDir, "visible.json"), append(visibleJSONPayload, '\n')); err != nil {
-					return err
-				}
-			}
-			if formatSet["text"] {
-				if err := writeArtifact("visible_txt", "rendered-extract-visible-text", filepath.Join(outDir, "visible.txt"), []byte(visibleText+"\n")); err != nil {
-					return err
-				}
-			}
-			if formatSet["html"] {
-				if err := writeArtifact("html_json", "rendered-extract-html-json", filepath.Join(outDir, "html.json"), append(htmlJSONPayload, '\n')); err != nil {
-					return err
-				}
-			}
-			if formatSet["markdown"] {
-				if err := writeArtifact("markdown", "rendered-extract-markdown", filepath.Join(outDir, "page.md"), []byte(markdown+"\n")); err != nil {
-					return err
-				}
-			}
-			if formatSet["links"] {
-				if err := writeArtifact("links_json", "rendered-extract-links-json", filepath.Join(outDir, "links.json"), append(linksPayload, '\n')); err != nil {
-					return err
-				}
-			}
-			if len(warnings) > 0 || len(collectorErrors) > 0 {
-				if err := writeArtifact("diagnostics_json", "rendered-extract-diagnostics-json", filepath.Join(outDir, "diagnostics.json"), append(diagnosticsPayload, '\n')); err != nil {
-					return err
-				}
-			}
-
-			closed := false
-			closeErr := ""
-			if !keepOpen {
-				if err := cdp.CloseTargetWithClient(ctx, client, createdID); err != nil {
-					closeErr = err.Error()
-				} else {
-					closed = true
-				}
-			}
-
-			report := map[string]any{
-				"ok":            true,
-				"target":        pageRow(target),
-				"readiness":     readiness,
-				"artifacts":     artifactPaths,
-				"artifact_list": artifactList,
-				"quality": map[string]any{
-					"snapshot_count":       snapshot.Count,
-					"visible_word_count":   visibleWordCount,
-					"html_length":          htmlLength,
-					"markdown_word_count":  markdownWordCount,
-					"external_link_count":  len(links.Results),
-					"selector_match_count": readiness.SelectorMatchCount,
-				},
-				"links":    map[string]any{"count": len(links.Results), "query": links.Query, "time_filter": links.TimeFilter, "serp": links.Serp},
-				"warnings": warnings,
-				"workflow": map[string]any{
-					"name":             "rendered-extract",
-					"requested_url":    rawURL,
-					"final_url":        finalURL,
-					"frame_id":         frameID,
-					"selector":         selector,
-					"wait":             durationString(wait),
-					"wait_until":       waitUntil,
-					"formats":          setKeys(formatSet),
-					"serp":             serpMode,
-					"created_page":     true,
-					"closed":           closed,
-					"close_error":      closeErr,
-					"collector_errors": collectorErrors,
-					"partial":          len(collectorErrors) > 0,
-				},
-			}
-			if len(warnings) > 0 || len(collectorErrors) > 0 {
-				report["diagnostics"] = diagnostics
-			}
-			human := fmt.Sprintf("rendered-extract\t%s\t%d words\t%d links", finalURL, visibleWordCount, len(links.Results))
-			return a.render(ctx, human, report)
+			ctx := cmd.Context()
+			return a.render(ctx, result.Human, result.Report)
 		},
 	}
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
@@ -11044,6 +10887,707 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
 	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
 	return cmd
+}
+
+func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExtractOptions) (renderedExtractResult, error) {
+	if options.Wait < 0 || options.Limit < 0 || options.MinVisibleWords < 0 || options.MinMarkdownWords < 0 || options.MinHTMLChars < 0 {
+		return renderedExtractResult{}, commandError("usage", "usage", "--wait, --limit, and quality thresholds must be non-negative", ExitUsage, []string{options.UsageCommand + " https://example.com --json"})
+	}
+	options.WaitUntil = strings.TrimSpace(options.WaitUntil)
+	if options.WaitUntil == "" {
+		options.WaitUntil = "useful-content"
+	}
+	if options.WaitUntil != "useful-content" && options.WaitUntil != "load" && options.WaitUntil != "dom-stable" {
+		return renderedExtractResult{}, commandError("usage", "usage", "--wait-until must be useful-content, load, or dom-stable", ExitUsage, []string{options.UsageCommand + " https://example.com --wait-until useful-content --json"})
+	}
+	options.Serp = strings.TrimSpace(strings.ToLower(options.Serp))
+	if options.Serp == "" {
+		options.Serp = "auto"
+	}
+	if options.Serp != "auto" && options.Serp != "google" && options.Serp != "none" {
+		return renderedExtractResult{}, commandError("usage", "usage", "--serp must be auto, google, or none", ExitUsage, []string{options.UsageCommand + " 'https://www.google.com/search?q=test' --serp google --json"})
+	}
+
+	fallback := options.Wait + 15*time.Second
+	if fallback < 30*time.Second {
+		fallback = 30 * time.Second
+	}
+	ctx, cancel := a.commandContextWithDefault(cmd, fallback)
+	defer cancel()
+
+	rawURL := strings.TrimSpace(options.RawURL)
+	if rawURL == "" {
+		return renderedExtractResult{}, commandError("usage", "usage", "url is required", ExitUsage, []string{options.UsageCommand + " https://example.com --json"})
+	}
+	if strings.TrimSpace(options.OutDir) == "" {
+		options.OutDir = filepath.Join("tmp", "cdp-rendered-extract")
+	}
+	formatSet := renderedExtractFormatSet(options.Formats)
+	serpMode := renderedExtractSERPMode(rawURL, options.Serp)
+
+	client, closeClient, err := a.browserEventCDPClient(ctx)
+	if err != nil {
+		return renderedExtractResult{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
+	}
+	createdID, err := a.createPageTarget(ctx, client, "about:blank")
+	if err != nil {
+		_ = closeClient(ctx)
+		return renderedExtractResult{}, err
+	}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, createdID, closeClient)
+	if err != nil {
+		_ = closeClient(ctx)
+		return renderedExtractResult{}, commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", createdID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+	}
+	defer session.Close(ctx)
+
+	collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
+	frameID, err := session.Navigate(ctx, rawURL)
+	if err != nil {
+		collectorErrors = append(collectorErrors, collectorError("navigation", err))
+	}
+
+	readiness, err := waitForRenderedExtractReadiness(ctx, session, options.Selector, options.Wait, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
+	if err != nil {
+		return renderedExtractResult{}, err
+	}
+	finalURL := readiness.URL
+	if strings.TrimSpace(finalURL) == "" {
+		finalURL = rawURL
+	}
+	target := cdp.TargetInfo{TargetID: createdID, Type: "page", URL: finalURL}
+
+	snapshot, err := collectPageSnapshot(ctx, session, options.Selector, options.Limit, 1)
+	if err != nil {
+		return renderedExtractResult{}, err
+	}
+	var htmlResult htmlResult
+	if err := evaluateJSONValue(ctx, session, htmlExpression(options.Selector, 1, 0), options.WorkflowName+" html", &htmlResult); err != nil {
+		return renderedExtractResult{}, err
+	}
+	if htmlResult.Error != nil {
+		return renderedExtractResult{}, invalidSelectorError(options.Selector, htmlResult.Error, options.UsageCommand+" https://example.com --selector body --json")
+	}
+	pageHTML := ""
+	htmlLength := 0
+	if len(htmlResult.Items) > 0 {
+		pageHTML = htmlResult.Items[0].HTML
+		htmlLength = htmlResult.Items[0].HTMLLength
+	}
+	visibleText := strings.Join(snapshotTextValues(snapshot.Items), "\n")
+	markdown := htmlToResearchMarkdown(pageHTML)
+	links, err := collectRenderedExtractLinks(ctx, session, rawURL, finalURL, serpMode)
+	if err != nil {
+		return renderedExtractResult{}, err
+	}
+
+	visibleWordCount := wordCount(visibleText)
+	markdownWordCount := wordCount(markdown)
+	warnings := renderedExtractWarnings(readiness, snapshot.Count, visibleWordCount, htmlLength, markdownWordCount, len(links.Results), options.MinVisibleWords, options.MinHTMLChars, options.MinMarkdownWords, serpMode)
+	artifactPaths := map[string]string{}
+	artifactList := []map[string]any{}
+	writeArtifact := func(key, artifactType, path string, payload []byte) error {
+		writtenPath, err := writeArtifactFile(path, payload)
+		if err != nil {
+			return err
+		}
+		artifactPaths[key] = writtenPath
+		artifactList = append(artifactList, map[string]any{"type": artifactType, "path": writtenPath, "bytes": len(payload)})
+		return nil
+	}
+	visibleJSONPayload, err := json.MarshalIndent(map[string]any{"snapshot": snapshot, "items": snapshot.Items}, "", "  ")
+	if err != nil {
+		return renderedExtractResult{}, commandError("internal", "internal", fmt.Sprintf("marshal visible artifact: %v", err), ExitInternal, []string{options.UsageCommand + " <url> --json"})
+	}
+	htmlJSONPayload, err := json.MarshalIndent(map[string]any{"html": htmlResult}, "", "  ")
+	if err != nil {
+		return renderedExtractResult{}, commandError("internal", "internal", fmt.Sprintf("marshal html artifact: %v", err), ExitInternal, []string{options.UsageCommand + " <url> --json"})
+	}
+	linksPayload, err := json.MarshalIndent(links, "", "  ")
+	if err != nil {
+		return renderedExtractResult{}, commandError("internal", "internal", fmt.Sprintf("marshal links artifact: %v", err), ExitInternal, []string{options.UsageCommand + " <url> --json"})
+	}
+	diagnostics := map[string]any{
+		"readiness":        readiness,
+		"warnings":         warnings,
+		"collector_errors": collectorErrors,
+		"suggested_commands": []string{
+			fmt.Sprintf("cdp snapshot --target %s --selector %s --diagnose-empty --json", createdID, options.Selector),
+			fmt.Sprintf("cdp html %s --target %s --diagnose-empty --json", options.Selector, createdID),
+			fmt.Sprintf("cdp workflow debug-bundle --target %s --out-dir %s --json", createdID, filepath.Join(options.OutDir, "debug-bundle")),
+		},
+	}
+	diagnosticsPayload, err := json.MarshalIndent(diagnostics, "", "  ")
+	if err != nil {
+		return renderedExtractResult{}, commandError("internal", "internal", fmt.Sprintf("marshal diagnostics artifact: %v", err), ExitInternal, []string{options.UsageCommand + " <url> --json"})
+	}
+	artifactPrefix := strings.TrimSpace(options.ArtifactTypePrefix)
+	if artifactPrefix == "" {
+		artifactPrefix = options.WorkflowName
+	}
+	if formatSet["snapshot"] {
+		if err := writeArtifact("visible_json", artifactPrefix+"-visible-json", filepath.Join(options.OutDir, "visible.json"), append(visibleJSONPayload, '\n')); err != nil {
+			return renderedExtractResult{}, err
+		}
+	}
+	if formatSet["text"] {
+		if err := writeArtifact("visible_txt", artifactPrefix+"-visible-text", filepath.Join(options.OutDir, "visible.txt"), []byte(visibleText+"\n")); err != nil {
+			return renderedExtractResult{}, err
+		}
+	}
+	if formatSet["html"] {
+		if err := writeArtifact("html_json", artifactPrefix+"-html-json", filepath.Join(options.OutDir, "html.json"), append(htmlJSONPayload, '\n')); err != nil {
+			return renderedExtractResult{}, err
+		}
+	}
+	if formatSet["markdown"] {
+		if err := writeArtifact("markdown", artifactPrefix+"-markdown", filepath.Join(options.OutDir, "page.md"), []byte(markdown+"\n")); err != nil {
+			return renderedExtractResult{}, err
+		}
+	}
+	if formatSet["links"] {
+		if err := writeArtifact("links_json", artifactPrefix+"-links-json", filepath.Join(options.OutDir, "links.json"), append(linksPayload, '\n')); err != nil {
+			return renderedExtractResult{}, err
+		}
+	}
+	if len(warnings) > 0 || len(collectorErrors) > 0 {
+		if err := writeArtifact("diagnostics_json", artifactPrefix+"-diagnostics-json", filepath.Join(options.OutDir, "diagnostics.json"), append(diagnosticsPayload, '\n')); err != nil {
+			return renderedExtractResult{}, err
+		}
+	}
+
+	closed := false
+	closeErr := ""
+	if !options.KeepOpen {
+		if err := cdp.CloseTargetWithClient(ctx, client, createdID); err != nil {
+			closeErr = err.Error()
+		} else {
+			closed = true
+		}
+	}
+
+	report := map[string]any{
+		"ok":            true,
+		"target":        pageRow(target),
+		"readiness":     readiness,
+		"artifacts":     artifactPaths,
+		"artifact_list": artifactList,
+		"quality": map[string]any{
+			"snapshot_count":       snapshot.Count,
+			"visible_word_count":   visibleWordCount,
+			"html_length":          htmlLength,
+			"markdown_word_count":  markdownWordCount,
+			"external_link_count":  len(links.Results),
+			"selector_match_count": readiness.SelectorMatchCount,
+		},
+		"links":    map[string]any{"count": len(links.Results), "query": links.Query, "time_filter": links.TimeFilter, "serp": links.Serp},
+		"warnings": warnings,
+		"workflow": map[string]any{
+			"name":             options.WorkflowName,
+			"requested_url":    rawURL,
+			"final_url":        finalURL,
+			"frame_id":         frameID,
+			"selector":         options.Selector,
+			"wait":             durationString(options.Wait),
+			"wait_until":       options.WaitUntil,
+			"formats":          setKeys(formatSet),
+			"serp":             serpMode,
+			"created_page":     true,
+			"closed":           closed,
+			"close_error":      closeErr,
+			"collector_errors": collectorErrors,
+			"partial":          len(collectorErrors) > 0,
+		},
+	}
+	if len(warnings) > 0 || len(collectorErrors) > 0 {
+		report["diagnostics"] = diagnostics
+	}
+	human := fmt.Sprintf("%s\t%s\t%d words\t%d links", options.WorkflowName, finalURL, visibleWordCount, len(links.Results))
+	return renderedExtractResult{Report: report, Human: human, Links: links, Warnings: warnings}, nil
+}
+
+func (a *app) newWorkflowWebResearchCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "web-research",
+		Short: "Run batched browser-grounded web research workflows",
+	}
+	cmd.AddCommand(a.newWorkflowWebResearchSERPCommand())
+	cmd.AddCommand(a.newWorkflowWebResearchExtractCommand())
+	return cmd
+}
+
+func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
+	var queryFile string
+	var serp string
+	var maxCandidates int
+	var candidateOut string
+	var outDir string
+	var wait time.Duration
+	var waitUntil string
+	var parallel int
+	var minVisibleWords int
+	var minMarkdownWords int
+	var minHTMLChars int
+	cmd := &cobra.Command{
+		Use:   "serp",
+		Short: "Collect rendered SERP artifacts and deduped research candidates",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wait < 0 || maxCandidates < 0 || parallel < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
+				return commandError("usage", "usage", "--wait, --max-candidates, --parallel, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --out-dir tmp/research --json"})
+			}
+			queries, err := readWebResearchQueries(queryFile)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(outDir) == "" {
+				outDir = filepath.Join("tmp", "cdp-web-research")
+			}
+			if strings.TrimSpace(candidateOut) == "" {
+				candidateOut = filepath.Join(outDir, "candidates.json")
+			}
+			if parallel == 0 || parallel > 3 {
+				parallel = 3
+			}
+			serp = strings.TrimSpace(strings.ToLower(serp))
+			if serp == "" {
+				serp = "google"
+			}
+			if serp != "google" {
+				return commandError("usage", "usage", "--serp must be google", ExitUsage, []string{"cdp workflow web-research serp --serp google --json"})
+			}
+
+			ctx := cmd.Context()
+			queriesPath := filepath.Join(outDir, "queries.json")
+			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp}, "", "  ")
+			if err != nil {
+				return commandError("internal", "internal", fmt.Sprintf("marshal web research queries: %v", err), ExitInternal, []string{"cdp workflow web-research serp --json"})
+			}
+			queriesPath, err = writeArtifactFile(queriesPath, append(queriesPayload, '\n'))
+			if err != nil {
+				return err
+			}
+
+			type serpResult struct {
+				Index  int
+				Query  webResearchQuery
+				Result renderedExtractResult
+				Err    error
+			}
+			jobs := make(chan int)
+			results := make(chan serpResult, len(queries))
+			var wg sync.WaitGroup
+			for i := 0; i < parallel; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for idx := range jobs {
+						query := queries[idx]
+						queryURL := googleSearchURL(query.Text, query.TimeFilter)
+						result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
+							WorkflowName:       "web-research-serp",
+							ArtifactTypePrefix: "web-research-serp",
+							UsageCommand:       "cdp workflow web-research serp",
+							RawURL:             queryURL,
+							Selector:           "body",
+							Wait:               wait,
+							WaitUntil:          waitUntil,
+							Formats:            "snapshot,text,html,markdown,links",
+							OutDir:             filepath.Join(outDir, "serps", webResearchSlug(query.Text)),
+							Serp:               "google",
+							Limit:              80,
+							MinVisibleWords:    minVisibleWords,
+							MinMarkdownWords:   minMarkdownWords,
+							MinHTMLChars:       minHTMLChars,
+						})
+						results <- serpResult{Index: idx, Query: query, Result: result, Err: err}
+					}
+				}()
+			}
+			for i := range queries {
+				jobs <- i
+			}
+			close(jobs)
+			wg.Wait()
+			close(results)
+
+			serpReports := make([]map[string]any, 0, len(queries))
+			failures := make([]map[string]any, 0)
+			candidates := make([]webResearchCandidate, 0)
+			seen := map[string]bool{}
+			for result := range results {
+				if result.Err != nil {
+					failures = append(failures, map[string]any{"query": result.Query.Text, "error": result.Err.Error()})
+					continue
+				}
+				serpReports = append(serpReports, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "report": result.Result.Report})
+				for _, link := range result.Result.Links.Results {
+					key := normalizeResearchURL(link.URL)
+					if key == "" || seen[key] {
+						continue
+					}
+					seen[key] = true
+					candidates = append(candidates, webResearchCandidate{Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, Rank: link.Rank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
+					if maxCandidates > 0 && len(candidates) >= maxCandidates {
+						break
+					}
+				}
+				if maxCandidates > 0 && len(candidates) >= maxCandidates {
+					break
+				}
+			}
+			sort.SliceStable(candidates, func(i, j int) bool {
+				if candidates[i].Query == candidates[j].Query {
+					return candidates[i].Rank < candidates[j].Rank
+				}
+				return candidates[i].Query < candidates[j].Query
+			})
+			candidatePayload, err := json.MarshalIndent(candidates, "", "  ")
+			if err != nil {
+				return commandError("internal", "internal", fmt.Sprintf("marshal web research candidates: %v", err), ExitInternal, []string{"cdp workflow web-research serp --json"})
+			}
+			candidateOut, err = writeArtifactFile(candidateOut, append(candidatePayload, '\n'))
+			if err != nil {
+				return err
+			}
+			candidatesTSV := filepath.Join(outDir, "candidates.tsv")
+			candidatesTSV, err = writeArtifactFile(candidatesTSV, []byte(webResearchCandidatesTSV(candidates)))
+			if err != nil {
+				return err
+			}
+
+			report := map[string]any{
+				"ok":         len(failures) == 0,
+				"queries":    queries,
+				"serps":      serpReports,
+				"candidates": candidates,
+				"failures":   failures,
+				"artifacts": map[string]string{
+					"queries_json":    queriesPath,
+					"candidates_json": candidateOut,
+					"candidates_tsv":  candidatesTSV,
+				},
+				"workflow": map[string]any{
+					"name":            "web-research-serp",
+					"serp":            serp,
+					"query_count":     len(queries),
+					"candidate_count": len(candidates),
+					"failure_count":   len(failures),
+					"max_candidates":  maxCandidates,
+					"parallel":        parallel,
+					"out_dir":         outDir,
+					"next_commands":   []string{"jq -r '.[].url' " + candidateOut + " > " + filepath.Join(outDir, "visit-urls.txt"), "cdp workflow web-research extract --url-file " + filepath.Join(outDir, "visit-urls.txt") + " --out-dir " + filepath.Join(outDir, "pages") + " --json"},
+				},
+			}
+			return a.render(ctx, fmt.Sprintf("web-research-serp\t%d queries\t%d candidates", len(queries), len(candidates)), report)
+		},
+	}
+	cmd.Flags().StringVar(&queryFile, "query-file", "", "newline-delimited Google queries to sample")
+	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google")
+	cmd.Flags().IntVar(&maxCandidates, "max-candidates", 100, "maximum deduped candidates to emit; use 0 for no limit")
+	cmd.Flags().StringVar(&candidateOut, "candidate-out", "", "path for deduped candidates JSON")
+	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for SERP artifacts and candidate files")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for each rendered SERP")
+	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
+	cmd.Flags().IntVar(&parallel, "parallel", 3, "maximum parallel SERP tabs, capped at 3")
+	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
+	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
+	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
+	return cmd
+}
+
+func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
+	var urlFile string
+	var maxPages int
+	var parallel int
+	var outDir string
+	var wait time.Duration
+	var waitUntil string
+	var selector string
+	var minVisibleWords int
+	var minMarkdownWords int
+	var minHTMLChars int
+	cmd := &cobra.Command{
+		Use:   "extract",
+		Short: "Extract selected research pages with bounded tab concurrency",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wait < 0 || maxPages < 0 || parallel < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
+				return commandError("usage", "usage", "--wait, --max-pages, --parallel, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research extract --url-file tmp/urls.txt --json"})
+			}
+			urls, err := readWebResearchURLs(urlFile, maxPages)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(outDir) == "" {
+				outDir = filepath.Join("tmp", "cdp-web-research", "pages")
+			}
+			if parallel == 0 || parallel > 10 {
+				parallel = 10
+			}
+
+			ctx := cmd.Context()
+			type pageResult struct {
+				Index  int
+				URL    string
+				Result renderedExtractResult
+				Err    error
+			}
+			jobs := make(chan int)
+			results := make(chan pageResult, len(urls))
+			var wg sync.WaitGroup
+			for i := 0; i < parallel; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for idx := range jobs {
+						rawURL := urls[idx]
+						result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
+							WorkflowName:       "web-research-extract",
+							ArtifactTypePrefix: "web-research-extract",
+							UsageCommand:       "cdp workflow web-research extract",
+							RawURL:             rawURL,
+							Selector:           selector,
+							Wait:               wait,
+							WaitUntil:          waitUntil,
+							Formats:            "snapshot,text,html,markdown,links",
+							OutDir:             filepath.Join(outDir, fmt.Sprintf("%03d-%s", idx+1, webResearchURLSlug(rawURL))),
+							Serp:               "none",
+							Limit:              80,
+							MinVisibleWords:    minVisibleWords,
+							MinMarkdownWords:   minMarkdownWords,
+							MinHTMLChars:       minHTMLChars,
+						})
+						results <- pageResult{Index: idx, URL: rawURL, Result: result, Err: err}
+					}
+				}()
+			}
+			for i := range urls {
+				jobs <- i
+			}
+			close(jobs)
+			wg.Wait()
+			close(results)
+
+			pages := make([]map[string]any, 0, len(urls))
+			qualities := make([]map[string]any, 0, len(urls))
+			failures := make([]map[string]any, 0)
+			warnings := make([]string, 0)
+			for result := range results {
+				if result.Err != nil {
+					failures = append(failures, map[string]any{"url": result.URL, "error": result.Err.Error()})
+					continue
+				}
+				pages = append(pages, map[string]any{"url": result.URL, "report": result.Result.Report})
+				quality, _ := result.Result.Report["quality"].(map[string]any)
+				artifacts, _ := result.Result.Report["artifacts"].(map[string]string)
+				qualities = append(qualities, map[string]any{"url": result.URL, "quality": quality, "warnings": result.Result.Warnings, "artifacts": artifacts})
+				for _, warning := range result.Result.Warnings {
+					warnings = append(warnings, result.URL+": "+warning)
+				}
+			}
+			sort.SliceStable(pages, func(i, j int) bool { return fmt.Sprint(pages[i]["url"]) < fmt.Sprint(pages[j]["url"]) })
+			qualityPath := filepath.Join(outDir, "page-quality.json")
+			qualityPayload, err := json.MarshalIndent(qualities, "", "  ")
+			if err != nil {
+				return commandError("internal", "internal", fmt.Sprintf("marshal page quality: %v", err), ExitInternal, []string{"cdp workflow web-research extract --json"})
+			}
+			qualityPath, err = writeArtifactFile(qualityPath, append(qualityPayload, '\n'))
+			if err != nil {
+				return err
+			}
+			failuresPath := filepath.Join(outDir, "failures.json")
+			failuresPayload, err := json.MarshalIndent(failures, "", "  ")
+			if err != nil {
+				return commandError("internal", "internal", fmt.Sprintf("marshal extraction failures: %v", err), ExitInternal, []string{"cdp workflow web-research extract --json"})
+			}
+			failuresPath, err = writeArtifactFile(failuresPath, append(failuresPayload, '\n'))
+			if err != nil {
+				return err
+			}
+
+			report := map[string]any{
+				"ok":        len(failures) == 0,
+				"pages":     pages,
+				"quality":   qualities,
+				"warnings":  warnings,
+				"failures":  failures,
+				"artifacts": map[string]string{"page_quality_json": qualityPath, "failures_json": failuresPath},
+				"workflow": map[string]any{
+					"name":          "web-research-extract",
+					"url_count":     len(urls),
+					"page_count":    len(pages),
+					"failure_count": len(failures),
+					"warning_count": len(warnings),
+					"max_pages":     maxPages,
+					"parallel":      parallel,
+					"out_dir":       outDir,
+					"next_commands": []string{"jq '.[] | select((.warnings | length) > 0)' " + qualityPath, "jq -r '.[].url' " + failuresPath},
+				},
+			}
+			return a.render(ctx, fmt.Sprintf("web-research-extract\t%d pages\t%d failures", len(pages), len(failures)), report)
+		},
+	}
+	cmd.Flags().StringVar(&urlFile, "url-file", "", "newline-delimited URLs to extract")
+	cmd.Flags().IntVar(&maxPages, "max-pages", 100, "maximum URLs to extract; use 0 for no limit")
+	cmd.Flags().IntVar(&parallel, "parallel", 10, "maximum parallel page tabs, capped at 10")
+	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for page artifacts")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for each rendered page")
+	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
+	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
+	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
+	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
+	return cmd
+}
+
+type webResearchQuery struct {
+	Text       string `json:"query"`
+	TimeFilter string `json:"time_filter,omitempty"`
+}
+
+type webResearchCandidate struct {
+	Query      string `json:"query"`
+	TimeFilter string `json:"time_filter,omitempty"`
+	Rank       int    `json:"rank"`
+	Title      string `json:"title"`
+	Source     string `json:"source,omitempty"`
+	Preview    string `json:"preview,omitempty"`
+	URL        string `json:"url"`
+	Type       string `json:"type,omitempty"`
+}
+
+func readWebResearchQueries(path string) ([]webResearchQuery, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, commandError("usage", "usage", "--query-file is required", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --json"})
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, commandError("read_failed", "filesystem", fmt.Sprintf("read query file %s: %v", path, err), ExitUsage, []string{"printf 'agentic engineering\\n' > tmp/queries.txt"})
+	}
+	queries := make([]webResearchQuery, 0)
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		query := webResearchQuery{Text: line}
+		if strings.Contains(line, "\t") {
+			parts := strings.SplitN(line, "\t", 2)
+			query.Text = strings.TrimSpace(parts[0])
+			query.TimeFilter = strings.TrimSpace(parts[1])
+		}
+		if query.Text != "" {
+			queries = append(queries, query)
+		}
+	}
+	if len(queries) == 0 {
+		return nil, commandError("usage", "usage", "query file contained no queries", ExitUsage, []string{"printf 'agentic engineering\\n' > tmp/queries.txt"})
+	}
+	return queries, nil
+}
+
+func readWebResearchURLs(path string, maxPages int) ([]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, commandError("usage", "usage", "--url-file is required", ExitUsage, []string{"cdp workflow web-research extract --url-file tmp/urls.txt --json"})
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, commandError("read_failed", "filesystem", fmt.Sprintf("read URL file %s: %v", path, err), ExitUsage, []string{"printf 'https://example.com\\n' > tmp/urls.txt"})
+	}
+	urls := make([]string, 0)
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key := normalizeResearchURL(line)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		urls = append(urls, line)
+		if maxPages > 0 && len(urls) >= maxPages {
+			break
+		}
+	}
+	if len(urls) == 0 {
+		return nil, commandError("usage", "usage", "URL file contained no HTTP(S) URLs", ExitUsage, []string{"printf 'https://example.com\\n' > tmp/urls.txt"})
+	}
+	return urls, nil
+}
+
+func googleSearchURL(query, timeFilter string) string {
+	values := url.Values{}
+	values.Set("q", query)
+	values.Set("safe", "active")
+	if strings.TrimSpace(timeFilter) != "" {
+		values.Set("tbs", strings.TrimSpace(timeFilter))
+	}
+	return "https://www.google.com/search?" + values.Encode()
+}
+
+func normalizeResearchURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func webResearchSlug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "item"
+	}
+	return out
+}
+
+func webResearchURLSlug(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return webResearchSlug(rawURL)
+	}
+	return webResearchSlug(parsed.Host + " " + strings.Trim(parsed.Path, "/"))
+}
+
+func webResearchCandidatesTSV(candidates []webResearchCandidate) string {
+	var b strings.Builder
+	b.WriteString("rank\tquery\ttime_filter\ttitle\tsource\turl\tpreview\n")
+	for _, candidate := range candidates {
+		fields := []string{strconv.Itoa(candidate.Rank), candidate.Query, candidate.TimeFilter, candidate.Title, candidate.Source, candidate.URL, candidate.Preview}
+		for i, field := range fields {
+			field = strings.ReplaceAll(field, "\t", " ")
+			field = strings.ReplaceAll(field, "\n", " ")
+			if i > 0 {
+				b.WriteByte('\t')
+			}
+			b.WriteString(field)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func renderedExtractFormatSet(formats string) map[string]bool {
@@ -12086,6 +12630,16 @@ func commandExamples(path string) []string {
 		"cdp workflow rendered-extract": {
 			"cdp workflow rendered-extract https://example.com --out-dir tmp/rendered-example --json",
 			"cdp workflow rendered-extract 'https://www.google.com/search?q=agentic+engineering&safe=active&tbs=qdr:m' --serp google --out-dir tmp/rendered-google --json",
+		},
+		"cdp workflow web-research": {
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json",
+			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --out-dir tmp/research/pages --json",
+		},
+		"cdp workflow web-research serp": {
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --max-candidates 100 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
+		},
+		"cdp workflow web-research extract": {
+			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 10 --out-dir tmp/research/pages --json",
 		},
 	}
 	examples["cdp focus"] = []string{"cdp focus input[name=email] --json"}

@@ -1676,6 +1676,75 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowWebResearchExtractJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "urls.txt")
+	if err := os.WriteFile(urlFile, []byte("https://example.test/story\nhttps://example.test/story#section\n"), 0o600); err != nil {
+		t.Fatalf("write url file: %v", err)
+	}
+	outDir := filepath.Join(tmpDir, "pages")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "extract", "--url-file", urlFile, "--max-pages", "1", "--parallel", "10", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research extract exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Pages []struct {
+			URL    string `json:"url"`
+			Report struct {
+				Artifacts struct {
+					Markdown  string `json:"markdown"`
+					LinksJSON string `json:"links_json"`
+				} `json:"artifacts"`
+				Workflow struct {
+					Name string `json:"name"`
+				} `json:"workflow"`
+			} `json:"report"`
+		} `json:"pages"`
+		Quality []struct {
+			URL      string   `json:"url"`
+			Warnings []string `json:"warnings"`
+		} `json:"quality"`
+		Artifacts struct {
+			PageQualityJSON string `json:"page_quality_json"`
+			FailuresJSON    string `json:"failures_json"`
+		} `json:"artifacts"`
+		Workflow struct {
+			Name         string `json:"name"`
+			URLCount     int    `json:"url_count"`
+			PageCount    int    `json:"page_count"`
+			Parallel     int    `json:"parallel"`
+			FailureCount int    `json:"failure_count"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research extract output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "web-research-extract" || got.Workflow.URLCount != 1 || got.Workflow.PageCount != 1 || got.Workflow.Parallel != 10 || got.Workflow.FailureCount != 0 {
+		t.Fatalf("workflow web-research extract metadata = %+v", got.Workflow)
+	}
+	if len(got.Pages) != 1 || got.Pages[0].Report.Workflow.Name != "web-research-extract" || got.Pages[0].Report.Artifacts.Markdown == "" || got.Pages[0].Report.Artifacts.LinksJSON == "" {
+		t.Fatalf("workflow web-research extract pages = %+v", got.Pages)
+	}
+	for _, path := range []string{got.Pages[0].Report.Artifacts.Markdown, got.Pages[0].Report.Artifacts.LinksJSON, got.Artifacts.PageQualityJSON, got.Artifacts.FailuresJSON} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("workflow web-research extract artifact %q was not written: %v", path, err)
+		}
+		if !strings.HasPrefix(path, outDir) {
+			t.Fatalf("workflow web-research extract artifact %q, want under %q", path, outDir)
+		}
+	}
+	if len(got.Quality) != 1 || len(got.Quality[0].Warnings) != 0 {
+		t.Fatalf("workflow web-research extract quality = %+v", got.Quality)
+	}
+}
+
 func TestWorkflowPerfJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

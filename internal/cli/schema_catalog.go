@@ -571,6 +571,32 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow parameters, cleanup status, selected formats, and collector metadata."},
 			},
 		},
+		"workflow-web-research-serp": {
+			Name:        "workflow-web-research-serp",
+			Description: "Batched Google SERP sampling with rendered artifacts and deduped research candidates.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when every SERP was sampled without extraction failures."},
+				{Name: "queries", Type: "array<object>", Required: true, Description: "Input queries with optional time filters."},
+				{Name: "serps", Type: "array<object>", Required: true, Description: "Per-query rendered extraction summaries and artifact references."},
+				{Name: "candidates", Type: "array<web_research_candidate>", Required: true, Description: "Deduped candidates with query, rank, title, source, preview, URL, and type."},
+				{Name: "failures", Type: "array<object>", Required: true, Description: "Per-query failures surfaced for agent judgment."},
+				{Name: "artifacts", Type: "object", Required: true, Description: "queries.json, candidates.json, and candidates.tsv paths."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "SERP, query count, candidate count, parallelism, output directory, and next commands."},
+			},
+		},
+		"workflow-web-research-extract": {
+			Name:        "workflow-web-research-extract",
+			Description: "Bounded-concurrency rendered extraction for selected research source URLs.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when every selected page extracted successfully."},
+				{Name: "pages", Type: "array<object>", Required: true, Description: "Per-URL rendered extraction summaries and artifact references."},
+				{Name: "quality", Type: "array<object>", Required: true, Description: "Per-page quality counts, warnings, and artifact paths."},
+				{Name: "warnings", Type: "array<string>", Required: true, Description: "Flattened low-signal extraction warnings."},
+				{Name: "failures", Type: "array<object>", Required: true, Description: "Per-URL extraction failures."},
+				{Name: "artifacts", Type: "object", Required: true, Description: "page-quality.json and failures.json paths."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "URL count, extracted page count, failure count, warning count, capped parallelism, and next commands."},
+			},
+		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
 			Description: "Summarized CDP protocol metadata.",

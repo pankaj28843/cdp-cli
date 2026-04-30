@@ -32,6 +32,8 @@ cdp storage cache list --url-contains localhost --json
 cdp storage cache get app-cache http://localhost:5173/api/me --json
 cdp storage service-workers list --url-contains localhost --json
 cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
+cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json
+cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --out-dir tmp/research/pages --json
 cdp protocol search screenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
