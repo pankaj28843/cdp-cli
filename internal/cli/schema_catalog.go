@@ -555,6 +555,22 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Trigger, requested URL, wait, truncation, artifact, and partial collector metadata."},
 			},
 		},
+		"workflow-rendered-extract": {
+			Name:        "workflow-rendered-extract",
+			Description: "Rendered research extraction artifact bundle with readiness, quality gates, Markdown, and SERP links.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when extraction completed and artifacts were written."},
+				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata with final URL when available."},
+				{Name: "readiness", Type: "rendered_extract_readiness", Required: true, Description: "Non-about:blank, document readiness, selector, DOM stability, and useful-content signals."},
+				{Name: "artifacts", Type: "object", Required: true, Description: "Stable artifact paths keyed by visible_json, visible_txt, html_json, markdown, links_json, and diagnostics_json when present."},
+				{Name: "artifact_list", Type: "array<artifact>", Required: true, Description: "Typed artifact metadata with byte counts."},
+				{Name: "quality", Type: "rendered_extract_quality", Required: true, Description: "Snapshot, visible text, HTML, Markdown, and external link quality counts."},
+				{Name: "links", Type: "object", Required: true, Description: "SERP mode plus query, time filter, and external link count."},
+				{Name: "warnings", Type: "array<string>", Required: true, Description: "Quality and consent/bot/blank-page warnings; empty when artifacts passed gates."},
+				{Name: "diagnostics", Type: "object", Required: false, Description: "Readiness, warnings, collector errors, and suggested commands when extraction is suspicious."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow parameters, cleanup status, selected formats, and collector metadata."},
+			},
+		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
 			Description: "Summarized CDP protocol metadata.",

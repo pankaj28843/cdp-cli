@@ -134,6 +134,13 @@ fi
 require_artifact "$state_dir/page-load.local.json"
 "$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null
+rendered_dir="$state_dir/rendered-extract"
+"$binary" workflow rendered-extract "$app_url" --state-dir "$state_dir/cdp-state" --out-dir "$rendered_dir" --wait 5s --json \
+  | jq -e --arg dir "$rendered_dir" '.ok == true and .workflow.name == "rendered-extract" and .readiness.navigated_from_about_blank == true and .target.url != "about:blank" and .quality.visible_word_count > 5 and .quality.html_length > 64 and .artifacts.visible_txt == ($dir + "/visible.txt") and .artifacts.markdown == ($dir + "/page.md") and .artifacts.links_json == ($dir + "/links.json")' >/dev/null
+require_artifact "$rendered_dir/visible.txt"
+require_artifact "$rendered_dir/html.json"
+require_artifact "$rendered_dir/page.md"
+require_artifact "$rendered_dir/links.json"
 "$binary" snapshot --selector article --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .snapshot.selector == "article" and (.snapshot.items | length >= 1)' >/dev/null
 "$binary" snapshot --selector "#missing-empty-fixture" --diagnose-empty --state-dir "$state_dir/cdp-state" --json \

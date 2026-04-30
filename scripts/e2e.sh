@@ -114,6 +114,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "workflow console-errors" --json | jq -e '.ok == true and .commands.name == "console-errors" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow network-failures" --json | jq -e '.ok == true and .commands.name == "network-failures" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow page-load" --json | jq -e '.ok == true and .commands.name == "page-load" and (.commands.examples | any(contains("--reload")))' >/dev/null
+"$binary" describe --command "workflow rendered-extract" --json | jq -e '.ok == true and .commands.name == "rendered-extract" and (.commands.examples | any(contains("--serp google"))) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 "$binary" describe --command "workflow verify" --json | jq -e '.ok == true and .commands.name == "verify" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow perf" --json | jq -e '.ok == true and .commands.name == "perf" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow debug-bundle" --json | jq -e '.ok == true and .commands.name == "debug-bundle" and (.commands.examples | length > 0)' >/dev/null
@@ -139,6 +140,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema workflow-network-failures --json | jq -e '.ok == true and .schema.name == "workflow-network-failures"' >/dev/null
 "$binary" schema workflow-a11y --json | jq -e '.ok == true and .schema.name == "workflow-a11y" and (.schema.fields | map(.name) | index("a11y"))' >/dev/null
 "$binary" schema workflow-page-load --json | jq -e '.ok == true and .schema.name == "workflow-page-load" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
+"$binary" schema workflow-rendered-extract --json | jq -e '.ok == true and .schema.name == "workflow-rendered-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
 "$binary" schema workflow-verify --json | jq -e '.ok == true and .schema.name == "workflow-verify" and (.schema.fields | map(.name) | index("requests"))' >/dev/null
 "$binary" schema workflow-perf --json | jq -e '.ok == true and .schema.name == "workflow-perf" and (.schema.fields | map(.name) | index("performance"))' >/dev/null
 "$binary" schema workflow-debug-bundle --json | jq -e '.ok == true and .schema.name == "workflow-debug-bundle" and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null

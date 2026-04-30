@@ -1598,6 +1598,84 @@ func TestWorkflowPageLoadJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowRenderedExtractJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outDir := t.TempDir()
+	rawURL := "https://www.google.com/search?q=agentic+engineering+2026+evolutions&safe=active&tbs=qdr:m"
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "rendered-extract", rawURL, "--serp", "google", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow rendered-extract exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK        bool                 `json:"ok"`
+		Target    struct{ URL string } `json:"target"`
+		Readiness struct {
+			NavigatedFromAboutBlank bool   `json:"navigated_from_about_blank"`
+			DocumentReadyState      string `json:"document_ready_state"`
+			UsefulContentSeen       bool   `json:"useful_content_seen"`
+		} `json:"readiness"`
+		Artifacts struct {
+			VisibleJSON string `json:"visible_json"`
+			VisibleTXT  string `json:"visible_txt"`
+			HTMLJSON    string `json:"html_json"`
+			Markdown    string `json:"markdown"`
+			LinksJSON   string `json:"links_json"`
+		} `json:"artifacts"`
+		Quality struct {
+			SnapshotCount     int `json:"snapshot_count"`
+			VisibleWordCount  int `json:"visible_word_count"`
+			HTMLLength        int `json:"html_length"`
+			MarkdownWordCount int `json:"markdown_word_count"`
+			ExternalLinkCount int `json:"external_link_count"`
+		} `json:"quality"`
+		Links struct {
+			Query      string `json:"query"`
+			TimeFilter string `json:"time_filter"`
+			Serp       string `json:"serp"`
+		} `json:"links"`
+		Warnings []string `json:"warnings"`
+		Workflow struct {
+			Name   string `json:"name"`
+			Closed bool   `json:"closed"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow rendered-extract output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "rendered-extract" || !got.Workflow.Closed || !got.Readiness.NavigatedFromAboutBlank || got.Readiness.DocumentReadyState != "complete" || !got.Readiness.UsefulContentSeen {
+		t.Fatalf("workflow rendered-extract metadata = %+v readiness=%+v", got.Workflow, got.Readiness)
+	}
+	if got.Target.URL == "about:blank" || got.Links.Query != "agentic engineering 2026 evolutions" || got.Links.TimeFilter != "qdr:m" || got.Links.Serp != "google" {
+		t.Fatalf("workflow rendered-extract target/links = target=%+v links=%+v", got.Target, got.Links)
+	}
+	if got.Quality.SnapshotCount == 0 || got.Quality.VisibleWordCount == 0 || got.Quality.HTMLLength == 0 || got.Quality.MarkdownWordCount == 0 || got.Quality.ExternalLinkCount == 0 || len(got.Warnings) != 0 {
+		t.Fatalf("workflow rendered-extract quality=%+v warnings=%+v", got.Quality, got.Warnings)
+	}
+	for _, path := range []string{got.Artifacts.VisibleJSON, got.Artifacts.VisibleTXT, got.Artifacts.HTMLJSON, got.Artifacts.Markdown, got.Artifacts.LinksJSON} {
+		if path == "" {
+			t.Fatalf("workflow rendered-extract artifacts = %+v, want all artifact paths", got.Artifacts)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("workflow rendered-extract artifact %q was not written: %v", path, err)
+		}
+		if !strings.HasPrefix(path, outDir) {
+			t.Fatalf("workflow rendered-extract artifact %q, want under %q", path, outDir)
+		}
+	}
+	linksBytes, err := os.ReadFile(got.Artifacts.LinksJSON)
+	if err != nil {
+		t.Fatalf("read links artifact: %v", err)
+	}
+	if !strings.Contains(string(linksBytes), "https://example.test/story") || strings.Contains(string(linksBytes), "google.com/url") {
+		t.Fatalf("links artifact = %s, want decoded external result", string(linksBytes))
+	}
+}
+
 func TestWorkflowPerfJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -3911,6 +3989,46 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 					"iframe_element_count":     1,
 					"shadow_root_count":        1,
 					"visible_text_candidates":  0,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_rendered_extract_readiness__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":                  "https://www.google.com/search?q=agentic+engineering+2026+evolutions&safe=active&tbs=qdr:m",
+					"document_ready_state": "complete",
+					"selector_matched":     true,
+					"selector_match_count": 1,
+					"selected_text_length": 96,
+					"selected_html_length": 256,
+					"selected_word_count":  12,
+					"body_text_length":     96,
+					"body_html_length":     256,
+					"dom_signature":        "ready",
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_rendered_extract_links__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"source_url": "https://www.google.com/search?q=agentic+engineering+2026+evolutions&safe=active&tbs=qdr:m",
+					"serp":       "google",
+					"count":      1,
+					"results": []map[string]any{{
+						"rank":        1,
+						"title":       "From OKRs To Intent Engineering",
+						"url":         "https://example.test/story",
+						"display_url": "example.test",
+						"snippet":     "22 Apr 2026 synthetic result for agentic engineering",
+						"date_text":   "22 Apr 2026",
+						"type":        "web",
+					}},
 				},
 			},
 		}
