@@ -1676,6 +1676,78 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("agentic engineering\tqdr:m\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	outDir := filepath.Join(tmpDir, "research")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--result-pages", "2", "--max-candidates", "20", "--parallel", "3", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		SERPs []struct {
+			Query    string `json:"query"`
+			SerpPage int    `json:"serp_page"`
+			Report   struct {
+				Artifacts struct {
+					Markdown string `json:"markdown"`
+				} `json:"artifacts"`
+			} `json:"report"`
+		} `json:"serps"`
+		Candidates []struct {
+			Query      string `json:"query"`
+			TimeFilter string `json:"time_filter"`
+			SerpPage   int    `json:"serp_page"`
+			RankOnPage int    `json:"rank_on_page"`
+			GlobalRank int    `json:"global_rank"`
+			URL        string `json:"url"`
+		} `json:"candidates"`
+		Artifacts struct {
+			CandidatesJSON string `json:"candidates_json"`
+			CandidatesTSV  string `json:"candidates_tsv"`
+		} `json:"artifacts"`
+		Workflow struct {
+			Name        string `json:"name"`
+			QueryCount  int    `json:"query_count"`
+			ResultPages int    `json:"result_pages"`
+			Parallel    int    `json:"parallel"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research serp output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "web-research-serp" || got.Workflow.QueryCount != 1 || got.Workflow.ResultPages != 2 || got.Workflow.Parallel != 3 {
+		t.Fatalf("workflow web-research serp metadata = %+v", got.Workflow)
+	}
+	if len(got.SERPs) != 2 || got.SERPs[0].SerpPage != 1 || got.SERPs[1].SerpPage != 2 {
+		t.Fatalf("workflow web-research serp pages = %+v", got.SERPs)
+	}
+	if len(got.Candidates) != 1 || got.Candidates[0].SerpPage != 1 || got.Candidates[0].RankOnPage != 1 || got.Candidates[0].GlobalRank != 1 || got.Candidates[0].TimeFilter != "qdr:m" {
+		t.Fatalf("workflow web-research candidates = %+v", got.Candidates)
+	}
+	for _, path := range []string{got.SERPs[0].Report.Artifacts.Markdown, got.SERPs[1].Report.Artifacts.Markdown, got.Artifacts.CandidatesJSON, got.Artifacts.CandidatesTSV} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("workflow web-research serp artifact %q was not written: %v", path, err)
+		}
+		if !strings.HasPrefix(path, outDir) {
+			t.Fatalf("workflow web-research serp artifact %q, want under %q", path, outDir)
+		}
+	}
+	if !strings.Contains(got.SERPs[0].Report.Artifacts.Markdown, filepath.Join("serps", "agentic-engineering", "page-1", "page.md")) || !strings.Contains(got.SERPs[1].Report.Artifacts.Markdown, filepath.Join("serps", "agentic-engineering", "page-2", "page.md")) {
+		t.Fatalf("workflow web-research serp artifact layout = %+v", got.SERPs)
+	}
+}
+
 func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

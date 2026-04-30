@@ -11125,6 +11125,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	var wait time.Duration
 	var waitUntil string
 	var parallel int
+	var resultPages int
 	var minVisibleWords int
 	var minMarkdownWords int
 	var minHTMLChars int
@@ -11133,8 +11134,8 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 		Short: "Collect rendered SERP artifacts and deduped research candidates",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || maxCandidates < 0 || parallel < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
-				return commandError("usage", "usage", "--wait, --max-candidates, --parallel, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --out-dir tmp/research --json"})
+			if wait < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
+				return commandError("usage", "usage", "--wait, --max-candidates, --parallel, --result-pages, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --result-pages 3 --out-dir tmp/research --json"})
 			}
 			queries, err := readWebResearchQueries(queryFile)
 			if err != nil {
@@ -11149,6 +11150,12 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			if parallel == 0 || parallel > 3 {
 				parallel = 3
 			}
+			if resultPages == 0 {
+				resultPages = 1
+			}
+			if resultPages > 3 {
+				resultPages = 3
+			}
 			serp = strings.TrimSpace(strings.ToLower(serp))
 			if serp == "" {
 				serp = "google"
@@ -11159,7 +11166,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 
 			ctx := cmd.Context()
 			queriesPath := filepath.Join(outDir, "queries.json")
-			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp}, "", "  ")
+			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "result_pages": resultPages}, "", "  ")
 			if err != nil {
 				return commandError("internal", "internal", fmt.Sprintf("marshal web research queries: %v", err), ExitInternal, []string{"cdp workflow web-research serp --json"})
 			}
@@ -11168,22 +11175,28 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				return err
 			}
 
-			type serpResult struct {
-				Index  int
-				Query  webResearchQuery
-				Result renderedExtractResult
-				Err    error
+			type serpJob struct {
+				QueryIndex int
+				SerpPage   int
 			}
-			jobs := make(chan int)
-			results := make(chan serpResult, len(queries))
+			type serpResult struct {
+				QueryIndex int
+				SerpPage   int
+				Query      webResearchQuery
+				Result     renderedExtractResult
+				Err        error
+			}
+			jobs := make(chan serpJob)
+			resultCount := len(queries) * resultPages
+			results := make(chan serpResult, resultCount)
 			var wg sync.WaitGroup
 			for i := 0; i < parallel; i++ {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					for idx := range jobs {
-						query := queries[idx]
-						queryURL := googleSearchURL(query.Text, query.TimeFilter)
+					for job := range jobs {
+						query := queries[job.QueryIndex]
+						queryURL := googleSearchURL(query.Text, query.TimeFilter, (job.SerpPage-1)*10)
 						result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
 							WorkflowName:       "web-research-serp",
 							ArtifactTypePrefix: "web-research-serp",
@@ -11193,41 +11206,55 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 							Wait:               wait,
 							WaitUntil:          waitUntil,
 							Formats:            "snapshot,text,html,markdown,links",
-							OutDir:             filepath.Join(outDir, "serps", webResearchSlug(query.Text)),
+							OutDir:             filepath.Join(outDir, "serps", webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
 							Serp:               "google",
 							Limit:              80,
 							MinVisibleWords:    minVisibleWords,
 							MinMarkdownWords:   minMarkdownWords,
 							MinHTMLChars:       minHTMLChars,
 						})
-						results <- serpResult{Index: idx, Query: query, Result: result, Err: err}
+						results <- serpResult{QueryIndex: job.QueryIndex, SerpPage: job.SerpPage, Query: query, Result: result, Err: err}
 					}
 				}()
 			}
 			for i := range queries {
-				jobs <- i
+				for page := 1; page <= resultPages; page++ {
+					jobs <- serpJob{QueryIndex: i, SerpPage: page}
+				}
 			}
 			close(jobs)
 			wg.Wait()
 			close(results)
 
-			serpReports := make([]map[string]any, 0, len(queries))
+			serpResults := make([]serpResult, 0, resultCount)
+			for result := range results {
+				serpResults = append(serpResults, result)
+			}
+			sort.SliceStable(serpResults, func(i, j int) bool {
+				if serpResults[i].QueryIndex == serpResults[j].QueryIndex {
+					return serpResults[i].SerpPage < serpResults[j].SerpPage
+				}
+				return serpResults[i].QueryIndex < serpResults[j].QueryIndex
+			})
+
+			serpReports := make([]map[string]any, 0, resultCount)
 			failures := make([]map[string]any, 0)
 			candidates := make([]webResearchCandidate, 0)
 			seen := map[string]bool{}
-			for result := range results {
+			for _, result := range serpResults {
 				if result.Err != nil {
-					failures = append(failures, map[string]any{"query": result.Query.Text, "error": result.Err.Error()})
+					failures = append(failures, map[string]any{"query": result.Query.Text, "serp_page": result.SerpPage, "error": result.Err.Error()})
 					continue
 				}
-				serpReports = append(serpReports, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "report": result.Result.Report})
+				serpReports = append(serpReports, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
 				for _, link := range result.Result.Links.Results {
 					key := normalizeResearchURL(link.URL)
 					if key == "" || seen[key] {
 						continue
 					}
 					seen[key] = true
-					candidates = append(candidates, webResearchCandidate{Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, Rank: link.Rank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
+					globalRank := (result.SerpPage-1)*10 + link.Rank
+					candidates = append(candidates, webResearchCandidate{Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, SerpPage: result.SerpPage, RankOnPage: link.Rank, GlobalRank: globalRank, Rank: globalRank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
 					if maxCandidates > 0 && len(candidates) >= maxCandidates {
 						break
 					}
@@ -11236,6 +11263,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					break
 				}
 			}
+
 			sort.SliceStable(candidates, func(i, j int) bool {
 				if candidates[i].Query == candidates[j].Query {
 					return candidates[i].Rank < candidates[j].Rank
@@ -11274,6 +11302,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					"candidate_count": len(candidates),
 					"failure_count":   len(failures),
 					"max_candidates":  maxCandidates,
+					"result_pages":    resultPages,
 					"parallel":        parallel,
 					"out_dir":         outDir,
 					"next_commands":   []string{"jq -r '.[].url' " + candidateOut + " > " + filepath.Join(outDir, "visit-urls.txt"), "cdp workflow web-research extract --url-file " + filepath.Join(outDir, "visit-urls.txt") + " --out-dir " + filepath.Join(outDir, "pages") + " --json"},
@@ -11290,6 +11319,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for each rendered SERP")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
 	cmd.Flags().IntVar(&parallel, "parallel", 3, "maximum parallel SERP tabs, capped at 3")
+	cmd.Flags().IntVar(&resultPages, "result-pages", 1, "Google result pages per query to sample, capped at 3")
 	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
@@ -11449,6 +11479,9 @@ type webResearchQuery struct {
 type webResearchCandidate struct {
 	Query      string `json:"query"`
 	TimeFilter string `json:"time_filter,omitempty"`
+	SerpPage   int    `json:"serp_page"`
+	RankOnPage int    `json:"rank_on_page"`
+	GlobalRank int    `json:"global_rank"`
 	Rank       int    `json:"rank"`
 	Title      string `json:"title"`
 	Source     string `json:"source,omitempty"`
@@ -11520,12 +11553,15 @@ func readWebResearchURLs(path string, maxPages int) ([]string, error) {
 	return urls, nil
 }
 
-func googleSearchURL(query, timeFilter string) string {
+func googleSearchURL(query, timeFilter string, start int) string {
 	values := url.Values{}
 	values.Set("q", query)
 	values.Set("safe", "active")
 	if strings.TrimSpace(timeFilter) != "" {
 		values.Set("tbs", strings.TrimSpace(timeFilter))
+	}
+	if start > 0 {
+		values.Set("start", strconv.Itoa(start))
 	}
 	return "https://www.google.com/search?" + values.Encode()
 }
@@ -11574,9 +11610,9 @@ func webResearchURLSlug(rawURL string) string {
 
 func webResearchCandidatesTSV(candidates []webResearchCandidate) string {
 	var b strings.Builder
-	b.WriteString("rank\tquery\ttime_filter\ttitle\tsource\turl\tpreview\n")
+	b.WriteString("global_rank\tserp_page\trank_on_page\tquery\ttime_filter\ttitle\tsource\turl\tpreview\n")
 	for _, candidate := range candidates {
-		fields := []string{strconv.Itoa(candidate.Rank), candidate.Query, candidate.TimeFilter, candidate.Title, candidate.Source, candidate.URL, candidate.Preview}
+		fields := []string{strconv.Itoa(candidate.GlobalRank), strconv.Itoa(candidate.SerpPage), strconv.Itoa(candidate.RankOnPage), candidate.Query, candidate.TimeFilter, candidate.Title, candidate.Source, candidate.URL, candidate.Preview}
 		for i, field := range fields {
 			field = strings.ReplaceAll(field, "\t", " ")
 			field = strings.ReplaceAll(field, "\n", " ")
@@ -12636,7 +12672,7 @@ func commandExamples(path string) []string {
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --out-dir tmp/research/pages --json",
 		},
 		"cdp workflow web-research serp": {
-			"cdp workflow web-research serp --query-file tmp/research/queries.txt --max-candidates 100 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
 		},
 		"cdp workflow web-research extract": {
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 10 --out-dir tmp/research/pages --json",
