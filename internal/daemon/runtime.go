@@ -29,8 +29,6 @@ const (
 	RPCMethodFetchProtocol = "Daemon.fetchProtocol"
 )
 
-var fetchProtocolFallback = cdp.FetchOfficialProtocol
-
 type Runtime struct {
 	PID               int    `json:"pid"`
 	StartedAt         string `json:"started_at"`
@@ -76,6 +74,14 @@ type RPCResponse struct {
 
 type RuntimeClient struct {
 	Runtime Runtime
+}
+
+type holdOptions struct {
+	fetchProtocolFallback func(context.Context) (cdp.Protocol, error)
+}
+
+func defaultHoldOptions() holdOptions {
+	return holdOptions{fetchProtocolFallback: cdp.FetchOfficialProtocol}
 }
 
 func RuntimePath(stateDir string) string {
@@ -267,6 +273,13 @@ func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 }
 
 func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconnect time.Duration) error {
+	return holdWithOptions(ctx, stateDir, endpoint, connectionMode, reconnect, defaultHoldOptions())
+}
+
+func holdWithOptions(ctx context.Context, stateDir, endpoint, connectionMode string, reconnect time.Duration, opts holdOptions) error {
+	if opts.fetchProtocolFallback == nil {
+		opts.fetchProtocolFallback = cdp.FetchOfficialProtocol
+	}
 	if strings.TrimSpace(endpoint) == "" {
 		return fmt.Errorf("daemon hold endpoint is required")
 	}
@@ -286,7 +299,7 @@ func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconn
 		client, err := cdp.Dial(ctx, endpoint)
 		if err == nil {
 			appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "browser_connected", Message: "connected to browser endpoint", PID: pid})
-			err = holdConnection(ctx, stateDir, socketPath, client, pid, connectionMode, reconnect)
+			err = holdConnection(ctx, stateDir, socketPath, client, pid, connectionMode, reconnect, opts)
 			if err != nil {
 				appendLog(context.Background(), stateDir, LogEntry{Level: "warn", Event: "hold_connection_ended", Message: err.Error(), PID: pid})
 			}
@@ -470,7 +483,7 @@ func waitForRuntime(ctx context.Context, stateDir string, pid int) (Runtime, err
 	return Runtime{}, fmt.Errorf("daemon keepalive process did not become ready")
 }
 
-func holdConnection(ctx context.Context, stateDir, socketPath string, client *cdp.Client, pid int, connectionMode string, reconnect time.Duration) error {
+func holdConnection(ctx context.Context, stateDir, socketPath string, client *cdp.Client, pid int, connectionMode string, reconnect time.Duration, opts holdOptions) error {
 	listener, err := listenRuntimeSocket(socketPath)
 	if err != nil {
 		_ = client.Close(websocket.StatusInternalError, "rpc listen failed")
@@ -501,7 +514,7 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 	cycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var mu sync.Mutex
-	go serveRPC(cycleCtx, listener, client, &mu)
+	go serveRPC(cycleCtx, listener, client, &mu, opts)
 	return keepAlive(cycleCtx, client, reconnect, &mu)
 }
 
@@ -521,7 +534,7 @@ func listenRuntimeSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, mu *sync.Mutex) {
+func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, mu *sync.Mutex, opts holdOptions) {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -531,11 +544,11 @@ func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, mu
 		if err != nil {
 			return
 		}
-		go handleRPC(ctx, conn, client, mu)
+		go handleRPC(ctx, conn, client, mu, opts)
 	}
 }
 
-func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.Mutex) {
+func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.Mutex, opts holdOptions) {
 	defer conn.Close()
 	var req RPCRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
@@ -578,7 +591,7 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 				_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
 				return
 			}
-			protocol, err = fetchProtocolFallback(callCtx)
+			protocol, err = opts.fetchProtocolFallback(callCtx)
 			if err != nil {
 				_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: fmt.Sprintf("fetch protocol metadata: live endpoint returned %d; fallback failed: %v", httpErr.StatusCode, err)})
 				return

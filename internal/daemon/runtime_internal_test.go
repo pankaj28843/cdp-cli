@@ -16,14 +16,12 @@ import (
 )
 
 func TestRuntimeFetchProtocolFallsBackWhenLiveProtocolMissing(t *testing.T) {
-	oldFallback := fetchProtocolFallback
-	fetchProtocolFallback = func(context.Context) (cdp.Protocol, error) {
+	fallback := func(context.Context) (cdp.Protocol, error) {
 		return cdp.Protocol{
 			Version: cdp.ProtocolVersion{Major: "1", Minor: "3"},
 			Domains: []cdp.Domain{{Domain: "Runtime"}},
 		}, nil
 	}
-	t.Cleanup(func() { fetchProtocolFallback = oldFallback })
 
 	server := newProtocolFallbackFakeServer(t)
 	defer server.Close()
@@ -33,7 +31,7 @@ func TestRuntimeFetchProtocolFallsBackWhenLiveProtocolMissing(t *testing.T) {
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- Hold(ctx, stateDir, fakeProtocolFallbackEndpoint(t, server.URL), "browser_url", 30*time.Second)
+		errCh <- holdWithOptions(ctx, stateDir, fakeProtocolFallbackEndpoint(t, server.URL), "browser_url", 30*time.Second, holdOptions{fetchProtocolFallback: fallback})
 	}()
 	runtime := waitForProtocolFallbackRuntime(t, ctx, stateDir)
 	t.Cleanup(func() {
