@@ -120,6 +120,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newClickCommand())
 	root.AddCommand(a.newFillCommand())
 	root.AddCommand(a.newTypeCommand())
+	root.AddCommand(a.newInsertTextCommand())
 	root.AddCommand(a.newPressCommand())
 	root.AddCommand(a.newHoverCommand())
 	root.AddCommand(a.newDragCommand())

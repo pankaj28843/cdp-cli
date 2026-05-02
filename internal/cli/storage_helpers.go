@@ -2,15 +2,15 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
 
-	"encoding/json"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
-	"net/url"
 )
 
 type storageSnapshot struct {
@@ -23,6 +23,7 @@ type storageSnapshot struct {
 	CacheStorage   []cacheStorageCache         `json:"cache_storage,omitempty"`
 	ServiceWorkers []serviceWorkerRegistration `json:"service_workers,omitempty"`
 	Quota          map[string]any              `json:"quota,omitempty"`
+	Dump           *indexedDBOperationResult   `json:"indexeddb_dump,omitempty"`
 }
 
 type storageAreaSnapshot struct {
@@ -73,8 +74,21 @@ type indexedDBOperationResult struct {
 	Deleted     bool                   `json:"deleted,omitempty"`
 	Cleared     int                    `json:"cleared,omitempty"`
 	Count       int                    `json:"count"`
+	Limit       int                    `json:"limit,omitempty"`
+	Offset      int                    `json:"offset,omitempty"`
+	PageSize    int                    `json:"page_size,omitempty"`
+	Cursor      string                 `json:"cursor,omitempty"`
+	NextCursor  string                 `json:"next_cursor,omitempty"`
+	HasMore     bool                   `json:"has_more,omitempty"`
+	Direction   string                 `json:"direction,omitempty"`
+	Records     []indexedDBRecord      `json:"records,omitempty"`
 	Databases   []indexedDBDatabase    `json:"databases,omitempty"`
 	Stores      []indexedDBObjectStore `json:"stores,omitempty"`
+}
+
+type indexedDBRecord struct {
+	Key   any `json:"key,omitempty"`
+	Value any `json:"value,omitempty"`
 }
 
 type indexedDBDatabase struct {
@@ -638,6 +652,108 @@ func indexedDBDeleteExpression(database, store, key string, keyJSON bool) string
 })()`, indexedDBOperationHelpers(), jsStringLiteral(database), jsStringLiteral(store), indexedDBKeyExpression(key, keyJSON), jsStringLiteral(indexedDBKeySource(keyJSON)))
 }
 
+type indexedDBDumpOptions struct {
+	Limit      int
+	Offset     int
+	PageSize   int
+	Cursor     string
+	Direction  string
+	KeysOnly   bool
+	ValuesOnly bool
+}
+
+func indexedDBDumpExpression(database, store string, opts indexedDBDumpOptions) string {
+	return fmt.Sprintf(`(async () => {
+  "__cdp_cli_indexeddb_dump__";
+  %s
+  const databaseName = %s;
+  const storeName = %s;
+  const limit = %d;
+  const offset = %d;
+  const pageSize = %d;
+  const cursorToken = %s;
+  const direction = %s;
+  const keysOnly = %t;
+  const valuesOnly = %t;
+  const encodeCursor = (key) => btoa(unescape(encodeURIComponent(JSON.stringify({key}))));
+  const decodeCursor = (token) => {
+    if (!token) {
+      return null;
+    }
+    try {
+      return JSON.parse(decodeURIComponent(escape(atob(token)))).key;
+    } catch (error) {
+      throw new Error("Invalid IndexedDB cursor token");
+    }
+  };
+  const db = await openDB(databaseName);
+  try {
+    ensureStore(db, storeName);
+    const transaction = db.transaction(storeName, "readonly");
+    const done = transactionDone(transaction);
+    const objectStore = transaction.objectStore(storeName);
+    const startKey = decodeCursor(cursorToken);
+    const range = startKey === null ? null : (direction.startsWith("prev") ? IDBKeyRange.upperBound(startKey, true) : IDBKeyRange.lowerBound(startKey, true));
+    const request = objectStore.openCursor(range, direction);
+    const records = [];
+    let skipped = 0;
+    let lastKey = null;
+    let hasMore = false;
+    await new Promise((resolve, reject) => {
+      request.onerror = () => reject(request.error || new Error("IndexedDB cursor failed"));
+      request.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        if (!cursorToken && skipped < offset) {
+          skipped++;
+          cursor.continue();
+          return;
+        }
+        if (records.length >= limit) {
+          hasMore = true;
+          resolve();
+          return;
+        }
+        const row = {};
+        if (!valuesOnly) {
+          row.key = cursor.key;
+        }
+        if (!keysOnly) {
+          row.value = cursor.value;
+        }
+        records.push(row);
+        lastKey = cursor.key;
+        cursor.continue();
+      };
+    });
+    await done;
+    return {
+      url: location.href,
+      origin: location.origin,
+      operation: "dump",
+      available: true,
+      found: true,
+      database: databaseName,
+      store: storeName,
+      count: records.length,
+      limit,
+      offset: cursorToken ? 0 : offset,
+      page_size: pageSize,
+      cursor: cursorToken,
+      next_cursor: hasMore && lastKey !== null ? encodeCursor(lastKey) : "",
+      has_more: hasMore,
+      direction,
+      records
+    };
+  } finally {
+    db.close();
+  }
+})()`, indexedDBOperationHelpers(), jsStringLiteral(database), jsStringLiteral(store), opts.Limit, opts.Offset, opts.PageSize, jsStringLiteral(opts.Cursor), jsStringLiteral(opts.Direction), opts.KeysOnly, opts.ValuesOnly)
+}
+
 func indexedDBClearExpression(database, store string) string {
 	return fmt.Sprintf(`(async () => {
   "__cdp_cli_indexeddb_clear__";
@@ -1127,7 +1243,7 @@ func readStorageSnapshotFile(path string) (storageSnapshot, error) {
 }
 
 func storageSnapshotHasData(snapshot storageSnapshot) bool {
-	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0 || len(snapshot.IndexedDB) > 0 || len(snapshot.CacheStorage) > 0 || len(snapshot.ServiceWorkers) > 0
+	return snapshot.URL != "" || snapshot.Origin != "" || len(snapshot.LocalStorage.Entries) > 0 || len(snapshot.SessionStorage.Entries) > 0 || len(snapshot.Cookies) > 0 || len(snapshot.IndexedDB) > 0 || len(snapshot.CacheStorage) > 0 || len(snapshot.ServiceWorkers) > 0 || snapshot.Dump != nil
 }
 
 func diffStorageSnapshots(left, right storageSnapshot) storageDiffReport {

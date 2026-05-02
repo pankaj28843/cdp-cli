@@ -776,28 +776,38 @@ func fillExpression(selector, value string) string {
 })()`, jsStringLiteral(selector), jsStringLiteral(value))
 }
 
-func typeExpression(selector, text string) string {
+func typeExpression(selector, text, strategy string) string {
 	return fmt.Sprintf(`(() => {
   const marker = "__cdp_cli_type__";
   const selector = %s;
   const text = String(%s);
+  const strategy = %s;
   let elements;
   try {
     elements = Array.from(document.querySelectorAll(selector));
   } catch (error) {
-    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", typing: false, error: { name: error.name, message: error.message }, marker };
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", value: "", kind: "", strategy, typing: false, error: { name: error.name, message: error.message }, marker };
   }
   if (elements.length === 0) {
-    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", typing: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", value: "", kind: "", strategy, typing: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
   }
   const element = elements[0];
-  if (!("value" in element)) {
-    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", typing: false, error: { name: "InvalidTargetError", message: "target element does not support direct value assignment" }, marker };
+  const editable = element.isContentEditable || element.getAttribute("contenteditable") === "true";
+  const kind = ("value" in element) ? String(element.tagName || "input").toLowerCase() : (editable ? "contenteditable" : "");
+  if (!("value" in element) && !editable) {
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous: "", value: "", kind, strategy, typing: false, error: { name: "InvalidTargetError", message: "target element is not editable" }, marker };
   }
-  const previous = String(element.value ?? "");
-  let value = previous;
+  const previous = ("value" in element) ? String(element.value ?? "") : String(element.innerText || element.textContent || "");
+  const chosen = strategy === "insert-text" || (strategy === "auto" && editable && !("value" in element)) ? "insert-text" : "dom";
   try {
     element.focus();
+    if (chosen === "insert-text") {
+      return { url: location.href, title: document.title, selector, count: elements.length, typed: text, previous, value: previous, kind, strategy: chosen, typing: true, marker };
+    }
+    if (!("value" in element)) {
+      return { url: location.href, title: document.title, selector, count: 0, typed: "", previous, value: previous, kind, strategy: chosen, typing: false, error: { name: "InvalidTargetError", message: "target element requires insert-text strategy" }, marker };
+    }
+    let value = previous;
     for (const ch of text) {
       value += ch;
       element.value = value;
@@ -809,11 +819,35 @@ func typeExpression(selector, text string) string {
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new KeyboardEvent("keyup", init));
     }
-    return { url: location.href, title: document.title, selector, count: elements.length, typed: text, previous, typing: true, marker };
+    return { url: location.href, title: document.title, selector, count: elements.length, typed: text, previous, value: String(element.value ?? ""), kind, strategy: chosen, typing: true, marker };
   } catch (error) {
-    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous, typing: false, error: { name: error.name, message: error.message }, marker };
+    const value = ("value" in element) ? String(element.value ?? "") : String(element.innerText || element.textContent || "");
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous, value, kind, strategy: chosen, typing: false, error: { name: error.name, message: error.message }, marker };
   }
-})()`, jsStringLiteral(selector), jsStringLiteral(text))
+})()`, jsStringLiteral(selector), jsStringLiteral(text), jsStringLiteral(strategy))
+}
+
+func insertedTextResultExpression(selector, text, previous, kind string, count int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_insert_text_result__";
+  const selector = %s;
+  const text = String(%s);
+  const previous = String(%s);
+  const kind = %s;
+  const count = %d;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous, value: "", kind, strategy: "insert-text", typing: false, error: { name: error.name, message: error.message }, marker };
+  }
+  const element = elements[0];
+  if (!element) {
+    return { url: location.href, title: document.title, selector, count: 0, typed: "", previous, value: "", kind, strategy: "insert-text", typing: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const value = ("value" in element) ? String(element.value ?? "") : String(element.innerText || element.textContent || "");
+  return { url: location.href, title: document.title, selector, count, typed: text, previous, value, kind, strategy: "insert-text", typing: true, marker };
+})()`, jsStringLiteral(selector), jsStringLiteral(text), jsStringLiteral(previous), jsStringLiteral(kind), count)
 }
 
 func pressExpression(key string, selector string) string {

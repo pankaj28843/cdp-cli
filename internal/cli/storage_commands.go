@@ -1,11 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"encoding/json"
 	"github.com/spf13/cobra"
 )
 
@@ -497,6 +497,7 @@ func (a *app) newStorageIndexedDBCommand() *cobra.Command {
 	cmd.AddCommand(a.newStorageIndexedDBListCommand())
 	cmd.AddCommand(a.newStorageIndexedDBGetCommand())
 	cmd.AddCommand(a.newStorageIndexedDBPutCommand())
+	cmd.AddCommand(a.newStorageIndexedDBDumpCommand())
 	cmd.AddCommand(a.newStorageIndexedDBDeleteCommand())
 	cmd.AddCommand(a.newStorageIndexedDBClearCommand())
 	return cmd
@@ -595,6 +596,92 @@ func (a *app) newStorageIndexedDBPutCommand() *cobra.Command {
 	}
 	addStorageTargetFlags(cmd, &targetID, &urlContains)
 	cmd.Flags().BoolVar(&keyJSON, "key-json", false, "parse <key> as JSON instead of using it as a string")
+	return cmd
+}
+
+func (a *app) newStorageIndexedDBDumpCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
+	var limit int
+	var offset int
+	var pageSize int
+	var cursor string
+	var direction string
+	var keysOnly bool
+	var valuesOnly bool
+	var outPath string
+	cmd := &cobra.Command{
+		Use:   "dump <database> <store>",
+		Short: "Dump a bounded range of IndexedDB records",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			direction = strings.ToLower(strings.TrimSpace(direction))
+			if direction == "" {
+				direction = "next"
+			}
+			if direction != "next" && direction != "nextunique" && direction != "prev" && direction != "prevunique" {
+				return commandError("usage", "usage", "--direction must be next, nextunique, prev, or prevunique", ExitUsage, []string{"cdp storage indexeddb dump app records --direction next --json"})
+			}
+			if limit < 0 || offset < 0 || pageSize < 0 {
+				return commandError("usage", "usage", "--limit, --offset, and --page-size must be non-negative", ExitUsage, []string{"cdp storage indexeddb dump app records --limit 100 --json"})
+			}
+			if keysOnly && valuesOnly {
+				return commandError("usage", "usage", "--keys-only and --values-only cannot be combined", ExitUsage, []string{"cdp storage indexeddb dump app records --keys-only --json"})
+			}
+			if pageSize > 0 {
+				limit = pageSize
+			}
+			if limit == 0 {
+				limit = 500
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 30*time.Second)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+			result, err := runIndexedDBOperation(ctx, session, indexedDBDumpExpression(args[0], args[1], indexedDBDumpOptions{
+				Limit:      limit,
+				Offset:     offset,
+				PageSize:   pageSize,
+				Cursor:     cursor,
+				Direction:  direction,
+				KeysOnly:   keysOnly,
+				ValuesOnly: valuesOnly,
+			}))
+			if err != nil {
+				return err
+			}
+			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			if strings.TrimSpace(outPath) != "" {
+				b, err := json.MarshalIndent(report, "", "  ")
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal indexeddb dump report: %v", err), ExitInternal, []string{"cdp storage indexeddb dump app records --json"})
+				}
+				writtenPath, err := writeArtifactFile(outPath, append(b, '\n'))
+				if err != nil {
+					return err
+				}
+				report["artifact"] = map[string]any{"type": "storage-indexeddb-dump", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifacts"] = []map[string]any{{"type": "storage-indexeddb-dump", "path": writtenPath}}
+				report["local_artifact_warning"] = "IndexedDB dump may include application data and local records; keep this artifact local"
+			}
+			human := fmt.Sprintf("indexeddb-dump\t%s/%s\trecords=%d", result.Database, result.Store, result.Count)
+			return a.render(ctx, human, report)
+		},
+	}
+	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&limit, "limit", 500, "maximum records to return")
+	cmd.Flags().IntVar(&offset, "offset", 0, "number of records to skip before returning results")
+	cmd.Flags().IntVar(&pageSize, "page-size", 0, "page size for cursor-style pagination; overrides --limit when set")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "opaque cursor returned by a previous dump page")
+	cmd.Flags().StringVar(&direction, "direction", "next", "cursor direction: next, nextunique, prev, or prevunique")
+	cmd.Flags().BoolVar(&keysOnly, "keys-only", false, "include keys without values")
+	cmd.Flags().BoolVar(&valuesOnly, "values-only", false, "include values without keys")
+	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON IndexedDB dump artifact")
 	return cmd
 }
 

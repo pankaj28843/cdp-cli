@@ -244,6 +244,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "type", Type: "type_result", Required: true, Description: "Selector, matched count, typed string, previous value, and success flag."},
 			},
 		},
+
+		"insert-text": {
+			Name:        "insert-text",
+			Description: "Text inserted through the browser input pipeline into an editable element.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when text insertion completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "insert_text", Type: "type_result", Required: true, Description: "Selector, match count, previous text, resulting value/text, element kind, and strategy."},
+			},
+		},
 		"press": {
 			Name:        "press",
 			Description: "Dispatch keyboard events for a key on the focused element or selector.",
@@ -376,12 +386,25 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"network-capture": {
 			Name:        "network-capture",
-			Description: "Full local network metadata capture with headers, bodies, timing, initiators, redaction, and artifact output.",
+			Description: "Full local network metadata capture with headers, bodies, timing, initiators, WebSocket records, redaction, and artifact output.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when network capture completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "requests", Type: "array<network_capture_request>", Required: true, Description: "Full request/response records keyed by CDP request id."},
-				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, redaction mode, warning, and collector errors."},
+				{Name: "requests", Type: "array<network_capture_request>", Required: true, Description: "Full request/response records keyed by CDP request id, optionally including WebSocket lifecycle and frame data."},
+				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, WebSocket options, redaction mode, warning, and collector errors."},
+				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
+				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
+			},
+		},
+
+		"network-websocket": {
+			Name:        "network-websocket",
+			Description: "Focused WebSocket lifecycle and frame capture from a page target.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when WebSocket capture completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "websockets", Type: "array<network_capture_request>", Required: true, Description: "WebSocket records with handshake metadata, frames, errors, and close status."},
+				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, payload limits, redaction mode, warning, and collector errors."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
 			},
@@ -407,11 +430,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"storage-indexeddb": {
 			Name:        "storage-indexeddb",
-			Description: "IndexedDB list/get/put/delete/clear result.",
+			Description: "IndexedDB list/get/put/dump/delete/clear result.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the IndexedDB command completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "storage", Type: "indexeddb_result", Required: true, Description: "Database/store metadata, record values, mutation booleans, and counts."},
+				{Name: "storage", Type: "indexeddb_result", Required: true, Description: "Database/store metadata, record values, dump pagination fields, mutation booleans, and counts."},
 			},
 		},
 		"storage-service-workers": {
@@ -492,6 +515,21 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON bundle artifact when --out-dir is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Per-artifact references for workflow-replayable output."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, requested URL, counts, next commands, and collector status."},
+			},
+		},
+
+		"workflow-action-capture": {
+			Name:        "workflow-action-capture",
+			Description: "Unified evidence capture around one declared browser action.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the action-capture workflow completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow timings, included collectors, and collector errors."},
+				{Name: "action", Type: "object", Required: true, Description: "Declared action and nested click/type/insert-text/press result."},
+				{Name: "requests", Type: "array<network_capture_request>", Required: false, Description: "Network records observed during the action window."},
+				{Name: "websockets", Type: "array<network_capture_request>", Required: false, Description: "WebSocket records observed during the action window."},
+				{Name: "messages", Type: "array<console_message>", Required: false, Description: "Console/log messages observed during the action window."},
+				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Screenshot and JSON artifact references."},
 			},
 		},
 		"workflow-a11y": {

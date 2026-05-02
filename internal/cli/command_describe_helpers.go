@@ -263,7 +263,12 @@ func commandExamples(path string) []string {
 		},
 		"cdp network capture": {
 			"cdp network capture --reload --wait 20s --out tmp/network.local.json --json",
+			"cdp network capture --include-websockets --include-websocket-payloads --out tmp/network-with-ws.local.json --json",
 			"cdp network capture --url-contains localhost --redact safe --out tmp/network-shareable.json --json",
+		},
+		"cdp network websocket": {
+			"cdp network websocket --wait 20s --include-payloads --out tmp/ws.local.json --json",
+			"cdp network websocket --url-contains localhost --redact safe --json",
 		},
 		"cdp storage": {
 			"cdp storage list --url-contains localhost --json",
@@ -307,6 +312,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp storage indexeddb": {
 			"cdp storage indexeddb list --url-contains localhost --json",
+			"cdp storage indexeddb dump app records --limit 100 --json",
 		},
 		"cdp storage indexeddb list": {
 			"cdp storage indexeddb list --url-contains localhost --json",

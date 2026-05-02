@@ -706,6 +706,67 @@ func TestClickJSON(t *testing.T) {
 	}
 }
 
+func TestTypeContentEditableUsesInsertTextJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "[contenteditable=true]", "hello rich editor", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("type contenteditable exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Type struct {
+			Selector string `json:"selector"`
+			Typing   bool   `json:"typing"`
+			Typed    string `json:"typed"`
+			Value    string `json:"value"`
+			Kind     string `json:"kind"`
+			Strategy string `json:"strategy"`
+		} `json:"type"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("type contenteditable output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Type.Typing || got.Type.Strategy != "insert-text" || got.Type.Kind != "contenteditable" || got.Type.Value != "beforehello rich editor" {
+		t.Fatalf("type contenteditable = %+v, want insert-text strategy and resulting text", got)
+	}
+}
+
+func TestInsertTextCommandJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"insert-text", "[contenteditable=true]", " inserted", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("insert-text exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK         bool `json:"ok"`
+		InsertText struct {
+			Typing   bool   `json:"typing"`
+			Value    string `json:"value"`
+			Strategy string `json:"strategy"`
+		} `json:"insert_text"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("insert-text output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.InsertText.Typing || got.InsertText.Strategy != "insert-text" || got.InsertText.Value != "before inserted" {
+		t.Fatalf("insert-text = %+v, want inserted rich text", got)
+	}
+}
+
 func TestHTMLCommandJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -1046,6 +1107,114 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	}
 }
 
+func TestNetworkWebSocketCaptureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "ws.local.json")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"network", "websocket",
+		"--wait", "250ms",
+		"--include-payloads",
+		"--payload-limit", "12",
+		"--redact", "safe",
+		"--out", outPath,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("network websocket exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK         bool `json:"ok"`
+		WebSockets []struct {
+			ID        string `json:"id"`
+			URL       string `json:"url"`
+			WebSocket struct {
+				RequestHeaders  map[string]any `json:"request_headers"`
+				ResponseHeaders map[string]any `json:"response_headers"`
+				Status          int            `json:"status"`
+				Frames          []struct {
+					Direction string `json:"direction"`
+					Payload   struct {
+						Text      string `json:"text"`
+						Truncated bool   `json:"truncated"`
+					} `json:"payload"`
+				} `json:"frames"`
+				Errors []struct {
+					ErrorMessage string `json:"error_message"`
+				} `json:"errors"`
+				Closed bool `json:"closed"`
+			} `json:"websocket"`
+		} `json:"websockets"`
+		Capture struct {
+			Count           int    `json:"count"`
+			IncludePayloads bool   `json:"include_payloads"`
+			PayloadLimit    int    `json:"payload_limit"`
+			Redact          string `json:"redact"`
+		} `json:"capture"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("network websocket output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Capture.Count != 1 || !got.Capture.IncludePayloads || got.Capture.PayloadLimit != 12 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath {
+		t.Fatalf("network websocket = %+v, want one safe-redacted websocket artifact", got)
+	}
+	ws := got.WebSockets[0].WebSocket
+	if got.WebSockets[0].ID != "ws-1" || ws.Status != 101 || !ws.Closed || len(ws.Frames) != 2 || len(ws.Errors) != 1 {
+		t.Fatalf("network websocket record = %+v, want lifecycle, frames, error, and close", got.WebSockets[0])
+	}
+	if ws.RequestHeaders["Authorization"] != "<redacted>" || ws.ResponseHeaders["Set-Cookie"] != "<redacted>" {
+		t.Fatalf("network websocket headers = %+v / %+v, want redacted sensitive headers", ws.RequestHeaders, ws.ResponseHeaders)
+	}
+	if strings.Contains(ws.Frames[0].Payload.Text, "secret") || !ws.Frames[0].Payload.Truncated {
+		t.Fatalf("network websocket payload = %+v, want redacted truncated payload", ws.Frames[0].Payload)
+	}
+}
+
+func TestNetworkCaptureIncludesWebSocketsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"network", "capture", "--wait", "250ms", "--include-websockets", "--include-websocket-payloads", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("network capture websockets exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		Requests []struct {
+			ID        string          `json:"id"`
+			WebSocket json.RawMessage `json:"websocket"`
+		} `json:"requests"`
+		Capture struct {
+			IncludeWebSockets        bool `json:"include_websockets"`
+			IncludeWebSocketPayloads bool `json:"include_websocket_payloads"`
+		} `json:"capture"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("network capture websockets output is invalid JSON: %v", err)
+	}
+	found := false
+	for _, request := range got.Requests {
+		if request.ID == "ws-1" && len(request.WebSocket) > 0 {
+			found = true
+		}
+	}
+	if !got.Capture.IncludeWebSockets || !got.Capture.IncludeWebSocketPayloads || !found {
+		t.Fatalf("network capture websockets = %+v, want websocket record included", got)
+	}
+}
+
 func TestNetworkCaptureDefaultKeepsLocalCredentials(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -1269,6 +1438,128 @@ func TestStorageCookiesAndDiffJSON(t *testing.T) {
 	}
 	if !diff.HasDiff || diff.Diff.Summary["added"] != 1 || diff.Diff.Summary["changed"] != 1 {
 		t.Fatalf("storage diff = %+v, want one added and one changed", diff)
+	}
+}
+
+func TestStorageIndexedDBDumpJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "dump.local.json")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"storage", "indexeddb", "dump", "cdp-demo-db", "settings",
+		"--page-size", "2",
+		"--out", outPath,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("indexeddb dump exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool `json:"ok"`
+		Storage struct {
+			Operation  string `json:"operation"`
+			Database   string `json:"database"`
+			Store      string `json:"store"`
+			Count      int    `json:"count"`
+			Limit      int    `json:"limit"`
+			PageSize   int    `json:"page_size"`
+			HasMore    bool   `json:"has_more"`
+			NextCursor string `json:"next_cursor"`
+			Records    []struct {
+				Key   string         `json:"key"`
+				Value map[string]any `json:"value"`
+			} `json:"records"`
+		} `json:"storage"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("indexeddb dump output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Storage.Operation != "dump" || got.Storage.Database != "cdp-demo-db" || got.Storage.Store != "settings" || got.Storage.Count != 2 || got.Storage.Limit != 2 || got.Storage.PageSize != 2 || !got.Storage.HasMore || got.Storage.NextCursor == "" || got.Artifact.Path != outPath {
+		t.Fatalf("indexeddb dump = %+v, want paginated dump artifact", got)
+	}
+	if len(got.Storage.Records) != 2 || got.Storage.Records[0].Key != "feature" || got.Storage.Records[0].Value["enabled"] != true {
+		t.Fatalf("indexeddb dump records = %+v, want keys and values", got.Storage.Records)
+	}
+}
+
+func TestWorkflowActionCaptureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "action.local.json")
+	beforePath := filepath.Join(dir, "before.png")
+	afterPath := filepath.Join(dir, "after.png")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "action-capture",
+		"--action", "insert-text:hello",
+		"--selector", "[contenteditable=true]",
+		"--wait-before", "0s",
+		"--wait-after", "0s",
+		"--include", "network,websocket,console,dom,text,storage-diff",
+		"--before-screenshot", beforePath,
+		"--after-screenshot", afterPath,
+		"--out", outPath,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow action-capture exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Workflow struct {
+			Name    string   `json:"name"`
+			Include []string `json:"include"`
+		} `json:"workflow"`
+		Action struct {
+			Type   string `json:"type"`
+			Result struct {
+				Strategy string `json:"strategy"`
+				Value    string `json:"value"`
+			} `json:"result"`
+		} `json:"action"`
+		Requests    []map[string]any `json:"requests"`
+		WebSockets  []map[string]any `json:"websockets"`
+		Messages    []map[string]any `json:"messages"`
+		StorageDiff struct {
+			HasDiff bool `json:"has_diff"`
+		} `json:"storage_diff"`
+		Artifacts []struct {
+			Type string `json:"type"`
+			Path string `json:"path"`
+		} `json:"artifacts"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow action-capture output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "action-capture" || got.Action.Type != "insert-text" || got.Action.Result.Strategy != "insert-text" || got.Action.Result.Value != "beforehello" {
+		t.Fatalf("workflow action-capture = %+v, want insert-text action result", got)
+	}
+	if len(got.Requests) == 0 || len(got.WebSockets) == 0 || len(got.Messages) == 0 || got.Artifact.Path != outPath {
+		t.Fatalf("workflow action-capture collectors = %+v, want network, websocket, console, and artifact", got)
+	}
+	if _, err := os.Stat(beforePath); err != nil {
+		t.Fatalf("before screenshot was not written: %v", err)
+	}
+	if _, err := os.Stat(afterPath); err != nil {
+		t.Fatalf("after screenshot was not written: %v", err)
 	}
 }
 
@@ -3947,6 +4238,37 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 							"errorText": "net::ERR_FAILED",
 						},
 					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.webSocketCreated",
+						"params": map[string]any{
+							"requestId": "ws-1",
+							"url":       "wss://example.test/socket?token=abc",
+							"initiator": map[string]any{"type": "script"},
+						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.webSocketWillSendHandshakeRequest",
+						"params": map[string]any{
+							"requestId": "ws-1",
+							"timestamp": 3.25,
+							"wallTime":  4.5,
+							"request":   map[string]any{"headers": map[string]any{"Authorization": "Bearer secret", "Sec-WebSocket-Key": "key"}},
+						},
+					},
+					map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.webSocketHandshakeResponseReceived",
+						"params": map[string]any{
+							"requestId": "ws-1",
+							"response":  map[string]any{"status": 101, "statusText": "Switching Protocols", "headers": map[string]any{"Set-Cookie": "ws=secret"}},
+						},
+					},
+					map[string]any{"sessionId": req.SessionID, "method": "Network.webSocketFrameSent", "params": map[string]any{"requestId": "ws-1", "timestamp": 3.5, "response": map[string]any{"opcode": 1, "mask": true, "payloadData": `{"auth":"secret","kind":"send"}`}}},
+					map[string]any{"sessionId": req.SessionID, "method": "Network.webSocketFrameReceived", "params": map[string]any{"requestId": "ws-1", "timestamp": 3.75, "response": map[string]any{"opcode": 1, "payloadData": `{"ok":true}`}}},
+					map[string]any{"sessionId": req.SessionID, "method": "Network.webSocketFrameError", "params": map[string]any{"requestId": "ws-1", "timestamp": 3.85, "errorMessage": "synthetic ws warning"}},
+					map[string]any{"sessionId": req.SessionID, "method": "Network.webSocketClosed", "params": map[string]any{"requestId": "ws-1", "timestamp": 4.0}},
 				)
 			} else if req.Method == "Network.getRequestPostData" {
 				var params struct {
@@ -3980,6 +4302,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Network.setCookie" {
 				resp["result"] = map[string]any{"success": true}
 			} else if req.Method == "Network.deleteCookies" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Input.insertText" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Storage.getUsageAndQuota" {
 				resp["result"] = map[string]any{
@@ -4209,6 +4533,45 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_type__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "[contenteditable=true]",
+					"count":    1,
+					"typed":    expressionStringArg(req.Expression, "const text = String("),
+					"previous": "before",
+					"value":    "before",
+					"kind":     "contenteditable",
+					"strategy": "insert-text",
+					"typing":   true,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_insert_text_result__") {
+		text := expressionStringArg(req.Expression, "const text = String(")
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "[contenteditable=true]",
+					"count":    1,
+					"typed":    text,
+					"previous": "before",
+					"value":    "before" + text,
+					"kind":     "contenteditable",
+					"strategy": "insert-text",
+					"typing":   true,
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_html__") {
 		if strings.Contains(req.Expression, `"empty"`) {
 			return map[string]any{
@@ -4416,6 +4779,33 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_dump__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":         "https://example.test/app",
+					"origin":      "https://example.test",
+					"operation":   "dump",
+					"available":   true,
+					"found":       true,
+					"database":    "cdp-demo-db",
+					"store":       "settings",
+					"count":       2,
+					"limit":       2,
+					"offset":      0,
+					"page_size":   2,
+					"next_cursor": "eyJrZXkiOiJhZ2VudCJ9",
+					"has_more":    true,
+					"direction":   "next",
+					"records": []map[string]any{
+						{"key": "feature", "value": map[string]any{"enabled": true, "source": "demo"}},
+						{"key": "agent", "value": map[string]any{"from": "cdp"}},
+					},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_storage_get__") {
 		return map[string]any{
 			"result": map[string]any{
@@ -4524,6 +4914,23 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 			"value": "Example App",
 		},
 	}
+}
+
+func expressionStringArg(expression, prefix string) string {
+	idx := strings.Index(expression, prefix)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(prefix)
+	end := strings.Index(expression[start:], ");")
+	if end < 0 {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal([]byte(expression[start:start+end]), &value); err != nil {
+		return ""
+	}
+	return value
 }
 
 func TestPagesTitleContainsJSON(t *testing.T) {

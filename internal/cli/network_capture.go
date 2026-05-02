@@ -2,15 +2,15 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
-	"encoding/json"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
-	"net/url"
 )
 
 type networkRequest struct {
@@ -28,49 +28,81 @@ type networkRequest struct {
 }
 
 type networkCaptureOptions struct {
-	Wait              time.Duration
-	Limit             int
-	IncludeHeaders    bool
-	IncludeInitiators bool
-	IncludeTiming     bool
-	IncludePostData   bool
-	BodyKinds         map[string]bool
-	BodyLimit         int
-	AfterEnable       func() error
+	Wait                  time.Duration
+	Limit                 int
+	IncludeHeaders        bool
+	IncludeInitiators     bool
+	IncludeTiming         bool
+	IncludePostData       bool
+	BodyKinds             map[string]bool
+	BodyLimit             int
+	IncludeWebSockets     bool
+	WebSocketPayloads     bool
+	WebSocketPayloadLimit int
+	AfterEnable           func() error
 }
 
 type networkCaptureRecord struct {
-	ID                 string                 `json:"id"`
-	URL                string                 `json:"url,omitempty"`
-	Method             string                 `json:"method,omitempty"`
-	ResourceType       string                 `json:"resource_type,omitempty"`
-	DocumentURL        string                 `json:"document_url,omitempty"`
-	LoaderID           string                 `json:"loader_id,omitempty"`
-	Timestamp          float64                `json:"timestamp,omitempty"`
-	WallTime           float64                `json:"wall_time,omitempty"`
-	RequestHeaders     map[string]any         `json:"request_headers,omitempty"`
-	RequestPostData    *networkCaptureBody    `json:"request_post_data,omitempty"`
-	RequestHasPostData bool                   `json:"-"`
-	ResponseHeaders    map[string]any         `json:"response_headers,omitempty"`
-	Status             int                    `json:"status,omitempty"`
-	StatusText         string                 `json:"status_text,omitempty"`
-	MimeType           string                 `json:"mime_type,omitempty"`
-	Protocol           string                 `json:"protocol,omitempty"`
-	RemoteIPAddress    string                 `json:"remote_ip_address,omitempty"`
-	RemotePort         int                    `json:"remote_port,omitempty"`
-	ConnectionID       float64                `json:"connection_id,omitempty"`
-	ConnectionReused   bool                   `json:"connection_reused,omitempty"`
-	FromDiskCache      bool                   `json:"from_disk_cache,omitempty"`
-	FromServiceWorker  bool                   `json:"from_service_worker,omitempty"`
-	EncodedDataLength  float64                `json:"encoded_data_length,omitempty"`
-	DecodedBodyLength  float64                `json:"decoded_body_length,omitempty"`
-	Initiator          json.RawMessage        `json:"initiator,omitempty"`
-	Timing             json.RawMessage        `json:"timing,omitempty"`
-	Redirects          []networkCaptureRecord `json:"redirects,omitempty"`
-	Body               *networkCaptureBody    `json:"body,omitempty"`
-	Failed             bool                   `json:"failed"`
-	ErrorText          string                 `json:"error_text,omitempty"`
-	Canceled           bool                   `json:"canceled,omitempty"`
+	ID                 string                   `json:"id"`
+	URL                string                   `json:"url,omitempty"`
+	Method             string                   `json:"method,omitempty"`
+	ResourceType       string                   `json:"resource_type,omitempty"`
+	DocumentURL        string                   `json:"document_url,omitempty"`
+	LoaderID           string                   `json:"loader_id,omitempty"`
+	Timestamp          float64                  `json:"timestamp,omitempty"`
+	WallTime           float64                  `json:"wall_time,omitempty"`
+	RequestHeaders     map[string]any           `json:"request_headers,omitempty"`
+	RequestPostData    *networkCaptureBody      `json:"request_post_data,omitempty"`
+	RequestHasPostData bool                     `json:"-"`
+	ResponseHeaders    map[string]any           `json:"response_headers,omitempty"`
+	Status             int                      `json:"status,omitempty"`
+	StatusText         string                   `json:"status_text,omitempty"`
+	MimeType           string                   `json:"mime_type,omitempty"`
+	Protocol           string                   `json:"protocol,omitempty"`
+	RemoteIPAddress    string                   `json:"remote_ip_address,omitempty"`
+	RemotePort         int                      `json:"remote_port,omitempty"`
+	ConnectionID       float64                  `json:"connection_id,omitempty"`
+	ConnectionReused   bool                     `json:"connection_reused,omitempty"`
+	FromDiskCache      bool                     `json:"from_disk_cache,omitempty"`
+	FromServiceWorker  bool                     `json:"from_service_worker,omitempty"`
+	EncodedDataLength  float64                  `json:"encoded_data_length,omitempty"`
+	DecodedBodyLength  float64                  `json:"decoded_body_length,omitempty"`
+	Initiator          json.RawMessage          `json:"initiator,omitempty"`
+	Timing             json.RawMessage          `json:"timing,omitempty"`
+	Redirects          []networkCaptureRecord   `json:"redirects,omitempty"`
+	Body               *networkCaptureBody      `json:"body,omitempty"`
+	Failed             bool                     `json:"failed"`
+	ErrorText          string                   `json:"error_text,omitempty"`
+	Canceled           bool                     `json:"canceled,omitempty"`
+	WebSocket          *networkWebSocketCapture `json:"websocket,omitempty"`
+}
+
+type networkWebSocketCapture struct {
+	RequestID       string                  `json:"request_id"`
+	URL             string                  `json:"url,omitempty"`
+	Initiator       json.RawMessage         `json:"initiator,omitempty"`
+	RequestHeaders  map[string]any          `json:"request_headers,omitempty"`
+	ResponseHeaders map[string]any          `json:"response_headers,omitempty"`
+	Status          int                     `json:"status,omitempty"`
+	StatusText      string                  `json:"status_text,omitempty"`
+	Frames          []networkWebSocketFrame `json:"frames,omitempty"`
+	Errors          []networkWebSocketError `json:"errors,omitempty"`
+	Closed          bool                    `json:"closed,omitempty"`
+	CreatedAt       float64                 `json:"created_at,omitempty"`
+	ClosedAt        float64                 `json:"closed_at,omitempty"`
+}
+
+type networkWebSocketFrame struct {
+	Direction string              `json:"direction"`
+	Opcode    float64             `json:"opcode,omitempty"`
+	Mask      bool                `json:"mask,omitempty"`
+	Payload   *networkCaptureBody `json:"payload,omitempty"`
+	Timestamp float64             `json:"timestamp,omitempty"`
+}
+
+type networkWebSocketError struct {
+	ErrorMessage string  `json:"error_message"`
+	Timestamp    float64 `json:"timestamp,omitempty"`
 }
 
 type networkCaptureBody struct {
@@ -190,6 +222,34 @@ func collectNetworkCapture(ctx context.Context, client browserEventClient, sessi
 			mergeCaptureLoadingFinished(event.Params, ensure)
 		case "Network.loadingFailed":
 			mergeCaptureLoadingFailed(event.Params, ensure)
+		case "Network.webSocketCreated":
+			if opts.IncludeWebSockets {
+				mergeCaptureWebSocketCreated(event.Params, ensure, opts)
+			}
+		case "Network.webSocketWillSendHandshakeRequest":
+			if opts.IncludeWebSockets {
+				mergeCaptureWebSocketWillSendHandshakeRequest(event.Params, ensure, opts)
+			}
+		case "Network.webSocketHandshakeResponseReceived":
+			if opts.IncludeWebSockets {
+				mergeCaptureWebSocketHandshakeResponseReceived(event.Params, ensure, opts)
+			}
+		case "Network.webSocketFrameSent":
+			if opts.IncludeWebSockets {
+				mergeCaptureWebSocketFrame(event.Params, ensure, opts, "sent")
+			}
+		case "Network.webSocketFrameReceived":
+			if opts.IncludeWebSockets {
+				mergeCaptureWebSocketFrame(event.Params, ensure, opts, "received")
+			}
+		case "Network.webSocketFrameError":
+			if opts.IncludeWebSockets {
+				mergeCaptureWebSocketFrameError(event.Params, ensure)
+			}
+		case "Network.webSocketClosed":
+			if opts.IncludeWebSockets {
+				mergeCaptureWebSocketClosed(event.Params, ensure)
+			}
 		}
 	}
 	events, err := client.DrainEvents(ctx)
@@ -457,6 +517,130 @@ func enrichResponseBody(ctx context.Context, client browserEventClient, sessionI
 	return nil
 }
 
+func mergeCaptureWebSocketCreated(paramsRaw json.RawMessage, ensure func(string) *networkCaptureRecord, opts networkCaptureOptions) {
+	var params struct {
+		RequestID string          `json:"requestId"`
+		URL       string          `json:"url"`
+		Initiator json.RawMessage `json:"initiator"`
+	}
+	if err := json.Unmarshal(paramsRaw, &params); err != nil || params.RequestID == "" {
+		return
+	}
+	record := ensure(params.RequestID)
+	record.ResourceType = "WebSocket"
+	record.URL = params.URL
+	ws := ensureWebSocket(record, params.RequestID)
+	ws.URL = params.URL
+	if opts.IncludeInitiators && len(params.Initiator) > 0 && string(params.Initiator) != "null" {
+		ws.Initiator = params.Initiator
+	}
+}
+
+func mergeCaptureWebSocketWillSendHandshakeRequest(paramsRaw json.RawMessage, ensure func(string) *networkCaptureRecord, opts networkCaptureOptions) {
+	var params struct {
+		RequestID string  `json:"requestId"`
+		Timestamp float64 `json:"timestamp"`
+		WallTime  float64 `json:"wallTime"`
+		Request   struct {
+			Headers map[string]any `json:"headers"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(paramsRaw, &params); err != nil || params.RequestID == "" {
+		return
+	}
+	record := ensure(params.RequestID)
+	record.ResourceType = "WebSocket"
+	record.Timestamp = params.Timestamp
+	record.WallTime = params.WallTime
+	ws := ensureWebSocket(record, params.RequestID)
+	ws.CreatedAt = params.Timestamp
+	if opts.IncludeHeaders && len(params.Request.Headers) > 0 {
+		ws.RequestHeaders = params.Request.Headers
+	}
+}
+
+func mergeCaptureWebSocketHandshakeResponseReceived(paramsRaw json.RawMessage, ensure func(string) *networkCaptureRecord, opts networkCaptureOptions) {
+	var params struct {
+		RequestID string `json:"requestId"`
+		Response  struct {
+			Status     int            `json:"status"`
+			StatusText string         `json:"statusText"`
+			Headers    map[string]any `json:"headers"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(paramsRaw, &params); err != nil || params.RequestID == "" {
+		return
+	}
+	record := ensure(params.RequestID)
+	record.ResourceType = "WebSocket"
+	ws := ensureWebSocket(record, params.RequestID)
+	ws.Status = params.Response.Status
+	ws.StatusText = params.Response.StatusText
+	if opts.IncludeHeaders && len(params.Response.Headers) > 0 {
+		ws.ResponseHeaders = params.Response.Headers
+	}
+}
+
+func mergeCaptureWebSocketFrame(paramsRaw json.RawMessage, ensure func(string) *networkCaptureRecord, opts networkCaptureOptions, direction string) {
+	var params struct {
+		RequestID string  `json:"requestId"`
+		Timestamp float64 `json:"timestamp"`
+		Response  struct {
+			Opcode      float64 `json:"opcode"`
+			Mask        bool    `json:"mask"`
+			PayloadData string  `json:"payloadData"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(paramsRaw, &params); err != nil || params.RequestID == "" {
+		return
+	}
+	record := ensure(params.RequestID)
+	record.ResourceType = "WebSocket"
+	frame := networkWebSocketFrame{Direction: direction, Opcode: params.Response.Opcode, Mask: params.Response.Mask, Timestamp: params.Timestamp}
+	if opts.WebSocketPayloads {
+		frame.Payload = captureBody(params.Response.PayloadData, false, opts.WebSocketPayloadLimit)
+	}
+	ws := ensureWebSocket(record, params.RequestID)
+	ws.Frames = append(ws.Frames, frame)
+}
+
+func mergeCaptureWebSocketFrameError(paramsRaw json.RawMessage, ensure func(string) *networkCaptureRecord) {
+	var params struct {
+		RequestID    string  `json:"requestId"`
+		Timestamp    float64 `json:"timestamp"`
+		ErrorMessage string  `json:"errorMessage"`
+	}
+	if err := json.Unmarshal(paramsRaw, &params); err != nil || params.RequestID == "" {
+		return
+	}
+	record := ensure(params.RequestID)
+	record.ResourceType = "WebSocket"
+	ws := ensureWebSocket(record, params.RequestID)
+	ws.Errors = append(ws.Errors, networkWebSocketError{ErrorMessage: params.ErrorMessage, Timestamp: params.Timestamp})
+}
+
+func mergeCaptureWebSocketClosed(paramsRaw json.RawMessage, ensure func(string) *networkCaptureRecord) {
+	var params struct {
+		RequestID string  `json:"requestId"`
+		Timestamp float64 `json:"timestamp"`
+	}
+	if err := json.Unmarshal(paramsRaw, &params); err != nil || params.RequestID == "" {
+		return
+	}
+	record := ensure(params.RequestID)
+	record.ResourceType = "WebSocket"
+	ws := ensureWebSocket(record, params.RequestID)
+	ws.Closed = true
+	ws.ClosedAt = params.Timestamp
+}
+
+func ensureWebSocket(record *networkCaptureRecord, requestID string) *networkWebSocketCapture {
+	if record.WebSocket == nil {
+		record.WebSocket = &networkWebSocketCapture{RequestID: requestID}
+	}
+	return record.WebSocket
+}
+
 func captureBody(text string, base64Encoded bool, limit int) *networkCaptureBody {
 	bytes := len([]byte(text))
 	body := &networkCaptureBody{Text: text, Base64Encoded: base64Encoded, Bytes: bytes}
@@ -525,6 +709,16 @@ func redactCaptureRecord(record *networkCaptureRecord, redact string) {
 	}
 	if record.Body != nil && record.Body.Text != "" {
 		record.Body.Text = redactBodyText(record.Body.Text, redact)
+	}
+	if record.WebSocket != nil {
+		record.WebSocket.URL = redactURL(record.WebSocket.URL, redact)
+		record.WebSocket.RequestHeaders = redactHeaderMap(record.WebSocket.RequestHeaders, redact)
+		record.WebSocket.ResponseHeaders = redactHeaderMap(record.WebSocket.ResponseHeaders, redact)
+		for i := range record.WebSocket.Frames {
+			if record.WebSocket.Frames[i].Payload != nil && record.WebSocket.Frames[i].Payload.Text != "" {
+				record.WebSocket.Frames[i].Payload.Text = redactBodyText(record.WebSocket.Frames[i].Payload.Text, redact)
+			}
+		}
 	}
 	for i := range record.Redirects {
 		redactCaptureRecord(&record.Redirects[i], redact)

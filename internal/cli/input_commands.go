@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +39,9 @@ type typeResult struct {
 	Typing   bool       `json:"typing"`
 	Typed    string     `json:"typed"`
 	Previous string     `json:"previous"`
+	Value    string     `json:"value,omitempty"`
+	Kind     string     `json:"kind,omitempty"`
+	Strategy string     `json:"strategy,omitempty"`
 	Error    *evalError `json:"error,omitempty"`
 }
 
@@ -208,11 +214,19 @@ func (a *app) newTypeCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var strategy string
 	cmd := &cobra.Command{
 		Use:   "type <selector> <text>",
-		Short: "Type text into the first matching form control",
+		Short: "Type text into the first matching editable element",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			strategy = strings.ToLower(strings.TrimSpace(strategy))
+			if strategy == "" {
+				strategy = "auto"
+			}
+			if strategy != "auto" && strategy != "dom" && strategy != "insert-text" {
+				return commandError("usage", "usage", "--strategy must be auto, dom, or insert-text", ExitUsage, []string{"cdp type '[contenteditable=true]' hello --strategy auto --json"})
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -222,8 +236,8 @@ func (a *app) newTypeCommand() *cobra.Command {
 			}
 			defer session.Close(ctx)
 
-			var result typeResult
-			if err := evaluateJSONValue(ctx, session, typeExpression(args[0], args[1]), "type", &result); err != nil {
+			result, err := performTextInput(ctx, session, args[0], args[1], strategy)
+			if err != nil {
 				return err
 			}
 			if result.Error != nil {
@@ -255,7 +269,68 @@ func (a *app) newTypeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&strategy, "strategy", "auto", "text input strategy: auto, dom, or insert-text")
 	return cmd
+}
+
+func (a *app) newInsertTextCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
+	cmd := &cobra.Command{
+		Use:   "insert-text <selector> <text>",
+		Short: "Insert text through the browser input pipeline",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			result, err := performTextInput(ctx, session, args[0], args[1], "insert-text")
+			if err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError("invalid_selector", "usage", fmt.Sprintf("insert-text %q: %s", args[0], result.Error.Message), ExitUsage, []string{"cdp insert-text '[contenteditable=true]' hello --json"})
+			}
+			if !result.Typing {
+				return commandError("invalid_selector", "usage", fmt.Sprintf("no editable element found for selector %q", args[0]), ExitUsage, []string{"cdp insert-text '[contenteditable=true]' hello --json"})
+			}
+			return a.render(ctx, fmt.Sprintf("inserted-text\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+				"ok":          true,
+				"action":      "inserted_text",
+				"target":      pageRow(target),
+				"insert_text": result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func performTextInput(ctx context.Context, session *cdp.PageSession, selector, text, strategy string) (typeResult, error) {
+	var result typeResult
+	if err := evaluateJSONValue(ctx, session, typeExpression(selector, text, strategy), "type", &result); err != nil {
+		return typeResult{}, err
+	}
+	if result.Error != nil || !result.Typing || result.Strategy != "insert-text" {
+		return result, nil
+	}
+	params, _ := json.Marshal(map[string]any{"text": text})
+	if _, err := session.Exec(ctx, "Input.insertText", params); err != nil {
+		return typeResult{}, commandError("connection_failed", "connection", fmt.Sprintf("insert text target %s: %v", session.TargetID, err), ExitConnection, []string{"cdp protocol exec Input.insertText --params '{\"text\":\"hello\"}' --json"})
+	}
+	if err := evaluateJSONValue(ctx, session, insertedTextResultExpression(selector, text, result.Previous, result.Kind, result.Count), "insert-text", &result); err != nil {
+		return typeResult{}, err
+	}
+	return result, nil
 }
 
 func (a *app) newPressCommand() *cobra.Command {
