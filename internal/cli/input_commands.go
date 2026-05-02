@@ -6,18 +6,24 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
 
 type clickResult struct {
-	URL      string     `json:"url"`
-	Title    string     `json:"title"`
-	Selector string     `json:"selector"`
-	Count    int        `json:"count"`
-	Clicked  bool       `json:"clicked"`
-	Error    *evalError `json:"error,omitempty"`
+	URL      string       `json:"url"`
+	Title    string       `json:"title"`
+	Selector string       `json:"selector"`
+	Count    int          `json:"count"`
+	Clicked  bool         `json:"clicked"`
+	Strategy string       `json:"strategy,omitempty"`
+	X        float64      `json:"x,omitempty"`
+	Y        float64      `json:"y,omitempty"`
+	Rect     snapshotRect `json:"rect,omitempty"`
+	Verified *bool        `json:"verified,omitempty"`
+	Error    *evalError   `json:"error,omitempty"`
 }
 
 type fillResult struct {
@@ -112,22 +118,48 @@ func (a *app) newClickCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var strategy string
+	var activate bool
+	var waitText string
+	var waitSelector string
+	var diagnosticsOut string
+	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "click <selector>",
 		Short: "Click the first matching element for a CSS selector",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			strategy = strings.ToLower(strings.TrimSpace(strategy))
+			if strategy == "" {
+				strategy = "auto"
+			}
+			if strategy != "auto" && strategy != "dom" && strategy != "raw-input" {
+				return commandError("usage", "usage", "--strategy must be auto, dom, or raw-input", ExitUsage, []string{"cdp click main --strategy raw-input --json"})
+			}
+			if strings.TrimSpace(waitText) != "" && strings.TrimSpace(waitSelector) != "" {
+				return commandError("usage", "usage", "use only one of --wait-text or --wait-selector", ExitUsage, []string{"cdp click button --wait-text Done --json"})
+			}
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
+			}
+
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
 			defer session.Close(ctx)
 
-			var result clickResult
-			if err := evaluateJSONValue(ctx, session, clickExpression(args[0]), "click", &result); err != nil {
+			if activate {
+				if err := cdp.ActivateTargetWithClient(ctx, client, target.TargetID); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("activate target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp page activate --json"})
+				}
+			}
+
+			result, err := performClick(ctx, session, args[0], strategy)
+			if err != nil {
 				return err
 			}
 			if result.Error != nil {
@@ -142,20 +174,204 @@ func (a *app) newClickCommand() *cobra.Command {
 					[]string{"cdp click main --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("clicked\t%s\t%s", target.TargetID, result.Selector), map[string]any{
-				"ok":     true,
+
+			verified := true
+			var verification *waitResult
+			if strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "" {
+				wait, err := waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+				if err != nil {
+					return err
+				}
+				verification = &wait
+				verified = wait.Matched
+				if !verified && strategy == "auto" {
+					fallback, err := performClick(ctx, session, args[0], "raw-input")
+					if err != nil {
+						return err
+					}
+					if fallback.Error != nil {
+						return invalidSelectorError(args[0], fallback.Error, "cdp click main --strategy raw-input --json")
+					}
+					result = fallback
+					wait, err = waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+					if err != nil {
+						return err
+					}
+					verification = &wait
+					verified = wait.Matched
+				}
+				result.Verified = &verified
+			}
+
+			report := map[string]any{
+				"ok":     verified,
 				"action": "clicked",
 				"target": pageRow(target),
 				"click":  result,
-			})
+			}
+			if verification != nil {
+				report["verification"] = verification
+			}
+			if strings.TrimSpace(diagnosticsOut) != "" {
+				diagnostics := clickDiagnostics(target, args[0], strategy, activate, waitText, waitSelector, a.clickTimeout(), result, verification)
+				report["diagnostics"] = diagnostics
+				b, err := json.MarshalIndent(diagnostics, "", "  ")
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal click diagnostics: %v", err), ExitInternal, []string{"cdp click button --diagnostics-out tmp/click.local.json --json"})
+				}
+				writtenPath, err := writeArtifactFile(diagnosticsOut, append(b, '\n'))
+				if err != nil {
+					return err
+				}
+				report["artifact"] = map[string]any{"type": "click-diagnostics", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifacts"] = []map[string]any{{"type": "click-diagnostics", "path": writtenPath, "bytes": len(b) + 1}}
+			}
+			human := fmt.Sprintf("clicked\t%s\t%s", target.TargetID, result.Selector)
+			if !verified {
+				human = fmt.Sprintf("click-unverified\t%s\t%s", target.TargetID, result.Selector)
+			}
+			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&strategy, "strategy", "auto", "click strategy: auto, dom, or raw-input")
+	cmd.Flags().BoolVar(&activate, "activate", false, "bring the target page to the foreground before clicking")
+	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
+	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().StringVar(&diagnosticsOut, "diagnostics-out", "", "optional path for privacy-preserving click diagnostics JSON")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }
 
+func performClick(ctx context.Context, session *cdp.PageSession, selector, strategy string) (clickResult, error) {
+	if strategy == "auto" || strategy == "dom" {
+		var result clickResult
+		if err := evaluateJSONValue(ctx, session, clickExpression(selector), "click", &result); err != nil {
+			return clickResult{}, err
+		}
+		result.Strategy = "dom"
+		return result, nil
+	}
+	var result clickResult
+	if err := evaluateJSONValue(ctx, session, rawClickPointExpression(selector), "click point", &result); err != nil {
+		return clickResult{}, err
+	}
+	if result.Error != nil || !result.Clicked {
+		return result, nil
+	}
+	if err := dispatchRawMouseClick(ctx, session, result.X, result.Y); err != nil {
+		return clickResult{}, err
+	}
+	result.Strategy = "raw-input"
+	return result, nil
+}
+
+func dispatchRawMouseClick(ctx context.Context, session *cdp.PageSession, x, y float64) error {
+	events := []map[string]any{
+		{"type": "mouseMoved", "x": x, "y": y, "button": "none"},
+		{"type": "mousePressed", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1},
+		{"type": "mouseReleased", "x": x, "y": y, "button": "left", "buttons": 0, "clickCount": 1},
+	}
+	for _, event := range events {
+		params, _ := json.Marshal(event)
+		if _, err := session.Exec(ctx, "Input.dispatchMouseEvent", params); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("dispatch raw mouse event target %s: %v", session.TargetID, err), ExitConnection, []string{"cdp protocol exec Input.dispatchMouseEvent --params '{\"type\":\"mousePressed\",\"x\":100,\"y\":100,\"button\":\"left\",\"buttons\":1,\"clickCount\":1}' --json"})
+		}
+	}
+	return nil
+}
+
+func waitForClickVerification(ctx context.Context, session *cdp.PageSession, poll time.Duration, waitText, waitSelector string) (waitResult, error) {
+	start := time.Now()
+	kind := "text"
+	value := strings.TrimSpace(waitText)
+	label := "wait text"
+	expression := func() string { return waitTextExpression(value) }
+	if strings.TrimSpace(waitSelector) != "" {
+		kind = "selector"
+		value = strings.TrimSpace(waitSelector)
+		label = "wait selector"
+		expression = func() string { return waitSelectorExpression(value) }
+	}
+	last := waitResult{Kind: kind, PollInterval: poll.String()}
+	if kind == "text" {
+		last.Needle = value
+	} else {
+		last.Selector = value
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			last.ElapsedMS = time.Since(start).Milliseconds()
+			return last, nil
+		default:
+		}
+
+		var result waitResult
+		if err := evaluateJSONValue(ctx, session, expression(), label, &result); err != nil {
+			if ctx.Err() != nil {
+				last.ElapsedMS = time.Since(start).Milliseconds()
+				return last, nil
+			}
+			return waitResult{}, err
+		}
+		result.ElapsedMS = time.Since(start).Milliseconds()
+		result.PollInterval = poll.String()
+		last = result
+		if result.Matched || result.Error != nil {
+			return result, nil
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			last.ElapsedMS = time.Since(start).Milliseconds()
+			last.PollInterval = poll.String()
+			return last, nil
+		case <-timer.C:
+		}
+	}
+}
+
+func (a *app) clickTimeout() time.Duration {
+	if a.opts.timeout > 0 {
+		return a.opts.timeout
+	}
+	return 10 * time.Second
+}
+
+func clickDiagnostics(target cdp.TargetInfo, selector, requestedStrategy string, activate bool, waitText, waitSelector string, timeout time.Duration, click clickResult, verification *waitResult) map[string]any {
+	diagnostics := map[string]any{
+		"selector":           selector,
+		"requested_strategy": requestedStrategy,
+		"strategy":           click.Strategy,
+		"activated":          activate,
+		"timeout":            timeout.String(),
+		"target": map[string]any{
+			"id":    target.TargetID,
+			"title": target.Title,
+			"url":   target.URL,
+		},
+		"click": map[string]any{
+			"clicked": click.Clicked,
+			"count":   click.Count,
+			"rect":    click.Rect,
+			"x":       click.X,
+			"y":       click.Y,
+		},
+	}
+	if strings.TrimSpace(waitText) != "" {
+		diagnostics["wait"] = map[string]any{"kind": "text", "needle": waitText}
+	} else if strings.TrimSpace(waitSelector) != "" {
+		diagnostics["wait"] = map[string]any{"kind": "selector", "selector": waitSelector}
+	}
+	if verification != nil {
+		diagnostics["verification"] = verification
+	}
+	return diagnostics
+}
 func (a *app) newFillCommand() *cobra.Command {
 	var targetID string
 	var urlContains string

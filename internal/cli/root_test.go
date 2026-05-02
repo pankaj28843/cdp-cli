@@ -696,13 +696,131 @@ func TestClickJSON(t *testing.T) {
 			Selector string `json:"selector"`
 			Count    int    `json:"count"`
 			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
 		} `json:"click"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("click output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Action != "clicked" || got.Target.ID != "page-1" || got.Click.Selector != "main" || got.Click.Count != 1 || !got.Click.Clicked {
-		t.Fatalf("click output = %+v, want clicked main", got)
+	if !got.OK || got.Action != "clicked" || got.Target.ID != "page-1" || got.Click.Selector != "main" || got.Click.Count != 1 || !got.Click.Clicked || got.Click.Strategy != "dom" {
+		t.Fatalf("click output = %+v, want DOM clicked main", got)
+	}
+}
+
+func TestClickRawInputVerifiedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "main", "--strategy", "raw-input", "--activate", "--wait-text", "Ready", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("raw click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Click struct {
+			Clicked  bool    `json:"clicked"`
+			Strategy string  `json:"strategy"`
+			X        float64 `json:"x"`
+			Y        float64 `json:"y"`
+			Verified *bool   `json:"verified"`
+		} `json:"click"`
+		Verification struct {
+			Matched bool `json:"matched"`
+		} `json:"verification"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("raw click output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.X != 310 || got.Click.Y != 120 || got.Click.Verified == nil || !*got.Click.Verified || !got.Verification.Matched {
+		t.Fatalf("raw click = %+v, want verified raw-input click", got)
+	}
+}
+
+func TestClickVerificationTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--timeout", "20ms", "click", "main", "--strategy", "raw-input", "--wait-text", "Never Ready", "--poll", "5ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("unverified click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Click struct {
+			Clicked  bool  `json:"clicked"`
+			Verified *bool `json:"verified"`
+		} `json:"click"`
+		Verification struct {
+			Matched bool `json:"matched"`
+		} `json:"verification"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("unverified click output is invalid JSON: %v", err)
+	}
+	if got.OK || !got.Click.Clicked || got.Click.Verified == nil || *got.Click.Verified || got.Verification.Matched {
+		t.Fatalf("unverified click = %+v, want clicked but not verified", got)
+	}
+}
+
+func TestClickRawInputZeroRectJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "zero", "--strategy", "raw-input", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("zero rect click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "zero width or height") {
+		t.Fatalf("zero rect stdout = %s, want zero rect error", out.String())
+	}
+}
+
+func TestClickDiagnosticsArtifactJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "click.local.json")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "main", "--strategy", "raw-input", "--wait-selector", "main", "--diagnostics-out", outPath, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("diagnostic click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Artifact struct {
+			Path string `json:"path"`
+		} `json:"artifact"`
+		Diagnostics struct {
+			Selector string `json:"selector"`
+			Strategy string `json:"strategy"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("diagnostic click output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Artifact.Path != outPath || got.Diagnostics.Selector != "main" || got.Diagnostics.Strategy != "raw-input" {
+		t.Fatalf("diagnostic click = %+v, want artifact metadata", got)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("click diagnostics artifact was not written: %v", err)
 	}
 }
 
@@ -4305,6 +4423,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Input.insertText" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "Input.dispatchMouseEvent" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Storage.getUsageAndQuota" {
 				resp["result"] = map[string]any{
 					"usage":          128,
@@ -4519,6 +4639,43 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_click_point__") {
+		if strings.Contains(req.Expression, `"zero"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":      "https://example.test/app",
+						"title":    "Example App",
+						"selector": "zero",
+						"count":    1,
+						"clicked":  false,
+						"strategy": "raw-input",
+						"x":        0,
+						"y":        0,
+						"rect":     map[string]any{"x": 0, "y": 0, "width": 0, "height": 0},
+						"error":    map[string]any{"name": "InvalidTargetError", "message": "target has zero width or height"},
+					},
+				},
+			}
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "main",
+					"count":    1,
+					"clicked":  true,
+					"strategy": "raw-input",
+					"x":        310,
+					"y":        120,
+					"rect":     map[string]any{"x": 10, "y": 20, "width": 600, "height": 200},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_click__") {
 		return map[string]any{
 			"result": map[string]any{
@@ -4675,14 +4832,19 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_wait_text__") {
+		matched := !strings.Contains(req.Expression, "Never Ready")
+		count := 0
+		if matched {
+			count = 1
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"kind":    "text",
-					"needle":  "Ready",
-					"matched": true,
-					"count":   1,
+					"needle":  expressionStringArg(req.Expression, "const needle = "),
+					"matched": matched,
+					"count":   count,
 				},
 			},
 		}
@@ -4922,15 +5084,15 @@ func expressionStringArg(expression, prefix string) string {
 		return ""
 	}
 	start := idx + len(prefix)
-	end := strings.Index(expression[start:], ");")
-	if end < 0 {
-		return ""
+	for end := strings.Index(expression[start:], ";"); end >= 0; end = strings.Index(expression[start:], ";") {
+		candidate := strings.TrimSuffix(expression[start:start+end], ")")
+		var value string
+		if err := json.Unmarshal([]byte(candidate), &value); err == nil {
+			return value
+		}
+		start += end + 1
 	}
-	var value string
-	if err := json.Unmarshal([]byte(expression[start:start+end]), &value); err != nil {
-		return ""
-	}
-	return value
+	return ""
 }
 
 func TestPagesTitleContainsJSON(t *testing.T) {

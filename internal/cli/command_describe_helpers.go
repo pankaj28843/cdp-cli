@@ -185,13 +185,14 @@ func commandExamples(path string) []string {
 			"cdp eval 'Array.from(document.querySelectorAll(\"article\"), el => el.innerText)' --url-contains x.com --json",
 			"cdp eval 'document.title' --title-contains Example --json",
 		},
+		"cdp click": {
+			"cdp click 'button.submit' --json",
+			"cdp click '[data-testid=row]' --strategy raw-input --activate --wait-text 'Opened' --timeout 10s --json",
+			"cdp click 'button.submit' --wait-selector '.toast-success' --diagnostics-out tmp/click.local.json --json",
+		},
 		"cdp text": {
 			"cdp text main --json",
 			"cdp text article --limit 10 --url-contains localhost --json",
-		},
-		"cdp click": {
-			"cdp click main --json",
-			"cdp click button --url-contains localhost --json",
 		},
 		"cdp fill": {
 			"cdp fill input[name='email'] user@example.com --json",

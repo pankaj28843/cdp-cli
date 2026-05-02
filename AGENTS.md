@@ -31,6 +31,8 @@ For browser-facing changes, also run the synthetic live-site loop:
 make e2e-demo-installed
 ```
 
+When validating a CLI behavior that users or agents will exercise through the installed `cdp` binary, run `make install` before the live/manual validation and again after final code changes. Run the validation with `cdp ...` from `PATH`, not `go run`, so the improved command is actually available to everyone using the local install.
+
 ## Design
 
 - The CLI is for agents first: strong `--help`, `--json`, `--jq`, `--debug`, `--timeout`, concise defaults, and stable error envelopes.

@@ -725,6 +725,39 @@ func clickExpression(selector string) string {
 })()`, string(selectorJSON))
 }
 
+func rawClickPointExpression(selector string) string {
+	selectorJSON, _ := json.Marshal(selector)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_click_point__";
+  const selector = %s;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, clicked: false, strategy: "raw-input", x: 0, y: 0, rect: { x: 0, y: 0, width: 0, height: 0 }, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, clicked: false, strategy: "raw-input", x: 0, y: 0, rect: { x: 0, y: 0, width: 0, height: 0 }, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const element = elements[0];
+  if (typeof element.scrollIntoView === "function") {
+    element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  }
+  const rect = element.getBoundingClientRect();
+  const box = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  if (rect.width <= 0 || rect.height <= 0) {
+    return { url: location.href, title: document.title, selector, count: elements.length, clicked: false, strategy: "raw-input", x: rect.x, y: rect.y, rect: box, error: { name: "InvalidTargetError", message: "target has zero width or height" }, marker };
+  }
+  const style = window.getComputedStyle(element);
+  if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity || "1") === 0) {
+    return { url: location.href, title: document.title, selector, count: elements.length, clicked: false, strategy: "raw-input", x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, rect: box, error: { name: "InvalidTargetError", message: "target is not visible" }, marker };
+  }
+  const x = rect.x + rect.width / 2;
+  const y = rect.y + rect.height / 2;
+  return { url: location.href, title: document.title, selector, count: elements.length, clicked: true, strategy: "raw-input", x, y, rect: box, marker };
+})()`, string(selectorJSON))
+}
+
 func collectFrameSummaries(node *frameTreeNode, parent string) []frameSummary {
 	if node == nil || node.Frame == nil {
 		return nil

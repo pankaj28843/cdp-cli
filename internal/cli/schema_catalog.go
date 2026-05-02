@@ -216,12 +216,15 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"click": {
 			Name:        "click",
-			Description: "Mouse click operation against the first matching element.",
+			Description: "DOM or raw-input mouse click operation with optional post-action verification.",
 			Fields: []schemaField{
-				{Name: "ok", Type: "boolean", Required: true, Description: "True when click command completed."},
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the click completed and any requested verification matched."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name, typically clicked when an element is found."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "click", Type: "click_result", Required: true, Description: "Selector, matched count, clicked boolean, and error metadata when applicable."},
+				{Name: "click", Type: "click_result", Required: true, Description: "Selector, matched count, strategy, coordinates for raw-input clicks, and verification status."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Post-click wait condition result when --wait-text or --wait-selector is used."},
+				{Name: "diagnostics", Type: "object", Required: false, Description: "Privacy-preserving click diagnostics when --diagnostics-out is used."},
+				{Name: "artifact", Type: "artifact", Required: false, Description: "Diagnostics artifact metadata when --diagnostics-out is used."},
 			},
 		},
 		"fill": {
