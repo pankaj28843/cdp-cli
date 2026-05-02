@@ -2015,7 +2015,7 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	outDir := t.TempDir()
 	rawURL := "https://www.google.com/search?q=agentic+engineering+2026+evolutions&safe=active&tbs=qdr:m"
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "rendered-extract", rawURL, "--serp", "google", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "rendered-extract", rawURL, "--serp", "google", "--out-dir", outDir, "--wait", "1500ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow rendered-extract exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -2027,6 +2027,9 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 			NavigatedFromAboutBlank bool   `json:"navigated_from_about_blank"`
 			DocumentReadyState      string `json:"document_ready_state"`
 			UsefulContentSeen       bool   `json:"useful_content_seen"`
+			ContentStableSeen       bool   `json:"content_stable_seen"`
+			StablePolls             int    `json:"stable_polls"`
+			PollCount               int    `json:"poll_count"`
 		} `json:"readiness"`
 		Artifacts struct {
 			VisibleJSON string `json:"visible_json"`
@@ -2056,7 +2059,7 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("workflow rendered-extract output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Workflow.Name != "rendered-extract" || !got.Workflow.Closed || !got.Readiness.NavigatedFromAboutBlank || got.Readiness.DocumentReadyState != "complete" || !got.Readiness.UsefulContentSeen {
+	if !got.OK || got.Workflow.Name != "rendered-extract" || !got.Workflow.Closed || !got.Readiness.NavigatedFromAboutBlank || got.Readiness.DocumentReadyState != "complete" || !got.Readiness.UsefulContentSeen || !got.Readiness.ContentStableSeen || got.Readiness.StablePolls < 2 || got.Readiness.PollCount < 3 {
 		t.Fatalf("workflow rendered-extract metadata = %+v readiness=%+v", got.Workflow, got.Readiness)
 	}
 	if got.Target.URL == "about:blank" || got.Links.Query != "agentic engineering 2026 evolutions" || got.Links.TimeFilter != "qdr:m" || got.Links.Serp != "google" {

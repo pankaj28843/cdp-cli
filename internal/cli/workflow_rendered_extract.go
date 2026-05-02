@@ -24,11 +24,18 @@ type renderedExtractReadiness struct {
 	SelectedWordCount       int    `json:"selected_word_count"`
 	BodyTextLength          int    `json:"body_text_length"`
 	BodyHTMLLength          int    `json:"body_html_length"`
+	ElementCount            int    `json:"element_count"`
 	DOMSignature            string `json:"dom_signature,omitempty"`
 	NavigatedFromAboutBlank bool   `json:"navigated_from_about_blank"`
 	LoadSeen                bool   `json:"load_seen"`
 	NetworkIdleSeen         bool   `json:"network_idle_seen"`
 	DOMStableSeen           bool   `json:"dom_stable_seen"`
+	TextStableSeen          bool   `json:"text_stable_seen"`
+	HTMLStableSeen          bool   `json:"html_stable_seen"`
+	ContentStableSeen       bool   `json:"content_stable_seen"`
+	ContentGrewSeen         bool   `json:"content_grew_seen"`
+	StablePolls             int    `json:"stable_polls"`
+	PollCount               int    `json:"poll_count"`
 	UsefulContentSeen       bool   `json:"useful_content_seen"`
 	Error                   string `json:"error,omitempty"`
 }
@@ -123,8 +130,8 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
-	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for non-blank useful rendered content")
-	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for useful rendered content and a quiet stability window")
+	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable; useful-content waits for SPA-aware content stability")
 	cmd.Flags().StringVar(&formats, "formats", "snapshot,text,html,markdown,links", "comma-separated artifacts: snapshot,text,html,markdown,links,all")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for rendered extraction artifacts")
 	cmd.Flags().StringVar(&serp, "serp", "auto", "SERP extractor: auto, google, or none")
@@ -376,18 +383,44 @@ func renderedExtractSERPMode(rawURL, mode string) string {
 }
 
 func waitForRenderedExtractReadiness(ctx context.Context, session *cdp.PageSession, selector string, wait time.Duration, waitUntil string, minWords, minHTMLChars int) (renderedExtractReadiness, error) {
+	return waitForRenderedExtractReadinessFunc(ctx, func(ctx context.Context, selector string) (renderedExtractReadiness, error) {
+		return collectRenderedExtractReadiness(ctx, session, selector)
+	}, selector, wait, waitUntil, minWords, minHTMLChars, 500*time.Millisecond)
+}
+
+func waitForRenderedExtractReadinessFunc(ctx context.Context, collect func(context.Context, string) (renderedExtractReadiness, error), selector string, wait time.Duration, waitUntil string, minWords, minHTMLChars int, pollInterval time.Duration) (renderedExtractReadiness, error) {
 	deadline := time.Now().Add(wait)
 	var last renderedExtractReadiness
-	lastSignature := ""
+	stablePolls := 0
+	pollCount := 0
+	contentGrewSeen := false
+	if pollInterval <= 0 {
+		pollInterval = 500 * time.Millisecond
+	}
 	for {
-		readiness, err := collectRenderedExtractReadiness(ctx, session, selector)
+		readiness, err := collect(ctx, selector)
 		if err != nil {
 			return renderedExtractReadiness{}, err
 		}
+		pollCount++
 		readiness.NavigatedFromAboutBlank = readiness.URL != "" && readiness.URL != "about:blank"
 		readiness.LoadSeen = readiness.DocumentReadyState == "complete"
-		readiness.NetworkIdleSeen = readiness.LoadSeen
-		readiness.DOMStableSeen = readiness.DOMSignature != "" && readiness.DOMSignature == lastSignature
+		readiness.DOMStableSeen = readiness.DOMSignature != "" && readiness.DOMSignature == last.DOMSignature
+		readiness.TextStableSeen = pollCount > 1 && readiness.SelectedTextLength == last.SelectedTextLength && readiness.SelectedWordCount == last.SelectedWordCount && readiness.BodyTextLength == last.BodyTextLength
+		readiness.HTMLStableSeen = pollCount > 1 && readiness.SelectedHTMLLength == last.SelectedHTMLLength && readiness.BodyHTMLLength == last.BodyHTMLLength && readiness.ElementCount == last.ElementCount
+		readiness.ContentStableSeen = readiness.TextStableSeen && readiness.HTMLStableSeen
+		if pollCount > 1 && (readiness.SelectedTextLength > last.SelectedTextLength || readiness.SelectedWordCount > last.SelectedWordCount || readiness.SelectedHTMLLength > last.SelectedHTMLLength || readiness.BodyTextLength > last.BodyTextLength || readiness.BodyHTMLLength > last.BodyHTMLLength || readiness.ElementCount > last.ElementCount) {
+			contentGrewSeen = true
+		}
+		readiness.ContentGrewSeen = contentGrewSeen
+		if readiness.ContentStableSeen {
+			stablePolls++
+		} else {
+			stablePolls = 0
+		}
+		readiness.StablePolls = stablePolls
+		readiness.PollCount = pollCount
+		readiness.NetworkIdleSeen = readiness.ContentStableSeen
 		readiness.UsefulContentSeen = readiness.NavigatedFromAboutBlank && readiness.SelectorMatched && (readiness.SelectedWordCount >= minWords || readiness.SelectedHTMLLength >= minHTMLChars)
 		last = readiness
 		switch waitUntil {
@@ -396,19 +429,18 @@ func waitForRenderedExtractReadiness(ctx context.Context, session *cdp.PageSessi
 				return readiness, nil
 			}
 		case "dom-stable":
-			if readiness.NavigatedFromAboutBlank && readiness.DOMStableSeen {
+			if readiness.NavigatedFromAboutBlank && readiness.DOMStableSeen && readiness.StablePolls >= 2 {
 				return readiness, nil
 			}
 		default:
-			if readiness.UsefulContentSeen && (readiness.DOMStableSeen || readiness.LoadSeen) {
+			if readiness.UsefulContentSeen && readiness.StablePolls >= 2 {
 				return readiness, nil
 			}
 		}
 		if wait == 0 || time.Now().After(deadline) {
 			return last, nil
 		}
-		lastSignature = readiness.DOMSignature
-		timer := time.NewTimer(500 * time.Millisecond)
+		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -446,9 +478,9 @@ func renderedExtractReadinessExpression(selector string) string {
   let elements = [];
   try {
     elements = Array.from(document.querySelectorAll(selector));
-  } catch (error) {
-    return { url: location.href, document_ready_state: document.readyState || "", selector_matched: false, selector_match_count: 0, selected_text_length: 0, selected_html_length: 0, selected_word_count: 0, body_text_length: 0, body_html_length: 0, dom_signature: "", error: error.name + ": " + error.message };
-  }
+	} catch (error) {
+	  return { url: location.href, document_ready_state: document.readyState || "", selector_matched: false, selector_match_count: 0, selected_text_length: 0, selected_html_length: 0, selected_word_count: 0, body_text_length: 0, body_html_length: 0, element_count: 0, dom_signature: "", error: error.name + ": " + error.message };
+	}
   let text = "";
   let html = "";
   for (const element of elements) {
@@ -456,7 +488,8 @@ func renderedExtractReadinessExpression(selector string) string {
     html += element.outerHTML || "";
   }
   const bodyText = normalize(document.body && (document.body.innerText || document.body.textContent));
-  const bodyHTML = String(document.body && document.body.outerHTML || "");
+	const bodyHTML = String(document.body && document.body.outerHTML || "");
+	const elementCount = document.querySelectorAll("*").length;
   return {
     url: location.href,
     document_ready_state: document.readyState || "",
@@ -466,9 +499,10 @@ func renderedExtractReadinessExpression(selector string) string {
     selected_html_length: html.length,
     selected_word_count: words(text),
     body_text_length: bodyText.length,
-    body_html_length: bodyHTML.length,
-    dom_signature: [location.href, document.readyState || "", elements.length, normalize(text).length, html.length, document.querySelectorAll("*").length].join("|")
-  };
+	  body_html_length: bodyHTML.length,
+	  element_count: elementCount,
+	  dom_signature: [location.href, document.readyState || "", elements.length, normalize(text).length, html.length, bodyText.length, bodyHTML.length, elementCount].join("|")
+	};
 })()`, string(selectorJSON))
 }
 

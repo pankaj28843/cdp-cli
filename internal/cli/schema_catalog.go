@@ -598,11 +598,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-rendered-extract": {
 			Name:        "workflow-rendered-extract",
-			Description: "Rendered research extraction artifact bundle with readiness, quality gates, Markdown, and SERP links.",
+			Description: "Rendered research extraction artifact bundle with SPA-aware readiness, quality gates, Markdown, and SERP links.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when extraction completed and artifacts were written."},
 				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata with final URL when available."},
-				{Name: "readiness", Type: "rendered_extract_readiness", Required: true, Description: "Non-about:blank, document readiness, selector, DOM stability, and useful-content signals."},
+				{Name: "readiness", Type: "rendered_extract_readiness", Required: true, Description: "Non-about:blank, document readiness, selector, DOM/text/HTML stability, growth, and useful-content signals."},
 				{Name: "artifacts", Type: "object", Required: true, Description: "Stable artifact paths keyed by visible_json, visible_txt, html_json, markdown, links_json, and diagnostics_json when present."},
 				{Name: "artifact_list", Type: "array<artifact>", Required: true, Description: "Typed artifact metadata with byte counts."},
 				{Name: "quality", Type: "rendered_extract_quality", Required: true, Description: "Snapshot, visible text, HTML, Markdown, and external link quality counts."},
