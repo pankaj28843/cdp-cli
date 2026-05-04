@@ -231,7 +231,7 @@ func normalizeAssertMode(mode string) string {
 }
 
 func formValuesExpression(includeHidden bool) string {
-	return `(() => { const __cdp_cli_form_values__ = true; const includeHidden = ` + fmt.Sprintf("%t", includeHidden) + `; return (` + formCollectorJS("null", "includeHidden") + `); })()`
+	return `(() => { const __cdp_cli_form_values__ = true; return (` + formCollectorJS("null", fmt.Sprintf("%t", includeHidden)) + `); })()`
 }
 
 func formGetExpression(selector string) string {
