@@ -117,6 +117,8 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newEvalCommand())
 	root.AddCommand(a.newFramesCommand())
 	root.AddCommand(a.newTextCommand())
+	root.AddCommand(a.newFormCommand())
+	root.AddCommand(a.newAssertCommand())
 	root.AddCommand(a.newClickCommand())
 	root.AddCommand(a.newFillCommand())
 	root.AddCommand(a.newTypeCommand())
@@ -322,6 +324,7 @@ func (a *app) renderError(ctx context.Context, err error) error {
 		Code:                cmdErr.Code,
 		ErrClass:            cmdErr.Class,
 		Message:             cmdErr.Error(),
+		Data:                cmdErr.Data,
 		RemediationCommands: cmdErr.RemediationCommands,
 	}
 

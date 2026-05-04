@@ -123,7 +123,6 @@ func (a *app) newFileCommand() *cobra.Command {
 
 func (a *app) newDialogCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "dialog", Short: "Observe and handle JavaScript dialogs"}
-	cmd.AddCommand(planned("wait", "Wait for the next JavaScript dialog"))
 	cmd.AddCommand(a.newDialogHandleCommand("accept", true))
 	cmd.AddCommand(a.newDialogHandleCommand("dismiss", false))
 	return cmd
@@ -147,7 +146,7 @@ func (a *app) newDialogHandleCommand(name string, accept bool) *cobra.Command {
 				params["promptText"] = promptText
 			}
 			if err := execSessionJSON(ctx, session, "Page.handleJavaScriptDialog", params, nil); err != nil {
-				return commandError("connection_failed", "connection", fmt.Sprintf("handle dialog: %v", err), ExitConnection, []string{"cdp dialog wait --json"})
+				return commandError("connection_failed", "connection", fmt.Sprintf("handle dialog: %v", err), ExitConnection, []string{"cdp events tap --enable page --match Page.javascriptDialogOpening --json"})
 			}
 			return a.render(ctx, "dialog "+name, map[string]any{"ok": true, "target": pageRow(target), "dialog": map[string]any{"action": name, "accepted": accept, "prompt_text_supplied": promptText != ""}})
 		},
@@ -164,9 +163,6 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateViewportCommand())
 	cmd.AddCommand(a.newEmulateClearCommand())
 	cmd.AddCommand(a.newEmulateMediaCommand())
-	cmd.AddCommand(planned("network", "Apply a named network emulation preset"))
-	cmd.AddCommand(planned("cpu", "Apply CPU throttling emulation"))
-	cmd.AddCommand(planned("geolocation", "Apply geolocation override"))
 	return cmd
 }
 

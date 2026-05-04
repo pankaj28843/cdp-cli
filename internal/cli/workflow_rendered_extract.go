@@ -183,7 +183,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if err != nil {
 		return renderedExtractResult{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
 	}
-	createdID, err := a.createPageTarget(ctx, client, "about:blank")
+	createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "rendered-extract")
 	if err != nil {
 		_ = closeClient(ctx)
 		return renderedExtractResult{}, err

@@ -428,6 +428,8 @@ type pageCleanupRecord struct {
 	TargetID   string `json:"target_id"`
 	URL        string `json:"url,omitempty"`
 	Title      string `json:"title,omitempty"`
+	CreatedBy  string `json:"created_by,omitempty"`
+	Workflow   string `json:"workflow,omitempty"`
 	FirstSeen  string `json:"first_seen"`
 	LastSeen   string `json:"last_seen"`
 }
@@ -441,6 +443,11 @@ func (a *app) newPageCleanupCommand() *cobra.Command {
 	var includeAttached bool
 	var includeURL string
 	var excludeURL string
+	var createdBy string
+	var workflowCreated bool
+	var force bool
+	var forceTarget string
+	var since time.Duration
 	var idleFor time.Duration
 	var max int
 	cmd := &cobra.Command{
@@ -456,8 +463,12 @@ run; pass --close to close candidates after they have remained inactive for
 --idle-for across cleanup runs.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if max < 0 {
-				return commandError("usage", "usage", "--max must be non-negative", ExitUsage, []string{"cdp page cleanup --max 10 --json"})
+			if max < 0 || since < 0 {
+				return commandError("usage", "usage", "--max and --since must be non-negative", ExitUsage, []string{"cdp page cleanup --max 10 --json"})
+			}
+			if strings.TrimSpace(forceTarget) != "" {
+				force = true
+				closePages = true
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -501,6 +512,11 @@ run; pass --close to close candidates after they have remained inactive for
 				IncludeAttached: includeAttached,
 				IncludeURL:      includeURL,
 				ExcludeURL:      excludeURL,
+				CreatedBy:       createdBy,
+				WorkflowCreated: workflowCreated,
+				Force:           force,
+				ForceTarget:     forceTarget,
+				Since:           since,
 				IdleFor:         idleFor,
 				Max:             max,
 				Now:             now,
@@ -549,6 +565,11 @@ run; pass --close to close candidates after they have remained inactive for
 					"include_attached": includeAttached,
 					"include_url":      strings.TrimSpace(includeURL),
 					"exclude_url":      strings.TrimSpace(excludeURL),
+					"created_by":       strings.TrimSpace(createdBy),
+					"workflow_created": workflowCreated,
+					"force":            force,
+					"force_target":     strings.TrimSpace(forceTarget),
+					"since":            durationString(since),
 					"selected_page":    selectedID,
 					"next_commands": []string{
 						"cdp page cleanup --json",
@@ -565,6 +586,11 @@ run; pass --close to close candidates after they have remained inactive for
 	cmd.Flags().BoolVar(&includeAttached, "include-attached", false, "also consider attached page targets")
 	cmd.Flags().StringVar(&includeURL, "include-url", "", "only consider pages whose URL contains this text")
 	cmd.Flags().StringVar(&excludeURL, "exclude-url", "", "exclude pages whose URL contains this text")
+	cmd.Flags().StringVar(&createdBy, "created-by", "", "only consider pages tagged with this creator, such as cdp")
+	cmd.Flags().BoolVar(&workflowCreated, "workflow-created", false, "close pages tagged as created by cdp workflows without waiting for --idle-for")
+	cmd.Flags().BoolVar(&force, "force", false, "allow explicit target cleanup to bypass selected, attached, visible, and idle protections")
+	cmd.Flags().StringVar(&forceTarget, "target", "", "force-close a specific page target id or unique prefix when used with --force")
+	cmd.Flags().DurationVar(&since, "since", 0, "only consider cleanup records first seen within this duration; 0 disables the filter")
 	cmd.Flags().DurationVar(&idleFor, "idle-for", 30*time.Minute, "minimum duration a page must remain inactive before --close can close it")
 	cmd.Flags().IntVar(&max, "max", 10, "maximum ready candidate pages to close or report; use 0 for no limit")
 	return cmd
@@ -576,6 +602,11 @@ type cleanupOptions struct {
 	IncludeAttached bool
 	IncludeURL      string
 	ExcludeURL      string
+	CreatedBy       string
+	WorkflowCreated bool
+	Force           bool
+	ForceTarget     string
+	Since           time.Duration
 	IdleFor         time.Duration
 	Max             int
 	Now             time.Time
@@ -586,6 +617,8 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 	candidates := []cleanupCandidate{}
 	includeURL := strings.ToLower(strings.TrimSpace(opts.IncludeURL))
 	excludeURL := strings.ToLower(strings.TrimSpace(opts.ExcludeURL))
+	createdBy := strings.ToLower(strings.TrimSpace(opts.CreatedBy))
+	forceTarget := strings.TrimSpace(opts.ForceTarget)
 	seen := map[string]bool{}
 	for _, target := range targets {
 		if target.Type != "page" {
@@ -599,9 +632,27 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 			continue
 		}
 		key := pageCleanupKey(opts.Connection, target.TargetID)
+		record, hasRecord := opts.Records[key]
+		if forceTarget != "" && target.TargetID != forceTarget && !strings.HasPrefix(target.TargetID, forceTarget) {
+			continue
+		}
+		if createdBy != "" && strings.ToLower(record.CreatedBy) != createdBy {
+			continue
+		}
+		if opts.WorkflowCreated && strings.ToLower(record.CreatedBy) != "cdp" {
+			continue
+		}
+		if opts.Since > 0 && hasRecord {
+			firstSeen, err := time.Parse(time.RFC3339, record.FirstSeen)
+			if err == nil && opts.Now.Sub(firstSeen) > opts.Since {
+				continue
+			}
+		}
 		seen[key] = true
 		candidate := cleanupCandidate{Target: target}
 		switch {
+		case opts.Force && forceTarget != "":
+			candidate.Ready = true
 		case target.TargetID == strings.TrimSpace(opts.SelectedID):
 			candidate.KeepReason = "selected_page"
 		case target.Attached && !opts.IncludeAttached:
@@ -613,6 +664,10 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 			}
 		}
 		updateCleanupRecord(&candidate, opts, key)
+		if opts.WorkflowCreated && candidate.KeepReason == "visible" {
+			candidate.KeepReason = ""
+			candidate.Ready = true
+		}
 		candidates = append(candidates, candidate)
 		if opts.Max > 0 && countReadyCandidates(candidates) >= opts.Max {
 			break
@@ -1014,6 +1069,14 @@ func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) 
 }
 
 func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, rawURL string) (string, error) {
+	return a.createPageTargetTagged(ctx, client, rawURL, "", "")
+}
+
+func (a *app) createWorkflowPageTarget(ctx context.Context, client cdp.CommandClient, rawURL, workflow string) (string, error) {
+	return a.createPageTargetTagged(ctx, client, rawURL, "cdp", workflow)
+}
+
+func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClient, rawURL, createdBy, workflow string) (string, error) {
 	targetID, err := cdp.CreateTargetWithClient(ctx, client, rawURL)
 	if err != nil {
 		return "", commandError(
@@ -1024,7 +1087,33 @@ func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, ra
 			[]string{"cdp doctor --json", "cdp pages --json"},
 		)
 	}
+	if strings.TrimSpace(createdBy) != "" {
+		if err := a.recordCreatedPageTarget(ctx, targetID, rawURL, createdBy, workflow); err != nil {
+			return "", commandError(
+				"internal",
+				"internal",
+				fmt.Sprintf("record workflow-created page %s: %v", targetID, err),
+				ExitInternal,
+				[]string{"cdp page cleanup --json", "cdp daemon status --json"},
+			)
+		}
+	}
 	return targetID, nil
+}
+
+func (a *app) recordCreatedPageTarget(ctx context.Context, targetID, rawURL, createdBy, workflow string) error {
+	store, err := a.stateStore()
+	if err != nil {
+		return err
+	}
+	records, err := loadPageCleanupRecords(ctx, store.Dir)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	key := pageCleanupKey(a.connectionStateName(ctx), targetID)
+	records[key] = pageCleanupRecord{Connection: a.connectionStateName(ctx), TargetID: targetID, URL: rawURL, CreatedBy: createdBy, Workflow: workflow, FirstSeen: now, LastSeen: now}
+	return savePageCleanupRecords(ctx, store.Dir, records)
 }
 
 func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleContains string) (cdp.TargetInfo, error) {

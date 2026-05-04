@@ -387,22 +387,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newWaitTextCommand())
 	cmd.AddCommand(a.newWaitSelectorCommand())
-	cmd.AddCommand(a.newWaitLoadCommand())
-	cmd.AddCommand(a.newWaitStableCommand())
-	cmd.AddCommand(a.newWaitIdleCommand())
 	return cmd
-}
-
-func (a *app) newWaitLoadCommand() *cobra.Command {
-	return planned("load", "Wait for DOMContentLoaded or load lifecycle events")
-}
-
-func (a *app) newWaitStableCommand() *cobra.Command {
-	return planned("stable", "Wait for a quiet DOM mutation window")
-}
-
-func (a *app) newWaitIdleCommand() *cobra.Command {
-	return planned("idle", "Wait for network idle with bounded inflight requests")
 }
 
 func (a *app) newWaitTextCommand() *cobra.Command {

@@ -22,6 +22,7 @@ type CommandError struct {
 	Message             string
 	ExitCode            int
 	RemediationCommands []string
+	Data                any
 	Err                 error
 }
 
@@ -46,6 +47,17 @@ func commandError(code, class, message string, exitCode int, remediation []strin
 		Message:             message,
 		ExitCode:            exitCode,
 		RemediationCommands: remediation,
+	}
+}
+
+func commandErrorWithData(code, class, message string, exitCode int, remediation []string, data any) error {
+	return &CommandError{
+		Code:                code,
+		Class:               class,
+		Message:             message,
+		ExitCode:            exitCode,
+		RemediationCommands: remediation,
+		Data:                data,
 	}
 }
 

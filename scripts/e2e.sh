@@ -163,8 +163,6 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "dialog accept" --json | jq -e '.ok == true and .commands.name == "accept" and (.commands.flags[] | select(.name == "prompt-text"))' >/dev/null
 "$binary" describe --command "events tap" --json | jq -e '.ok == true and .commands.name == "tap" and (.commands.flags[] | select(.name == "max-events"))' >/dev/null
 "$binary" describe --command "protocol compat" --json | jq -e '.ok == true and .commands.name == "compat" and (.commands.examples | any(contains("--requires")))' >/dev/null
-"$binary" describe --command "wait load" --json | jq -e '.ok == true and .commands.name == "load"' >/dev/null
-"$binary" describe --command "network block" --json | jq -e '.ok == true and .commands.name == "block"' >/dev/null
 "$binary" describe --command "memory heap-snapshot" --json | jq -e '.ok == true and .commands.name == "heap-snapshot" and (.commands.flags[] | select(.name == "out"))' >/dev/null
 "$binary" describe --command "perf summary" --json | jq -e '.ok == true and .commands.name == "summary" and (.commands.flags[] | select(.name == "duration"))' >/dev/null
 "$binary" describe --command "workflow feeds" --json | jq -e '.ok == true and .commands.name == "feeds" and (.commands.examples | any(contains("--wait-load")))' >/dev/null

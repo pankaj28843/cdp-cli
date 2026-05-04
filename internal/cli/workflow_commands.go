@@ -34,8 +34,7 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowRenderedExtractCommand())
 	cmd.AddCommand(a.newWorkflowWebResearchCommand())
 	cmd.AddCommand(a.newWorkflowResponsiveAuditCommand())
-	cmd.AddCommand(a.newWorkflowPerfSmokeCommand())
-	cmd.AddCommand(a.newWorkflowMemorySmokeCommand())
+	cmd.AddCommand(a.newWorkflowLighthouseCommand())
 	return cmd
 }
 
@@ -80,7 +79,7 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 			}()
 
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			createdID, err := a.createPageTarget(ctx, client, "about:blank")
+			createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "verify")
 			if err != nil {
 				return err
 			}
@@ -216,7 +215,7 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 			}()
 
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			createdID, err := a.createPageTarget(ctx, client, "about:blank")
+			createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "perf")
 			if err != nil {
 				return err
 			}
@@ -342,7 +341,7 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 			}()
 
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			createdID, err := a.createPageTarget(ctx, client, "about:blank")
+			createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "a11y")
 			if err != nil {
 				return err
 			}
@@ -478,7 +477,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 			if err != nil {
 				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
 			}
-			targetID, err := a.createPageTarget(ctx, client, rawURL)
+			targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "hacker-news")
 			if err != nil {
 				_ = closeClient(ctx)
 				return err
@@ -661,7 +660,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 						[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
 					)
 				}
-				targetID, err = a.createPageTarget(ctx, client, rawURL)
+				targetID, err = a.createWorkflowPageTarget(ctx, client, rawURL, "debug-bundle")
 				if err != nil {
 					closeClient(ctx)
 					return err
@@ -1142,7 +1141,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
 			if rawURL != "" && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
-				createdID, err := a.createPageTarget(ctx, client, "about:blank")
+				createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "page-load")
 				if err != nil {
 					return err
 				}
@@ -1288,7 +1287,7 @@ func (a *app) newWorkflowFeedsCommand() *cobra.Command {
 			return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
 		}
 		rawURL := strings.TrimSpace(args[0])
-		targetID, err := a.createPageTarget(ctx, client, rawURL)
+		targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "feeds")
 		if err != nil {
 			_ = closeClient(ctx)
 			return err
@@ -1699,15 +1698,52 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 }
 
 func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
-	return planned("responsive-audit <url>", "Audit a URL across desktop, tablet, and mobile viewport presets")
+	var viewports, include, outDir string
+	var wait time.Duration
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "responsive-audit <url>",
+		Short: "Audit a URL across desktop, tablet, and mobile viewport presets",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wait < 0 || limit < 0 {
+				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow responsive-audit https://example.com --wait 5s --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, wait+30*time.Second)
+			defer cancel()
+			return runResponsiveAuditWorkflow(ctx, a, args[0], responsiveAuditOptions{Viewports: viewports, Include: include, OutDir: outDir, Wait: wait, Limit: limit})
+		},
+	}
+	cmd.Flags().StringVar(&viewports, "viewports", "desktop,tablet,mobile", "comma-separated viewport presets: desktop, tablet, mobile")
+	cmd.Flags().StringVar(&include, "include", "console,network,layout,screenshot,a11y", "signals to collect: console, network, layout, screenshot, a11y, all")
+	cmd.Flags().StringVar(&outDir, "out-dir", "tmp/responsive-audit", "directory for screenshot artifacts")
+	cmd.Flags().DurationVar(&wait, "wait", 3*time.Second, "how long to collect events after each viewport navigation")
+	cmd.Flags().IntVar(&limit, "limit", 50, "maximum console, network, and layout items per viewport; use 0 for no limit")
+	return cmd
 }
 
-func (a *app) newWorkflowPerfSmokeCommand() *cobra.Command {
-	return planned("perf-smoke <url>", "Run a lightweight performance smoke workflow")
-}
-
-func (a *app) newWorkflowMemorySmokeCommand() *cobra.Command {
-	return planned("memory-smoke <url>", "Run a bounded memory smoke workflow with local artifacts")
+func (a *app) newWorkflowLighthouseCommand() *cobra.Command {
+	var categories, formFactor, throttling, outDir string
+	var wait time.Duration
+	cmd := &cobra.Command{
+		Use:   "lighthouse <url>",
+		Short: "Run Lighthouse CLI and summarize category scores",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wait < 0 {
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow lighthouse https://example.com --wait 5s --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 2*time.Minute)
+			defer cancel()
+			return runLighthouseWorkflow(ctx, a, args[0], lighthouseWorkflowOptions{Categories: categories, FormFactor: formFactor, Throttling: throttling, OutDir: outDir, Wait: wait})
+		},
+	}
+	cmd.Flags().StringVar(&categories, "categories", "accessibility,best-practices,performance,seo", "comma-separated Lighthouse categories")
+	cmd.Flags().StringVar(&formFactor, "form-factor", "mobile", "Lighthouse form factor: mobile or desktop")
+	cmd.Flags().StringVar(&throttling, "throttling", "simulate", "Lighthouse throttling method: simulate, devtools, or provided")
+	cmd.Flags().StringVar(&outDir, "out-dir", "tmp/lighthouse", "directory for Lighthouse JSON and HTML reports")
+	cmd.Flags().DurationVar(&wait, "wait", 0, "optional pre-audit wait hint included in output")
+	return cmd
 }
 
 func feedDiscoveryExpression() string {
@@ -2386,7 +2422,7 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
 			}
 			rawURL := strings.TrimSpace(args[0])
-			targetID, err := a.createPageTarget(ctx, client, rawURL)
+			targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "visible-posts")
 			if err != nil {
 				_ = closeClient(ctx)
 				return err

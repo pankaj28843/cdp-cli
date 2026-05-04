@@ -70,9 +70,6 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only return failed requests and HTTP 4xx/5xx responses")
 	cmd.AddCommand(a.newNetworkCaptureCommand())
 	cmd.AddCommand(a.newNetworkWebSocketCommand())
-	cmd.AddCommand(a.newNetworkBlockCommand())
-	cmd.AddCommand(a.newNetworkUnblockCommand())
-	cmd.AddCommand(a.newNetworkMockCommand())
 	return cmd
 }
 
@@ -189,18 +186,6 @@ func filterWebSocketRecords(records []networkCaptureRecord) []networkCaptureReco
 		}
 	}
 	return websockets
-}
-
-func (a *app) newNetworkBlockCommand() *cobra.Command {
-	return planned("block", "Block request URL patterns until interception cleanup is available")
-}
-
-func (a *app) newNetworkUnblockCommand() *cobra.Command {
-	return planned("unblock", "Disable request interception state")
-}
-
-func (a *app) newNetworkMockCommand() *cobra.Command {
-	return planned("mock", "Mock matching network responses")
 }
 
 func (a *app) newNetworkCaptureCommand() *cobra.Command {

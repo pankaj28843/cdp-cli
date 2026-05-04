@@ -9,17 +9,6 @@ import (
 	"github.com/spf13/pflag"
 )
 
-func planned(use, short string) *cobra.Command {
-	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name := cmd.CommandPath()
-			return notImplemented(name)
-		},
-	}
-}
-
 func describeCommand(cmd *cobra.Command) commandInfo {
 	info := commandInfo{
 		Name:     cmd.Name(),
@@ -174,6 +163,8 @@ func commandExamples(path string) []string {
 		},
 		"cdp page cleanup": {
 			"cdp page cleanup --json",
+			"cdp page cleanup --workflow-created --close --include-url localhost --json",
+			"cdp page cleanup --target <target-id> --force --json",
 			"cdp page cleanup --close --max 10 --exclude-url localhost --json",
 		},
 		"cdp open": {
@@ -441,17 +432,13 @@ func commandExamples(path string) []string {
 	examples["cdp clear"] = []string{"cdp clear input[name=email] --json"}
 	examples["cdp select"] = []string{"cdp select select[name=plan] pro --json"}
 	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json"}
-	examples["cdp dialog"] = []string{"cdp dialog wait --timeout 5s --json"}
-	examples["cdp dialog wait"] = []string{"cdp dialog wait --timeout 5s --json"}
+	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --json"}
 	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}
 	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json"}
 	examples["cdp emulate"] = []string{"cdp emulate viewport --preset mobile --json"}
 	examples["cdp emulate viewport"] = []string{"cdp emulate viewport --width 390 --height 844 --mobile --dpr 1 --json", "cdp emulate viewport --preset iphone-12 --json"}
 	examples["cdp emulate clear"] = []string{"cdp emulate clear --json"}
 	examples["cdp emulate media"] = []string{"cdp emulate media --prefers-color-scheme dark --json"}
-	examples["cdp emulate network"] = []string{"cdp emulate network --preset slow-4g --json"}
-	examples["cdp emulate cpu"] = []string{"cdp emulate cpu --rate 4 --json"}
-	examples["cdp emulate geolocation"] = []string{"cdp emulate geolocation --lat 55.6 --lon 12.5 --json"}
 	examples["cdp a11y"] = []string{"cdp a11y tree --depth 4 --json"}
 	examples["cdp a11y tree"] = []string{"cdp a11y tree --target <target-id> --depth 4 --json"}
 	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json"}
@@ -461,17 +448,14 @@ func commandExamples(path string) []string {
 	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"}
 	examples["cdp events"] = []string{"cdp events tap --duration 10s --json"}
 	examples["cdp events tap"] = []string{"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json"}
-	examples["cdp network block"] = []string{"cdp network block --url-pattern '*.analytics.test/*' --json"}
-	examples["cdp network unblock"] = []string{"cdp network unblock --json"}
-	examples["cdp network mock"] = []string{"cdp network mock --url-pattern '*/api/feed' --status 503 --body-file fixtures/feed-503.json --json"}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
-	examples["cdp wait load"] = []string{"cdp wait load --state load --timeout 10s --json"}
-	examples["cdp wait stable"] = []string{"cdp wait stable --quiet-window 750ms --timeout 10s --json"}
-	examples["cdp wait idle"] = []string{"cdp wait idle --quiet-window 500ms --max-inflight 0 --timeout 10s --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds https://example.com --wait-load 10s --json", "cdp workflow feeds https://example.com --keep-open --json"}
-	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit https://example.com --viewports desktop,tablet,mobile --json"}
-	examples["cdp workflow perf-smoke"] = []string{"cdp workflow perf-smoke https://example.com --out-dir tmp/perf-smoke --json"}
-	examples["cdp workflow memory-smoke"] = []string{"cdp workflow memory-smoke https://example.com --out-dir tmp/memory-smoke --json"}
+	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit https://example.com --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}
+	examples["cdp workflow lighthouse"] = []string{"cdp workflow lighthouse https://example.com --categories accessibility,best-practices --out-dir tmp/lighthouse --json"}
+	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json"}
+	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json"}
+	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --json"}
+	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --json"}
 
 	return examples[path]
 }
