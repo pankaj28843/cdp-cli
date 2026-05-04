@@ -31,7 +31,7 @@ type formControl struct {
 	Type              string   `json:"type,omitempty"`
 	Role              string   `json:"role,omitempty"`
 	Name              string   `json:"name,omitempty"`
-	Value             string   `json:"value,omitempty"`
+	Value             string   `json:"value"`
 	Values            []string `json:"values,omitempty"`
 	Checked           *bool    `json:"checked,omitempty"`
 	Visible           bool     `json:"visible"`
@@ -280,10 +280,10 @@ func formCollectorJS(selectorExpr, includeHiddenExpr string) string {
       const tag = el.tagName.toLowerCase();
       const selected = tag === 'select' ? Array.from(el.selectedOptions || []).map(o => o.value) : [];
       const checked = (tag === 'input' && /checkbox|radio/i.test(el.type)) ? Boolean(el.checked) : undefined;
-      const value = tag === 'select' ? selected.join(',') : (el.isContentEditable ? norm(el.innerText || el.textContent) : String(el.value || ''));
+      const value = tag === 'select' ? selected.join(',') : (el.isContentEditable ? norm(el.innerText || el.textContent) : String(el.value ?? el.getAttribute('value') ?? el.textContent ?? ''));
       const visibility = visibleInfo(el);
       const hint = css(el);
-      const out = { selector_hint: hint, tag, type: el.type || '', role: el.getAttribute('role') || '', name: label(el), value, values: selected, visible: visibility.visible, aria_hidden: visibility.ariaHidden, read_only: Boolean(el.readOnly), disabled: Boolean(el.disabled), content_editable: Boolean(el.isContentEditable) };
+      const out = { selector_hint: hint, tag, type: el.type || '', role: el.getAttribute('role') || '', name: label(el), value: String(value), values: selected, visible: visibility.visible, aria_hidden: visibility.ariaHidden, read_only: Boolean(el.readOnly), disabled: Boolean(el.disabled), content_editable: Boolean(el.isContentEditable) };
       if (checked !== undefined) out.checked = checked;
       out.selector_ambiguous = document.querySelectorAll(hint).length !== 1;
       return out;
