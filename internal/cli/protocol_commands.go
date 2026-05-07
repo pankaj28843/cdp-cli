@@ -455,7 +455,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			defer closeClient(ctx)
@@ -568,7 +568,7 @@ func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
 			"connection",
 			err.Error(),
 			ExitConnection,
-			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+			a.connectionRemediationCommands(),
 		)
 	}
 	protocol, err := daemon.RuntimeClient{Runtime: runtime}.FetchProtocol(ctx)

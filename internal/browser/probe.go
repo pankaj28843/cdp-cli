@@ -43,6 +43,15 @@ type versionResponse struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
+func autoConnectRemediationCommands() []string {
+	return []string{
+		"open chrome://inspect/#remote-debugging",
+		"cdp daemon status --json",
+		"cdp doctor --check daemon --json",
+		"cdp doctor --check browser-health --json",
+	}
+}
+
 func Probe(ctx context.Context, opts ProbeOptions) (ProbeResult, error) {
 	if opts.AutoConnect {
 		if !opts.ActiveProbe {
@@ -218,29 +227,23 @@ func probeAutoConnect(ctx context.Context, opts ProbeOptions) (ProbeResult, erro
 	port, path, err := activePort(opts.UserDataDir, channel)
 	if err != nil {
 		return ProbeResult{
-			State:          "permission_pending",
-			Message:        "Chrome auto-connect is not ready; enable remote debugging in Chrome and allow the prompt",
-			ConnectionMode: "auto_connect",
-			Channel:        channel,
-			RemediationCommands: []string{
-				"open chrome://inspect/#remote-debugging",
-				"cdp doctor --auto-connect --json",
-			},
+			State:               "permission_pending",
+			Message:             "Chrome auto-connect is not ready; enable remote debugging in Chrome and allow the prompt",
+			ConnectionMode:      "auto_connect",
+			Channel:             channel,
+			RemediationCommands: autoConnectRemediationCommands(),
 		}, nil
 	}
 
 	status, err := websocketProbe(ctx, port, path)
 	if err != nil {
 		return ProbeResult{
-			State:          "permission_pending",
-			Message:        "Chrome auto-connect endpoint exists but did not accept the DevTools WebSocket yet",
-			ConnectionMode: "auto_connect",
-			Channel:        channel,
-			HTTPStatus:     status,
-			RemediationCommands: []string{
-				"open chrome://inspect/#remote-debugging",
-				"cdp doctor --auto-connect --json",
-			},
+			State:               "permission_pending",
+			Message:             "Chrome auto-connect endpoint exists but did not accept the DevTools WebSocket yet",
+			ConnectionMode:      "auto_connect",
+			Channel:             channel,
+			HTTPStatus:          status,
+			RemediationCommands: autoConnectRemediationCommands(),
 		}, nil
 	}
 
@@ -262,14 +265,11 @@ func probeAutoConnectPassive(opts ProbeOptions) (ProbeResult, error) {
 	_, _, err := activePort(opts.UserDataDir, channel)
 	if err != nil {
 		return ProbeResult{
-			State:          "permission_pending",
-			Message:        "Chrome auto-connect is not ready; enable remote debugging in Chrome and allow the prompt",
-			ConnectionMode: "auto_connect",
-			Channel:        channel,
-			RemediationCommands: []string{
-				"open chrome://inspect/#remote-debugging",
-				"cdp doctor --active-browser-probe --json",
-			},
+			State:               "permission_pending",
+			Message:             "Chrome auto-connect is not ready; enable remote debugging in Chrome and allow the prompt",
+			ConnectionMode:      "auto_connect",
+			Channel:             channel,
+			RemediationCommands: autoConnectRemediationCommands(),
 		}, nil
 	}
 	return ProbeResult{
@@ -278,8 +278,10 @@ func probeAutoConnectPassive(opts ProbeOptions) (ProbeResult, error) {
 		ConnectionMode: "auto_connect",
 		Channel:        channel,
 		RemediationCommands: []string{
-			"cdp doctor --active-browser-probe --json",
-			"cdp daemon status --active-browser-probe --json",
+			"cdp daemon status --json",
+			"cdp doctor --check daemon --json",
+			"cdp doctor --check browser-health --json",
+			"cdp daemon logs --tail 50 --json",
 		},
 	}, nil
 }

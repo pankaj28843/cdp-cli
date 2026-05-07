@@ -3,11 +3,12 @@ package cdp
 import "context"
 
 type TargetInfo struct {
-	TargetID string `json:"targetId"`
-	Type     string `json:"type"`
-	Title    string `json:"title,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Attached bool   `json:"attached"`
+	TargetID         string `json:"targetId"`
+	Type             string `json:"type"`
+	Title            string `json:"title,omitempty"`
+	URL              string `json:"url,omitempty"`
+	Attached         bool   `json:"attached"`
+	BrowserContextID string `json:"browserContextId,omitempty"`
 }
 
 func ListTargets(ctx context.Context, endpoint string) ([]TargetInfo, error) {

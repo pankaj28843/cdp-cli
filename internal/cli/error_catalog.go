@@ -49,10 +49,23 @@ func errorCatalog() []errorInfo {
 			Class:    "permission",
 			ExitCode: ExitPermission,
 			Message:  "Chrome permission is required before continuing",
-			Meaning:  "The browser needs explicit user approval before this CLI can inspect the active session.",
+			Meaning:  "The browser needs explicit user approval before this CLI can inspect the active session. Agents should stop and report the required human action instead of retrying daemon lifecycle commands.",
 			RemediationCommands: []string{
+				"open chrome://inspect/#remote-debugging",
 				"cdp daemon status --json",
-				"cdp daemon start --help",
+				"cdp doctor --check daemon --json",
+			},
+		},
+		{
+			Code:     "browser_resource_budget_exceeded",
+			Class:    "resource_budget",
+			ExitCode: ExitConnection,
+			Message:  "the selected browser profile is over the cdp tab/window budget",
+			Meaning:  "The command would create another page while the approved browser profile is already at or over the safe agent resource budget.",
+			RemediationCommands: []string{
+				"cdp pages --json",
+				"cdp page cleanup --workflow-created --close --json",
+				"cdp doctor --check browser-budget --json",
 			},
 		},
 		{

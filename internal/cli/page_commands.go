@@ -62,6 +62,12 @@ func (a *app) newPagesCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			client, closeClient, err := a.browserCDPClient(ctx)
+			if err != nil {
+				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
+			}
+			defer closeClient(ctx)
+			budget := cdp.BrowserBudgetForTargets(ctx, client, targets, cdp.BrowserResourceBudgetOptions{ConnectionMode: a.connectionMode()})
 			pages := pageRows(targets)
 			pages = filterRowsContains(pages, "url", firstNonEmpty(urlContains, includeURL))
 			pages = filterRowsContains(pages, "title", titleContains)
@@ -71,7 +77,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 			for _, page := range pages {
 				lines = append(lines, fmt.Sprintf("%s\t%s", page["id"], page["title"]))
 			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "pages": pages})
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "pages": pages, "budget": budget})
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of pages to return; use 0 for no limit")
@@ -90,7 +96,7 @@ func (a *app) listTargets(ctx context.Context) ([]cdp.TargetInfo, error) {
 			"connection",
 			err.Error(),
 			ExitConnection,
-			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+			a.connectionRemediationCommands(),
 		)
 	}
 	defer closeClient(ctx)
@@ -112,11 +118,12 @@ func targetRows(targets []cdp.TargetInfo) []map[string]any {
 	rows := make([]map[string]any, 0, len(targets))
 	for _, target := range targets {
 		rows = append(rows, map[string]any{
-			"id":       target.TargetID,
-			"type":     target.Type,
-			"title":    target.Title,
-			"url":      target.URL,
-			"attached": target.Attached,
+			"id":                 target.TargetID,
+			"type":               target.Type,
+			"title":              target.Title,
+			"url":                target.URL,
+			"attached":           target.Attached,
+			"browser_context_id": target.BrowserContextID,
 		})
 	}
 	return rows
@@ -250,7 +257,7 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			defer closeClient(ctx)
@@ -845,7 +852,7 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			defer closeClient(ctx)
@@ -911,16 +918,16 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 		return daemon.Runtime{}, err
 	}
 	if !ok {
-		return daemon.Runtime{}, fmt.Errorf("browser commands require a running cdp daemon; run `cdp daemon start --auto-connect --json` or `cdp daemon start --browser-url <browser-url> --json`")
+		return daemon.Runtime{}, fmt.Errorf("browser commands require a running cdp daemon; inspect `cdp daemon status --json` and `cdp doctor --check daemon --json` before retrying")
 	}
 	if !a.runtimeMatchesConnection(runtime) {
-		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the selected browser connection; run `cdp daemon status --json` or restart it with `cdp daemon stop --json` then `cdp daemon start --json`")
+		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the selected browser connection; inspect `cdp daemon status --json` and `cdp connection current --json` before a human-managed repair")
 	}
 	if !daemon.RuntimeRunning(runtime) {
-		return daemon.Runtime{}, fmt.Errorf("daemon runtime state exists but the process is not running; run `cdp daemon start --json`")
+		return daemon.Runtime{}, fmt.Errorf("daemon runtime state exists but the process is not running; inspect `cdp daemon status --json` or run a human-managed `cdp daemon keepalive --repair --json`")
 	}
 	if !daemon.RuntimeSocketReady(ctx, runtime) {
-		return daemon.Runtime{}, fmt.Errorf("daemon runtime socket is not ready; run `cdp daemon status --json` or restart it with `cdp daemon stop --json` then `cdp daemon start --json`")
+		return daemon.Runtime{}, fmt.Errorf("daemon runtime socket is not ready; inspect `cdp daemon status --json` or run a human-managed `cdp daemon keepalive --repair --json`")
 	}
 	return runtime, nil
 }
@@ -933,7 +940,7 @@ func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titl
 			"connection",
 			err.Error(),
 			ExitConnection,
-			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+			a.connectionRemediationCommands(),
 		)
 	}
 	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
@@ -993,7 +1000,7 @@ func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains,
 			"connection",
 			err.Error(),
 			ExitConnection,
-			[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+			a.connectionRemediationCommands(),
 		)
 	}
 	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
@@ -1077,6 +1084,9 @@ func (a *app) createWorkflowPageTarget(ctx context.Context, client cdp.CommandCl
 }
 
 func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClient, rawURL, createdBy, workflow string) (string, error) {
+	if _, err := a.enforceBrowserBudgetForNewPage(ctx, client); err != nil {
+		return "", err
+	}
 	targetID, err := cdp.CreateTargetWithClient(ctx, client, rawURL)
 	if err != nil {
 		return "", commandError(

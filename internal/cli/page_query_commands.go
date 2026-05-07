@@ -781,10 +781,16 @@ func fillExpression(selector, value string) string {
   if (!("value" in element)) {
     return { url: location.href, title: document.title, selector, count: 0, filled: false, previous: "", value: "", error: { name: "InvalidTargetError", message: "target element does not support direct value assignment" }, marker };
   }
+  const setNativeValue = (el, next) => {
+    const proto = Object.getPrototypeOf(el);
+    const descriptor = proto && Object.getOwnPropertyDescriptor(proto, "value");
+    if (descriptor && typeof descriptor.set === "function") descriptor.set.call(el, next);
+    else el.value = next;
+  };
   const previous = element.value ?? "";
   try {
     element.focus();
-    element.value = value;
+    setNativeValue(element, value);
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
     return { url: location.href, title: document.title, selector, count: elements.length, filled: true, previous, value: String(element.value), marker };
@@ -817,6 +823,12 @@ func typeExpression(selector, text, strategy string) string {
   }
   const previous = ("value" in element) ? String(element.value ?? "") : String(element.innerText || element.textContent || "");
   const chosen = strategy === "insert-text" || (strategy === "auto" && editable && !("value" in element)) ? "insert-text" : "dom";
+  const setNativeValue = (el, next) => {
+    const proto = Object.getPrototypeOf(el);
+    const descriptor = proto && Object.getOwnPropertyDescriptor(proto, "value");
+    if (descriptor && typeof descriptor.set === "function") descriptor.set.call(el, next);
+    else el.value = next;
+  };
   try {
     element.focus();
     if (chosen === "insert-text") {
@@ -828,7 +840,7 @@ func typeExpression(selector, text, strategy string) string {
     let value = previous;
     for (const ch of text) {
       value += ch;
-      element.value = value;
+      setNativeValue(element, value);
       const key = String(ch);
       const keyCode = key.length > 0 ? key.codePointAt(0) : 0;
       const init = { key, code: key.length === 1 ? "Key" + key.toUpperCase() : key, keyCode: keyCode || 0, charCode: keyCode || 0, bubbles: true, cancelable: true };
@@ -837,6 +849,7 @@ func typeExpression(selector, text, strategy string) string {
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new KeyboardEvent("keyup", init));
     }
+    element.dispatchEvent(new Event("change", { bubbles: true }));
     return { url: location.href, title: document.title, selector, count: elements.length, typed: text, previous, value: String(element.value ?? ""), kind, strategy: chosen, typing: true, marker };
   } catch (error) {
     const value = ("value" in element) ? String(element.value ?? "") : String(element.innerText || element.textContent || "");

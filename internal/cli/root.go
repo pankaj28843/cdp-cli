@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,20 +26,21 @@ type BuildInfo struct {
 }
 
 type options struct {
-	json        bool
-	compact     bool
-	jq          string
-	debug       bool
-	timeout     time.Duration
-	profile     string
-	config      string
-	browserURL  string
-	autoConnect bool
-	channel     string
-	userDataDir string
-	stateDir    string
-	activeProbe bool
-	connection  string
+	json            bool
+	compact         bool
+	jq              string
+	debug           bool
+	timeout         time.Duration
+	profile         string
+	config          string
+	browserURL      string
+	autoConnect     bool
+	channel         string
+	userDataDir     string
+	stateDir        string
+	activeProbe     bool
+	connection      string
+	allowOverBudget bool
 }
 
 type app struct {
@@ -101,6 +103,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
 	root.PersistentFlags().BoolVar(&a.opts.activeProbe, "active-browser-probe", os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "1" || os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "true", "actively connect to Chrome during daemon status/start checks; may trigger a Chrome remote-debugging prompt")
 	root.PersistentFlags().StringVar(&a.opts.connection, "connection", os.Getenv("CDP_CONNECTION"), "named browser connection from local state to use for this command")
+	root.PersistentFlags().BoolVar(&a.opts.allowOverBudget, "allow-over-budget", envBool("CDP_ALLOW_OVER_BUDGET"), "human override: allow creating browser tabs even when the selected profile is over the cdp resource budget")
 
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
@@ -195,16 +198,21 @@ func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemo
 	status := daemon.Snapshot(a.connectionMode(), a.opts.autoConnect, probe)
 	store, err := a.stateStore()
 	if err != nil {
+		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
 	}
 	runtime, ok, err := daemon.LoadRuntime(ctx, store.Dir)
 	if err != nil || !ok {
+		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
 	}
 	if !a.runtimeMatchesConnection(runtime) {
+		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
 	}
-	return daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime))
+	status = daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime))
+	status.Health = a.browserHealthSnapshot(ctx, status, false)
+	return status
 }
 
 func (a *app) runtimeMatchesConnection(runtime daemon.Runtime) bool {
@@ -280,6 +288,11 @@ func envDefault(key, fallback string) string {
 	return fallback
 }
 
+func envBool(key string) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return value == "1" || value == "true" || value == "yes"
+}
+
 func (a *app) commandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
 	return a.commandContextWithDefault(cmd, 0)
 }
@@ -308,6 +321,47 @@ func (a *app) render(ctx context.Context, human string, data any) error {
 	}, human, data)
 }
 
+func liftErrorEnvelopeData(env *output.Envelope, data any) {
+	fields, ok := data.(map[string]any)
+	if !ok {
+		return
+	}
+	if value, ok := fields["human_required"].(bool); ok {
+		env.HumanRequired = value
+	}
+	if value, ok := fields["agent_should_stop"].(bool); ok {
+		env.AgentShouldStop = value
+	}
+	if value, ok := fields["human_action"].(string); ok {
+		env.HumanAction = value
+	}
+	if value, ok := stringSliceField(fields["safe_diagnostics"]); ok {
+		env.SafeDiagnostics = value
+	}
+	if value, ok := fields["resource_budget"]; ok {
+		env.ResourceBudget = value
+	}
+}
+
+func stringSliceField(value any) ([]string, bool) {
+	switch typed := value.(type) {
+	case []string:
+		return typed, true
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, text)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
 func (a *app) renderError(ctx context.Context, err error) error {
 	var cmdErr *CommandError
 	if !errors.As(err, &cmdErr) {
@@ -326,6 +380,14 @@ func (a *app) renderError(ctx context.Context, err error) error {
 		Message:             cmdErr.Error(),
 		Data:                cmdErr.Data,
 		RemediationCommands: cmdErr.RemediationCommands,
+	}
+	liftErrorEnvelopeData(&env, cmdErr.Data)
+	if a.opts.autoConnect && (cmdErr.Code == "permission_pending" || cmdErr.Code == "connection_not_configured") {
+		env.RemediationCommands = permissionRemediationCommands()
+		env.HumanRequired = true
+		env.AgentShouldStop = true
+		env.HumanAction = autoConnectHumanAction
+		env.SafeDiagnostics = safeDiagnosticCommands()
 	}
 
 	if a.opts.json || a.opts.jq != "" {

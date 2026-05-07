@@ -140,12 +140,22 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "entries", Type: "array<daemon_log_entry>", Required: true, Description: "Log entries with time, level, event, message, and pid."},
 			},
 		},
+		"daemon-health": {
+			Name:        "daemon-health",
+			Description: "Safe daemon/browser health telemetry for the selected daemon-backed connection.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when health telemetry was assembled."},
+				{Name: "daemon", Type: "daemon_status", Required: true, Description: "Daemon status with embedded health."},
+				{Name: "health", Type: "browser_health", Required: true, Description: "Safe tab/window/resource and daemon RPC health summary."},
+			},
+		},
 		"pages": {
 			Name:        "pages",
 			Description: "Open page targets from the selected browser connection.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when page targets were listed."},
 				{Name: "pages", Type: "array<page>", Required: true, Description: "Page rows with id, type, title, url, and attachment state."},
+				{Name: "budget", Type: "browser_resource_budget", Required: true, Description: "Safe tab/window budget summary computed from target metadata."},
 			},
 		},
 		"targets": {
@@ -633,9 +643,9 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "pages", Type: "array<object>", Required: true, Description: "Per-URL rendered extraction summaries and artifact references."},
 				{Name: "quality", Type: "array<object>", Required: true, Description: "Per-page quality counts, warnings, and artifact paths."},
 				{Name: "warnings", Type: "array<string>", Required: true, Description: "Flattened low-signal extraction warnings."},
-				{Name: "failures", Type: "array<object>", Required: true, Description: "Per-URL extraction failures."},
-				{Name: "artifacts", Type: "object", Required: true, Description: "page-quality.json and failures.json paths."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "URL count, extracted page count, failure count, warning count, capped parallelism, and next commands."},
+				{Name: "failures", Type: "array<object>", Required: true, Description: "Per-URL extraction failures with err_class classification."},
+				{Name: "artifacts", Type: "object", Required: true, Description: "page-quality, failures, failed-urls, remaining-urls, and retry-command artifact paths."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "URL count, extracted page count, failure counts, requested/effective parallelism, backpressure, retry artifacts, and next commands."},
 			},
 		},
 		"protocol-metadata": {
@@ -713,6 +723,11 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "err_class", Type: "string", Required: true, Description: "Broader class for policy decisions."},
 				{Name: "message", Type: "string", Required: true, Description: "Concise human-readable failure detail."},
 				{Name: "remediation_commands", Type: "array<string>", Required: false, Description: "Safe commands an agent can run next."},
+				{Name: "human_required", Type: "boolean", Required: false, Description: "True when a human action, such as approving Chrome remote debugging, is required."},
+				{Name: "agent_should_stop", Type: "boolean", Required: false, Description: "True when agents should stop retrying and report the human action."},
+				{Name: "human_action", Type: "string", Required: false, Description: "Concrete human action required before retrying."},
+				{Name: "safe_diagnostics", Type: "array<string>", Required: false, Description: "Observation-only commands safe for agents while waiting for a human."},
+				{Name: "resource_budget", Type: "browser_resource_budget", Required: false, Description: "Budget snapshot for resource-budget failures."},
 			},
 		},
 		"exit-codes": {

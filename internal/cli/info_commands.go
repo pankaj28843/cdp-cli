@@ -153,6 +153,32 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				"details":              probe,
 				"remediation_commands": browserRemediation,
 			})
+			if checkName == "" || checkName == "browser-health" || checkName == "browser-budget" {
+				health := healthMap(daemonStatus.Health)
+				if checkName == "" || checkName == "browser-health" {
+					checks = append(checks, map[string]any{
+						"name":            "browser-health",
+						"status":          doctorStatusFromHealth(health),
+						"state":           fmt.Sprint(health["state"]),
+						"message":         browserHealthMessage(health),
+						"connection_mode": a.connectionMode(),
+						"details":         health,
+						"next_commands":   safeDiagnosticCommands(),
+					})
+				}
+				if checkName == "" || checkName == "browser-budget" {
+					checks = append(checks, map[string]any{
+						"name":            "browser-budget",
+						"status":          doctorStatusFromBudgetHealth(health),
+						"state":           fmt.Sprint(health["state"]),
+						"message":         browserBudgetMessage(health),
+						"connection_mode": a.connectionMode(),
+						"details":         health["resource_budget"],
+						"health":          health,
+						"next_commands":   []string{"cdp pages --json", "cdp page cleanup --workflow-created --close --json"},
+					})
+				}
+			}
 			if checkName != "" {
 				checks = filterChecksByName(checks, checkName)
 				if len(checks) == 0 {
@@ -167,7 +193,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			}
 
 			data := map[string]any{
-				"ok":     browserStatus != "fail" && daemonCheckStatus != "fail",
+				"ok":     checksOK(checks),
 				"checks": checks,
 			}
 			human := fmt.Sprintf("cli: pass\ndaemon: %s\nbrowser: %s", daemonStatus.State, browserStatus)
@@ -238,6 +264,59 @@ func daemonDoctorStatus(state string) string {
 	default:
 		return "pending"
 	}
+}
+
+func healthMap(value any) map[string]any {
+	if typed, ok := value.(map[string]any); ok {
+		return typed
+	}
+	return map[string]any{"state": "unknown", "reasons": []string{"health_unavailable"}}
+}
+
+func doctorStatusFromHealth(health map[string]any) string {
+	switch fmt.Sprint(health["state"]) {
+	case "healthy":
+		return "pass"
+	case "permission_pending", "passive_no_process", "not_running", "unknown":
+		return "pending"
+	default:
+		return "warn"
+	}
+}
+
+func doctorStatusFromBudgetHealth(health map[string]any) string {
+	if health["resource_budget"] == nil {
+		return "pending"
+	}
+	if health["tabs_over_budget"] == true || health["windows_over_budget"] == true {
+		return "warn"
+	}
+	return "pass"
+}
+
+func browserHealthMessage(health map[string]any) string {
+	state := fmt.Sprint(health["state"])
+	reasons := toStringSlice(health["reasons"])
+	if len(reasons) == 0 {
+		return "browser health is " + state
+	}
+	return fmt.Sprintf("browser health is %s: %s", state, strings.Join(reasons, ", "))
+}
+
+func browserBudgetMessage(health map[string]any) string {
+	if health["resource_budget"] == nil {
+		return "browser budget is unavailable until a daemon runtime is running"
+	}
+	return fmt.Sprintf("browser budget: %v/%v tabs, %v/%v windows", health["tab_count"], health["max_tabs"], health["window_count"], health["max_windows"])
+}
+
+func checksOK(checks []map[string]any) bool {
+	for _, check := range checks {
+		if check["status"] == "fail" {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *app) newExplainErrorCommand() *cobra.Command {

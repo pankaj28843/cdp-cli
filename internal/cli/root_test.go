@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"nhooyr.io/websocket"
@@ -531,6 +533,98 @@ func TestPagesURLFilterJSON(t *testing.T) {
 	}
 }
 
+func TestPagesIncludeBrowserBudgetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": true},
+		{"targetId": "page-window-2", "type": "page", "title": "Docs", "url": "https://docs.example.test/", "attached": false},
+		{"targetId": "worker-1", "type": "service_worker", "title": "Worker", "url": "https://example.test/sw.js", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK     bool `json:"ok"`
+		Budget struct {
+			TabCount          int            `json:"tab_count"`
+			WindowCount       int            `json:"window_count"`
+			WindowCountKnown  bool           `json:"window_count_known"`
+			AttachedPageCount int            `json:"attached_page_count"`
+			TargetTypeCounts  map[string]int `json:"target_type_counts"`
+		} `json:"budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Budget.TabCount != 2 || got.Budget.WindowCount != 2 || !got.Budget.WindowCountKnown || got.Budget.AttachedPageCount != 1 || got.Budget.TargetTypeCounts["service_worker"] != 1 {
+		t.Fatalf("pages budget = %+v, want tab/window budget summary", got.Budget)
+	}
+}
+
+func TestOpenRefusesOverBudgetJSON(t *testing.T) {
+	targets := make([]map[string]any, 0, cdp.DefaultMaxTabs)
+	for i := 0; i < cdp.DefaultMaxTabs; i++ {
+		targets = append(targets, map[string]any{"targetId": fmt.Sprintf("page-%02d", i+1), "type": "page", "title": "Tab", "url": "https://example.test/tab", "attached": false})
+	}
+	server := newFakeCDPServer(t, targets)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/new", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitConnection {
+		t.Fatalf("open exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitConnection, out.String(), errOut.String())
+	}
+	var got struct {
+		OK             bool   `json:"ok"`
+		Code           string `json:"code"`
+		ErrClass       string `json:"err_class"`
+		ResourceBudget struct {
+			TabCount       int  `json:"tab_count"`
+			MaxTabs        int  `json:"max_tabs"`
+			TabsOverBudget bool `json:"tabs_over_budget"`
+		} `json:"resource_budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open error output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "browser_resource_budget_exceeded" || got.ErrClass != "resource_budget" || got.ResourceBudget.TabCount != cdp.DefaultMaxTabs || !got.ResourceBudget.TabsOverBudget {
+		t.Fatalf("open error = %+v, want resource budget refusal", got)
+	}
+}
+
+func TestDoctorBrowserHealthJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--check", "browser-health", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor browser-health exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Checks []struct {
+			Name    string `json:"name"`
+			Status  string `json:"status"`
+			Details struct {
+				State    string `json:"state"`
+				TabCount int    `json:"tab_count"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor browser-health output is invalid JSON: %v", err)
+	}
+	if len(got.Checks) != 1 || got.Checks[0].Name != "browser-health" || got.Checks[0].Status != "pass" || got.Checks[0].Details.State != "healthy" || got.Checks[0].Details.TabCount != 1 {
+		t.Fatalf("doctor browser-health = %+v, want healthy tab summary", got.Checks)
+	}
+}
+
 func TestPageReloadJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -749,7 +843,7 @@ func TestClickVerificationTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--timeout", "20ms", "click", "main", "--strategy", "raw-input", "--wait-text", "Never Ready", "--poll", "5ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--timeout", "100ms", "click", "main", "--strategy", "raw-input", "--wait-text", "Never Ready", "--poll", "5ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("unverified click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -2198,6 +2292,9 @@ func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 		Artifacts struct {
 			PageQualityJSON string `json:"page_quality_json"`
 			FailuresJSON    string `json:"failures_json"`
+			FailedURLs      string `json:"failed_urls"`
+			RemainingURLs   string `json:"remaining_urls"`
+			RetryCommand    string `json:"retry_command"`
 		} `json:"artifacts"`
 		Workflow struct {
 			Name         string `json:"name"`
@@ -2216,7 +2313,7 @@ func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 	if len(got.Pages) != 1 || got.Pages[0].Report.Workflow.Name != "web-research-extract" || got.Pages[0].Report.Artifacts.Markdown == "" || got.Pages[0].Report.Artifacts.LinksJSON == "" {
 		t.Fatalf("workflow web-research extract pages = %+v", got.Pages)
 	}
-	for _, path := range []string{got.Pages[0].Report.Artifacts.Markdown, got.Pages[0].Report.Artifacts.LinksJSON, got.Artifacts.PageQualityJSON, got.Artifacts.FailuresJSON} {
+	for _, path := range []string{got.Pages[0].Report.Artifacts.Markdown, got.Pages[0].Report.Artifacts.LinksJSON, got.Artifacts.PageQualityJSON, got.Artifacts.FailuresJSON, got.Artifacts.FailedURLs, got.Artifacts.RemainingURLs, got.Artifacts.RetryCommand} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("workflow web-research extract artifact %q was not written: %v", path, err)
 		}
@@ -3232,12 +3329,16 @@ func TestDaemonStartAutoConnectPermissionPendingJSON(t *testing.T) {
 		Code                string   `json:"code"`
 		ErrClass            string   `json:"err_class"`
 		RemediationCommands []string `json:"remediation_commands"`
+		HumanRequired       bool     `json:"human_required"`
+		AgentShouldStop     bool     `json:"agent_should_stop"`
+		HumanAction         string   `json:"human_action"`
+		SafeDiagnostics     []string `json:"safe_diagnostics"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon start error output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "permission_pending" || got.ErrClass != "permission" || !containsString(got.RemediationCommands, "open chrome://inspect/#remote-debugging") {
-		t.Fatalf("daemon start error = %+v, want permission_pending with Chrome remediation", got)
+	if got.OK || got.Code != "permission_pending" || got.ErrClass != "permission" || !containsString(got.RemediationCommands, "open chrome://inspect/#remote-debugging") || !got.HumanRequired || !got.AgentShouldStop || !strings.Contains(got.HumanAction, "chrome://inspect") || !containsString(got.SafeDiagnostics, "cdp daemon status --json") {
+		t.Fatalf("daemon start error = %+v, want permission_pending with human-in-loop remediation", got)
 	}
 
 	out.Reset()
@@ -3274,12 +3375,16 @@ func TestDaemonRestartAutoConnectPermissionPendingJSON(t *testing.T) {
 		Code                string   `json:"code"`
 		ErrClass            string   `json:"err_class"`
 		RemediationCommands []string `json:"remediation_commands"`
+		HumanRequired       bool     `json:"human_required"`
+		AgentShouldStop     bool     `json:"agent_should_stop"`
+		HumanAction         string   `json:"human_action"`
+		SafeDiagnostics     []string `json:"safe_diagnostics"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon restart error output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "permission_pending" || got.ErrClass != "permission" || !containsString(got.RemediationCommands, "open chrome://inspect/#remote-debugging") {
-		t.Fatalf("daemon restart error = %+v, want permission_pending with Chrome remediation", got)
+	if got.OK || got.Code != "permission_pending" || got.ErrClass != "permission" || !containsString(got.RemediationCommands, "open chrome://inspect/#remote-debugging") || !got.HumanRequired || !got.AgentShouldStop || !strings.Contains(got.HumanAction, "chrome://inspect") || !containsString(got.SafeDiagnostics, "cdp daemon status --json") {
+		t.Fatalf("daemon restart error = %+v, want permission_pending with human-in-loop remediation", got)
 	}
 }
 
@@ -4253,9 +4358,19 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Target.closeTarget" {
 				resp["result"] = map[string]any{"success": true}
+			} else if req.Method == "Browser.getWindowForTarget" {
+				var params struct {
+					TargetID string `json:"targetId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				windowID := 1
+				if strings.Contains(params.TargetID, "window-2") {
+					windowID = 2
+				}
+				resp["result"] = map[string]any{"windowId": windowID, "bounds": map[string]any{"windowState": "normal"}}
 			} else if req.Method == "Page.navigate" {
 				resp["result"] = map[string]any{"frameId": "frame-1"}
-			} else if req.Method == "Page.enable" {
+			} else if req.Method == "Page.enable" || req.Method == "Page.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.reload" {
 				resp["result"] = map[string]any{}
@@ -4269,6 +4384,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					},
 				}
 			} else if req.Method == "Page.navigateToHistoryEntry" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Network.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.enable" {
 				resp["result"] = map[string]any{}
@@ -4435,6 +4552,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					"overrideActive": false,
 					"usageBreakdown": []map[string]any{{"storageType": "local_storage", "usage": 64}},
 				}
+			} else if req.Method == "Runtime.disable" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Runtime.enable" {
 				resp["result"] = map[string]any{}
 				events = append(events, map[string]any{
@@ -4475,6 +4594,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						},
 					},
 				})
+			} else if req.Method == "Log.disable" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Log.enable" {
 				resp["result"] = map[string]any{}
 				events = append(events, map[string]any{
@@ -4491,7 +4612,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						},
 					},
 				})
-			} else if req.Method == "Performance.enable" {
+			} else if req.Method == "Performance.enable" || req.Method == "Performance.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Performance.getMetrics" {
 				resp["result"] = map[string]any{
@@ -4537,6 +4658,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Browser.getVersion" {
 				resp["result"] = map[string]any{"product": "Chrome/Test", "protocolVersion": "1.3"}
+			} else if req.Method == "SystemInfo.getProcessInfo" {
+				resp["result"] = map[string]any{"processInfo": []map[string]any{{"type": "browser", "id": 100, "cpuTime": 1.5}, {"type": "renderer", "id": 101, "cpuTime": 0.25}}}
 			} else {
 				resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
 			}

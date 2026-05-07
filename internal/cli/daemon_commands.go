@@ -20,12 +20,14 @@ func (a *app) newDaemonCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Manage the long-running Chrome attach daemon",
+		Long:  "Manage the long-running Chrome attach daemon. In --auto-connect mode, Chrome/default-profile access is human-in-the-loop: agents may inspect status, doctor, health, and logs, but should not retry start/restart/stop loops when permission is pending. If Chrome asks for remote debugging approval, stop and ask the human to open chrome://inspect/#remote-debugging and click Allow.",
 	}
 	cmd.AddCommand(a.newDaemonStartCommand())
 	cmd.AddCommand(a.newDaemonStatusCommand())
 	cmd.AddCommand(a.newDaemonStopCommand())
 	cmd.AddCommand(a.newDaemonRestartCommand())
 	cmd.AddCommand(a.newDaemonKeepaliveCommand())
+	cmd.AddCommand(a.newDaemonHealthCommand())
 	cmd.AddCommand(a.newDaemonHoldCommand())
 	cmd.AddCommand(a.newDaemonLogsCommand())
 	return cmd
@@ -119,12 +121,13 @@ func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemon
 	if keepAlive {
 		endpoint, err = a.browserEndpoint(ctx)
 		if err != nil {
-			return daemonStartResult{}, commandError(
+			return daemonStartResult{}, commandErrorWithData(
 				"permission_pending",
 				"permission",
 				err.Error(),
 				ExitPermission,
-				[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
+				permissionRemediationCommands(),
+				permissionPendingData(map[string]any{"daemon_start": map[string]any{"phase": "resolve_browser_endpoint", "waiting_for_user_approval": a.opts.autoConnect}}),
 			)
 		}
 	}
@@ -161,12 +164,13 @@ func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemon
 	if keepAlive {
 		r, reused, err := a.startKeepAlive(ctx, endpoint, cfg.reconnect)
 		if err != nil {
-			return daemonStartResult{}, commandError(
+			return daemonStartResult{}, commandErrorWithData(
 				"permission_pending",
 				"permission",
 				fmt.Sprintf("start daemon keepalive: %v", err),
 				ExitPermission,
-				[]string{"open chrome://inspect/#remote-debugging", "cdp daemon start --auto-connect --json"},
+				permissionRemediationCommands(),
+				permissionPendingData(map[string]any{"daemon_start": map[string]any{"phase": "start_keepalive", "waiting_for_user_approval": a.opts.autoConnect, "browser_endpoint_seen": endpoint != ""}}),
 			)
 		}
 		runtime = &r
@@ -176,6 +180,7 @@ func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemon
 	status := a.daemonStatus(ctx, probe)
 	if runtime != nil {
 		status = daemon.WithRuntime(status, *runtime, true)
+		status.Health = a.browserHealthSnapshot(ctx, status, false)
 	}
 	if !keepAlive {
 		if err := daemonStartFailure(probe, status); err != nil {
@@ -268,12 +273,13 @@ func daemonStartFailure(probe browser.ProbeResult, status daemon.Status) error {
 			remediation,
 		)
 	case "permission_pending":
-		return commandError(
+		return commandErrorWithData(
 			"permission_pending",
 			"permission",
 			probe.Message,
 			ExitPermission,
-			remediation,
+			permissionRemediationCommands(),
+			permissionPendingData(map[string]any{"daemon_start": map[string]any{"phase": "browser_probe", "waiting_for_user_approval": true}}),
 		)
 	case "unreachable", "listening_not_cdp", "invalid_response", "missing_browser_websocket":
 		return commandError(
@@ -395,6 +401,29 @@ func (a *app) newDaemonStopCommand() *cobra.Command {
 	}
 }
 
+func (a *app) newDaemonHealthCommand() *cobra.Command {
+	var processInfo bool
+	cmd := &cobra.Command{
+		Use:   "health",
+		Short: "Show safe daemon/browser health telemetry",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			probe, err := a.browserProbe(ctx)
+			if err != nil {
+				return commandError("invalid_browser_url", "usage", err.Error(), ExitUsage, []string{"cdp daemon health --browser-url <browser-url> --json"})
+			}
+			status := a.daemonStatus(ctx, probe)
+			health := a.browserHealthSnapshot(ctx, status, processInfo)
+			status.Health = health
+			return a.render(ctx, fmt.Sprintf("daemon-health\t%s", health["state"]), map[string]any{"ok": true, "daemon": status, "health": health})
+		},
+	}
+	cmd.Flags().BoolVar(&processInfo, "process-info", false, "include optional SystemInfo.getProcessInfo process counts when a daemon runtime is healthy")
+	return cmd
+}
+
 func (a *app) newDaemonLogsCommand() *cobra.Command {
 	var tail int
 	cmd := &cobra.Command{
@@ -513,6 +542,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	var display string
 	var chromeCommand string
 	var chromeArgs []string
+	var repair bool
 
 	cmd := &cobra.Command{
 		Use:   "keepalive",
@@ -594,7 +624,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				)
 			}
 			status := a.daemonStatus(ctx, probe)
-			probeResult := map[string]any{"mode": probeMode, "result": probe.State}
+			probeResult := map[string]any{"mode": probeMode, "result": probe.State, "repair_requested": repair}
 			runtimeHealthy, runtimeCheck := keepaliveRuntimeCheck(ctx, status)
 			if status.State == "running" && runtimeHealthy {
 				return a.render(ctx, fmt.Sprintf("keepalive\t%s\thealthy", connectionName), map[string]any{
@@ -715,6 +745,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd.Flags().StringVar(&display, "display", os.Getenv("DISPLAY"), "DISPLAY value to use when launching Chrome for auto-connect")
 	cmd.Flags().StringVar(&chromeCommand, "chrome-command", "google-chrome-stable", "Chrome command to launch for auto-connect repair; empty disables launch")
 	cmd.Flags().StringArrayVar(&chromeArgs, "chrome-args", nil, "extra Chrome argument; repeat for multiple arguments")
+	cmd.Flags().BoolVar(&repair, "repair", false, "human-managed repair mode: remove stale runtime state and restart the daemon when safe")
 	return cmd
 }
 

@@ -28,7 +28,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			closeOwned := true

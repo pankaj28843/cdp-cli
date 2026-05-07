@@ -28,6 +28,11 @@ type Envelope struct {
 	Data                any        `json:"data,omitempty"`
 	Artifacts           []Artifact `json:"artifacts,omitempty"`
 	RemediationCommands []string   `json:"remediation_commands,omitempty"`
+	HumanRequired       bool       `json:"human_required,omitempty"`
+	AgentShouldStop     bool       `json:"agent_should_stop,omitempty"`
+	HumanAction         string     `json:"human_action,omitempty"`
+	SafeDiagnostics     []string   `json:"safe_diagnostics,omitempty"`
+	ResourceBudget      any        `json:"resource_budget,omitempty"`
 }
 
 func Render(ctx context.Context, w io.Writer, opts Options, human string, data any) error {

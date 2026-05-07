@@ -68,7 +68,7 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			closeOwned := true
@@ -204,7 +204,7 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			closeOwned := true
@@ -330,7 +330,7 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			closeOwned := true
@@ -475,7 +475,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 			}
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
-				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
+				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 			}
 			targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "hacker-news")
 			if err != nil {
@@ -657,7 +657,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 						"connection",
 						err.Error(),
 						ExitConnection,
-						[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+						a.connectionRemediationCommands(),
 					)
 				}
 				targetID, err = a.createWorkflowPageTarget(ctx, client, rawURL, "debug-bundle")
@@ -1129,7 +1129,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon start --auto-connect --json", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			closeOwned := true
@@ -1284,7 +1284,7 @@ func (a *app) newWorkflowFeedsCommand() *cobra.Command {
 		defer cancel()
 		client, closeClient, err := a.browserCDPClient(ctx)
 		if err != nil {
-			return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
+			return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 		}
 		rawURL := strings.TrimSpace(args[0])
 		targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "feeds")
@@ -1578,60 +1578,121 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 			if strings.TrimSpace(outDir) == "" {
 				outDir = filepath.Join("tmp", "cdp-web-research", "pages")
 			}
-			if parallel == 0 || parallel > 10 {
+			requestedParallel := parallel
+			if parallel == 0 {
+				parallel = 4
+			}
+			if parallel > 10 {
 				parallel = 10
 			}
 
 			ctx := cmd.Context()
+			initialBudget := cdp.BrowserResourceBudget{}
+			effectiveParallel := parallel
+			backpressureApplied := false
+			if len(urls) > 0 {
+				client, closeClient, err := a.browserCDPClient(ctx)
+				if err != nil {
+					return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
+				}
+				budget, budgetErr := a.enforceBrowserBudgetForNewPage(ctx, client)
+				_ = closeClient(ctx)
+				if budgetErr != nil {
+					return budgetErr
+				}
+				initialBudget = budget
+				if remaining := budget.RemainingTabs(); remaining > 0 && effectiveParallel > remaining {
+					effectiveParallel = remaining
+					backpressureApplied = true
+				}
+			}
+			if effectiveParallel <= 0 {
+				effectiveParallel = 1
+			}
+
 			type pageResult struct {
 				Index  int
 				URL    string
 				Result renderedExtractResult
 				Err    error
 			}
-			jobs := make(chan int)
 			results := make(chan pageResult, len(urls))
-			var wg sync.WaitGroup
-			for i := 0; i < parallel; i++ {
-				wg.Add(1)
+			launch := func(idx int) {
+				rawURL := urls[idx]
 				go func() {
-					defer wg.Done()
-					for idx := range jobs {
-						rawURL := urls[idx]
-						result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
-							WorkflowName:       "web-research-extract",
-							ArtifactTypePrefix: "web-research-extract",
-							UsageCommand:       "cdp workflow web-research extract",
-							RawURL:             rawURL,
-							Selector:           selector,
-							Wait:               wait,
-							WaitUntil:          waitUntil,
-							Formats:            "snapshot,text,html,markdown,links",
-							OutDir:             filepath.Join(outDir, fmt.Sprintf("%03d-%s", idx+1, webResearchURLSlug(rawURL))),
-							Serp:               "none",
-							Limit:              80,
-							MinVisibleWords:    minVisibleWords,
-							MinMarkdownWords:   minMarkdownWords,
-							MinHTMLChars:       minHTMLChars,
-						})
-						results <- pageResult{Index: idx, URL: rawURL, Result: result, Err: err}
-					}
+					result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
+						WorkflowName:       "web-research-extract",
+						ArtifactTypePrefix: "web-research-extract",
+						UsageCommand:       "cdp workflow web-research extract",
+						RawURL:             rawURL,
+						Selector:           selector,
+						Wait:               wait,
+						WaitUntil:          waitUntil,
+						Formats:            "snapshot,text,html,markdown,links",
+						OutDir:             filepath.Join(outDir, fmt.Sprintf("%03d-%s", idx+1, webResearchURLSlug(rawURL))),
+						Serp:               "none",
+						Limit:              80,
+						MinVisibleWords:    minVisibleWords,
+						MinMarkdownWords:   minMarkdownWords,
+						MinHTMLChars:       minHTMLChars,
+					})
+					results <- pageResult{Index: idx, URL: rawURL, Result: result, Err: err}
 				}()
 			}
-			for i := range urls {
-				jobs <- i
+			collected := make([]pageResult, 0, len(urls))
+			nextIndex := 0
+			active := 0
+			currentParallel := effectiveParallel
+			pageFailureCount := 0
+			infrastructureFailureCount := 0
+			retriedAfterReconnect := false
+			stopScheduling := false
+			for len(collected) < len(urls) {
+				for !stopScheduling && active < currentParallel && nextIndex < len(urls) {
+					launch(nextIndex)
+					nextIndex++
+					active++
+				}
+				if active == 0 {
+					break
+				}
+				result := <-results
+				active--
+				collected = append(collected, result)
+				if result.Err == nil {
+					continue
+				}
+				failureClass := classifyWorkflowExtractFailure(result.Err)
+				if isInfrastructureFailureClass(failureClass) {
+					infrastructureFailureCount++
+					currentParallel = 1
+					backpressureApplied = true
+					if !retriedAfterReconnect {
+						if err := a.repairDaemonForWorkflow(ctx); err == nil {
+							retriedAfterReconnect = true
+						} else {
+							stopScheduling = true
+						}
+					} else {
+						stopScheduling = true
+					}
+					continue
+				}
+				pageFailureCount++
+				if pageFailureCount >= 3 {
+					currentParallel = 1
+					backpressureApplied = true
+				}
 			}
-			close(jobs)
-			wg.Wait()
-			close(results)
+			remainingURLs := append([]string(nil), urls[nextIndex:]...)
 
 			pages := make([]map[string]any, 0, len(urls))
 			qualities := make([]map[string]any, 0, len(urls))
 			failures := make([]map[string]any, 0)
 			warnings := make([]string, 0)
-			for result := range results {
+			for _, result := range collected {
 				if result.Err != nil {
-					failures = append(failures, map[string]any{"url": result.URL, "error": result.Err.Error()})
+					failures = append(failures, map[string]any{"url": result.URL, "error": result.Err.Error(), "err_class": classifyWorkflowExtractFailure(result.Err)})
 					continue
 				}
 				pages = append(pages, map[string]any{"url": result.URL, "report": result.Result.Report})
@@ -1661,6 +1722,23 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			failedURLs := make([]string, 0, len(failures))
+			for _, failure := range failures {
+				failedURLs = append(failedURLs, fmt.Sprint(failure["url"]))
+			}
+			failedURLsPath, err := writeArtifactFile(filepath.Join(outDir, "failed-urls.txt"), []byte(strings.Join(failedURLs, "\n")+newlineIfNotEmpty(failedURLs)))
+			if err != nil {
+				return err
+			}
+			remainingURLsPath, err := writeArtifactFile(filepath.Join(outDir, "remaining-urls.txt"), []byte(strings.Join(remainingURLs, "\n")+newlineIfNotEmpty(remainingURLs)))
+			if err != nil {
+				return err
+			}
+			retryParallel := saferWebResearchRetryParallel(effectiveParallel, backpressureApplied)
+			retryCommandPath, err := writeArtifactFile(filepath.Join(outDir, "retry-command.sh"), []byte(webResearchRetryCommand(urlFile, outDir, wait, waitUntil, selector, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, retryParallel)))
+			if err != nil {
+				return err
+			}
 
 			report := map[string]any{
 				"ok":        len(failures) == 0,
@@ -1668,17 +1746,27 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 				"quality":   qualities,
 				"warnings":  warnings,
 				"failures":  failures,
-				"artifacts": map[string]string{"page_quality_json": qualityPath, "failures_json": failuresPath},
+				"artifacts": map[string]string{"page_quality_json": qualityPath, "failures_json": failuresPath, "failed_urls": failedURLsPath, "remaining_urls": remainingURLsPath, "retry_command": retryCommandPath},
 				"workflow": map[string]any{
-					"name":          "web-research-extract",
-					"url_count":     len(urls),
-					"page_count":    len(pages),
-					"failure_count": len(failures),
-					"warning_count": len(warnings),
-					"max_pages":     maxPages,
-					"parallel":      parallel,
-					"out_dir":       outDir,
-					"next_commands": []string{"jq '.[] | select((.warnings | length) > 0)' " + qualityPath, "jq -r '.[].url' " + failuresPath},
+					"name":                    "web-research-extract",
+					"url_count":               len(urls),
+					"page_count":              len(pages),
+					"failure_count":           len(failures),
+					"page_failures":           pageFailureCount,
+					"infrastructure_failures": infrastructureFailureCount,
+					"warning_count":           len(warnings),
+					"max_pages":               maxPages,
+					"requested_parallel":      requestedParallel,
+					"parallel":                effectiveParallel,
+					"parallel_cap":            10,
+					"backpressure_applied":    backpressureApplied,
+					"retried_after_reconnect": retriedAfterReconnect,
+					"remaining_url_count":     len(remainingURLs),
+					"initial_resource_budget": initialBudget,
+					"retry_parallel":          retryParallel,
+					"retry_artifacts":         map[string]string{"failed_urls": failedURLsPath, "remaining_urls": remainingURLsPath, "retry_command": retryCommandPath},
+					"out_dir":                 outDir,
+					"next_commands":           []string{"jq '.[] | select((.warnings | length) > 0)' " + qualityPath, "jq -r '.[].url' " + failuresPath, "sh " + retryCommandPath},
 				},
 			}
 			return a.render(ctx, fmt.Sprintf("web-research-extract\t%d pages\t%d failures", len(pages), len(failures)), report)
@@ -1686,7 +1774,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&urlFile, "url-file", "", "newline-delimited URLs to extract")
 	cmd.Flags().IntVar(&maxPages, "max-pages", 100, "maximum URLs to extract; use 0 for no limit")
-	cmd.Flags().IntVar(&parallel, "parallel", 10, "maximum parallel page tabs, capped at 10")
+	cmd.Flags().IntVar(&parallel, "parallel", 4, "maximum parallel page tabs; default 4, hard-capped at 10 and bounded by remaining tab budget")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for page artifacts")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for each rendered page")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
@@ -1695,6 +1783,127 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
 	return cmd
+}
+
+func classifyWorkflowExtractFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	var cmdErr *CommandError
+	if errors.As(err, &cmdErr) {
+		switch cmdErr.Code {
+		case "timeout":
+			return "page_timeout"
+		case "browser_resource_budget_exceeded":
+			return "browser_resource_budget_exceeded"
+		case "permission_pending":
+			return "permission_pending"
+		case "connection_not_configured", "connection_failed":
+			if looksLikeDaemonDisconnect(cmdErr.Error()) {
+				return "daemon_disconnected"
+			}
+			return "collector_error"
+		default:
+			if cmdErr.Class == "connection" && looksLikeDaemonDisconnect(cmdErr.Error()) {
+				return "daemon_disconnected"
+			}
+		}
+	}
+	message := err.Error()
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(message), "context deadline exceeded") {
+		return "page_timeout"
+	}
+	if looksLikeDaemonDisconnect(message) {
+		return "daemon_disconnected"
+	}
+	return "collector_error"
+}
+
+func looksLikeDaemonDisconnect(message string) bool {
+	message = strings.ToLower(message)
+	needles := []string{"use of closed network connection", "daemon runtime socket", "daemon runtime state", "running cdp daemon", "connection is closed", "failed to get reader", "broken pipe"}
+	for _, needle := range needles {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func isInfrastructureFailureClass(class string) bool {
+	switch class {
+	case "daemon_disconnected", "permission_pending", "browser_resource_budget_exceeded":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *app) repairDaemonForWorkflow(ctx context.Context) error {
+	if a.opts.autoConnect && !a.opts.activeProbe {
+		return fmt.Errorf("auto-connect daemon repair requires human approval")
+	}
+	_, err := a.runDaemonStart(ctx, daemonStartConfig{connectionName: a.connectionStateName(ctx), remember: true})
+	return err
+}
+
+func newlineIfNotEmpty(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return "\n"
+}
+
+func saferWebResearchRetryParallel(effectiveParallel int, backpressureApplied bool) int {
+	parallel := effectiveParallel
+	if parallel <= 0 {
+		parallel = 1
+	}
+	if parallel > 4 {
+		parallel = 4
+	}
+	if backpressureApplied && parallel > 2 {
+		parallel = 2
+	}
+	return parallel
+}
+
+func webResearchRetryCommand(urlFile, outDir string, wait time.Duration, waitUntil, selector string, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, parallel int) string {
+	failedURLFile := filepath.Join(outDir, "failed-urls.txt")
+	parts := []string{
+		"cdp", "workflow", "web-research", "extract",
+		"--url-file", failedURLFile,
+		"--out-dir", outDir,
+		"--parallel", fmt.Sprint(parallel),
+		"--wait", wait.String(),
+		"--wait-until", waitUntil,
+		"--selector", selector,
+		"--min-visible-words", fmt.Sprint(minVisibleWords),
+		"--min-markdown-words", fmt.Sprint(minMarkdownWords),
+		"--min-html-chars", fmt.Sprint(minHTMLChars),
+		"--json",
+	}
+	if maxPages > 0 {
+		parts = append(parts[:8], append([]string{"--max-pages", fmt.Sprint(maxPages)}, parts[8:]...)...)
+	}
+	_ = urlFile
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		quoted = append(quoted, shellQuote(part))
+	}
+	return "#!/bin/sh\nset -eu\n" + strings.Join(quoted, " ") + "\n"
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if strings.IndexFunc(value, func(r rune) bool {
+		return !(r == '-' || r == '_' || r == '/' || r == '.' || r == ':' || r == '=' || r == ',' || r == '+' || r == '@' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'))
+	}) == -1 {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
@@ -1769,26 +1978,59 @@ func pageLoadIncludeSet(include string) map[string]bool {
 }
 
 func enablePageLoadCollectors(ctx context.Context, client browserEventClient, sessionID string, includeSet map[string]bool) []map[string]string {
+	collectorErrors, _ := enablePageLoadCollectorsWithTeardown(ctx, client, sessionID, includeSet)
+	return collectorErrors
+}
+
+func enablePageLoadCollectorsWithTeardown(ctx context.Context, client browserEventClient, sessionID string, includeSet map[string]bool) ([]map[string]string, func(context.Context) []map[string]string) {
 	var collectorErrors []map[string]string
-	enable := func(name, method string) {
-		if err := client.CallSession(ctx, sessionID, method, map[string]any{}, nil); err != nil {
-			collectorErrors = append(collectorErrors, collectorError(name, err))
+	type enabledCollector struct {
+		name    string
+		disable string
+	}
+	enabled := make([]enabledCollector, 0)
+	enable := func(name, method, disable string, params map[string]any) {
+		if params == nil {
+			params = map[string]any{}
 		}
+		if err := client.CallSession(ctx, sessionID, method, params, nil); err != nil {
+			collectorErrors = append(collectorErrors, collectorError(name, err))
+			return
+		}
+		enabled = append(enabled, enabledCollector{name: name, disable: disable})
 	}
 	if includeSet["navigation"] {
-		enable("navigation", "Page.enable")
+		enable("navigation", "Page.enable", "Page.disable", nil)
 	}
 	if includeSet["console"] {
-		enable("runtime", "Runtime.enable")
-		enable("log", "Log.enable")
+		enable("runtime", "Runtime.enable", "Runtime.disable", nil)
+		enable("log", "Log.enable", "Log.disable", nil)
 	}
 	if includeSet["network"] {
-		enable("network", "Network.enable")
+		enable("network", "Network.enable", "Network.disable", boundedNetworkEnableParams())
 	}
 	if includeSet["performance"] {
-		enable("performance", "Performance.enable")
+		enable("performance", "Performance.enable", "Performance.disable", nil)
 	}
-	return collectorErrors
+	teardown := func(teardownCtx context.Context) []map[string]string {
+		var teardownErrors []map[string]string
+		for i := len(enabled) - 1; i >= 0; i-- {
+			collector := enabled[i]
+			if err := client.CallSession(teardownCtx, sessionID, collector.disable, map[string]any{}, nil); err != nil {
+				teardownErrors = append(teardownErrors, collectorError(collector.name+"_teardown", err))
+			}
+		}
+		return teardownErrors
+	}
+	return collectorErrors, teardown
+}
+
+func boundedNetworkEnableParams() map[string]any {
+	return map[string]any{
+		"maxTotalBufferSize":    1 << 20,
+		"maxResourceBufferSize": 256 << 10,
+		"maxPostDataSize":       64 << 10,
+	}
 }
 
 func collectPageLoadEvents(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, includeSet map[string]bool) ([]networkRequest, bool, []consoleMessage, bool, error) {
@@ -2419,7 +2661,7 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 			defer cancel()
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
-				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
+				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 			}
 			rawURL := strings.TrimSpace(args[0])
 			targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "visible-posts")

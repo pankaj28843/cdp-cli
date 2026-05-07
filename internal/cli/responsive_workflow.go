@@ -21,7 +21,7 @@ type responsiveAuditOptions struct {
 func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts responsiveAuditOptions) error {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
-		return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
+		return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 	}
 	defer closeClient(ctx)
 	targetID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "responsive-audit")

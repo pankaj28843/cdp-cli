@@ -66,6 +66,8 @@ func commandExamples(path string) []string {
 		"cdp doctor": {
 			"cdp doctor --json",
 			"cdp doctor --check daemon --json",
+			"cdp doctor --check browser-health --json",
+			"cdp doctor --check browser-budget --json",
 		},
 		"cdp explain-error": {
 			"cdp explain-error not_implemented --json",
@@ -78,12 +80,13 @@ func commandExamples(path string) []string {
 			"cdp schema error-envelope --json",
 		},
 		"cdp daemon start": {
-			"cdp daemon start --auto-connect --json",
+			"cdp daemon start --auto-connect --json # human-managed: requires Chrome Allow prompt when permission is pending",
 			"cdp daemon start --browser-url <browser-url> --json",
 			"cdp daemon start --autoConnect --json",
 		},
 		"cdp daemon status": {
 			"cdp daemon status --json",
+			"cdp daemon health --json",
 		},
 		"cdp daemon stop": {
 			"cdp daemon stop --json",
@@ -94,7 +97,7 @@ func commandExamples(path string) []string {
 			"cdp daemon restart --browser-url <browser-url> --json",
 		},
 		"cdp daemon keepalive": {
-			"cdp daemon keepalive --auto-connect --display :0 --json",
+			"cdp daemon keepalive --auto-connect --repair --display :0 --json",
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp daemon keepalive --connection default --probe auto --json",
 		},
@@ -419,13 +422,14 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow web-research": {
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json",
-			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --out-dir tmp/research/pages --json",
+			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json",
 		},
 		"cdp workflow web-research serp": {
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
 		},
 		"cdp workflow web-research extract": {
-			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 10 --out-dir tmp/research/pages --json",
+			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 4 --out-dir tmp/research/pages --json",
+			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --allow-over-budget --json # supervised high-stress cap",
 		},
 	}
 	examples["cdp focus"] = []string{"cdp focus input[name=email] --json"}

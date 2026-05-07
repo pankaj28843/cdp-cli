@@ -181,7 +181,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
-		return renderedExtractResult{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, []string{"cdp daemon start --auto-connect --json", "cdp connection current --json"})
+		return renderedExtractResult{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 	}
 	createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "rendered-extract")
 	if err != nil {
@@ -195,7 +195,12 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	}
 	defer session.Close(ctx)
 
-	collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
+	collectorErrors, teardownCollectors := enablePageLoadCollectorsWithTeardown(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
+	defer func() {
+		if teardownCollectors != nil {
+			_ = teardownCollectors(ctx)
+		}
+	}()
 	frameID, err := session.Navigate(ctx, rawURL)
 	if err != nil {
 		collectorErrors = append(collectorErrors, collectorError("navigation", err))
@@ -310,14 +315,24 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		}
 	}
 
+	teardownErrors := teardownCollectors(ctx)
+	teardownCollectors = nil
+	collectorErrors = append(collectorErrors, teardownErrors...)
+
 	closed := false
 	closeErr := ""
+	unclosedTargetPath := ""
 	if !options.KeepOpen {
 		if err := cdp.CloseTargetWithClient(ctx, client, createdID); err != nil {
 			closeErr = err.Error()
+			unclosedTargetPath, _ = writeArtifactFile(filepath.Join(options.OutDir, "unclosed-targets.txt"), []byte(createdID+"\t"+finalURL+"\t"+closeErr+"\n"))
 		} else {
 			closed = true
 		}
+	}
+	if unclosedTargetPath != "" {
+		artifactPaths["unclosed_targets_txt"] = unclosedTargetPath
+		artifactList = append(artifactList, map[string]any{"type": artifactPrefix + "-unclosed-targets", "path": unclosedTargetPath})
 	}
 
 	report := map[string]any{
@@ -349,8 +364,10 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			"created_page":     true,
 			"closed":           closed,
 			"close_error":      closeErr,
+			"unclosed_targets": unclosedTargetPath,
+			"cleanup_command":  "cdp page cleanup --workflow-created --close --json",
 			"collector_errors": collectorErrors,
-			"partial":          len(collectorErrors) > 0,
+			"partial":          len(collectorErrors) > 0 || closeErr != "",
 		},
 	}
 	if len(warnings) > 0 || len(collectorErrors) > 0 {

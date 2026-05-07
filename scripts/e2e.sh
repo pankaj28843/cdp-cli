@@ -41,7 +41,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities"))' >/dev/null
 "$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
-"$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages"))' >/dev/null
+"$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("budget"))' >/dev/null
 "$binary" schema targets --json | jq -e '.ok == true and .schema.name == "targets" and (.schema.fields | map(.name) | index("targets"))' >/dev/null
 "$binary" schema open --json | jq -e '.ok == true and .schema.name == "open" and (.schema.fields | map(.name) | index("page"))' >/dev/null
 "$binary" schema eval --json | jq -e '.ok == true and .schema.name == "eval" and (.schema.fields | map(.name) | index("result"))' >/dev/null
@@ -63,6 +63,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema daemon-restart --json | jq -e '.ok == true and .schema.name == "daemon-restart" and (.schema.fields | map(.name) | index("restart"))' >/dev/null
 "$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("lock"))' >/dev/null
 "$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("entries"))' >/dev/null
+"$binary" schema daemon-health --json | jq -e '.ok == true and .schema.name == "daemon-health" and (.schema.fields | map(.name) | index("health"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "click" --json | jq -e '.ok == true and .commands.name == "click" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "fill" --json | jq -e '.ok == true and .commands.name == "fill" and (.commands.examples | length > 0)' >/dev/null
@@ -117,7 +118,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "workflow rendered-extract" --json | jq -e '.ok == true and .commands.name == "rendered-extract" and (.commands.examples | any(contains("--serp google"))) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 "$binary" describe --command "workflow web-research" --json | jq -e '.ok == true and .commands.name == "web-research" and (.commands.children | map(.name) | index("extract"))' >/dev/null
 "$binary" describe --command "workflow web-research serp" --json | jq -e '.ok == true and .commands.name == "serp" and (.commands.examples | any(contains("--result-pages 3"))) and (.commands.flags[] | select(.name == "candidate-out")) and (.commands.flags[] | select(.name == "result-pages"))' >/dev/null
-"$binary" describe --command "workflow web-research extract" --json | jq -e '.ok == true and .commands.name == "extract" and (.commands.examples | any(contains("--parallel 10"))) and (.commands.flags[] | select(.name == "url-file"))' >/dev/null
+"$binary" describe --command "workflow web-research extract" --json | jq -e '.ok == true and .commands.name == "extract" and (.commands.examples | any(contains("--parallel 4"))) and (.commands.examples | any(contains("--parallel 10"))) and (.commands.flags[] | select(.name == "url-file"))' >/dev/null
 "$binary" describe --command "workflow verify" --json | jq -e '.ok == true and .commands.name == "verify" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow perf" --json | jq -e '.ok == true and .commands.name == "perf" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow debug-bundle" --json | jq -e '.ok == true and .commands.name == "debug-bundle" and (.commands.examples | length > 0)' >/dev/null
@@ -145,7 +146,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema workflow-page-load --json | jq -e '.ok == true and .schema.name == "workflow-page-load" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema workflow-rendered-extract --json | jq -e '.ok == true and .schema.name == "workflow-rendered-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
 "$binary" schema workflow-web-research-serp --json | jq -e '.ok == true and .schema.name == "workflow-web-research-serp" and (.schema.fields | map(.name) | index("candidates")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
-"$binary" schema workflow-web-research-extract --json | jq -e '.ok == true and .schema.name == "workflow-web-research-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("failures"))' >/dev/null
+"$binary" schema workflow-web-research-extract --json | jq -e '.ok == true and .schema.name == "workflow-web-research-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("failures")) and (.schema.fields[] | select(.name == "workflow").description | contains("backpressure"))' >/dev/null
 "$binary" schema workflow-verify --json | jq -e '.ok == true and .schema.name == "workflow-verify" and (.schema.fields | map(.name) | index("requests"))' >/dev/null
 "$binary" schema workflow-perf --json | jq -e '.ok == true and .schema.name == "workflow-perf" and (.schema.fields | map(.name) | index("performance"))' >/dev/null
 "$binary" schema workflow-debug-bundle --json | jq -e '.ok == true and .schema.name == "workflow-debug-bundle" and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
@@ -180,7 +181,7 @@ if [[ "$daemon_start_code" -ne 4 ]]; then
   echo "daemon start exit code = $daemon_start_code, want 4 while auto-connect permission is pending" >&2
   exit 1
 fi
-printf '%s\n' "$daemon_start_output" | jq -e '.ok == false and .code == "permission_pending" and (.remediation_commands | index("open chrome://inspect/#remote-debugging"))' >/dev/null
+printf '%s\n' "$daemon_start_output" | jq -e '.ok == false and .code == "permission_pending" and .human_required == true and .agent_should_stop == true and (.remediation_commands | index("open chrome://inspect/#remote-debugging")) and (.safe_diagnostics | index("cdp daemon status --json"))' >/dev/null
 "$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default" and .connection.mode == "auto_connect"' >/dev/null
 
 set +e
@@ -191,7 +192,7 @@ if [[ "$daemon_restart_code" -ne 4 ]]; then
   echo "daemon restart exit code = $daemon_restart_code, want 4 while auto-connect permission is pending" >&2
   exit 1
 fi
-printf '%s\n' "$daemon_restart_output" | jq -e '.ok == false and .code == "permission_pending" and (.remediation_commands | index("open chrome://inspect/#remote-debugging"))' >/dev/null
+printf '%s\n' "$daemon_restart_output" | jq -e '.ok == false and .code == "permission_pending" and .human_required == true and .agent_should_stop == true and (.remediation_commands | index("open chrome://inspect/#remote-debugging")) and (.safe_diagnostics | index("cdp daemon status --json"))' >/dev/null
 
 "$binary" connection add default --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
 "$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default"' >/dev/null

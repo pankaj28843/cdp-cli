@@ -18,7 +18,8 @@ command routing plus a cron-safe `daemon keepalive` command are in place.
 ```bash
 cdp daemon start --auto-connect --json
 cdp daemon status --json
-cdp daemon keepalive --auto-connect --display :0 --json
+cdp doctor --check browser-health --json
+cdp daemon keepalive --auto-connect --repair --display :0 --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
 cdp page select --url-contains example.com --json
 cdp open https://example.com --json
@@ -33,7 +34,7 @@ cdp storage cache get app-cache http://localhost:5173/api/me --json
 cdp storage service-workers list --url-contains localhost --json
 cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json
-cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --out-dir tmp/research/pages --json
+cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json
 cdp protocol search screenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
@@ -48,7 +49,7 @@ keepalive already owns that lock, and starts or repairs the daemon only when the
 selected connection is not healthy.
 
 ```cron
-* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1
+* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1
 ```
 
 ## Principles
@@ -56,7 +57,9 @@ selected connection is not healthy.
 - Agent-first help: the CLI should teach agents how to use it without source inspection.
 - Machine-readable by default when asked: `--json` and `--jq` are first-class.
 - Safe default-profile access: never silently expose browser data; make attachment explicit and inspectable.
+- Human-in-loop auto-connect: when Chrome approval is pending, agents should inspect `cdp daemon status --json`, `cdp doctor --check daemon --json`, and logs, then stop and report the required human Allow action instead of retrying start/stop loops.
 - Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
+- Browser resource budget: page creation is guarded by a default budget of 15 page tabs and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; cleanup should prefer `cdp page cleanup --workflow-created --close --json`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.
 
