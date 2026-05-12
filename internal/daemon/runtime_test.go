@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -81,6 +82,65 @@ func TestReadLogsTailsJSONLines(t *testing.T) {
 }
 
 const largeCDPResponseSize = 70 << 20
+
+func TestRuntimeClientRPCErrorCompatibility(t *testing.T) {
+	legacyRuntime := runtimeWithRPCResponse(t, daemon.RPCResponse{OK: false, Error: "legacy failure"})
+	_, err := daemon.CallRuntime(context.Background(), legacyRuntime, "", "Test.legacy", nil)
+	if err == nil || err.Error() != "legacy failure" {
+		t.Fatalf("legacy CallRuntime error = %v, want legacy failure", err)
+	}
+
+	structuredRuntime := runtimeWithRPCResponse(t, daemon.RPCResponse{
+		OK:    false,
+		Error: "legacy structured failure",
+		ErrorEnvelope: &daemon.RPCError{
+			Code:    "daemon_rpc_failed",
+			Class:   "connection",
+			Message: "structured failure",
+		},
+	})
+	_, err = daemon.CallRuntime(context.Background(), structuredRuntime, "", "Test.structured", nil)
+	var rpcErr *daemon.RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != "daemon_rpc_failed" || rpcErr.Class != "connection" || rpcErr.Error() != "structured failure" {
+		t.Fatalf("structured CallRuntime error = %#v, want RPCError with code/class/message", err)
+	}
+
+	var decoded daemon.RPCResponse
+	if err := json.Unmarshal([]byte(`{"ok":false,"error":"legacy","error_envelope":{"code":"daemon_rpc_failed","class":"connection","message":"structured failure"}}`), &decoded); err != nil {
+		t.Fatalf("Unmarshal structured RPCResponse returned error: %v", err)
+	}
+	if decoded.Error != "legacy" || decoded.ErrorEnvelope == nil || decoded.ErrorEnvelope.Code != "daemon_rpc_failed" || decoded.ErrorEnvelope.Class != "connection" || decoded.ErrorEnvelope.Error() != "structured failure" {
+		t.Fatalf("decoded RPCResponse = %+v, want legacy string plus structured envelope", decoded)
+	}
+}
+
+func TestRuntimeClientStructuredContextErrors(t *testing.T) {
+	timeoutRuntime := runtimeWithRPCResponse(t, daemon.RPCResponse{
+		OK: false,
+		ErrorEnvelope: &daemon.RPCError{
+			Code:    "timeout",
+			Class:   "timeout",
+			Message: context.DeadlineExceeded.Error(),
+		},
+	})
+	_, err := daemon.CallRuntime(context.Background(), timeoutRuntime, "", "Test.timeout", nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("structured timeout error = %v, want context deadline exceeded", err)
+	}
+
+	canceledRuntime := runtimeWithRPCResponse(t, daemon.RPCResponse{
+		OK: false,
+		ErrorEnvelope: &daemon.RPCError{
+			Code:    "canceled",
+			Class:   "canceled",
+			Message: context.Canceled.Error(),
+		},
+	})
+	_, err = daemon.CallRuntime(context.Background(), canceledRuntime, "", "Test.canceled", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("structured canceled error = %v, want context canceled", err)
+	}
+}
 
 func TestRuntimeClientEventAndProtocolRPC(t *testing.T) {
 	server := newRuntimeRPCFakeServer(t)
@@ -269,6 +329,34 @@ func newRuntimeRPCLargeFakeServer(t *testing.T) *httptest.Server {
 		}
 	})
 	return httptest.NewServer(mux)
+}
+
+func runtimeWithRPCResponse(t *testing.T, response daemon.RPCResponse) daemon.Runtime {
+	t.Helper()
+	stateDir := shortStateDir(t)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	socketPath := filepath.Join(stateDir, "daemon.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+	})
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var req daemon.RPCRequest
+		_ = json.NewDecoder(conn).Decode(&req)
+		_ = json.NewEncoder(conn).Encode(response)
+	}()
+	return daemon.Runtime{SocketPath: socketPath}
 }
 
 func fakeEndpoint(t *testing.T, rawURL string) string {

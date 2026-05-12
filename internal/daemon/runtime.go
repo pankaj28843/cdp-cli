@@ -67,9 +67,32 @@ type RPCRequest struct {
 }
 
 type RPCResponse struct {
-	OK     bool            `json:"ok"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	OK            bool            `json:"ok"`
+	Result        json.RawMessage `json:"result,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	ErrorEnvelope *RPCError       `json:"error_envelope,omitempty"`
+}
+
+type RPCError struct {
+	Code    string `json:"code,omitempty"`
+	Class   string `json:"class,omitempty"`
+	Message string `json:"message"`
+}
+
+func (e *RPCError) Error() string {
+	if e == nil {
+		return "daemon rpc call failed"
+	}
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	if strings.TrimSpace(e.Code) != "" {
+		return e.Code
+	}
+	if strings.TrimSpace(e.Class) != "" {
+		return e.Class
+	}
+	return "daemon rpc call failed"
 }
 
 type RuntimeClient struct {
@@ -426,24 +449,43 @@ func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string,
 		return nil, fmt.Errorf("read daemon rpc response %s: %w", method, err)
 	}
 	if !resp.OK {
-		if resp.Error == "" {
-			resp.Error = "daemon rpc call failed"
-		}
-		switch resp.Error {
-		case context.DeadlineExceeded.Error():
-			return nil, context.DeadlineExceeded
-		case context.Canceled.Error():
-			return nil, context.Canceled
-		}
-		if strings.Contains(resp.Error, context.DeadlineExceeded.Error()) {
-			return nil, context.DeadlineExceeded
-		}
-		if strings.Contains(resp.Error, context.Canceled.Error()) {
-			return nil, context.Canceled
-		}
-		return nil, fmt.Errorf("%s", resp.Error)
+		return nil, errorFromRPCResponse(resp)
 	}
 	return resp.Result, nil
+}
+
+func errorFromRPCResponse(resp RPCResponse) error {
+	if resp.ErrorEnvelope != nil {
+		rpcErr := *resp.ErrorEnvelope
+		if strings.TrimSpace(rpcErr.Message) == "" {
+			rpcErr.Message = resp.Error
+		}
+		if err := rpcContextError(rpcErr.Code, rpcErr.Class, rpcErr.Error()); err != nil {
+			return err
+		}
+		return &rpcErr
+	}
+	message := resp.Error
+	if strings.TrimSpace(message) == "" {
+		message = "daemon rpc call failed"
+	}
+	if err := rpcContextError("", "", message); err != nil {
+		return err
+	}
+	return fmt.Errorf("%s", message)
+}
+
+func rpcContextError(code, class, message string) error {
+	code = strings.ToLower(strings.TrimSpace(code))
+	class = strings.ToLower(strings.TrimSpace(class))
+	message = strings.ToLower(message)
+	if code == "timeout" || class == "timeout" || strings.Contains(message, context.DeadlineExceeded.Error()) {
+		return context.DeadlineExceeded
+	}
+	if code == "canceled" || code == "cancelled" || class == "canceled" || class == "cancelled" || strings.Contains(message, context.Canceled.Error()) {
+		return context.Canceled
+	}
+	return nil
 }
 
 func RuntimeSocketReady(ctx context.Context, runtime Runtime) bool {
@@ -552,11 +594,12 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 	defer conn.Close()
 	var req RPCRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+		_ = json.NewEncoder(conn).Encode(rpcErrorResponse("rpc_request_invalid", "usage", fmt.Sprintf("decode daemon rpc request: %v", err)))
 		return
 	}
 	req.Method = strings.TrimSpace(req.Method)
 	if req.Method == "" {
-		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: "daemon rpc method is required"})
+		_ = json.NewEncoder(conn).Encode(rpcErrorResponse("rpc_method_required", "usage", "daemon rpc method is required"))
 		return
 	}
 	callCtx := ctx
@@ -573,7 +616,7 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 	case RPCMethodReadEvent:
 		event, err := client.ReadEvent(callCtx)
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("rpc_read_event_failed", "connection", err))
 			return
 		}
 		writeRPCResult(conn, event)
@@ -581,19 +624,19 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 	case RPCMethodFetchProtocol:
 		protocolURL, err := protocolURLFromEndpoint(client.Endpoint())
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("protocol_endpoint_invalid", "connection", err))
 			return
 		}
 		protocol, err := cdp.FetchProtocol(callCtx, protocolURL)
 		if err != nil {
 			var httpErr cdp.ProtocolHTTPError
 			if !errors.As(err, &httpErr) {
-				_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+				_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("protocol_fetch_failed", "connection", err))
 				return
 			}
 			protocol, err = opts.fetchProtocolFallback(callCtx)
 			if err != nil {
-				_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: fmt.Sprintf("fetch protocol metadata: live endpoint returned %d; fallback failed: %v", httpErr.StatusCode, err)})
+				_ = json.NewEncoder(conn).Encode(rpcErrorResponse("protocol_fetch_failed", "connection", fmt.Sprintf("fetch protocol metadata: live endpoint returned %d; fallback failed: %v", httpErr.StatusCode, err)))
 				return
 			}
 			protocol.Source = "daemon-fallback"
@@ -623,10 +666,38 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 func writeRPCResult(conn net.Conn, value any) {
 	raw, err := json.Marshal(value)
 	if err != nil {
-		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+		_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("rpc_result_marshal_failed", "internal", err))
 		return
 	}
 	_ = json.NewEncoder(conn).Encode(RPCResponse{OK: true, Result: raw})
+}
+
+func rpcErrorResponseForError(code, class string, err error) RPCResponse {
+	if err == nil {
+		return rpcErrorResponse(code, class, "daemon rpc call failed")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return rpcErrorResponse("timeout", "timeout", context.DeadlineExceeded.Error())
+	}
+	if errors.Is(err, context.Canceled) {
+		return rpcErrorResponse("canceled", "canceled", context.Canceled.Error())
+	}
+	return rpcErrorResponse(code, class, err.Error())
+}
+
+func rpcErrorResponse(code, class, message string) RPCResponse {
+	if strings.TrimSpace(message) == "" {
+		message = "daemon rpc call failed"
+	}
+	return RPCResponse{
+		OK:    false,
+		Error: message,
+		ErrorEnvelope: &RPCError{
+			Code:    code,
+			Class:   class,
+			Message: message,
+		},
+	}
 }
 
 func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration, mu *sync.Mutex) error {

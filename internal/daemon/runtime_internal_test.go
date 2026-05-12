@@ -57,6 +57,46 @@ func TestRuntimeFetchProtocolFallsBackWhenLiveProtocolMissing(t *testing.T) {
 	}
 }
 
+func TestRuntimeStructuredDaemonKnownErrors(t *testing.T) {
+	fallback := func(context.Context) (cdp.Protocol, error) {
+		return cdp.Protocol{}, errors.New("synthetic fallback unavailable")
+	}
+
+	server := newProtocolFallbackFakeServer(t)
+	defer server.Close()
+
+	stateDir := shortInternalStateDir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- holdWithOptions(ctx, stateDir, fakeProtocolFallbackEndpoint(t, server.URL), "browser_url", 30*time.Second, holdOptions{fetchProtocolFallback: fallback})
+	}()
+	runtime := waitForProtocolFallbackRuntime(t, ctx, stateDir)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	_, err := CallRuntime(ctx, runtime, "", "", nil)
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != "rpc_method_required" || rpcErr.Class != "usage" || rpcErr.Message != "daemon rpc method is required" {
+		t.Fatalf("empty method error = %#v, want structured rpc_method_required usage", err)
+	}
+
+	_, err = RuntimeClient{Runtime: runtime}.FetchProtocol(ctx)
+	if !errors.As(err, &rpcErr) || rpcErr.Code != "protocol_fetch_failed" || rpcErr.Class != "connection" {
+		t.Fatalf("fetch protocol error = %#v, want structured protocol_fetch_failed connection", err)
+	}
+}
+
 func newProtocolFallbackFakeServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
