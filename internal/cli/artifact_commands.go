@@ -387,6 +387,7 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer cdp.CloseTargetWithClient(context.Background(), client, targetID)
 			target := cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, func(context.Context) error { return nil })
 			if err != nil {
@@ -400,6 +401,9 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 			defer execSessionJSON(context.Background(), session, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
 			if strings.TrimSpace(waitFor) != "" {
 				if _, err := waitForScreenshotRenderExpression(ctx, session, waitFor, 250*time.Millisecond); err != nil {
+					return err
+				}
+				if err := settleScreenshotRenderFrame(ctx, session); err != nil {
 					return err
 				}
 			} else if wait > 0 {
@@ -464,6 +468,23 @@ func waitForScreenshotRenderExpression(ctx context.Context, session *cdp.PageSes
 		err := evaluateJSONValue(ctx, session, waitEvalExpression(expression), "screenshot render wait-for", &result)
 		return result, err
 	})
+}
+
+func settleScreenshotRenderFrame(ctx context.Context, session *cdp.PageSession) error {
+	_, err := session.Evaluate(ctx, `(async () => {
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return true;
+})()`, true)
+	if err != nil {
+		return commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("settle screenshot render target %s: %v", session.TargetID, err),
+			ExitConnection,
+			[]string{"cdp pages --json", "cdp doctor --json"},
+		)
+	}
+	return nil
 }
 
 func (a *app) attachOrCreateScreenshotSession(ctx context.Context, targetID, urlContains, titleContains, navigateURL string) (*cdp.PageSession, cdp.TargetInfo, error) {

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,7 +28,7 @@ func TestRuntimeFetchProtocolFallsBackWhenLiveProtocolMissing(t *testing.T) {
 	server := newProtocolFallbackFakeServer(t)
 	defer server.Close()
 
-	stateDir := t.TempDir()
+	stateDir := shortInternalStateDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -95,6 +97,16 @@ func fakeProtocolFallbackEndpoint(t *testing.T, rawURL string) string {
 	u.Scheme = "ws"
 	u.Path = "/devtools/browser/test"
 	return u.String()
+}
+
+func shortInternalStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "cdp-cli-daemon-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "state")
 }
 
 func waitForProtocolFallbackRuntime(t *testing.T, ctx context.Context, stateDir string) Runtime {

@@ -106,6 +106,23 @@ func TestProjectConnectionUsesLongestPrefix(t *testing.T) {
 	}
 }
 
+func TestProjectConnectionMatchesSymlinkedTempPaths(t *testing.T) {
+	realRoot := t.TempDir()
+	symlinkRoot := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+	project := filepath.Join(symlinkRoot, "repo")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	file := state.File{Connections: []state.Connection{{Name: "project", Mode: "browser_url", Project: project}}}
+	got, ok := state.ProjectConnection(file, filepath.Join(realRoot, "repo"))
+	if !ok || got.Name != "project" {
+		t.Fatalf("ProjectConnection() = %+v ok=%v, want symlinked project", got, ok)
+	}
+}
+
 func TestPageSelectionForConnection(t *testing.T) {
 	file := state.UpsertPageSelection(state.File{}, state.PageSelection{
 		Connection: "local",

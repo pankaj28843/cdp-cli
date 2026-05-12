@@ -28,7 +28,29 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
 		os.Exit(cli.Execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr, cli.BuildInfo{}))
 	}
-	os.Exit(m.Run())
+	os.Exit(runWithShortTempDir(m.Run))
+}
+
+func runWithShortTempDir(run func() int) int {
+	if os.Getenv("CDP_CLI_TEST_SHORT_TMPDIR") == "1" {
+		return run()
+	}
+	dir, err := os.MkdirTemp("/tmp", "cdp-cli-test-*")
+	if err != nil {
+		return run()
+	}
+	defer os.RemoveAll(dir)
+	oldTMPDIR, oldMarker := os.Getenv("TMPDIR"), os.Getenv("CDP_CLI_TEST_SHORT_TMPDIR")
+	_ = os.Setenv("TMPDIR", dir)
+	_ = os.Setenv("CDP_CLI_TEST_SHORT_TMPDIR", "1")
+	code := run()
+	_ = os.Setenv("TMPDIR", oldTMPDIR)
+	if oldMarker == "" {
+		_ = os.Unsetenv("CDP_CLI_TEST_SHORT_TMPDIR")
+	} else {
+		_ = os.Setenv("CDP_CLI_TEST_SHORT_TMPDIR", oldMarker)
+	}
+	return code
 }
 
 func TestVersionJSON(t *testing.T) {
@@ -406,7 +428,7 @@ func TestPagesUsesRunningDaemonByDefaultJSON(t *testing.T) {
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
-	stateDir := t.TempDir()
+	stateDir := shortCLIStateDir(t)
 	var addOut, addErr bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"connection", "add", "default", "--auto-connect", "--state-dir", stateDir, "--json"}, &addOut, &addErr, cli.BuildInfo{})
 	if code != cli.ExitOK {
@@ -4326,7 +4348,7 @@ func fakeWebSocketEndpoint(t *testing.T, rawURL string) string {
 
 func startFakeDaemon(t *testing.T, server *httptest.Server, connectionMode string) string {
 	t.Helper()
-	stateDir := t.TempDir()
+	stateDir := shortCLIStateDir(t)
 	t.Setenv("CDP_STATE_DIR", stateDir)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -4346,6 +4368,16 @@ func startFakeDaemon(t *testing.T, server *httptest.Server, connectionMode strin
 		}
 	})
 	return stateDir
+}
+
+func shortCLIStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "cdp-cli-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "state")
 }
 
 func waitForDaemonRuntime(t *testing.T, ctx context.Context, stateDir string) {

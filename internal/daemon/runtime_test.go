@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,11 +51,14 @@ func TestRuntimeEndpointPersistsButDoesNotMarshal(t *testing.T) {
 }
 
 func TestReadLogsTailsJSONLines(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := shortStateDir(t)
 	content := strings.Join([]string{
 		`{"time":"2026-04-29T00:00:00Z","level":"info","event":"hold_start","pid":123}`,
 		`{"time":"2026-04-29T00:00:01Z","level":"info","event":"rpc_listening","pid":123}`,
 	}, "\n") + "\n"
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
 	if err := os.WriteFile(daemon.RuntimeLogPath(stateDir), []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
@@ -82,7 +86,7 @@ func TestRuntimeClientEventAndProtocolRPC(t *testing.T) {
 	server := newRuntimeRPCFakeServer(t)
 	defer server.Close()
 
-	stateDir := t.TempDir()
+	stateDir := shortStateDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -133,7 +137,7 @@ func TestRuntimeClientReadsVeryLargeCDPResponsesAndStaysRunning(t *testing.T) {
 	server := newRuntimeRPCLargeFakeServer(t)
 	defer server.Close()
 
-	stateDir := t.TempDir()
+	stateDir := shortStateDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -276,6 +280,16 @@ func fakeEndpoint(t *testing.T, rawURL string) string {
 	u.Scheme = "ws"
 	u.Path = "/devtools/browser/test"
 	return u.String()
+}
+
+func shortStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "cdp-cli-daemon-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "state")
 }
 
 func waitForRuntime(t *testing.T, ctx context.Context, stateDir string) daemon.Runtime {

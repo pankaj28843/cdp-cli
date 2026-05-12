@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/config"
@@ -25,6 +26,7 @@ func TestResolvePathExplicit(t *testing.T) {
 }
 
 func TestResolvePathDefault(t *testing.T) {
+	t.Setenv("HOME", "/tmp/test-home")
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/test-config")
 
 	got, err := config.ResolvePath("")
@@ -33,6 +35,9 @@ func TestResolvePathDefault(t *testing.T) {
 	}
 
 	want := filepath.Join("/tmp/test-config", "cdp-cli", "config.json")
+	if runtime.GOOS == "darwin" {
+		want = filepath.Join("/tmp/test-home", "Library", "Application Support", "cdp-cli", "config.json")
+	}
 	if got != want {
 		t.Fatalf("ResolvePath() = %q, want %q", got, want)
 	}

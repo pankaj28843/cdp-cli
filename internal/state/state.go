@@ -192,14 +192,14 @@ func CurrentConnection(file File) (Connection, bool) {
 }
 
 func ProjectConnection(file File, cwd string) (Connection, bool) {
-	cwd = filepath.Clean(cwd)
+	cwd = comparableProjectPath(cwd)
 	var best Connection
 	bestLen := -1
 	for _, conn := range file.Connections {
 		if conn.Project == "" {
 			continue
 		}
-		project := filepath.Clean(conn.Project)
+		project := comparableProjectPath(conn.Project)
 		if cwd != project && !strings.HasPrefix(cwd, project+string(os.PathSeparator)) {
 			continue
 		}
@@ -209,6 +209,15 @@ func ProjectConnection(file File, cwd string) (Connection, bool) {
 		}
 	}
 	return best, bestLen >= 0
+}
+
+func comparableProjectPath(path string) string {
+	cleaned := filepath.Clean(path)
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return cleaned
+	}
+	return filepath.Clean(resolved)
 }
 
 func UpsertPageSelection(file File, selection PageSelection) File {
