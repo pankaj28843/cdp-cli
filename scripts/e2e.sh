@@ -94,8 +94,10 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "layout overflow" --json | jq -e '.ok == true and .commands.name == "overflow" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "wait text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "wait selector" --json | jq -e '.ok == true and .commands.name == "selector" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "wait eval" --json | jq -e '.ok == true and .commands.name == "eval" and (.commands.examples | any(contains("__rendered")))' >/dev/null
 "$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | any(contains("--diagnose-empty"))) and (.commands.flags[] | select(.name == "debug-empty"))' >/dev/null
-"$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | any(contains("--element"))) and (.commands.flags[] | select(.name == "crop")) and (.commands.flags[] | select(.name == "navigate"))' >/dev/null
+"$binary" describe --command "screenshot render" --json | jq -e '.ok == true and .commands.name == "render" and (.commands.examples | any(contains("--serve"))) and (.commands.flags[] | select(.name == "wait-for"))' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--failed")))' >/dev/null
 "$binary" describe --command "network capture" --json | jq -e '.ok == true and .commands.name == "capture" and (.commands.examples | any(contains("--redact")))' >/dev/null

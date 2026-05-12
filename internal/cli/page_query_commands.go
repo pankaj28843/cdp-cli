@@ -92,14 +92,16 @@ type layoutOverflowItem struct {
 }
 
 type waitResult struct {
-	Kind         string     `json:"kind"`
-	Needle       string     `json:"needle,omitempty"`
-	Selector     string     `json:"selector,omitempty"`
-	Matched      bool       `json:"matched"`
-	Count        int        `json:"count,omitempty"`
-	ElapsedMS    int64      `json:"elapsed_ms"`
-	PollInterval string     `json:"poll_interval"`
-	Error        *evalError `json:"error,omitempty"`
+	Kind         string          `json:"kind"`
+	Needle       string          `json:"needle,omitempty"`
+	Selector     string          `json:"selector,omitempty"`
+	Expression   string          `json:"expression,omitempty"`
+	Matched      bool            `json:"matched"`
+	Count        int             `json:"count,omitempty"`
+	Value        json.RawMessage `json:"value,omitempty"`
+	ElapsedMS    int64           `json:"elapsed_ms"`
+	PollInterval string          `json:"poll_interval"`
+	Error        *evalError      `json:"error,omitempty"`
 }
 
 type evalError struct {
@@ -387,6 +389,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newWaitTextCommand())
 	cmd.AddCommand(a.newWaitSelectorCommand())
+	cmd.AddCommand(a.newWaitEvalCommand())
 	return cmd
 }
 
@@ -477,6 +480,56 @@ func (a *app) newWaitSelectorCommand() *cobra.Command {
 			result.ElapsedMS = time.Since(start).Milliseconds()
 			result.PollInterval = poll.String()
 			return a.render(ctx, fmt.Sprintf("matched selector\t%s", args[0]), map[string]any{
+				"ok":     true,
+				"target": pageRow(target),
+				"wait":   result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
+	return cmd
+}
+
+func (a *app) newWaitEvalCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
+	var poll time.Duration
+	cmd := &cobra.Command{
+		Use:   "eval <expression>",
+		Short: "Wait until a JavaScript expression evaluates truthy",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait eval 'window.__rendered === true' --poll 250ms --json"})
+			}
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			start := time.Now()
+			result, err := waitForPageCondition(ctx, session, poll, func() (waitResult, error) {
+				var result waitResult
+				err := evaluateJSONValue(ctx, session, waitEvalExpression(args[0]), "wait eval", &result)
+				return result, err
+			})
+			if err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, []string{"cdp wait eval 'window.__rendered === true' --json"})
+			}
+			result.ElapsedMS = time.Since(start).Milliseconds()
+			result.PollInterval = poll.String()
+			return a.render(ctx, fmt.Sprintf("matched eval\t%s", args[0]), map[string]any{
 				"ok":     true,
 				"target": pageRow(target),
 				"wait":   result,
@@ -1166,4 +1219,18 @@ func waitSelectorExpression(selector string) string {
     return { kind: "selector", selector, matched: false, count: 0, error: { name: error.name, message: error.message }, marker };
   }
 })()`, string(selectorJSON))
+}
+
+func waitEvalExpression(expression string) string {
+	expressionJSON, _ := json.Marshal(expression)
+	return fmt.Sprintf(`(async () => {
+  const marker = "__cdp_cli_wait_eval__";
+  const expression = %s;
+  try {
+    const value = await (0, eval)(expression);
+    return { kind: "eval", expression, matched: !!value, value, marker };
+  } catch (error) {
+    return { kind: "eval", expression, matched: false, error: { name: error.name, message: error.message }, marker };
+  }
+})()`, string(expressionJSON))
 }

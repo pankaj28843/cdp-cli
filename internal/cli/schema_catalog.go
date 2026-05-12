@@ -348,7 +348,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait": {
 			Name:        "wait",
-			Description: "Page condition wait result for text or selector checks.",
+			Description: "Page condition wait result for text, selector, or JavaScript expression checks.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
@@ -373,7 +373,8 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when screenshot capture completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "screenshot", Type: "artifact", Required: true, Description: "Path, byte count, format, and capture mode."},
+				{Name: "screenshot", Type: "artifact", Required: true, Description: "Path, byte count, format, capture mode, optional element clip, crop, and navigation metadata."},
+				{Name: "render", Type: "object", Required: false, Description: "HTML render source URL, viewport, serve mode, and wait metadata for screenshot render."},
 				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Artifact references for agent workflows."},
 			},
 		},

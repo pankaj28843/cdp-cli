@@ -237,6 +237,10 @@ func commandExamples(path string) []string {
 			"cdp wait selector main --timeout 10s --json",
 			"cdp wait selector '[data-ready=\"true\"]' --poll 500ms --json",
 		},
+		"cdp wait eval": {
+			"cdp wait eval 'window.__rendered === true' --timeout 10s --json",
+			"cdp wait eval 'document.readyState === \"complete\"' --poll 500ms --json",
+		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",
@@ -246,6 +250,13 @@ func commandExamples(path string) []string {
 			"cdp screenshot --out tmp/page.png --json",
 			"cdp screenshot --target <target-id> --full-page --out tmp/page.png --json",
 			"cdp screenshot --url-contains localhost --out tmp/page.png --json",
+			"cdp screenshot --navigate https://example.com --wait 2s --out tmp/page.png --json",
+			"cdp screenshot --element '.mermaid svg' --out tmp/diagram.png --json",
+			"cdp screenshot --out tmp/page.png --crop --crop-padding 10 --json",
+		},
+		"cdp screenshot render": {
+			"cdp screenshot render ./diagram.html --out tmp/diagram.png --width 1800 --height 1100 --dpr 2 --wait-for 'window.__rendered' --json",
+			"cdp screenshot render ./diagram.html --out tmp/diagram.png --serve --wait 3s --crop --json",
 		},
 		"cdp console": {
 			"cdp console --json",

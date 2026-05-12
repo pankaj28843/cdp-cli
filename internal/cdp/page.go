@@ -37,6 +37,15 @@ type ScreenshotOptions struct {
 	Format   string
 	Quality  int
 	FullPage bool
+	Clip     *ScreenshotClip
+}
+
+type ScreenshotClip struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+	Scale  float64 `json:"scale"`
 }
 
 type ScreenshotResult struct {
@@ -248,6 +257,13 @@ func (s *PageSession) CaptureScreenshot(ctx context.Context, opts ScreenshotOpti
 	}
 	if opts.FullPage {
 		params["captureBeyondViewport"] = true
+	}
+	if opts.Clip != nil {
+		clip := *opts.Clip
+		if clip.Scale == 0 {
+			clip.Scale = 1
+		}
+		params["clip"] = clip
 	}
 	var result struct {
 		Data string `json:"data"`

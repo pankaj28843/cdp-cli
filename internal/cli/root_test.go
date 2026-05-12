@@ -1194,6 +1194,36 @@ func TestWaitSelectorJSON(t *testing.T) {
 	}
 }
 
+func TestWaitEvalJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "eval", "window.__rendered === true", "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait eval exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind       string          `json:"kind"`
+			Expression string          `json:"expression"`
+			Matched    bool            `json:"matched"`
+			Value      json.RawMessage `json:"value"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait eval output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "eval" || got.Wait.Expression != "window.__rendered === true" || !got.Wait.Matched || string(got.Wait.Value) != "true" {
+		t.Fatalf("wait eval output = %+v, want matched eval", got)
+	}
+}
+
 func TestNetworkJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -2978,6 +3008,78 @@ func TestScreenshotJSON(t *testing.T) {
 	}
 }
 
+func TestScreenshotRenderJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "diagram.html")
+	if err := os.WriteFile(htmlPath, []byte("<main>ready</main>"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	outPath := filepath.Join(dir, "diagram.png")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "render", htmlPath, "--out", outPath, "--width", "800", "--height", "600", "--dpr", "2", "--wait-for", "window.__rendered === true", "--serve", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("screenshot render exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Render struct {
+			Served   bool   `json:"served"`
+			WaitFor  string `json:"wait_for"`
+			Viewport struct {
+				Width int `json:"width"`
+			} `json:"viewport"`
+		} `json:"render"`
+		Screenshot struct {
+			Path string `json:"path"`
+		} `json:"screenshot"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("screenshot render output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Render.Served || got.Render.WaitFor != "window.__rendered === true" || got.Render.Viewport.Width != 800 || got.Screenshot.Path != outPath {
+		t.Fatalf("screenshot render output = %+v, want render metadata", got)
+	}
+}
+
+func TestShotElementNavJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "element.png")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "--out", outPath, "--element", "main", "--navigate", "https://example.test/next", "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("screenshot element exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK         bool `json:"ok"`
+		Screenshot struct {
+			Element  string `json:"element"`
+			Navigate struct {
+				URL string `json:"url"`
+			} `json:"navigate"`
+			Clip struct {
+				Width float64 `json:"width"`
+			} `json:"clip"`
+		} `json:"screenshot"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("screenshot element output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Screenshot.Element != "main" || got.Screenshot.Navigate.URL != "https://example.test/next" || got.Screenshot.Clip.Width <= 0 {
+		t.Fatalf("screenshot element output = %+v, want element metadata", got)
+	}
+}
+
 func TestWorkflowVisiblePostsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -4385,6 +4487,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Page.navigateToHistoryEntry" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.enable" {
@@ -5023,6 +5127,30 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 					"selector": "main",
 					"matched":  true,
 					"count":    1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_screenshot_element__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"found": true,
+					"rect":  map[string]any{"x": 10, "y": 20, "width": 300, "height": 200},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_wait_eval__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"kind":       "eval",
+					"expression": "window.__rendered === true",
+					"matched":    true,
+					"value":      true,
 				},
 			},
 		}
