@@ -777,6 +777,32 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_observe__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": "button",
+					"count":    1,
+					"interactive": []map[string]any{{
+						"ref":      "obs:0",
+						"index":    0,
+						"tag":      "button",
+						"role":     "button",
+						"name":     "Save changes",
+						"selector": "button#save",
+						"text":     "Save changes",
+						"disabled": false,
+						"visible":  true,
+						"rect":     map[string]any{"x": 10, "y": 20, "width": 100, "height": 32},
+					}},
+					"warnings": []string{},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_dom_query__") {
 		return map[string]any{
 			"result": map[string]any{

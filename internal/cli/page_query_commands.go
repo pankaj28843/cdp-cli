@@ -45,6 +45,30 @@ type domQueryResult struct {
 	Error    *evalError `json:"error,omitempty"`
 }
 
+type observeResult struct {
+	URL         string        `json:"url"`
+	Title       string        `json:"title"`
+	Selector    string        `json:"selector"`
+	Count       int           `json:"count"`
+	Interactive []observeNode `json:"interactive"`
+	Warnings    []string      `json:"warnings,omitempty"`
+	Error       *evalError    `json:"error,omitempty"`
+}
+
+type observeNode struct {
+	Ref      string       `json:"ref"`
+	Index    int          `json:"index"`
+	Tag      string       `json:"tag"`
+	Role     string       `json:"role,omitempty"`
+	Name     string       `json:"name,omitempty"`
+	Selector string       `json:"selector"`
+	Text     string       `json:"text,omitempty"`
+	Href     string       `json:"href,omitempty"`
+	Disabled bool         `json:"disabled"`
+	Visible  bool         `json:"visible"`
+	Rect     snapshotRect `json:"rect"`
+}
+
 type domNode struct {
 	UID       string       `json:"uid"`
 	Index     int          `json:"index"`
@@ -107,6 +131,56 @@ type waitResult struct {
 type evalError struct {
 	Name    string `json:"name"`
 	Message string `json:"message"`
+}
+
+func (a *app) newObserveCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
+	var selector string
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "observe",
+		Short: "Summarize visible interactive elements for agent planning",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			if limit < 0 {
+				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp observe --limit 30 --json"})
+			}
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			var result observeResult
+			if err := evaluateJSONValue(ctx, session, observeExpression(selector, limit), "observe", &result); err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return invalidSelectorError(selector, result.Error, "cdp observe --selector 'button, a' --json")
+			}
+			lines := make([]string, 0, len(result.Interactive))
+			for _, node := range result.Interactive {
+				label := firstNonEmpty(node.Name, node.Text, node.Href, node.Selector)
+				lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s", node.Ref, node.Role, node.Selector, label))
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+				"ok":          true,
+				"target":      pageRow(target),
+				"observe":     result,
+				"interactive": result.Interactive,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&selector, "selector", "a[href], button, input, textarea, select, [role=button], [role=link], [role=menuitem], [contenteditable=true]", "CSS selector for candidate interactive elements")
+	cmd.Flags().IntVar(&limit, "limit", 50, "maximum interactive elements to return; use 0 for no limit")
+	return cmd
 }
 
 func (a *app) newTextCommand() *cobra.Command {
@@ -1031,6 +1105,95 @@ func dragExpression(selector string, dx, dy int) string {
   element.dispatchEvent(new MouseEvent("mouseup", { clientX: endX, clientY: endY, bubbles: true, cancelable: true, button: 0, view: window }));
   return { url: location.href, title: document.title, selector, count: elements.length, dragged: true, delta_x: deltaX, delta_y: deltaY, start_x: startX, start_y: startY, end_x: endX, end_y: endY, marker };
 })()`, jsStringLiteral(selector), dx, dy)
+}
+
+func observeExpression(selector string, limit int) string {
+	selectorJSON, _ := json.Marshal(selector)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_observe__";
+  const selector = %s;
+  const limit = %d;
+  const normalize = (value) => (value || "").replace(/\s+/g, " ").trim();
+  const cssEscape = (value) => {
+    if (window.CSS && CSS.escape) return CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  };
+  const roleFor = (element) => {
+    const explicit = element.getAttribute("role") || "";
+    if (explicit) return explicit;
+    const tag = element.tagName.toLowerCase();
+    if (tag === "a" && element.href) return "link";
+    if (tag === "button") return "button";
+    if (tag === "select") return "combobox";
+    if (tag === "textarea") return "textbox";
+    if (tag === "input") {
+      const type = (element.getAttribute("type") || "text").toLowerCase();
+      if (["button", "submit", "reset"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      return "textbox";
+    }
+    return tag;
+  };
+  const nameFor = (element) => {
+    const labelledBy = element.getAttribute("aria-labelledby") || "";
+    if (labelledBy) {
+      const labelled = labelledBy.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((el) => normalize(el.innerText || el.textContent)).filter(Boolean).join(" ");
+      if (labelled) return labelled;
+    }
+    const id = element.id || "";
+    if (id) {
+      const label = document.querySelector('label[for="' + cssEscape(id) + '"]');
+      if (label) {
+        const text = normalize(label.innerText || label.textContent);
+        if (text) return text;
+      }
+    }
+    return normalize(element.getAttribute("aria-label") || element.getAttribute("alt") || element.getAttribute("title") || element.innerText || element.textContent || element.value || "");
+  };
+  const selectorFor = (element) => {
+    const tag = element.tagName.toLowerCase();
+    if (element.id) return tag + "#" + cssEscape(element.id);
+    const aria = element.getAttribute("aria-label");
+    if (aria) return tag + '[aria-label="' + aria.replace(/"/g, '\\"') + '"]';
+    const testid = element.getAttribute("data-testid") || element.getAttribute("data-test") || element.getAttribute("data-cy");
+    if (testid) return tag + '[data-testid="' + testid.replace(/"/g, '\\"') + '"]';
+    const classes = Array.from(element.classList || []).slice(0, 2).map(cssEscape).join(".");
+    return classes ? tag + "." + classes : tag;
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, interactive: [], error: { name: error.name, message: error.message } };
+  }
+  const interactive = [];
+  for (let index = 0; index < elements.length; index++) {
+    const element = elements[index];
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    if (!visible) continue;
+    const text = normalize(element.innerText || element.textContent || "").slice(0, 240);
+    interactive.push({
+      ref: "obs:" + interactive.length,
+      index,
+      tag: element.tagName.toLowerCase(),
+      role: roleFor(element),
+      name: nameFor(element).slice(0, 240),
+      selector: selectorFor(element),
+      text,
+      href: element.href || "",
+      disabled: Boolean(element.disabled || element.getAttribute("aria-disabled") === "true"),
+      visible,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    });
+    if (limit > 0 && interactive.length >= limit) break;
+  }
+  const warnings = [];
+  if (elements.length > interactive.length && limit > 0 && interactive.length >= limit) warnings.push("result limited; rerun with --limit 0 for all visible candidates");
+  return { url: location.href, title: document.title, selector, count: interactive.length, interactive, warnings, marker };
+})()`, string(selectorJSON), limit)
 }
 
 func textExpression(selector string, limit, minChars int) string {

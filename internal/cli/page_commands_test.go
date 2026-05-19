@@ -661,6 +661,47 @@ func TestHTMLCommandEmptyDiagnosticsJSON(t *testing.T) {
 	}
 }
 
+func TestObserveJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"observe", "--selector", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("observe exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK      bool `json:"ok"`
+		Observe struct {
+			Count       int `json:"count"`
+			Interactive []struct {
+				Ref      string `json:"ref"`
+				Role     string `json:"role"`
+				Name     string `json:"name"`
+				Selector string `json:"selector"`
+				Visible  bool   `json:"visible"`
+			} `json:"interactive"`
+		} `json:"observe"`
+		Interactive []struct {
+			Ref string `json:"ref"`
+		} `json:"interactive"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("observe output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Observe.Count != 1 || len(got.Interactive) != 1 {
+		t.Fatalf("observe output = %+v, want one interactive element", got)
+	}
+	node := got.Observe.Interactive[0]
+	if node.Ref != "obs:0" || node.Role != "button" || node.Name != "Save changes" || node.Selector != "button#save" || !node.Visible {
+		t.Fatalf("observe interactive node = %+v, want stable agent action hint", node)
+	}
+}
+
 func TestDOMQueryJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

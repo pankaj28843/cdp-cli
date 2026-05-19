@@ -308,6 +308,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "frames", Type: "array<frame_summary>", Required: true, Description: "Flattened frame metadata including id, URL, parent id, and child count."},
 			},
 		},
+		"observe": {
+			Name:        "observe",
+			Description: "Visible interactive element summaries for agent planning before action.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when observation completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "observe", Type: "observe_result", Required: true, Description: "URL, title, selector, count, and visible interactive candidates."},
+				{Name: "interactive", Type: "array<observe_node>", Required: true, Description: "Interactive candidates duplicated for jq convenience."},
+			},
+		},
 		"html": {
 			Name:        "html",
 			Description: "Compact HTML extracted from a CSS selector.",

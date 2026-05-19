@@ -213,7 +213,7 @@ func capabilityCatalog() []map[string]any {
 		capabilityRow("connection", "implemented", "connection, daemon, doctor", []string{"cdp connection current --json", "cdp daemon status --json"}, []string{"cdp doctor --json"}),
 		capabilityRow("target_discovery", "implemented", "targets, pages", []string{"cdp targets --json", "cdp pages --json"}, []string{"cdp doctor --check browser-budget --json"}),
 		capabilityRow("page_control", "implemented", "page reload/back/forward/activate/close, open", []string{"cdp page select --url-contains example --json", "cdp page reload --target <target-id> --json"}, []string{"cdp pages --json"}),
-		capabilityRow("page_inspection", "implemented", "eval, text, html, snapshot, dom query, css inspect, layout overflow", []string{"cdp snapshot --json", "cdp eval 'document.title' --json"}, []string{"cdp text body --json"}),
+		capabilityRow("page_inspection", "implemented", "eval, observe, text, html, snapshot, dom query, css inspect, layout overflow", []string{"cdp snapshot --json", "cdp eval 'document.title' --json", "cdp observe --help"}, []string{"cdp text body --json"}),
 		capabilityRow("artifacts", "implemented", "screenshot", []string{"cdp screenshot --out tmp/page.png --json"}, []string{"cdp workflow debug-bundle --out-dir tmp/debug-bundle --json"}),
 		capabilityRow("console", "implemented", "console, workflow console-errors", []string{"cdp console --errors --wait 1s --json"}, []string{"cdp workflow console-errors --wait 1s --json"}),
 		capabilityRow("network", "implemented", "network, workflow network-failures", []string{"cdp network --wait 1s --json"}, []string{"cdp workflow network-failures --wait 1s --json"}),

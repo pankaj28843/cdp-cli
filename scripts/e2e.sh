@@ -81,6 +81,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "frames" --json | jq -e '.ok == true and .commands.name == "frames" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "pages" --json | jq -e '.ok == true and .commands.name == "pages" and (.commands.examples | any(contains("--title-contains")))' >/dev/null
 "$binary" describe --command "eval" --json | jq -e '.ok == true and .commands.name == "eval" and (.commands.examples | any(contains("--title-contains")))' >/dev/null
+"$binary" describe --command "observe" --json | jq -e '.ok == true and .commands.name == "observe" and (.commands.examples | any(contains("observe")))' >/dev/null
+"$binary" schema observe --json | jq -e '.ok == true and .schema.name == "observe"' >/dev/null
 "$binary" describe --command "page select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("--url-contains")))' >/dev/null
 "$binary" describe --command "page reload" --json | jq -e '.ok == true and .commands.name == "reload" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "page back" --json | jq -e '.ok == true and .commands.name == "back" and (.commands.examples | length > 0)' >/dev/null

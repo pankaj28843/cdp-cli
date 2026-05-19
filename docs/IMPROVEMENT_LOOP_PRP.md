@@ -4,6 +4,17 @@
 
 Keep improving cdp-cli as an agent-experience-first browser CLI while dogfooding the installed `cdp` binary. The active PR must always reflect the overall change set in title and body.
 
+## Status Snapshot (2026-05-20 02:45 Europe/Copenhagen)
+
+- Current phase/step: Phase 6 observe command implemented after the observe/act/extract research lane timed out with no usable written proposal.
+- Repo reconciliation: branch `improve/formal-browser-invariants`, PR #1 open at `161b000`; local observe changes pending commit/push.
+- Research evidence: prior research lanes and direct inspection support an agent-first `observe` primitive that is read-only, bounded, selector-scoped, and returns stable action hints before `click`/`fill`/`type`. The timed-out observe/act/extract subagent produced only partial progress metadata, so implementation used existing `dom query`, `text`, and accessibility-style extraction patterns in this repo.
+- Iteration contract: candidate=`cdp observe` read-only visible interactive element summaries; checker=`make verify && make install && make e2e-installed`; repair_budget=2.
+- Commands/evidence run: focused `go test ./internal/cli -run 'TestObserveJSON|TestDoctorCapabilitiesJSON|TestDescribeJSON|TestSchema' -count=1` passed; `make verify` passed; `make install` and `make e2e-installed` passed; installed `cdp observe --help`, `cdp describe --command observe --json --jq ...`, and `cdp schema observe --json --jq ...` verified help, discoverability, and schema.
+- Files changed since last snapshot: `docs/IMPROVEMENT_LOOP_PRP.md`, `internal/cli/command_describe_helpers.go`, `internal/cli/info_commands.go`, `internal/cli/page_commands_test.go`, `internal/cli/page_query_commands.go`, `internal/cli/root.go`, `internal/cli/schema_catalog.go`, `internal/cli/test_harness_test.go`, `scripts/e2e.sh`.
+- Stop tag: continuing.
+- Exact next action: commit/push observe, refresh PR #1 body, then choose whether to continue into `extract` or stop the Ralph loop for review.
+
 ## Status Snapshot (2026-05-20 02:05 Europe/Copenhagen)
 
 - Current phase/step: Phase 5 CPU emulation implementation in progress after dogfooding CDP Emulation docs.
