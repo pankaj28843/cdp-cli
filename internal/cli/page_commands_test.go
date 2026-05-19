@@ -1179,6 +1179,67 @@ func TestScreenshotRenderJSON(t *testing.T) {
 	}
 }
 
+func TestEmulateUserAgentJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "user-agent", "--user-agent", "AgentTest/1.0", "--platform", "Linux", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate user-agent exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			UserAgent      string `json:"user_agent"`
+			Platform       string `json:"platform"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate user-agent output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.UserAgent != "AgentTest/1.0" || got.Emulation.Platform != "Linux" || !strings.Contains(got.Emulation.CleanupCommand, "cdp emulate clear") {
+		t.Fatalf("emulate user-agent output = %+v, want applied override and cleanup command", got)
+	}
+}
+
+func TestEmulateGeolocationJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "geolocation", "--latitude", "55.6761", "--longitude", "12.5683", "--accuracy", "50", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate geolocation exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			Geolocation struct {
+				Latitude  float64 `json:"latitude"`
+				Longitude float64 `json:"longitude"`
+				Accuracy  float64 `json:"accuracy"`
+			} `json:"geolocation"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate geolocation output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.Geolocation.Latitude != 55.6761 || got.Emulation.Geolocation.Longitude != 12.5683 || got.Emulation.Geolocation.Accuracy != 50 || !strings.Contains(got.Emulation.CleanupCommand, "cdp emulate clear") {
+		t.Fatalf("emulate geolocation output = %+v, want applied override and cleanup command", got)
+	}
+}
+
 func TestShotElementNavJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},

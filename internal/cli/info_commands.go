@@ -224,7 +224,8 @@ func capabilityCatalog() []map[string]any {
 		capabilityRow("performance", "implemented", "perf summary, workflow perf, workflow page-load metrics", []string{"cdp perf summary --duration 1s --json"}, []string{"cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json"}),
 		capabilityRow("memory", "implemented", "memory counters, heap snapshot artifact", []string{"cdp memory counters --json"}, []string{"cdp memory heap-snapshot --out tmp/heap.heapsnapshot --json"}),
 		capabilityRow("advanced_storage", "implemented", "storage indexeddb, storage cache, storage service-workers", []string{"cdp storage indexeddb list --json", "cdp storage cache list --json", "cdp storage service-workers list --json"}, []string{"cdp storage snapshot --json"}),
-		capabilityRow("emulation", "planned", "viewport, media, user-agent, geolocation, network, cpu", []string{"cdp emulate viewport --help"}, []string{"cdp workflow responsive-audit https://example.com --json"}),
+		capabilityRow("emulation", "implemented", "viewport, media, user-agent, geolocation, responsive audit", []string{"cdp emulate viewport --help", "cdp emulate user-agent --help", "cdp emulate geolocation --help"}, []string{"cdp workflow responsive-audit https://example.com --json"}),
+		capabilityRow("network_cpu_throttling", "planned", "network and CPU throttling presets", []string{"cdp protocol describe Emulation.setCPUThrottlingRate --json", "cdp protocol describe Network.emulateNetworkConditions --json"}, []string{"cdp workflow responsive-audit https://example.com --include network --json"}),
 	}
 }
 

@@ -39,6 +39,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "accessibility" and .status == "implemented" and (.verify_commands | index("cdp a11y tree --json"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "performance" and .status == "implemented" and (.evidence_commands | index("cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "memory" and .status == "implemented" and (.verify_commands | index("cdp memory counters --json"))))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "emulation" and .status == "implemented" and (.verify_commands | index("cdp emulate user-agent --help"))))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "network_cpu_throttling" and .status == "planned"))' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
@@ -168,6 +170,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "a11y tree" --json | jq -e '.ok == true and .commands.name == "tree" and (.commands.flags[] | select(.name == "depth"))' >/dev/null
 "$binary" describe --command "a11y find" --json | jq -e '.ok == true and .commands.name == "find" and (.commands.flags[] | select(.name == "role"))' >/dev/null
 "$binary" describe --command "emulate viewport" --json | jq -e '.ok == true and .commands.name == "viewport" and (.commands.examples | any(contains("--preset")))' >/dev/null
+"$binary" describe --command "emulate user-agent" --json | jq -e '.ok == true and .commands.name == "user-agent" and (.commands.examples | any(contains("--user-agent")))' >/dev/null
+"$binary" describe --command "emulate geolocation" --json | jq -e '.ok == true and .commands.name == "geolocation" and (.commands.examples | any(contains("--latitude")))' >/dev/null
 "$binary" describe --command "dialog accept" --json | jq -e '.ok == true and .commands.name == "accept" and (.commands.flags[] | select(.name == "prompt-text"))' >/dev/null
 "$binary" describe --command "events tap" --json | jq -e '.ok == true and .commands.name == "tap" and (.commands.flags[] | select(.name == "max-events"))' >/dev/null
 "$binary" describe --command "protocol compat" --json | jq -e '.ok == true and .commands.name == "compat" and (.commands.examples | any(contains("--requires")))' >/dev/null

@@ -163,6 +163,8 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateViewportCommand())
 	cmd.AddCommand(a.newEmulateClearCommand())
 	cmd.AddCommand(a.newEmulateMediaCommand())
+	cmd.AddCommand(a.newEmulateUserAgentCommand())
+	cmd.AddCommand(a.newEmulateGeolocationCommand())
 	return cmd
 }
 
@@ -208,7 +210,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 
 func (a *app) newEmulateClearCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
-	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, and geolocation emulation", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, and geolocation emulation", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -216,10 +218,20 @@ func (a *app) newEmulateClearCommand() *cobra.Command {
 			return err
 		}
 		defer session.Close(ctx)
-		_ = execSessionJSON(ctx, session, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
-		_ = execSessionJSON(ctx, session, "Emulation.clearGeolocationOverride", map[string]any{}, nil)
-		_ = execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{}, nil)
-		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true}})
+		cleared := []string{}
+		if err := execSessionJSON(ctx, session, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil); err == nil {
+			cleared = append(cleared, "viewport")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.clearGeolocationOverride", map[string]any{}, nil); err == nil {
+			cleared = append(cleared, "geolocation")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{}, nil); err == nil {
+			cleared = append(cleared, "media")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setUserAgentOverride", map[string]any{"userAgent": ""}, nil); err == nil {
+			cleared = append(cleared, "user-agent")
+		}
+		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true, "cleared_overrides": cleared}})
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
@@ -250,6 +262,71 @@ func (a *app) newEmulateMediaCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&colorScheme, "prefers-color-scheme", "", "emulate prefers-color-scheme: light or dark")
+	return cmd
+}
+
+func (a *app) newEmulateUserAgentCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, userAgent, platform string
+	cmd := &cobra.Command{Use: "user-agent", Short: "Apply user-agent emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		if userAgent == "" {
+			return commandError("usage", "usage", "--user-agent is required", ExitUsage, []string{"cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"userAgent": userAgent}
+		if platform != "" {
+			params["platform"] = platform
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setUserAgentOverride", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate user-agent: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setUserAgentOverride --json"})
+		}
+		return a.render(ctx, "user-agent emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"user_agent": userAgent, "platform": platform, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&userAgent, "user-agent", "", "user-agent string to apply")
+	cmd.Flags().StringVar(&platform, "platform", "", "optional navigator platform override")
+	return cmd
+}
+
+func (a *app) newEmulateGeolocationCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var latitude, longitude, accuracy float64
+	cmd := &cobra.Command{Use: "geolocation", Short: "Apply geolocation emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		if latitude < -90 || latitude > 90 {
+			return commandError("usage", "usage", "--latitude must be between -90 and 90", ExitUsage, []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --json"})
+		}
+		if longitude < -180 || longitude > 180 {
+			return commandError("usage", "usage", "--longitude must be between -180 and 180", ExitUsage, []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --json"})
+		}
+		if accuracy < 0 {
+			return commandError("usage", "usage", "--accuracy must be non-negative", ExitUsage, []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --accuracy 100 --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"latitude": latitude, "longitude": longitude, "accuracy": accuracy}
+		if err := execSessionJSON(ctx, session, "Emulation.setGeolocationOverride", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate geolocation: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setGeolocationOverride --json"})
+		}
+		return a.render(ctx, "geolocation emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"geolocation": params, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().Float64Var(&latitude, "latitude", 0, "latitude to emulate")
+	cmd.Flags().Float64Var(&longitude, "longitude", 0, "longitude to emulate")
+	cmd.Flags().Float64Var(&accuracy, "accuracy", 100, "geolocation accuracy in meters")
 	return cmd
 }
 

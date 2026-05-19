@@ -713,6 +713,12 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	if status := capabilityStatus(got.Capabilities, "memory"); status != "implemented" {
 		t.Fatalf("memory capability status = %q, want implemented", status)
 	}
+	if status := capabilityStatus(got.Capabilities, "emulation"); status != "implemented" {
+		t.Fatalf("emulation capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "network_cpu_throttling"); status != "planned" {
+		t.Fatalf("network_cpu_throttling capability status = %q, want planned", status)
+	}
 	if commands := capabilityVerifyCommands(got.Capabilities, "raw_protocol"); !containsString(commands, "cdp protocol metadata --json") {
 		t.Fatalf("raw_protocol verify_commands = %v, want protocol metadata check", commands)
 	}
@@ -724,6 +730,9 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	}
 	if commands := capabilityEvidenceCommands(got.Capabilities, "performance"); !containsString(commands, "cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json") {
 		t.Fatalf("performance evidence_commands = %v, want workflow perf trace evidence", commands)
+	}
+	if commands := capabilityVerifyCommands(got.Capabilities, "emulation"); !containsString(commands, "cdp emulate user-agent --help") {
+		t.Fatalf("emulation verify_commands = %v, want user-agent help check", commands)
 	}
 	if got.AgentReadiness.Status != "ready" || got.AgentReadiness.Mode != "daemon_first_cli" || got.AgentReadiness.Implemented == 0 || got.AgentReadiness.Planned == 0 {
 		t.Fatalf("agent_readiness = %+v, want daemon-first readiness summary", got.AgentReadiness)

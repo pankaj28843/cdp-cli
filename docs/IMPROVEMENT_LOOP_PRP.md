@@ -4,6 +4,17 @@
 
 Keep improving cdp-cli as an agent-experience-first browser CLI while dogfooding the installed `cdp` binary. The active PR must always reflect the overall change set in title and body.
 
+## Status Snapshot (2026-05-20 01:45 Europe/Copenhagen)
+
+- Current phase/step: Phase 4 emulation implementation in progress, driven by subagent web/CDP research.
+- Repo reconciliation: branch `improve/formal-browser-invariants`, PR #1 open at `19f130d`; local changes pending full validation/commit.
+- Research evidence: emulation research recommends a PR-sized UA+geolocation slice using `Emulation.setUserAgentOverride`, `Emulation.setGeolocationOverride`, and existing page-scoped daemon attachment; CPU/network throttling remains explicitly planned because it changes timing/failure interpretation.
+- Iteration contract: candidate=`cdp emulate user-agent` + `cdp emulate geolocation` + capability catalog update; checker=`make verify && make install && make e2e-installed`; repair_budget=2.
+- Commands/evidence run: focused `go test ./internal/cli -run 'TestEmulate(UserAgent|Geolocation)JSON|TestDoctorCapabilitiesJSON|TestDescribeJSON' -count=1` passed; `make verify` passed; `make install` and `make e2e-installed` passed; installed `cdp emulate user-agent --help`, `cdp emulate geolocation --help`, and `cdp doctor --capabilities --json --jq ...` verified emulation implemented and `network_cpu_throttling` planned.
+- Files changed since last snapshot: `docs/IMPROVEMENT_LOOP_PRP.md`, `internal/cli/command_describe_helpers.go`, `internal/cli/info_commands.go`, `internal/cli/input_extra_commands.go`, `internal/cli/page_commands_test.go`, `internal/cli/root_test.go`, `internal/cli/test_harness_test.go`, `scripts/e2e.sh`.
+- Stop tag: continuing.
+- Exact next action: run full validation, install/e2e-installed, dogfood installed commands, commit/push, and refresh PR #1 body.
+
 ## Status Snapshot (2026-05-20 01:25 Europe/Copenhagen)
 
 - Current phase/step: Phase 3 research synthesis started; implemented smallest safe gap from dogfooding: capability catalog now reflects already-present accessibility/performance/memory browser surfaces as implemented instead of planned.
