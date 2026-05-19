@@ -60,6 +60,7 @@ selected connection is not healthy.
 - Human-in-loop auto-connect: when Chrome approval is pending, agents should inspect `cdp daemon status --json`, `cdp doctor --check daemon --json`, and logs, then stop and report the required human Allow action instead of retrying start/stop loops.
 - Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
 - Browser resource budget: page creation is guarded by a default budget of 15 page tabs and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; cleanup should prefer `cdp page cleanup --workflow-created --close --json`.
+- Formal browser invariants: daemon boundary, explicit profile access, lazy discovery, bounded page creation, unambiguous target selection, conservative cleanup, and JSON error envelopes are tracked in `docs/FORMAL_INVARIANTS.md`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.
 

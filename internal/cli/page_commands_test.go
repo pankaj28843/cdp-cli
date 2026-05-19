@@ -424,6 +424,34 @@ func TestOpenRefusesOverBudgetJSON(t *testing.T) {
 	}
 }
 
+func TestEvalAmbiguousTargetPrefixFailsBeforeAttach(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-prefix-one", "type": "page", "title": "First Page", "url": "https://example.test/first", "attached": false},
+		{"targetId": "page-prefix-two", "type": "page", "title": "Second Page", "url": "https://example.test/second", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--target", "page-prefix", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("eval ambiguous target exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool     `json:"ok"`
+		Code     string   `json:"code"`
+		ErrClass string   `json:"err_class"`
+		Commands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("eval ambiguous target output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "ambiguous_target" || got.ErrClass != "usage" || len(got.Commands) == 0 {
+		t.Fatalf("eval ambiguous target = %+v, want structured ambiguity envelope", got)
+	}
+}
+
 func TestPageReloadJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
