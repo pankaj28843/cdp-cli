@@ -456,6 +456,7 @@ func commandExamples(path string) []string {
 	examples["cdp emulate media"] = []string{"cdp emulate media --prefers-color-scheme dark --json"}
 	examples["cdp emulate user-agent"] = []string{"cdp emulate user-agent --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36' --platform Linux --json"}
 	examples["cdp emulate geolocation"] = []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --accuracy 100 --json"}
+	examples["cdp emulate cpu"] = []string{"cdp emulate cpu --rate 4 --json", "cdp emulate cpu --rate 1 --json"}
 	examples["cdp a11y"] = []string{"cdp a11y tree --depth 4 --json"}
 	examples["cdp a11y tree"] = []string{"cdp a11y tree --target <target-id> --depth 4 --json"}
 	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json"}

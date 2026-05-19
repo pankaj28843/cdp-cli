@@ -1240,6 +1240,36 @@ func TestEmulateGeolocationJSON(t *testing.T) {
 	}
 }
 
+func TestEmulateCPUJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "cpu", "--rate", "4", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate cpu exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			CPU struct {
+				Rate float64 `json:"rate"`
+			} `json:"cpu"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate cpu output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.CPU.Rate != 4 || !strings.Contains(got.Emulation.CleanupCommand, "--rate 1") {
+		t.Fatalf("emulate cpu output = %+v, want applied override and cleanup command", got)
+	}
+}
+
 func TestShotElementNavJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},

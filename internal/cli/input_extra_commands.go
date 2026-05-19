@@ -165,6 +165,7 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateMediaCommand())
 	cmd.AddCommand(a.newEmulateUserAgentCommand())
 	cmd.AddCommand(a.newEmulateGeolocationCommand())
+	cmd.AddCommand(a.newEmulateCPUCommand())
 	return cmd
 }
 
@@ -210,7 +211,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 
 func (a *app) newEmulateClearCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
-	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, and geolocation emulation", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, and CPU emulation", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -230,6 +231,9 @@ func (a *app) newEmulateClearCommand() *cobra.Command {
 		}
 		if err := execSessionJSON(ctx, session, "Emulation.setUserAgentOverride", map[string]any{"userAgent": ""}, nil); err == nil {
 			cleared = append(cleared, "user-agent")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", map[string]any{"rate": 1}, nil); err == nil {
+			cleared = append(cleared, "cpu")
 		}
 		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true, "cleared_overrides": cleared}})
 	}}
@@ -327,6 +331,33 @@ func (a *app) newEmulateGeolocationCommand() *cobra.Command {
 	cmd.Flags().Float64Var(&latitude, "latitude", 0, "latitude to emulate")
 	cmd.Flags().Float64Var(&longitude, "longitude", 0, "longitude to emulate")
 	cmd.Flags().Float64Var(&accuracy, "accuracy", 100, "geolocation accuracy in meters")
+	return cmd
+}
+
+func (a *app) newEmulateCPUCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var rate float64
+	cmd := &cobra.Command{Use: "cpu", Short: "Apply CPU throttling emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		if rate < 1 {
+			return commandError("usage", "usage", "--rate must be >= 1; 1 disables CPU throttling", ExitUsage, []string{"cdp emulate cpu --rate 4 --json", "cdp emulate cpu --rate 1 --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"rate": rate}
+		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate cpu: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setCPUThrottlingRate --json"})
+		}
+		return a.render(ctx, fmt.Sprintf("cpu throttling	%.2fx", rate), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cpu": params, "cleanup_command": fmt.Sprintf("cdp emulate cpu --rate 1 --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().Float64Var(&rate, "rate", 4, "CPU slowdown multiplier; use 1 to disable throttling")
 	return cmd
 }
 

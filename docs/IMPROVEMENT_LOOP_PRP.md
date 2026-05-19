@@ -4,6 +4,17 @@
 
 Keep improving cdp-cli as an agent-experience-first browser CLI while dogfooding the installed `cdp` binary. The active PR must always reflect the overall change set in title and body.
 
+## Status Snapshot (2026-05-20 02:05 Europe/Copenhagen)
+
+- Current phase/step: Phase 5 CPU emulation implementation in progress after dogfooding CDP Emulation docs.
+- Repo reconciliation: branch `improve/formal-browser-invariants`, PR #1 open at `f4139aa`; local changes pending validation/commit.
+- Research evidence: installed `cdp workflow rendered-extract` captured CDP Emulation docs into `tmp/research-cdp-loop/emulation/*`; extracted docs include `Emulation.setCPUThrottlingRate`, `Emulation.setGeolocationOverride`, and `Emulation.setUserAgentOverride`; `docsearch` also returned Network and Emulation protocol references. The gap-scan subagent returned a tool-validation failure instead of useful candidates, so direct repo inspection drove the slice.
+- Iteration contract: candidate=`cdp emulate cpu --rate` plus capability split from `network_cpu_throttling` to implemented CPU emulation + planned `network_throttling`; checker=`make verify && make install && make e2e-installed`; repair_budget=2.
+- Commands/evidence run: `cdp workflow rendered-extract` on CDP Emulation docs passed; `docsearch search chrome-devtools-protocol "Network.emulateNetworkConditions Emulation.setCPUThrottlingRate"` returned source hits; focused `go test ./internal/cli -run 'TestEmulate(UserAgent|Geolocation|CPU)JSON|TestDoctorCapabilitiesJSON|TestDescribeJSON' -count=1` passed after updating tests for the renamed planned capability; `make verify` passed; `make install` and `make e2e-installed` passed; installed `cdp emulate cpu --help` and `cdp doctor --capabilities --json --jq ...` verified CPU under implemented emulation and `network_throttling` planned.
+- Files changed since last snapshot: `docs/IMPROVEMENT_LOOP_PRP.md`, `internal/cli/command_describe_helpers.go`, `internal/cli/info_commands.go`, `internal/cli/input_extra_commands.go`, `internal/cli/page_commands_test.go`, `internal/cli/root_test.go`, `internal/cli/test_harness_test.go`, `scripts/e2e.sh`.
+- Stop tag: continuing.
+- Exact next action: run full validation, install/e2e-installed, dogfood installed `cdp emulate cpu --help`, commit/push, and refresh PR #1 body.
+
 ## Status Snapshot (2026-05-20 01:45 Europe/Copenhagen)
 
 - Current phase/step: Phase 4 emulation implementation in progress, driven by subagent web/CDP research.
