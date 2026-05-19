@@ -36,6 +36,9 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "advanced_storage" and .status == "implemented"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "raw_protocol" and (.verify_commands | index("cdp protocol metadata --json"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "artifacts" and (.evidence_commands | index("cdp workflow debug-bundle --out-dir tmp/debug-bundle --json"))))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "accessibility" and .status == "implemented" and (.verify_commands | index("cdp a11y tree --json"))))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "performance" and .status == "implemented" and (.evidence_commands | index("cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json"))))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "memory" and .status == "implemented" and (.verify_commands | index("cdp memory counters --json"))))' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null

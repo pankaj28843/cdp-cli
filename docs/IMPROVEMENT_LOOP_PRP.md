@@ -4,6 +4,17 @@
 
 Keep improving cdp-cli as an agent-experience-first browser CLI while dogfooding the installed `cdp` binary. The active PR must always reflect the overall change set in title and body.
 
+## Status Snapshot (2026-05-20 01:25 Europe/Copenhagen)
+
+- Current phase/step: Phase 3 research synthesis started; implemented smallest safe gap from dogfooding: capability catalog now reflects already-present accessibility/performance/memory browser surfaces as implemented instead of planned.
+- Repo reconciliation: branch `improve/formal-browser-invariants`, PR #1 open at `beb7264`; local changes pending validation/commit.
+- Research evidence: installed `cdp workflow rendered-extract` captured PR #1 and Stagehand docs into `tmp/research-cdp-loop/*`; `docsearch` confirmed CDP Accessibility/Tracing/Performance docs; subagent research prioritized Stagehand-style observe/act/extract separation, deterministic raw CDP escape hatches, session observability, and Target/Page/Network/Runtime/Storage next-surface ordering.
+- Iteration contract: candidate=capability catalog truthfulness for implemented a11y/perf/memory surfaces; checker=`make verify && make install && make e2e-installed`; repair_budget=2.
+- Commands/evidence run so far: `cdp doctor --capabilities --json --jq ...` showed previous implemented/planned state; `cdp workflow rendered-extract` succeeded for PR #1 and Stagehand docs; `docsearch search chrome-devtools-protocol ...` returned Accessibility/Tracing evidence; focused `go test ./internal/cli -run TestDoctorCapabilitiesJSON -count=1` passed; `bash scripts/e2e.sh ./bin/cdp` passed after rebuilding `bin/cdp`.
+- Files changed since last snapshot: `docs/IMPROVEMENT_LOOP_PRP.md`, `internal/cli/info_commands.go`, `internal/cli/root_test.go`, `scripts/e2e.sh`.
+- Stop tag: continuing.
+- Exact next action: run full validation, install/e2e-installed, commit/push, update PR #1 body, then decide next implementation from research map.
+
 ## Status Snapshot (2026-05-20 01:05 Europe/Copenhagen)
 
 - Current phase/step: Phase 2 verification-command iteration complete; next Phase 3 browser dogfooding/research synthesis.
@@ -40,8 +51,8 @@ Keep improving cdp-cli as an agent-experience-first browser CLI while dogfooding
 
 ## Phase 3 - Browser Dogfooding Improvements
 
-- [ ] Use installed `cdp` to inspect the PR, docs, and Chrome DevTools Protocol pages; record one concrete UX gap as a feature request.
-- [ ] Implement the smallest safe gap from that request in the same PR.
+- [x] Use installed `cdp` to inspect the PR, docs, and Chrome DevTools Protocol pages; record one concrete UX gap as a feature request.
+- [x] Implement the smallest safe gap from that request in the same PR.
 - [ ] Run `make e2e-demo-installed` for browser-facing changes and include evidence in the PR body.
 
 ## Validation Gate

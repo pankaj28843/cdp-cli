@@ -704,11 +704,26 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	if status := capabilityStatus(got.Capabilities, "advanced_storage"); status != "implemented" {
 		t.Fatalf("advanced_storage capability status = %q, want implemented", status)
 	}
+	if status := capabilityStatus(got.Capabilities, "accessibility"); status != "implemented" {
+		t.Fatalf("accessibility capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "performance"); status != "implemented" {
+		t.Fatalf("performance capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "memory"); status != "implemented" {
+		t.Fatalf("memory capability status = %q, want implemented", status)
+	}
 	if commands := capabilityVerifyCommands(got.Capabilities, "raw_protocol"); !containsString(commands, "cdp protocol metadata --json") {
 		t.Fatalf("raw_protocol verify_commands = %v, want protocol metadata check", commands)
 	}
 	if commands := capabilityEvidenceCommands(got.Capabilities, "artifacts"); !containsString(commands, "cdp workflow debug-bundle --out-dir tmp/debug-bundle --json") {
 		t.Fatalf("artifacts evidence_commands = %v, want debug-bundle evidence command", commands)
+	}
+	if commands := capabilityVerifyCommands(got.Capabilities, "accessibility"); !containsString(commands, "cdp a11y tree --json") {
+		t.Fatalf("accessibility verify_commands = %v, want a11y tree check", commands)
+	}
+	if commands := capabilityEvidenceCommands(got.Capabilities, "performance"); !containsString(commands, "cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json") {
+		t.Fatalf("performance evidence_commands = %v, want workflow perf trace evidence", commands)
 	}
 	if got.AgentReadiness.Status != "ready" || got.AgentReadiness.Mode != "daemon_first_cli" || got.AgentReadiness.Implemented == 0 || got.AgentReadiness.Planned == 0 {
 		t.Fatalf("agent_readiness = %+v, want daemon-first readiness summary", got.AgentReadiness)
