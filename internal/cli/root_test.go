@@ -686,6 +686,14 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 			Name   string `json:"name"`
 			Status string `json:"status"`
 		} `json:"capabilities"`
+		AgentReadiness struct {
+			Status       string   `json:"status"`
+			Mode         string   `json:"mode"`
+			Implemented  int      `json:"implemented"`
+			Planned      int      `json:"planned"`
+			NextCommands []string `json:"next_commands"`
+		} `json:"agent_readiness"`
+		NextCommands []string `json:"next_commands"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("doctor --capabilities output is invalid JSON: %v", err)
@@ -698,6 +706,12 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	}
 	if status := capabilityStatus(got.Capabilities, "advanced_storage"); status != "implemented" {
 		t.Fatalf("advanced_storage capability status = %q, want implemented", status)
+	}
+	if got.AgentReadiness.Status != "ready" || got.AgentReadiness.Mode != "daemon_first_cli" || got.AgentReadiness.Implemented == 0 || got.AgentReadiness.Planned == 0 {
+		t.Fatalf("agent_readiness = %+v, want daemon-first readiness summary", got.AgentReadiness)
+	}
+	if !containsString(got.NextCommands, "cdp doctor --json") || !containsString(got.AgentReadiness.NextCommands, "cdp pages --json") {
+		t.Fatalf("next commands = top-level %v readiness %v, want safe bootstrap commands", got.NextCommands, got.AgentReadiness.NextCommands)
 	}
 }
 
@@ -720,8 +734,8 @@ func TestDoctorCapabilitiesSchemaJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("schema doctor-capabilities output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Schema.Name != "doctor-capabilities" || !schemaHasField(got.Schema.Fields, "capabilities") {
-		t.Fatalf("schema doctor-capabilities = %+v, want capabilities field", got)
+	if !got.OK || got.Schema.Name != "doctor-capabilities" || !schemaHasField(got.Schema.Fields, "capabilities") || !schemaHasField(got.Schema.Fields, "agent_readiness") || !schemaHasField(got.Schema.Fields, "next_commands") {
+		t.Fatalf("schema doctor-capabilities = %+v, want capabilities and bootstrap fields", got)
 	}
 }
 

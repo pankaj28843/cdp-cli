@@ -99,13 +99,16 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				ctx, cancel := a.commandContext(cmd)
 				defer cancel()
 				rows := capabilityCatalog()
+				readiness := agentReadiness(rows)
 				lines := make([]string, 0, len(rows))
 				for _, row := range rows {
 					lines = append(lines, fmt.Sprintf("%s\t%s", row["name"], row["status"]))
 				}
 				return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
-					"ok":           true,
-					"capabilities": rows,
+					"ok":              true,
+					"capabilities":    rows,
+					"agent_readiness": readiness,
+					"next_commands":   readiness["next_commands"],
 				})
 			}
 
@@ -221,6 +224,38 @@ func capabilityCatalog() []map[string]string {
 		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
 		{"name": "memory", "status": "planned", "commands": "heap snapshot"},
 		{"name": "advanced_storage", "status": "implemented", "commands": "storage indexeddb, storage cache, storage service-workers"},
+	}
+}
+
+func agentReadiness(capabilities []map[string]string) map[string]any {
+	implemented := 0
+	planned := 0
+	for _, capability := range capabilities {
+		switch capability["status"] {
+		case "implemented":
+			implemented++
+		case "planned":
+			planned++
+		}
+	}
+	return map[string]any{
+		"status":       "ready",
+		"mode":         "daemon_first_cli",
+		"implemented":  implemented,
+		"planned":      planned,
+		"safe_default": "passive diagnostics avoid active Chrome approval prompts unless --active-browser-probe is supplied",
+		"next_commands": []string{
+			"cdp doctor --json",
+			"cdp daemon status --json",
+			"cdp pages --json",
+			"cdp page cleanup --workflow-created --close --json",
+		},
+		"browser_commands": []string{
+			"cdp pages --json",
+			"cdp open https://example.com --json",
+			"cdp snapshot --json",
+			"cdp workflow debug-bundle --out-dir tmp/debug-bundle --json",
+		},
 	}
 }
 
