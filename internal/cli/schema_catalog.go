@@ -39,7 +39,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Implemented and planned cdp-cli capability areas plus agent bootstrap guidance.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when capability metadata was generated."},
-				{Name: "capabilities", Type: "array<capability>", Required: true, Description: "Capability rows with name, status, and related commands."},
+				{Name: "capabilities", Type: "array<capability>", Required: true, Description: "Capability rows with name, status, related commands, verification commands, and evidence commands."},
 				{Name: "agent_readiness", Type: "object", Required: true, Description: "Agent-first readiness summary with safe defaults and bootstrap commands."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Recommended safe commands for validating live browser access."},
 			},

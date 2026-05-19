@@ -102,7 +102,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				readiness := agentReadiness(rows)
 				lines := make([]string, 0, len(rows))
 				for _, row := range rows {
-					lines = append(lines, fmt.Sprintf("%s\t%s", row["name"], row["status"]))
+					lines = append(lines, fmt.Sprintf("%s\t%s", capabilityString(row, "name"), capabilityString(row, "status")))
 				}
 				return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
 					"ok":              true,
@@ -208,30 +208,45 @@ func (a *app) newDoctorCommand() *cobra.Command {
 	return cmd
 }
 
-func capabilityCatalog() []map[string]string {
-	return []map[string]string{
-		{"name": "connection", "status": "implemented", "commands": "connection, daemon, doctor"},
-		{"name": "target_discovery", "status": "implemented", "commands": "targets, pages"},
-		{"name": "page_control", "status": "implemented", "commands": "page reload/back/forward/activate/close, open"},
-		{"name": "page_inspection", "status": "implemented", "commands": "eval, text, html, snapshot, dom query, css inspect, layout overflow"},
-		{"name": "artifacts", "status": "implemented", "commands": "screenshot"},
-		{"name": "console", "status": "implemented", "commands": "console, workflow console-errors"},
-		{"name": "network", "status": "implemented", "commands": "network, workflow network-failures"},
-		{"name": "storage", "status": "implemented", "commands": "storage list/get/set/delete/clear/snapshot/diff, storage cookies"},
-		{"name": "raw_protocol", "status": "implemented", "commands": "protocol metadata/domains/search/describe/exec"},
-		{"name": "input_automation", "status": "implemented", "commands": "click, fill, type, press, hover, drag"},
-		{"name": "emulation", "status": "planned", "commands": "viewport, media, user-agent, geolocation, network, cpu"},
-		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
-		{"name": "memory", "status": "planned", "commands": "heap snapshot"},
-		{"name": "advanced_storage", "status": "implemented", "commands": "storage indexeddb, storage cache, storage service-workers"},
+func capabilityCatalog() []map[string]any {
+	return []map[string]any{
+		capabilityRow("connection", "implemented", "connection, daemon, doctor", []string{"cdp connection current --json", "cdp daemon status --json"}, []string{"cdp doctor --json"}),
+		capabilityRow("target_discovery", "implemented", "targets, pages", []string{"cdp targets --json", "cdp pages --json"}, []string{"cdp doctor --check browser-budget --json"}),
+		capabilityRow("page_control", "implemented", "page reload/back/forward/activate/close, open", []string{"cdp page select --url-contains example --json", "cdp page reload --target <target-id> --json"}, []string{"cdp pages --json"}),
+		capabilityRow("page_inspection", "implemented", "eval, text, html, snapshot, dom query, css inspect, layout overflow", []string{"cdp snapshot --json", "cdp eval 'document.title' --json"}, []string{"cdp text body --json"}),
+		capabilityRow("artifacts", "implemented", "screenshot", []string{"cdp screenshot --out tmp/page.png --json"}, []string{"cdp workflow debug-bundle --out-dir tmp/debug-bundle --json"}),
+		capabilityRow("console", "implemented", "console, workflow console-errors", []string{"cdp console --errors --wait 1s --json"}, []string{"cdp workflow console-errors --wait 1s --json"}),
+		capabilityRow("network", "implemented", "network, workflow network-failures", []string{"cdp network --wait 1s --json"}, []string{"cdp workflow network-failures --wait 1s --json"}),
+		capabilityRow("storage", "implemented", "storage list/get/set/delete/clear/snapshot/diff, storage cookies", []string{"cdp storage list --json", "cdp storage snapshot --json"}, []string{"cdp storage cookies list --json"}),
+		capabilityRow("raw_protocol", "implemented", "protocol metadata/domains/search/describe/exec", []string{"cdp protocol metadata --json", "cdp protocol search screenshot --json"}, []string{"cdp protocol exec Browser.getVersion --json"}),
+		capabilityRow("input_automation", "implemented", "click, fill, type, press, hover, drag", []string{"cdp form values --json"}, []string{"cdp click <selector> --json"}),
+		capabilityRow("emulation", "planned", "viewport, media, user-agent, geolocation, network, cpu", []string{"cdp emulate viewport --help"}, []string{"cdp workflow responsive-audit https://example.com --json"}),
+		capabilityRow("performance", "planned", "trace, Lighthouse, performance insights", []string{"cdp perf --json"}, []string{"cdp workflow perf https://example.com --json"}),
+		capabilityRow("memory", "planned", "heap snapshot", []string{"cdp memory counters --json"}, []string{"cdp memory heap-snapshot --out tmp/heap.heapsnapshot --json"}),
+		capabilityRow("advanced_storage", "implemented", "storage indexeddb, storage cache, storage service-workers", []string{"cdp storage indexeddb list --json", "cdp storage cache list --json", "cdp storage service-workers list --json"}, []string{"cdp storage snapshot --json"}),
 	}
 }
 
-func agentReadiness(capabilities []map[string]string) map[string]any {
+func capabilityRow(name, status, commands string, verifyCommands, evidenceCommands []string) map[string]any {
+	return map[string]any{
+		"name":              name,
+		"status":            status,
+		"commands":          commands,
+		"verify_commands":   verifyCommands,
+		"evidence_commands": evidenceCommands,
+	}
+}
+
+func capabilityString(row map[string]any, key string) string {
+	value, _ := row[key].(string)
+	return value
+}
+
+func agentReadiness(capabilities []map[string]any) map[string]any {
 	implemented := 0
 	planned := 0
 	for _, capability := range capabilities {
-		switch capability["status"] {
+		switch capabilityString(capability, "status") {
 		case "implemented":
 			implemented++
 		case "planned":

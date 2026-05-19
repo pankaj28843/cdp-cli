@@ -681,11 +681,8 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK           bool `json:"ok"`
-		Capabilities []struct {
-			Name   string `json:"name"`
-			Status string `json:"status"`
-		} `json:"capabilities"`
+		OK             bool                `json:"ok"`
+		Capabilities   []capabilityTestRow `json:"capabilities"`
 		AgentReadiness struct {
 			Status       string   `json:"status"`
 			Mode         string   `json:"mode"`
@@ -706,6 +703,12 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	}
 	if status := capabilityStatus(got.Capabilities, "advanced_storage"); status != "implemented" {
 		t.Fatalf("advanced_storage capability status = %q, want implemented", status)
+	}
+	if commands := capabilityVerifyCommands(got.Capabilities, "raw_protocol"); !containsString(commands, "cdp protocol metadata --json") {
+		t.Fatalf("raw_protocol verify_commands = %v, want protocol metadata check", commands)
+	}
+	if commands := capabilityEvidenceCommands(got.Capabilities, "artifacts"); !containsString(commands, "cdp workflow debug-bundle --out-dir tmp/debug-bundle --json") {
+		t.Fatalf("artifacts evidence_commands = %v, want debug-bundle evidence command", commands)
 	}
 	if got.AgentReadiness.Status != "ready" || got.AgentReadiness.Mode != "daemon_first_cli" || got.AgentReadiness.Implemented == 0 || got.AgentReadiness.Planned == 0 {
 		t.Fatalf("agent_readiness = %+v, want daemon-first readiness summary", got.AgentReadiness)
@@ -739,16 +742,38 @@ func TestDoctorCapabilitiesSchemaJSON(t *testing.T) {
 	}
 }
 
-func capabilityStatus(capabilities []struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-}, name string) string {
+type capabilityTestRow struct {
+	Name             string   `json:"name"`
+	Status           string   `json:"status"`
+	VerifyCommands   []string `json:"verify_commands"`
+	EvidenceCommands []string `json:"evidence_commands"`
+}
+
+func capabilityStatus(capabilities []capabilityTestRow, name string) string {
 	for _, capability := range capabilities {
 		if capability.Name == name {
 			return capability.Status
 		}
 	}
 	return ""
+}
+
+func capabilityVerifyCommands(capabilities []capabilityTestRow, name string) []string {
+	for _, capability := range capabilities {
+		if capability.Name == name {
+			return capability.VerifyCommands
+		}
+	}
+	return nil
+}
+
+func capabilityEvidenceCommands(capabilities []capabilityTestRow, name string) []string {
+	for _, capability := range capabilities {
+		if capability.Name == name {
+			return capability.EvidenceCommands
+		}
+	}
+	return nil
 }
 
 func containsString(values []string, want string) bool {
