@@ -39,8 +39,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "accessibility" and .status == "implemented" and (.verify_commands | index("cdp a11y tree --json"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "performance" and .status == "implemented" and (.evidence_commands | index("cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "memory" and .status == "implemented" and (.verify_commands | index("cdp memory counters --json"))))' >/dev/null
-"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "emulation" and .status == "implemented" and (.verify_commands | index("cdp emulate user-agent --help")) and (.verify_commands | index("cdp emulate cpu --help"))))' >/dev/null
-"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "network_throttling" and .status == "planned"))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "emulation" and .status == "implemented" and (.verify_commands | index("cdp emulate user-agent --help")) and (.verify_commands | index("cdp emulate cpu --help")) and (.verify_commands | index("cdp emulate network --help"))))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and ([.capabilities[] | select(.name == "network_throttling")] | length == 0)' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp daemon health --json")) and (.bootstrap_path.recover_commands | index("cdp daemon logs --tail 50 --json")) and (.bootstrap_path.stop_signals | index("human_required"))' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
@@ -63,7 +63,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema connection-prune --json | jq -e '.ok == true and .schema.name == "connection-prune" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
 "$binary" schema connection-resolve --json | jq -e '.ok == true and .schema.name == "connection-resolve" and (.schema.fields | map(.name) | index("source"))' >/dev/null
 "$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.fields | map(.name) | index("scope")) and (.schema.fields | map(.name) | index("artifact"))' >/dev/null
-"$binary" schema protocol-examples --json | jq -e '.ok == true and .schema.name == "protocol-examples" and (.schema.fields | map(.name) | index("examples"))' >/dev/null
+"$binary" schema protocol-examples --json | jq -e '.ok == true and .schema.name == "protocol-examples" and (.schema.fields[] | select(.name == "examples").description | contains("required/optional param names"))' >/dev/null
 "$binary" schema protocol-metadata --json | jq -e '.ok == true and .schema.name == "protocol-metadata"' >/dev/null
 "$binary" schema protocol-domains --json | jq -e '.ok == true and .schema.name == "protocol-domains"' >/dev/null
 "$binary" schema protocol-search --json | jq -e '.ok == true and .schema.name == "protocol-search"' >/dev/null
@@ -93,9 +93,13 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "page cleanup" --json | jq -e '.ok == true and .commands.name == "cleanup" and (.commands.examples | any(contains("--close")))' >/dev/null
 "$binary" schema page-cleanup --json | jq -e '.ok == true and .schema.name == "page-cleanup" and (.schema.fields | map(.name) | index("candidates"))' >/dev/null
 "$binary" describe --json | jq -e '.commands.children[] | select(.name == "page") | .children[] | select(.name == "cleanup")' >/dev/null
-"$binary" --help | rg -q "cleanup routine|page cleanup|clean"
-"$binary" describe --command "page cleanup" --json | jq -r '.commands.examples[]' | rg -q 'cdp page cleanup --close'
-"$binary" describe --command "page cleanup" --json | jq -r '.commands.short' | rg -q 'cron cleanup'
+help_output="$("$binary" --help)"
+rg -q "cleanup routine|page cleanup|clean" <<<"$help_output"
+page_cleanup_describe="$("$binary" describe --command "page cleanup" --json)"
+page_cleanup_examples="$(jq -r '.commands.examples[]' <<<"$page_cleanup_describe")"
+rg -q 'cdp page cleanup --close' <<<"$page_cleanup_examples"
+page_cleanup_short="$(jq -r '.commands.short' <<<"$page_cleanup_describe")"
+rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null
 "$binary" describe --command "text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "html" --json | jq -e '.ok == true and .commands.name == "html" and (.commands.examples | any(contains("--diagnose-empty"))) and (.commands.flags[] | select(.name == "diagnose-empty"))' >/dev/null
@@ -150,7 +154,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema dom-query --json | jq -e '.ok == true and .schema.name == "dom-query"' >/dev/null
 "$binary" schema css-inspect --json | jq -e '.ok == true and .schema.name == "css-inspect"' >/dev/null
 "$binary" schema layout-overflow --json | jq -e '.ok == true and .schema.name == "layout-overflow"' >/dev/null
-"$binary" schema wait --json | jq -e '.ok == true and .schema.name == "wait"' >/dev/null
+"$binary" schema wait --json | jq -e '.ok == true and .schema.name == "wait" and (.schema.fields[] | select(.name == "wait").description | contains("evidence"))' >/dev/null
 "$binary" schema workflow-hacker-news --json | jq -e '.ok == true and .schema.name == "workflow-hacker-news" and (.schema.fields | map(.name) | index("organization"))' >/dev/null
 "$binary" schema workflow-console-errors --json | jq -e '.ok == true and .schema.name == "workflow-console-errors"' >/dev/null
 "$binary" schema workflow-network-failures --json | jq -e '.ok == true and .schema.name == "workflow-network-failures"' >/dev/null
@@ -176,6 +180,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "emulate user-agent" --json | jq -e '.ok == true and .commands.name == "user-agent" and (.commands.examples | any(contains("--user-agent")))' >/dev/null
 "$binary" describe --command "emulate geolocation" --json | jq -e '.ok == true and .commands.name == "geolocation" and (.commands.examples | any(contains("--latitude")))' >/dev/null
 "$binary" describe --command "emulate cpu" --json | jq -e '.ok == true and .commands.name == "cpu" and (.commands.examples | any(contains("--rate")))' >/dev/null
+"$binary" describe --command "emulate network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--preset slow-3g"))) and (.commands.flags[] | select(.name == "download-kbps"))' >/dev/null
 "$binary" describe --command "dialog accept" --json | jq -e '.ok == true and .commands.name == "accept" and (.commands.flags[] | select(.name == "prompt-text"))' >/dev/null
 "$binary" describe --command "events tap" --json | jq -e '.ok == true and .commands.name == "tap" and (.commands.flags[] | select(.name == "max-events"))' >/dev/null
 "$binary" describe --command "protocol compat" --json | jq -e '.ok == true and .commands.name == "compat" and (.commands.examples | any(contains("--requires")))' >/dev/null
@@ -269,6 +274,15 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_describe_output" | jq -e '.ok == true and .entity.path == "Page.captureScreenshot"' >/dev/null
     else
       printf '%s\n' "$live_describe_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured" or .code == "unknown_protocol_entity")' >/dev/null
+    fi
+    set +e
+    live_examples_output="$("$binary" --timeout 5s protocol examples Browser.getVersion --json 2>/tmp/cdp-cli-live-examples.err)"
+    live_examples_code=$?
+    set -e
+    if [[ "$live_examples_code" -eq 0 ]]; then
+      printf '%s\n' "$live_examples_output" | jq -e '.ok == true and .examples[0].scope == "browser" and (.examples[0].command | contains("--target") | not) and (.examples[0] | has("required_params")) and (.examples[0] | has("scope_note"))' >/dev/null
+    else
+      printf '%s\n' "$live_examples_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured" or .code == "unknown_protocol_entity")' >/dev/null
     fi
     set +e
     live_exec_output="$("$binary" --timeout 5s protocol exec Browser.getVersion --params '{}' --json 2>/tmp/cdp-cli-live-exec.err)"

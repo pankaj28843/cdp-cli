@@ -3,9 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
-	"path/filepath"
 )
 
 func (a *app) newFocusCommand() *cobra.Command {
@@ -166,6 +167,7 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateUserAgentCommand())
 	cmd.AddCommand(a.newEmulateGeolocationCommand())
 	cmd.AddCommand(a.newEmulateCPUCommand())
+	cmd.AddCommand(a.newEmulateNetworkCommand())
 	return cmd
 }
 
@@ -211,7 +213,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 
 func (a *app) newEmulateClearCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
-	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, and CPU emulation", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, CPU, and network emulation", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -234,6 +236,9 @@ func (a *app) newEmulateClearCommand() *cobra.Command {
 		}
 		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", map[string]any{"rate": 1}, nil); err == nil {
 			cleared = append(cleared, "cpu")
+		}
+		if err := execSessionJSON(ctx, session, "Network.emulateNetworkConditions", networkEmulationResetParams(), nil); err == nil {
+			cleared = append(cleared, "network")
 		}
 		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true, "cleared_overrides": cleared}})
 	}}
@@ -359,6 +364,90 @@ func (a *app) newEmulateCPUCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().Float64Var(&rate, "rate", 4, "CPU slowdown multiplier; use 1 to disable throttling")
 	return cmd
+}
+
+func (a *app) newEmulateNetworkCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, preset string
+	var latency int
+	var downloadKbps, uploadKbps float64
+	var offline bool
+	cmd := &cobra.Command{Use: "network", Short: "Apply network throttling emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		params, label, err := networkEmulationParams(preset, offline, latency, downloadKbps, uploadKbps)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		if err := execSessionJSON(ctx, session, "Network.emulateNetworkConditions", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate network: %v", err), ExitConnection, []string{"cdp protocol describe Network.emulateNetworkConditions --json"})
+		}
+		return a.render(ctx, fmt.Sprintf("network throttling\t%s", label), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"network": params, "preset": label, "cleanup_command": fmt.Sprintf("cdp emulate network --preset none --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&preset, "preset", "", "network preset: none, offline, slow-3g, fast-3g, wifi")
+	cmd.Flags().BoolVar(&offline, "offline", false, "emulate offline network state")
+	cmd.Flags().IntVar(&latency, "latency", 0, "round-trip latency in milliseconds")
+	cmd.Flags().Float64Var(&downloadKbps, "download-kbps", 0, "download throughput in kilobits per second; 0 disables throttling")
+	cmd.Flags().Float64Var(&uploadKbps, "upload-kbps", 0, "upload throughput in kilobits per second; 0 disables throttling")
+	return cmd
+}
+
+type networkPreset struct {
+	Latency      int
+	DownloadKbps float64
+	UploadKbps   float64
+	Offline      bool
+}
+
+func networkEmulationParams(preset string, offline bool, latency int, downloadKbps, uploadKbps float64) (map[string]any, string, error) {
+	if latency < 0 || downloadKbps < 0 || uploadKbps < 0 {
+		return nil, "", commandError("usage", "usage", "--latency, --download-kbps, and --upload-kbps must be non-negative", ExitUsage, []string{"cdp emulate network --preset slow-3g --json", "cdp emulate network --latency 100 --download-kbps 750 --upload-kbps 250 --json"})
+	}
+	label := strings.TrimSpace(strings.ToLower(preset))
+	if label == "" {
+		label = "custom"
+	}
+	presets := map[string]networkPreset{
+		"none":    {},
+		"offline": {Offline: true},
+		"slow-3g": {Latency: 400, DownloadKbps: 400, UploadKbps: 400},
+		"fast-3g": {Latency: 150, DownloadKbps: 1600, UploadKbps: 750},
+		"wifi":    {Latency: 20, DownloadKbps: 30000, UploadKbps: 15000},
+	}
+	if presetValues, ok := presets[label]; ok {
+		latency = presetValues.Latency
+		downloadKbps = presetValues.DownloadKbps
+		uploadKbps = presetValues.UploadKbps
+		offline = presetValues.Offline
+	} else if strings.TrimSpace(preset) != "" {
+		return nil, "", commandError("usage", "usage", "unknown network preset", ExitUsage, []string{"cdp emulate network --preset slow-3g --json", "cdp emulate network --preset none --json"})
+	}
+	return map[string]any{
+		"offline":            offline,
+		"latency":            latency,
+		"downloadThroughput": kbpsToBytesPerSecond(downloadKbps),
+		"uploadThroughput":   kbpsToBytesPerSecond(uploadKbps),
+	}, label, nil
+}
+
+func networkEmulationResetParams() map[string]any {
+	return map[string]any{
+		"offline":            false,
+		"latency":            0,
+		"downloadThroughput": 0.0,
+		"uploadThroughput":   0.0,
+	}
+}
+
+func kbpsToBytesPerSecond(kbps float64) float64 {
+	return kbps * 1000 / 8
 }
 
 func (a *app) newA11yCommand() *cobra.Command {

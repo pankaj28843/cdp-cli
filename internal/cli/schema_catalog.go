@@ -365,7 +365,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition, match status, count, elapsed time, and poll interval."},
+				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition, match status, evidence, count, elapsed time, and poll interval."},
 			},
 		},
 		"snapshot": {
@@ -716,7 +716,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when examples were generated."},
 				{Name: "entity", Type: "protocol_entity", Required: true, Description: "Protocol command metadata and raw schema."},
-				{Name: "examples", Type: "array<protocol_exec_example>", Required: true, Description: "Runnable cdp protocol exec command examples with scope and params."},
+				{Name: "examples", Type: "array<protocol_exec_example>", Required: true, Description: "Runnable cdp protocol exec command examples with scope, params, required/optional param names, sample params, and scope notes."},
 				{Name: "source", Type: "string", Required: true, Description: "Protocol source endpoint."},
 			},
 		},

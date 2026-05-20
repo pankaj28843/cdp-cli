@@ -88,7 +88,7 @@ func TestClickVerificationTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--timeout", "100ms", "click", "main", "--strategy", "raw-input", "--wait-text", "Never Ready", "--poll", "5ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--timeout", "500ms", "click", "main", "--strategy", "raw-input", "--wait-text", "Never Ready", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("unverified click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}

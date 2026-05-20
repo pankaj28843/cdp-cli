@@ -454,13 +454,14 @@ func commandExamples(path string) []string {
 	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --json"}
 	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}
 	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json"}
-	examples["cdp emulate"] = []string{"cdp emulate viewport --preset mobile --json", "cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json"}
+	examples["cdp emulate"] = []string{"cdp emulate viewport --preset mobile --json", "cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json", "cdp emulate network --preset slow-3g --json"}
 	examples["cdp emulate viewport"] = []string{"cdp emulate viewport --width 390 --height 844 --mobile --dpr 1 --json", "cdp emulate viewport --preset iphone-12 --json"}
 	examples["cdp emulate clear"] = []string{"cdp emulate clear --json"}
 	examples["cdp emulate media"] = []string{"cdp emulate media --prefers-color-scheme dark --json"}
 	examples["cdp emulate user-agent"] = []string{"cdp emulate user-agent --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36' --platform Linux --json"}
 	examples["cdp emulate geolocation"] = []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --accuracy 100 --json"}
 	examples["cdp emulate cpu"] = []string{"cdp emulate cpu --rate 4 --json", "cdp emulate cpu --rate 1 --json"}
+	examples["cdp emulate network"] = []string{"cdp emulate network --preset slow-3g --json", "cdp emulate network --latency 100 --download-kbps 750 --upload-kbps 250 --json", "cdp emulate network --preset none --json"}
 	examples["cdp a11y"] = []string{"cdp a11y tree --depth 4 --json"}
 	examples["cdp a11y tree"] = []string{"cdp a11y tree --target <target-id> --depth 4 --json"}
 	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json"}

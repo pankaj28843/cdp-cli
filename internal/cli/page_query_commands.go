@@ -123,6 +123,8 @@ type waitResult struct {
 	Matched      bool            `json:"matched"`
 	Count        int             `json:"count,omitempty"`
 	Value        json.RawMessage `json:"value,omitempty"`
+	Condition    string          `json:"condition,omitempty"`
+	Evidence     map[string]any  `json:"evidence,omitempty"`
 	ElapsedMS    int64           `json:"elapsed_ms"`
 	PollInterval string          `json:"poll_interval"`
 	Error        *evalError      `json:"error,omitempty"`
@@ -617,6 +619,23 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	return cmd
 }
 
+func (r *waitResult) addEvidence() {
+	if !r.Matched {
+		return
+	}
+	switch r.Kind {
+	case "text":
+		r.Condition = fmt.Sprintf("visible text contains %q", r.Needle)
+		r.Evidence = map[string]any{"needle": r.Needle, "matched": true, "count": r.Count}
+	case "selector":
+		r.Condition = fmt.Sprintf("selector %q matched at least one element", r.Selector)
+		r.Evidence = map[string]any{"selector": r.Selector, "matched": true, "count": r.Count}
+	case "eval":
+		r.Condition = fmt.Sprintf("expression %q evaluated truthy", r.Expression)
+		r.Evidence = map[string]any{"expression": r.Expression, "matched": true, "value": r.Value}
+	}
+}
+
 func waitForPageCondition(ctx context.Context, session *cdp.PageSession, poll time.Duration, check func() (waitResult, error)) (waitResult, error) {
 	for {
 		result, err := check()
@@ -624,6 +643,7 @@ func waitForPageCondition(ctx context.Context, session *cdp.PageSession, poll ti
 			return waitResult{}, err
 		}
 		if result.Matched || result.Error != nil {
+			result.addEvidence()
 			return result, nil
 		}
 		timer := time.NewTimer(poll)

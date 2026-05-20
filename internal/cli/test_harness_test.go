@@ -135,7 +135,17 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					"description": "Page domain",
 					"commands": []map[string]any{
 						{"name": "navigate"},
-						{"name": "captureScreenshot", "description": "Capture page pixels"},
+						{"name": "captureScreenshot", "description": "Capture page pixels", "parameters": []map[string]any{
+							{"name": "format", "type": "string", "optional": true},
+							{"name": "quality", "type": "integer", "optional": true},
+						}},
+					},
+				},
+				{
+					"domain":      "Browser",
+					"description": "Browser domain",
+					"commands": []map[string]any{
+						{"name": "getVersion", "description": "Return browser version metadata"},
 					},
 				},
 				{
@@ -232,7 +242,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Page.navigateToHistoryEntry" {
 				resp["result"] = map[string]any{}
-			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setCPUThrottlingRate" {
+			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setCPUThrottlingRate" || req.Method == "Network.emulateNetworkConditions" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.disable" {
 				resp["result"] = map[string]any{}
@@ -890,14 +900,16 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_wait_selector__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		matched := selector == "main"
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"kind":     "selector",
-					"selector": "main",
-					"matched":  true,
-					"count":    1,
+					"selector": selector,
+					"matched":  matched,
+					"count":    boolCount(matched),
 				},
 			},
 		}
@@ -914,14 +926,16 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_wait_eval__") {
+		expression := expressionStringArg(req.Expression, "const expression = ")
+		matched := expression == "window.__rendered === true"
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"kind":       "eval",
-					"expression": "window.__rendered === true",
-					"matched":    true,
-					"value":      true,
+					"expression": expression,
+					"matched":    matched,
+					"value":      matched,
 				},
 			},
 		}
@@ -1140,6 +1154,13 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 			"value": "Example App",
 		},
 	}
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func expressionStringArg(expression, prefix string) string {

@@ -6,11 +6,13 @@ The goal is a long-running local CDP process that can attach to a user-approved 
 
 ## Status
 
-Early implementation. The command tree, JSON/error conventions, connection
-memory, browser readiness probes, target/page listing, page open/eval/snapshot
-commands, screenshot artifact capture, console/log capture, raw CDP discovery,
-raw CDP execution, Web Storage/cookie/IndexedDB/Cache Storage/service worker
-controls, and a default-profile auto-connect keepalive daemon with local
+Active implementation. The command tree, JSON/error conventions, connection
+memory, browser readiness probes, target/page listing, page open/eval/wait/
+observe/snapshot/html/DOM/CSS/layout commands, input automation, screenshots,
+console and network capture, emulation for viewport/media/user-agent/
+geolocation/CPU/network, accessibility/performance/memory probes, raw CDP
+discovery/examples/exec, Web Storage/cookie/IndexedDB/Cache Storage/service
+worker controls, and a default-profile auto-connect keepalive daemon with local
 command routing plus a cron-safe `daemon keepalive` command are in place.
 
 ## Intended Shape
@@ -24,9 +26,13 @@ cdp pages --json | jq '.pages[] | {id,title,url}'
 cdp page select --url-contains example.com --json
 cdp open https://example.com --json
 cdp eval 'document.title' --json
-cdp snapshot --interactive-only --limit 50 --json
+cdp observe --json
+cdp wait text Ready --timeout 10s --json
+cdp snapshot --selector body --limit 50 --json
 cdp screenshot --out tmp/page.png --json
 cdp console --errors --wait 2s --json
+cdp emulate network --preset slow-3g --json
+cdp emulate clear --json
 cdp storage indexeddb list --url-contains localhost --json
 cdp storage indexeddb get app settings feature --json
 cdp storage cache list --url-contains localhost --json
@@ -36,6 +42,7 @@ cdp workflow visible-posts https://x.com/<handle> --limit 5 --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json
 cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json
 cdp protocol search screenshot --json
+cdp protocol examples Page.captureScreenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json

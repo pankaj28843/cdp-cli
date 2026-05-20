@@ -36,7 +36,7 @@ func TestProtocolMetadataJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("protocol metadata output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Protocol.DomainCount != 2 || got.Protocol.Domains[0].Name != "Page" || got.Protocol.Domains[0].CommandCount != 2 {
+	if !got.OK || got.Protocol.DomainCount != 3 || got.Protocol.Domains[0].Name != "Page" || got.Protocol.Domains[0].CommandCount != 2 {
 		t.Fatalf("protocol metadata = %+v, want compact domain summary", got)
 	}
 }
@@ -63,7 +63,7 @@ func TestProtocolDomainsJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("protocol domains output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.DomainCount != 2 || got.Domains[1].Name != "Runtime" || got.Domains[1].EventCount != 1 {
+	if !got.OK || got.DomainCount != 3 || got.Domains[2].Name != "Runtime" || got.Domains[2].EventCount != 1 {
 		t.Fatalf("protocol domains = %+v, want compact domains", got)
 	}
 }
@@ -188,15 +188,52 @@ func TestProtocolExamplesJSON(t *testing.T) {
 	var got struct {
 		OK       bool `json:"ok"`
 		Examples []struct {
-			Command string `json:"command"`
-			Scope   string `json:"scope"`
+			Command        string         `json:"command"`
+			Scope          string         `json:"scope"`
+			Params         string         `json:"params"`
+			RequiredParams []string       `json:"required_params"`
+			OptionalParams []string       `json:"optional_params"`
+			ParamsSample   map[string]any `json:"params_sample"`
+			ScopeNote      string         `json:"scope_note"`
+			Notes          []string       `json:"notes"`
 		} `json:"examples"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("protocol examples output is invalid JSON: %v", err)
 	}
-	if !got.OK || len(got.Examples) == 0 || got.Examples[0].Scope != "target" || !strings.Contains(got.Examples[0].Command, "Page.captureScreenshot") {
+	if !got.OK || len(got.Examples) == 0 || got.Examples[0].Scope != "target" || !strings.Contains(got.Examples[0].Command, "Page.captureScreenshot") || got.Examples[0].Params == "" {
 		t.Fatalf("protocol examples = %+v, want target-scoped example", got)
+	}
+	if len(got.Examples[0].RequiredParams) != 0 || !containsString(got.Examples[0].OptionalParams, "format") || got.Examples[0].ScopeNote == "" || len(got.Examples[0].Notes) == 0 {
+		t.Fatalf("protocol examples metadata = %+v, want optional param and scope notes", got.Examples[0])
+	}
+}
+
+func TestProtocolExamplesBrowserScopedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"protocol", "examples", "Browser.getVersion", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol examples browser exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Examples []struct {
+			Command        string   `json:"command"`
+			Scope          string   `json:"scope"`
+			RequiredParams []string `json:"required_params"`
+			ScopeNote      string   `json:"scope_note"`
+		} `json:"examples"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol examples browser output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Examples) == 0 || got.Examples[0].Scope != "browser" || strings.Contains(got.Examples[0].Command, "--target") || len(got.Examples[0].RequiredParams) != 0 || !strings.Contains(got.Examples[0].ScopeNote, "Browser-scoped") {
+		t.Fatalf("protocol examples browser = %+v, want browser-scoped no-target example", got)
 	}
 }
 
