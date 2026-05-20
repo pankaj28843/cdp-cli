@@ -108,6 +108,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 					"ok":              true,
 					"capabilities":    rows,
 					"agent_readiness": readiness,
+					"bootstrap_path":  readiness["bootstrap_path"],
 					"next_commands":   readiness["next_commands"],
 				})
 			}
@@ -255,23 +256,52 @@ func agentReadiness(capabilities []map[string]any) map[string]any {
 			planned++
 		}
 	}
+	bootstrapPath := agentBootstrapPath()
 	return map[string]any{
-		"status":       "ready",
-		"mode":         "daemon_first_cli",
-		"implemented":  implemented,
-		"planned":      planned,
-		"safe_default": "passive diagnostics avoid active Chrome approval prompts unless --active-browser-probe is supplied",
-		"next_commands": []string{
-			"cdp doctor --json",
-			"cdp daemon status --json",
-			"cdp pages --json",
-			"cdp page cleanup --workflow-created --close --json",
-		},
+		"status":         "ready",
+		"mode":           "daemon_first_cli",
+		"implemented":    implemented,
+		"planned":        planned,
+		"safe_default":   "passive diagnostics avoid active Chrome approval prompts unless --active-browser-probe is supplied",
+		"bootstrap_path": bootstrapPath,
+		"next_commands":  bootstrapPath["validate_commands"],
 		"browser_commands": []string{
 			"cdp pages --json",
 			"cdp open https://example.com --json",
 			"cdp snapshot --json",
 			"cdp workflow debug-bundle --out-dir tmp/debug-bundle --json",
+		},
+	}
+}
+
+func agentBootstrapPath() map[string]any {
+	return map[string]any{
+		"setup_commands": []string{
+			"cdp --help",
+			"cdp version --json",
+			"cdp describe --json",
+			"cdp doctor --capabilities --json",
+		},
+		"validate_commands": []string{
+			"cdp doctor --json",
+			"cdp daemon status --json",
+			"cdp doctor --check daemon --json",
+			"cdp doctor --check browser-health --json",
+			"cdp daemon health --json",
+			"cdp pages --json",
+		},
+		"recover_commands": []string{
+			"cdp daemon status --json",
+			"cdp doctor --check daemon --json",
+			"cdp doctor --check browser-health --json",
+			"cdp daemon health --json",
+			"cdp daemon logs --tail 50 --json",
+		},
+		"stop_signals": []string{
+			"human_required",
+			"agent_should_stop",
+			"permission_pending",
+			"unhealthy",
 		},
 	}
 }

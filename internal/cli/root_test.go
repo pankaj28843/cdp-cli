@@ -684,13 +684,15 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 		OK             bool                `json:"ok"`
 		Capabilities   []capabilityTestRow `json:"capabilities"`
 		AgentReadiness struct {
-			Status       string   `json:"status"`
-			Mode         string   `json:"mode"`
-			Implemented  int      `json:"implemented"`
-			Planned      int      `json:"planned"`
-			NextCommands []string `json:"next_commands"`
+			Status        string            `json:"status"`
+			Mode          string            `json:"mode"`
+			Implemented   int               `json:"implemented"`
+			Planned       int               `json:"planned"`
+			BootstrapPath bootstrapPathTest `json:"bootstrap_path"`
+			NextCommands  []string          `json:"next_commands"`
 		} `json:"agent_readiness"`
-		NextCommands []string `json:"next_commands"`
+		BootstrapPath bootstrapPathTest `json:"bootstrap_path"`
+		NextCommands  []string          `json:"next_commands"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("doctor --capabilities output is invalid JSON: %v", err)
@@ -740,6 +742,17 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	if !containsString(got.NextCommands, "cdp doctor --json") || !containsString(got.AgentReadiness.NextCommands, "cdp pages --json") {
 		t.Fatalf("next commands = top-level %v readiness %v, want safe bootstrap commands", got.NextCommands, got.AgentReadiness.NextCommands)
 	}
+	if !containsString(got.BootstrapPath.SetupCommands, "cdp describe --json") || !containsString(got.BootstrapPath.ValidateCommands, "cdp daemon health --json") || !containsString(got.BootstrapPath.RecoverCommands, "cdp daemon logs --tail 50 --json") {
+		t.Fatalf("bootstrap_path = %+v, want setup, validate, and recover commands", got.BootstrapPath)
+	}
+	if !containsString(got.BootstrapPath.StopSignals, "human_required") || !containsString(got.BootstrapPath.StopSignals, "permission_pending") || !containsString(got.BootstrapPath.StopSignals, "unhealthy") {
+		t.Fatalf("bootstrap_path stop_signals = %v, want human stop signals", got.BootstrapPath.StopSignals)
+	}
+	for _, command := range append(append(append([]string{}, got.BootstrapPath.SetupCommands...), got.BootstrapPath.ValidateCommands...), got.BootstrapPath.RecoverCommands...) {
+		if strings.Contains(command, "daemon start") || strings.Contains(command, "daemon stop") || strings.Contains(command, "daemon restart") || strings.Contains(command, "keepalive --repair") || strings.Contains(command, "--active-browser-probe") || strings.Contains(command, "--browser-url") {
+			t.Fatalf("bootstrap_path command %q mutates daemon lifecycle or probes browser", command)
+		}
+	}
 }
 
 func TestDoctorCapabilitiesSchemaJSON(t *testing.T) {
@@ -761,9 +774,16 @@ func TestDoctorCapabilitiesSchemaJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("schema doctor-capabilities output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Schema.Name != "doctor-capabilities" || !schemaHasField(got.Schema.Fields, "capabilities") || !schemaHasField(got.Schema.Fields, "agent_readiness") || !schemaHasField(got.Schema.Fields, "next_commands") {
+	if !got.OK || got.Schema.Name != "doctor-capabilities" || !schemaHasField(got.Schema.Fields, "capabilities") || !schemaHasField(got.Schema.Fields, "agent_readiness") || !schemaHasField(got.Schema.Fields, "bootstrap_path") || !schemaHasField(got.Schema.Fields, "next_commands") {
 		t.Fatalf("schema doctor-capabilities = %+v, want capabilities and bootstrap fields", got)
 	}
+}
+
+type bootstrapPathTest struct {
+	SetupCommands    []string `json:"setup_commands"`
+	ValidateCommands []string `json:"validate_commands"`
+	RecoverCommands  []string `json:"recover_commands"`
+	StopSignals      []string `json:"stop_signals"`
 }
 
 type capabilityTestRow struct {
