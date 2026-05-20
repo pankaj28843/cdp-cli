@@ -1074,7 +1074,7 @@ func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) 
 }
 
 func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, rawURL string) (string, error) {
-	return a.createPageTargetTagged(ctx, client, rawURL, "", "")
+	return a.createPageTargetTagged(ctx, client, rawURL, "cdp", "")
 }
 
 func (a *app) createWorkflowPageTarget(ctx context.Context, client cdp.CommandClient, rawURL, workflow string) (string, error) {

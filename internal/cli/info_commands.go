@@ -322,6 +322,10 @@ func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
 	output, err := exec.CommandContext(ctx, "crontab", "-l").CombinedOutput()
 	available := !errors.Is(err, exec.ErrNotFound)
 	summary := summarizeCrontab(string(output))
+	return scheduledTasksStatusForSummary(available, err, summary)
+}
+
+func scheduledTasksStatusForSummary(available bool, err error, summary crontabSummary) map[string]any {
 	status := "pass"
 	message := "user crontab includes cdp daemon keepalive"
 	if !available {
@@ -338,6 +342,11 @@ func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
 			status = "warn"
 			message = "current user crontab has cdp entries but no daemon keepalive task"
 		}
+	} else if !summary.HasPageCleanup {
+		status = "warn"
+		message = "current user crontab has cdp daemon keepalive but no page cleanup task"
+	} else {
+		message = "user crontab includes cdp daemon keepalive and page cleanup"
 	}
 	return map[string]any{
 		"name":    "scheduled-tasks",
@@ -354,6 +363,7 @@ func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
 		"next_commands": []string{
 			"crontab -l | grep cdp",
 			`(crontab -l 2>/dev/null; echo '* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * $HOME/.local/bin/cdp page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup.log 2>&1') | crontab -`,
 			"cdp doctor --check scheduled-tasks --json",
 		},
 	}

@@ -87,3 +87,34 @@ func TestPageCleanupWorkflowCreatedClosesRecentVisibleTaggedPage(t *testing.T) {
 		t.Fatalf("page cleanup = %+v, want tagged visible workflow page closed", got)
 	}
 }
+
+func TestOpenNewTabRecordsCDPOwnershipForCleanup(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{})
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/cdp-opened", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("open exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	b, err := os.ReadFile(filepath.Join(stateDir, "page-cleanup.json"))
+	if err != nil {
+		t.Fatalf("read page cleanup state: %v", err)
+	}
+	var got struct {
+		Pages []struct {
+			Connection string `json:"connection"`
+			TargetID   string `json:"target_id"`
+			URL        string `json:"url"`
+			CreatedBy  string `json:"created_by"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("page cleanup state is invalid JSON: %v", err)
+	}
+	if len(got.Pages) != 1 || got.Pages[0].Connection != "default" || got.Pages[0].TargetID != "created-page" || got.Pages[0].URL != "https://example.test/cdp-opened" || got.Pages[0].CreatedBy != "cdp" {
+		t.Fatalf("page cleanup state = %+v, want cdp ownership record for opened tab", got.Pages)
+	}
+}

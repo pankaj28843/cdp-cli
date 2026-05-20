@@ -16,6 +16,24 @@ func TestSummarizeCrontabDetectsUserLevelCDPTasks(t *testing.T) {
 	}
 }
 
+func TestScheduledTasksDoctorCheckReportsCleanupTask(t *testing.T) {
+	check := scheduledTasksStatusForSummary(true, nil, crontabSummary{EntryCount: 2, HasDaemonKeepalive: true, HasPageCleanup: true})
+	if check["status"] != "pass" || check["message"] != "user crontab includes cdp daemon keepalive and page cleanup" {
+		t.Fatalf("scheduled task check = %+v, want pass message for keepalive and cleanup", check)
+	}
+	next, ok := check["next_commands"].([]string)
+	if !ok || !testContainsString(next, `(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * $HOME/.local/bin/cdp page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup.log 2>&1') | crontab -`) {
+		t.Fatalf("scheduled task next_commands = %+v, want cleanup install command", check["next_commands"])
+	}
+}
+
+func TestScheduledTasksDoctorCheckWarnsWithoutCleanupTask(t *testing.T) {
+	check := scheduledTasksStatusForSummary(true, nil, crontabSummary{EntryCount: 1, HasDaemonKeepalive: true})
+	if check["status"] != "warn" || check["message"] != "current user crontab has cdp daemon keepalive but no page cleanup task" {
+		t.Fatalf("scheduled task check = %+v, want cleanup warning", check)
+	}
+}
+
 func TestSummarizeCrontabIgnoresUnrelatedEntries(t *testing.T) {
 	got := summarizeCrontab(`
 SHELL=/bin/sh
@@ -24,4 +42,13 @@ SHELL=/bin/sh
 	if got.EntryCount != 0 || got.HasDaemonKeepalive || got.HasPageCleanup {
 		t.Fatalf("summarizeCrontab = %+v, want no cdp entries", got)
 	}
+}
+
+func testContainsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

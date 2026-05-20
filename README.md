@@ -58,6 +58,7 @@ selected connection is not healthy.
 
 ```cron
 * * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1
+* * * * * $HOME/.local/bin/cdp page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup.log 2>&1
 ```
 
 Verify the current Linux user's scheduled task with:
@@ -74,7 +75,7 @@ crontab -l | grep cdp
 - Safe default-profile access: never silently expose browser data; make attachment explicit and inspectable.
 - Human-in-loop auto-connect: when Chrome approval is pending, agents should inspect `cdp daemon status --json`, `cdp doctor --check daemon --json`, and logs, then stop and report the required human Allow action instead of retrying start/stop loops.
 - Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
-- Browser resource budget: page creation is guarded by a default budget of 15 page tabs and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; cleanup should prefer `cdp page cleanup --workflow-created --close --json`.
+- Browser resource budget: page creation is guarded by a default budget of 15 page tabs and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; cleanup should prefer `cdp page cleanup --created-by cdp --idle-for 30m --close --json`.
 - Formal browser invariants: daemon boundary, explicit profile access, lazy discovery, bounded page creation, unambiguous target selection, conservative cleanup, and JSON error envelopes are tracked in `docs/FORMAL_INVARIANTS.md`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.

@@ -101,6 +101,7 @@ rg -q "cleanup routine|page cleanup|clean" <<<"$help_output"
 page_cleanup_describe="$("$binary" describe --command "page cleanup" --json)"
 page_cleanup_examples="$(jq -r '.commands.examples[]' <<<"$page_cleanup_describe")"
 rg -q 'cdp page cleanup --close' <<<"$page_cleanup_examples"
+rg -q 'cdp page cleanup --created-by cdp --idle-for 30m --close' <<<"$page_cleanup_examples"
 page_cleanup_short="$(jq -r '.commands.short' <<<"$page_cleanup_describe")"
 rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null
