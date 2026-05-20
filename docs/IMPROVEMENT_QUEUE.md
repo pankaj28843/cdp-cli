@@ -12,6 +12,9 @@ the behavior is stable and covered by E2E checks.
   storage controls, page control, wait/query/observe commands, input automation,
   accessibility/perf/memory probes, and emulation for viewport/media/user-agent/
   geolocation/CPU/network are covered by unit checks and installed E2E metadata.
+- Page cleanup dry-runs now expose close intent (`would_close_count`,
+  `close_required`, and follow-up commands), so agents can tell when a cron-safe
+  cleanup is observing versus actually closing candidates.
 - Cross-agent layout is normalized: `AGENTS.md` is canonical, compatibility
   instruction/skill paths are relative symlinks, and Copilot instructions point
   back to `AGENTS.md`.
@@ -20,8 +23,8 @@ the behavior is stable and covered by E2E checks.
 
 1. Split `internal/cli/commands.go` into focused files without changing
    behavior.
-2. Add a public-safe artifact redaction check for bundles, traces, storage
-   dumps, heap snapshots, and logs.
+2. Add a shared public-safe artifact redaction guard for bundles, traces,
+   storage dumps, heap snapshots, logs, HAR, and request/response body artifacts.
 3. Add screenshot device presets.
 4. Add full-page screenshot tiling for very tall pages.
 5. Add HAR export.
