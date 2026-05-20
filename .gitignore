@@ -7,4 +7,5 @@ coverage.out
 .env
 .env.*
 tmp/
+tmp*
 .cdp-cli/
