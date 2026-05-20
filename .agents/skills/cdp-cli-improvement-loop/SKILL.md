@@ -20,6 +20,10 @@ commands, and end-to-end checks against the installed binary.
 - Keep the repository public-safe. Do not commit local usernames, absolute home
   paths, hostnames, private browser profile paths, cookies, tokens, request
   headers, screenshots, traces, page content, or local MCP configuration dumps.
+- Keep PRP plans outside the code repo under `~/plan-prps/cdp-cli/`. Before
+  starting or resuming work, check that directory for the newest plan and update
+  that external file as the living sprint state; do not create or update PRP
+  plans under `docs/`, `plans/`, or any other tracked repo path.
 - Borrow prior-art workflow mechanics only when they apply to a Chrome DevTools
   Protocol CLI. Do not import domain-specific assumptions from unrelated CLIs.
 - Every loop ships one complete improvement, validates it with `make verify`,
