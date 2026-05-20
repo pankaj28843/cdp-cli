@@ -20,6 +20,7 @@ command routing plus a cron-safe `daemon keepalive` command are in place.
 ```bash
 cdp daemon start --auto-connect --json
 cdp daemon status --json
+cdp doctor --check scheduled-tasks --json
 cdp doctor --check browser-health --json
 cdp daemon keepalive --auto-connect --repair --display :0 --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
@@ -57,6 +58,13 @@ selected connection is not healthy.
 
 ```cron
 * * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1
+```
+
+Verify the current Linux user's scheduled task with:
+
+```bash
+cdp doctor --check scheduled-tasks --json
+crontab -l | grep cdp
 ```
 
 ## Principles

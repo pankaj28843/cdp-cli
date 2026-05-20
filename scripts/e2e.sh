@@ -26,12 +26,14 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect")))' >/dev/null
 "$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--display")))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
+"$binary" describe --command "doctor" --json | jq -e '.ok == true and .commands.name == "doctor" and (.commands.examples | any(contains("scheduled-tasks")))' >/dev/null
 "$binary" describe --command "connection" --json | jq -e '.ok == true and .commands.name == "connection" and (.commands.examples | any(contains("connection list")))' >/dev/null
 "$binary" describe --command "connection add" --json | jq -e '.ok == true and .commands.name == "add" and (.commands.examples | any(contains("--auto-connect")))' >/dev/null
 "$binary" describe --command "connection select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("connection select")))' >/dev/null
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
+"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].next_commands | index("crontab -l | grep cdp"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities | map(.name) | index("raw_protocol"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "advanced_storage" and .status == "implemented"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "raw_protocol" and (.verify_commands | index("cdp protocol metadata --json"))))' >/dev/null
@@ -42,6 +44,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "emulation" and .status == "implemented" and (.verify_commands | index("cdp emulate user-agent --help")) and (.verify_commands | index("cdp emulate cpu --help")) and (.verify_commands | index("cdp emulate network --help"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and ([.capabilities[] | select(.name == "network_throttling")] | length == 0)' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp daemon health --json")) and (.bootstrap_path.recover_commands | index("cdp daemon logs --tail 50 --json")) and (.bootstrap_path.stop_signals | index("human_required"))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp doctor --check scheduled-tasks --json"))' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null

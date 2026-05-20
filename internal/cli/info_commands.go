@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
@@ -183,6 +186,9 @@ func (a *app) newDoctorCommand() *cobra.Command {
 					})
 				}
 			}
+			if checkName == "" || checkName == "scheduled-tasks" {
+				checks = append(checks, scheduledTasksDoctorCheck(ctx))
+			}
 			if checkName != "" {
 				checks = filterChecksByName(checks, checkName)
 				if len(checks) == 0 {
@@ -285,6 +291,7 @@ func agentBootstrapPath() map[string]any {
 			"cdp doctor --json",
 			"cdp daemon status --json",
 			"cdp doctor --check daemon --json",
+			"cdp doctor --check scheduled-tasks --json",
 			"cdp doctor --check browser-health --json",
 			"cdp daemon health --json",
 			"cdp pages --json",
@@ -303,6 +310,74 @@ func agentBootstrapPath() map[string]any {
 			"unhealthy",
 		},
 	}
+}
+
+type crontabSummary struct {
+	EntryCount         int
+	HasDaemonKeepalive bool
+	HasPageCleanup     bool
+}
+
+func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
+	output, err := exec.CommandContext(ctx, "crontab", "-l").CombinedOutput()
+	available := !errors.Is(err, exec.ErrNotFound)
+	summary := summarizeCrontab(string(output))
+	status := "pass"
+	message := "user crontab includes cdp daemon keepalive"
+	if !available {
+		status = "pending"
+		message = "crontab command is not available on PATH"
+	} else if err != nil && summary.EntryCount == 0 {
+		status = "pending"
+		message = "current user crontab has no cdp entries"
+	} else if !summary.HasDaemonKeepalive {
+		if summary.EntryCount == 0 {
+			status = "pending"
+			message = "current user crontab has no cdp entries"
+		} else {
+			status = "warn"
+			message = "current user crontab has cdp entries but no daemon keepalive task"
+		}
+	}
+	return map[string]any{
+		"name":    "scheduled-tasks",
+		"status":  status,
+		"message": message,
+		"details": map[string]any{
+			"source":               "crontab -l",
+			"user_level":           true,
+			"crontab_available":    available,
+			"cdp_entries_count":    summary.EntryCount,
+			"has_daemon_keepalive": summary.HasDaemonKeepalive,
+			"has_page_cleanup":     summary.HasPageCleanup,
+		},
+		"next_commands": []string{
+			"crontab -l | grep cdp",
+			`(crontab -l 2>/dev/null; echo '* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1') | crontab -`,
+			"cdp doctor --check scheduled-tasks --json",
+		},
+	}
+}
+
+func summarizeCrontab(text string) crontabSummary {
+	var summary crontabSummary
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.Contains(line, "grep cdp") {
+			continue
+		}
+		if !strings.Contains(line, "cdp ") && !strings.HasSuffix(line, "/cdp") {
+			continue
+		}
+		summary.EntryCount++
+		if strings.Contains(line, "cdp daemon keepalive") {
+			summary.HasDaemonKeepalive = true
+		}
+		if strings.Contains(line, "cdp page cleanup") {
+			summary.HasPageCleanup = true
+		}
+	}
+	return summary
 }
 
 func filterChecksByName(checks []map[string]any, name string) []map[string]any {

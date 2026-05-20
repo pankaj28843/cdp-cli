@@ -66,6 +66,7 @@ func commandExamples(path string) []string {
 		"cdp doctor": {
 			"cdp doctor --json",
 			"cdp doctor --check daemon --json",
+			"cdp doctor --check scheduled-tasks --json",
 			"cdp doctor --check browser-health --json",
 			"cdp doctor --check browser-budget --json",
 		},
