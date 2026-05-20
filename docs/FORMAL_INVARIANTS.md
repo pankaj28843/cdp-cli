@@ -14,6 +14,9 @@ These invariants define the safety and liveness rules for cdp-cli browser workfl
 | Cleanup is conservative by default: selected, visible, and attached pages are retained unless an explicit close/force path applies. | `internal/cli/page_commands.go` | `TestPageCleanupJSON` | Add selected-page retention coverage and forced targeted cleanup coverage. |
 | JSON failures use stable envelopes with `ok=false`, `code`, `err_class`, `message`, and remediation when useful. | `internal/cli/errors.go`, `internal/cli/schema_catalog.go` | root/schema/error tests, browser workflow tests | Add table coverage for daemon/browser command errors that currently flow through generic errors. |
 | Heavy or private browser data is written as artifact references, not embedded in default JSON output. | workflow and artifact command files | debug bundle, screenshot, memory tests | Add a public-safe redaction scan over bundle/log artifacts. |
+| Screenshot capture metadata must be enough to reproduce framing decisions without embedding image data in JSON. | `internal/cli/artifact_commands.go`, `internal/cdp/page.go`, responsive workflow files | screenshot artifact tests, render screenshot tests | Add preset and tile tests that assert viewport, DPR, clip/tile count, full-page mode, and output paths. |
+| Network interception workflows must release every paused request before command exit. | future request blocking/mocking commands, `internal/cdp` event loop helpers | none yet | Add timeout and cancellation tests that prove blocked/mocked sessions disable interception and continue or fail paused requests. |
+| Streamed trace and body artifacts must stay bounded, close protocol handles, and emit safety metadata. | future HAR/body/trace commands, artifact helpers | network capture body limits, perf workflow artifact tests | Add synthetic stream tests for `IO.read` EOF, max bytes, scanner results, and handle cleanup. |
 
 ## Liveness Properties
 
