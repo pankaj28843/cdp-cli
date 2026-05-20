@@ -127,9 +127,12 @@ func TestPageCleanupJSON(t *testing.T) {
 	var got struct {
 		OK      bool `json:"ok"`
 		Cleanup struct {
-			DryRun         bool `json:"dry_run"`
-			CandidateCount int  `json:"candidate_count"`
-			ClosedCount    int  `json:"closed_count"`
+			DryRun          bool `json:"dry_run"`
+			CandidateCount  int  `json:"candidate_count"`
+			ReadyCount      int  `json:"ready_count"`
+			WouldCloseCount int  `json:"would_close_count"`
+			CloseRequired   bool `json:"close_required"`
+			ClosedCount     int  `json:"closed_count"`
 		} `json:"cleanup"`
 		Candidates []struct {
 			Target struct {
@@ -143,7 +146,7 @@ func TestPageCleanupJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("page cleanup output is invalid JSON: %v", err)
 	}
-	if !got.OK || !got.Cleanup.DryRun || got.Cleanup.CandidateCount != 1 || got.Cleanup.ClosedCount != 0 {
+	if !got.OK || !got.Cleanup.DryRun || got.Cleanup.CandidateCount != 1 || got.Cleanup.ReadyCount != 1 || got.Cleanup.WouldCloseCount != 1 || !got.Cleanup.CloseRequired || got.Cleanup.ClosedCount != 0 {
 		t.Fatalf("page cleanup summary = %+v, want one dry-run candidate", got.Cleanup)
 	}
 	if len(got.Candidates) != 3 || got.Candidates[0].KeepReason != "visible" || got.Candidates[1].KeepReason != "" || !got.Candidates[1].Hidden || got.Candidates[2].KeepReason != "attached" {
@@ -158,8 +161,10 @@ func TestPageCleanupJSON(t *testing.T) {
 	}
 	var closed struct {
 		Cleanup struct {
-			DryRun      bool `json:"dry_run"`
-			ClosedCount int  `json:"closed_count"`
+			DryRun          bool `json:"dry_run"`
+			WouldCloseCount int  `json:"would_close_count"`
+			CloseRequired   bool `json:"close_required"`
+			ClosedCount     int  `json:"closed_count"`
 		} `json:"cleanup"`
 		Closed []struct {
 			Target struct {
@@ -170,7 +175,7 @@ func TestPageCleanupJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &closed); err != nil {
 		t.Fatalf("page cleanup close output is invalid JSON: %v", err)
 	}
-	if closed.Cleanup.DryRun || closed.Cleanup.ClosedCount != 1 || len(closed.Closed) != 1 || closed.Closed[0].Target.ID != "page-hidden" {
+	if closed.Cleanup.DryRun || closed.Cleanup.WouldCloseCount != 0 || closed.Cleanup.CloseRequired || closed.Cleanup.ClosedCount != 1 || len(closed.Closed) != 1 || closed.Closed[0].Target.ID != "page-hidden" {
 		t.Fatalf("page cleanup close = %+v, want hidden page closed", closed)
 	}
 }

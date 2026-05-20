@@ -560,24 +560,32 @@ run; pass --close to close candidates after they have remained inactive for
 				}
 				lines = append(lines, fmt.Sprintf("%s\t%s\t%s", candidate.Target.TargetID, status, candidate.Target.Title))
 			}
+			readyCount := countReadyCandidates(candidates)
+			wouldCloseCount := 0
+			if !closePages {
+				wouldCloseCount = readyCount
+			}
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
 				"ok": true,
 				"cleanup": map[string]any{
-					"dry_run":          !closePages,
-					"close":            closePages,
-					"candidate_count":  countClosableCandidates(candidates),
-					"closed_count":     len(closed),
-					"idle_for":         idleFor.String(),
-					"state_path":       pageCleanupStatePath(store.Dir),
-					"include_attached": includeAttached,
-					"include_url":      strings.TrimSpace(includeURL),
-					"exclude_url":      strings.TrimSpace(excludeURL),
-					"created_by":       strings.TrimSpace(createdBy),
-					"workflow_created": workflowCreated,
-					"force":            force,
-					"force_target":     strings.TrimSpace(forceTarget),
-					"since":            durationString(since),
-					"selected_page":    selectedID,
+					"dry_run":           !closePages,
+					"close":             closePages,
+					"candidate_count":   readyCount,
+					"ready_count":       readyCount,
+					"would_close_count": wouldCloseCount,
+					"close_required":    !closePages && readyCount > 0,
+					"closed_count":      len(closed),
+					"idle_for":          idleFor.String(),
+					"state_path":        pageCleanupStatePath(store.Dir),
+					"include_attached":  includeAttached,
+					"include_url":       strings.TrimSpace(includeURL),
+					"exclude_url":       strings.TrimSpace(excludeURL),
+					"created_by":        strings.TrimSpace(createdBy),
+					"workflow_created":  workflowCreated,
+					"force":             force,
+					"force_target":      strings.TrimSpace(forceTarget),
+					"since":             durationString(since),
+					"selected_page":     selectedID,
 					"next_commands": []string{
 						"cdp page cleanup --json",
 						"cdp page cleanup --close --max 10 --json",
@@ -745,16 +753,6 @@ func pageVisibility(ctx context.Context, client cdp.CommandClient, targetID stri
 		return "unknown", false, false
 	}
 	return result.VisibilityState, result.Hidden, result.Prerendering
-}
-
-func countClosableCandidates(candidates []cleanupCandidate) int {
-	count := 0
-	for _, candidate := range candidates {
-		if candidate.Ready {
-			count++
-		}
-	}
-	return count
 }
 
 func pageCleanupStatePath(stateDir string) string {

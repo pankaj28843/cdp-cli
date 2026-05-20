@@ -193,7 +193,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Cron-friendly dry-run or close result for inactive page targets.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when cleanup evaluation completed."},
-				{Name: "cleanup", Type: "page_cleanup_summary", Required: true, Description: "Dry-run flag, filters, selected page, candidate count, closed count, and next commands."},
+				{Name: "cleanup", Type: "page_cleanup_summary", Required: true, Description: "Dry-run flag, filters, selected page, ready/would-close counts, close-required hint, closed count, and next commands."},
 				{Name: "candidates", Type: "array<page_cleanup_candidate>", Required: true, Description: "Page targets considered with visibility state, hidden flag, keep reason, and close error."},
 				{Name: "closed", Type: "array<page_cleanup_candidate>", Required: true, Description: "Candidates closed when --close is set."},
 			},
