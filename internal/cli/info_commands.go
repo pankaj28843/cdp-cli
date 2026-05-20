@@ -99,13 +99,17 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				ctx, cancel := a.commandContext(cmd)
 				defer cancel()
 				rows := capabilityCatalog()
+				readiness := agentReadiness(rows)
 				lines := make([]string, 0, len(rows))
 				for _, row := range rows {
-					lines = append(lines, fmt.Sprintf("%s\t%s", row["name"], row["status"]))
+					lines = append(lines, fmt.Sprintf("%s\t%s", capabilityString(row, "name"), capabilityString(row, "status")))
 				}
 				return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
-					"ok":           true,
-					"capabilities": rows,
+					"ok":              true,
+					"capabilities":    rows,
+					"agent_readiness": readiness,
+					"bootstrap_path":  readiness["bootstrap_path"],
+					"next_commands":   readiness["next_commands"],
 				})
 			}
 
@@ -205,22 +209,99 @@ func (a *app) newDoctorCommand() *cobra.Command {
 	return cmd
 }
 
-func capabilityCatalog() []map[string]string {
-	return []map[string]string{
-		{"name": "connection", "status": "implemented", "commands": "connection, daemon, doctor"},
-		{"name": "target_discovery", "status": "implemented", "commands": "targets, pages"},
-		{"name": "page_control", "status": "implemented", "commands": "page reload/back/forward/activate/close, open"},
-		{"name": "page_inspection", "status": "implemented", "commands": "eval, text, html, snapshot, dom query, css inspect, layout overflow"},
-		{"name": "artifacts", "status": "implemented", "commands": "screenshot"},
-		{"name": "console", "status": "implemented", "commands": "console, workflow console-errors"},
-		{"name": "network", "status": "implemented", "commands": "network, workflow network-failures"},
-		{"name": "storage", "status": "implemented", "commands": "storage list/get/set/delete/clear/snapshot/diff, storage cookies"},
-		{"name": "raw_protocol", "status": "implemented", "commands": "protocol metadata/domains/search/describe/exec"},
-		{"name": "input_automation", "status": "implemented", "commands": "click, fill, type, press, hover, drag"},
-		{"name": "emulation", "status": "planned", "commands": "viewport, media, user-agent, geolocation, network, cpu"},
-		{"name": "performance", "status": "planned", "commands": "trace, Lighthouse, performance insights"},
-		{"name": "memory", "status": "planned", "commands": "heap snapshot"},
-		{"name": "advanced_storage", "status": "implemented", "commands": "storage indexeddb, storage cache, storage service-workers"},
+func capabilityCatalog() []map[string]any {
+	return []map[string]any{
+		capabilityRow("connection", "implemented", "connection, daemon, doctor", []string{"cdp connection current --json", "cdp daemon status --json"}, []string{"cdp doctor --json"}),
+		capabilityRow("target_discovery", "implemented", "targets, pages", []string{"cdp targets --json", "cdp pages --json"}, []string{"cdp doctor --check browser-budget --json"}),
+		capabilityRow("page_control", "implemented", "page reload/back/forward/activate/close, open", []string{"cdp page select --url-contains example --json", "cdp page reload --target <target-id> --json"}, []string{"cdp pages --json"}),
+		capabilityRow("page_inspection", "implemented", "eval, observe, text, html, snapshot, dom query, css inspect, layout overflow", []string{"cdp snapshot --json", "cdp eval 'document.title' --json", "cdp observe --help"}, []string{"cdp text body --json"}),
+		capabilityRow("artifacts", "implemented", "screenshot", []string{"cdp screenshot --out tmp/page.png --json"}, []string{"cdp workflow debug-bundle --out-dir tmp/debug-bundle --json"}),
+		capabilityRow("console", "implemented", "console, workflow console-errors", []string{"cdp console --errors --wait 1s --json"}, []string{"cdp workflow console-errors --wait 1s --json"}),
+		capabilityRow("network", "implemented", "network, workflow network-failures", []string{"cdp network --wait 1s --json"}, []string{"cdp workflow network-failures --wait 1s --json"}),
+		capabilityRow("storage", "implemented", "storage list/get/set/delete/clear/snapshot/diff, storage cookies", []string{"cdp storage list --json", "cdp storage snapshot --json"}, []string{"cdp storage cookies list --json"}),
+		capabilityRow("raw_protocol", "implemented", "protocol metadata/domains/search/describe/exec", []string{"cdp protocol metadata --json", "cdp protocol search screenshot --json"}, []string{"cdp protocol exec Browser.getVersion --json"}),
+		capabilityRow("input_automation", "implemented", "click, fill, type, press, hover, drag", []string{"cdp form values --json"}, []string{"cdp click <selector> --json"}),
+		capabilityRow("accessibility", "implemented", "a11y tree/find/node, workflow a11y", []string{"cdp a11y tree --json", "cdp a11y find --role button --json"}, []string{"cdp workflow a11y https://example.com --json"}),
+		capabilityRow("performance", "implemented", "perf summary, workflow perf, workflow page-load metrics", []string{"cdp perf summary --duration 1s --json"}, []string{"cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json"}),
+		capabilityRow("memory", "implemented", "memory counters, heap snapshot artifact", []string{"cdp memory counters --json"}, []string{"cdp memory heap-snapshot --out tmp/heap.heapsnapshot --json"}),
+		capabilityRow("advanced_storage", "implemented", "storage indexeddb, storage cache, storage service-workers", []string{"cdp storage indexeddb list --json", "cdp storage cache list --json", "cdp storage service-workers list --json"}, []string{"cdp storage snapshot --json"}),
+		capabilityRow("emulation", "implemented", "viewport, media, user-agent, geolocation, CPU throttling, network throttling, responsive audit", []string{"cdp emulate viewport --help", "cdp emulate user-agent --help", "cdp emulate geolocation --help", "cdp emulate cpu --help", "cdp emulate network --help"}, []string{"cdp workflow responsive-audit https://example.com --json", "cdp emulate network --preset slow-3g --json"}),
+	}
+}
+
+func capabilityRow(name, status, commands string, verifyCommands, evidenceCommands []string) map[string]any {
+	return map[string]any{
+		"name":              name,
+		"status":            status,
+		"commands":          commands,
+		"verify_commands":   verifyCommands,
+		"evidence_commands": evidenceCommands,
+	}
+}
+
+func capabilityString(row map[string]any, key string) string {
+	value, _ := row[key].(string)
+	return value
+}
+
+func agentReadiness(capabilities []map[string]any) map[string]any {
+	implemented := 0
+	planned := 0
+	for _, capability := range capabilities {
+		switch capabilityString(capability, "status") {
+		case "implemented":
+			implemented++
+		case "planned":
+			planned++
+		}
+	}
+	bootstrapPath := agentBootstrapPath()
+	return map[string]any{
+		"status":         "ready",
+		"mode":           "daemon_first_cli",
+		"implemented":    implemented,
+		"planned":        planned,
+		"safe_default":   "passive diagnostics avoid active Chrome approval prompts unless --active-browser-probe is supplied",
+		"bootstrap_path": bootstrapPath,
+		"next_commands":  bootstrapPath["validate_commands"],
+		"browser_commands": []string{
+			"cdp pages --json",
+			"cdp open https://example.com --json",
+			"cdp snapshot --json",
+			"cdp workflow debug-bundle --out-dir tmp/debug-bundle --json",
+		},
+	}
+}
+
+func agentBootstrapPath() map[string]any {
+	return map[string]any{
+		"setup_commands": []string{
+			"cdp --help",
+			"cdp version --json",
+			"cdp describe --json",
+			"cdp doctor --capabilities --json",
+		},
+		"validate_commands": []string{
+			"cdp doctor --json",
+			"cdp daemon status --json",
+			"cdp doctor --check daemon --json",
+			"cdp doctor --check browser-health --json",
+			"cdp daemon health --json",
+			"cdp pages --json",
+		},
+		"recover_commands": []string{
+			"cdp daemon status --json",
+			"cdp doctor --check daemon --json",
+			"cdp doctor --check browser-health --json",
+			"cdp daemon health --json",
+			"cdp daemon logs --tail 50 --json",
+		},
+		"stop_signals": []string{
+			"human_required",
+			"agent_should_stop",
+			"permission_pending",
+			"unhealthy",
+		},
 	}
 }
 

@@ -681,11 +681,18 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK           bool `json:"ok"`
-		Capabilities []struct {
-			Name   string `json:"name"`
-			Status string `json:"status"`
-		} `json:"capabilities"`
+		OK             bool                `json:"ok"`
+		Capabilities   []capabilityTestRow `json:"capabilities"`
+		AgentReadiness struct {
+			Status        string            `json:"status"`
+			Mode          string            `json:"mode"`
+			Implemented   int               `json:"implemented"`
+			Planned       int               `json:"planned"`
+			BootstrapPath bootstrapPathTest `json:"bootstrap_path"`
+			NextCommands  []string          `json:"next_commands"`
+		} `json:"agent_readiness"`
+		BootstrapPath bootstrapPathTest `json:"bootstrap_path"`
+		NextCommands  []string          `json:"next_commands"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("doctor --capabilities output is invalid JSON: %v", err)
@@ -698,6 +705,53 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	}
 	if status := capabilityStatus(got.Capabilities, "advanced_storage"); status != "implemented" {
 		t.Fatalf("advanced_storage capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "accessibility"); status != "implemented" {
+		t.Fatalf("accessibility capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "performance"); status != "implemented" {
+		t.Fatalf("performance capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "memory"); status != "implemented" {
+		t.Fatalf("memory capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "emulation"); status != "implemented" {
+		t.Fatalf("emulation capability status = %q, want implemented", status)
+	}
+	if status := capabilityStatus(got.Capabilities, "network_throttling"); status != "" {
+		t.Fatalf("network_throttling capability status = %q, want row removed after network emulation shipped", status)
+	}
+	if commands := capabilityVerifyCommands(got.Capabilities, "raw_protocol"); !containsString(commands, "cdp protocol metadata --json") {
+		t.Fatalf("raw_protocol verify_commands = %v, want protocol metadata check", commands)
+	}
+	if commands := capabilityEvidenceCommands(got.Capabilities, "artifacts"); !containsString(commands, "cdp workflow debug-bundle --out-dir tmp/debug-bundle --json") {
+		t.Fatalf("artifacts evidence_commands = %v, want debug-bundle evidence command", commands)
+	}
+	if commands := capabilityVerifyCommands(got.Capabilities, "accessibility"); !containsString(commands, "cdp a11y tree --json") {
+		t.Fatalf("accessibility verify_commands = %v, want a11y tree check", commands)
+	}
+	if commands := capabilityEvidenceCommands(got.Capabilities, "performance"); !containsString(commands, "cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json") {
+		t.Fatalf("performance evidence_commands = %v, want workflow perf trace evidence", commands)
+	}
+	if commands := capabilityVerifyCommands(got.Capabilities, "emulation"); !containsString(commands, "cdp emulate user-agent --help") || !containsString(commands, "cdp emulate cpu --help") || !containsString(commands, "cdp emulate network --help") {
+		t.Fatalf("emulation verify_commands = %v, want user-agent, CPU, and network help checks", commands)
+	}
+	if got.AgentReadiness.Status != "ready" || got.AgentReadiness.Mode != "daemon_first_cli" || got.AgentReadiness.Implemented == 0 {
+		t.Fatalf("agent_readiness = %+v, want daemon-first readiness summary", got.AgentReadiness)
+	}
+	if !containsString(got.NextCommands, "cdp doctor --json") || !containsString(got.AgentReadiness.NextCommands, "cdp pages --json") {
+		t.Fatalf("next commands = top-level %v readiness %v, want safe bootstrap commands", got.NextCommands, got.AgentReadiness.NextCommands)
+	}
+	if !containsString(got.BootstrapPath.SetupCommands, "cdp describe --json") || !containsString(got.BootstrapPath.ValidateCommands, "cdp daemon health --json") || !containsString(got.BootstrapPath.RecoverCommands, "cdp daemon logs --tail 50 --json") {
+		t.Fatalf("bootstrap_path = %+v, want setup, validate, and recover commands", got.BootstrapPath)
+	}
+	if !containsString(got.BootstrapPath.StopSignals, "human_required") || !containsString(got.BootstrapPath.StopSignals, "permission_pending") || !containsString(got.BootstrapPath.StopSignals, "unhealthy") {
+		t.Fatalf("bootstrap_path stop_signals = %v, want human stop signals", got.BootstrapPath.StopSignals)
+	}
+	for _, command := range append(append(append([]string{}, got.BootstrapPath.SetupCommands...), got.BootstrapPath.ValidateCommands...), got.BootstrapPath.RecoverCommands...) {
+		if strings.Contains(command, "daemon start") || strings.Contains(command, "daemon stop") || strings.Contains(command, "daemon restart") || strings.Contains(command, "keepalive --repair") || strings.Contains(command, "--active-browser-probe") || strings.Contains(command, "--browser-url") {
+			t.Fatalf("bootstrap_path command %q mutates daemon lifecycle or probes browser", command)
+		}
 	}
 }
 
@@ -720,21 +774,50 @@ func TestDoctorCapabilitiesSchemaJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("schema doctor-capabilities output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Schema.Name != "doctor-capabilities" || !schemaHasField(got.Schema.Fields, "capabilities") {
-		t.Fatalf("schema doctor-capabilities = %+v, want capabilities field", got)
+	if !got.OK || got.Schema.Name != "doctor-capabilities" || !schemaHasField(got.Schema.Fields, "capabilities") || !schemaHasField(got.Schema.Fields, "agent_readiness") || !schemaHasField(got.Schema.Fields, "bootstrap_path") || !schemaHasField(got.Schema.Fields, "next_commands") {
+		t.Fatalf("schema doctor-capabilities = %+v, want capabilities and bootstrap fields", got)
 	}
 }
 
-func capabilityStatus(capabilities []struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-}, name string) string {
+type bootstrapPathTest struct {
+	SetupCommands    []string `json:"setup_commands"`
+	ValidateCommands []string `json:"validate_commands"`
+	RecoverCommands  []string `json:"recover_commands"`
+	StopSignals      []string `json:"stop_signals"`
+}
+
+type capabilityTestRow struct {
+	Name             string   `json:"name"`
+	Status           string   `json:"status"`
+	VerifyCommands   []string `json:"verify_commands"`
+	EvidenceCommands []string `json:"evidence_commands"`
+}
+
+func capabilityStatus(capabilities []capabilityTestRow, name string) string {
 	for _, capability := range capabilities {
 		if capability.Name == name {
 			return capability.Status
 		}
 	}
 	return ""
+}
+
+func capabilityVerifyCommands(capabilities []capabilityTestRow, name string) []string {
+	for _, capability := range capabilities {
+		if capability.Name == name {
+			return capability.VerifyCommands
+		}
+	}
+	return nil
+}
+
+func capabilityEvidenceCommands(capabilities []capabilityTestRow, name string) []string {
+	for _, capability := range capabilities {
+		if capability.Name == name {
+			return capability.EvidenceCommands
+		}
+	}
+	return nil
 }
 
 func containsString(values []string, want string) bool {

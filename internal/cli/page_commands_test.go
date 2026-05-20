@@ -424,6 +424,34 @@ func TestOpenRefusesOverBudgetJSON(t *testing.T) {
 	}
 }
 
+func TestEvalAmbiguousTargetPrefixFailsBeforeAttach(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-prefix-one", "type": "page", "title": "First Page", "url": "https://example.test/first", "attached": false},
+		{"targetId": "page-prefix-two", "type": "page", "title": "Second Page", "url": "https://example.test/second", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--target", "page-prefix", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("eval ambiguous target exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool     `json:"ok"`
+		Code     string   `json:"code"`
+		ErrClass string   `json:"err_class"`
+		Commands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("eval ambiguous target output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "ambiguous_target" || got.ErrClass != "usage" || len(got.Commands) == 0 {
+		t.Fatalf("eval ambiguous target = %+v, want structured ambiguity envelope", got)
+	}
+}
+
 func TestPageReloadJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -633,6 +661,47 @@ func TestHTMLCommandEmptyDiagnosticsJSON(t *testing.T) {
 	}
 }
 
+func TestObserveJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"observe", "--selector", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("observe exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK      bool `json:"ok"`
+		Observe struct {
+			Count       int `json:"count"`
+			Interactive []struct {
+				Ref      string `json:"ref"`
+				Role     string `json:"role"`
+				Name     string `json:"name"`
+				Selector string `json:"selector"`
+				Visible  bool   `json:"visible"`
+			} `json:"interactive"`
+		} `json:"observe"`
+		Interactive []struct {
+			Ref string `json:"ref"`
+		} `json:"interactive"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("observe output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Observe.Count != 1 || len(got.Interactive) != 1 {
+		t.Fatalf("observe output = %+v, want one interactive element", got)
+	}
+	node := got.Observe.Interactive[0]
+	if node.Ref != "obs:0" || node.Role != "button" || node.Name != "Save changes" || node.Selector != "button#save" || !node.Visible {
+		t.Fatalf("observe interactive node = %+v, want stable agent action hint", node)
+	}
+}
+
 func TestDOMQueryJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -739,15 +808,17 @@ func TestWaitTextJSON(t *testing.T) {
 	var got struct {
 		OK   bool `json:"ok"`
 		Wait struct {
-			Kind    string `json:"kind"`
-			Needle  string `json:"needle"`
-			Matched bool   `json:"matched"`
+			Kind      string         `json:"kind"`
+			Needle    string         `json:"needle"`
+			Matched   bool           `json:"matched"`
+			Condition string         `json:"condition"`
+			Evidence  map[string]any `json:"evidence"`
 		} `json:"wait"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("wait text output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Wait.Kind != "text" || got.Wait.Needle != "Ready" || !got.Wait.Matched {
+	if !got.OK || got.Wait.Kind != "text" || got.Wait.Needle != "Ready" || !got.Wait.Matched || !strings.Contains(got.Wait.Condition, "Ready") || got.Wait.Evidence["needle"] != "Ready" {
 		t.Fatalf("wait text output = %+v, want matched text", got)
 	}
 }
@@ -768,15 +839,17 @@ func TestWaitSelectorJSON(t *testing.T) {
 	var got struct {
 		OK   bool `json:"ok"`
 		Wait struct {
-			Kind     string `json:"kind"`
-			Selector string `json:"selector"`
-			Matched  bool   `json:"matched"`
+			Kind      string         `json:"kind"`
+			Selector  string         `json:"selector"`
+			Matched   bool           `json:"matched"`
+			Condition string         `json:"condition"`
+			Evidence  map[string]any `json:"evidence"`
 		} `json:"wait"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("wait selector output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Wait.Kind != "selector" || got.Wait.Selector != "main" || !got.Wait.Matched {
+	if !got.OK || got.Wait.Kind != "selector" || got.Wait.Selector != "main" || !got.Wait.Matched || !strings.Contains(got.Wait.Condition, "main") || got.Wait.Evidence["selector"] != "main" {
 		t.Fatalf("wait selector output = %+v, want matched selector", got)
 	}
 }
@@ -801,13 +874,137 @@ func TestWaitEvalJSON(t *testing.T) {
 			Expression string          `json:"expression"`
 			Matched    bool            `json:"matched"`
 			Value      json.RawMessage `json:"value"`
+			Condition  string          `json:"condition"`
+			Evidence   map[string]any  `json:"evidence"`
 		} `json:"wait"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("wait eval output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Wait.Kind != "eval" || got.Wait.Expression != "window.__rendered === true" || !got.Wait.Matched || string(got.Wait.Value) != "true" {
+	if !got.OK || got.Wait.Kind != "eval" || got.Wait.Expression != "window.__rendered === true" || !got.Wait.Matched || string(got.Wait.Value) != "true" || !strings.Contains(got.Wait.Condition, "__rendered") || got.Wait.Evidence["expression"] != "window.__rendered === true" {
 		t.Fatalf("wait eval output = %+v, want matched eval", got)
+	}
+}
+
+func TestWaitTimeoutsFailClosedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"text", []string{"wait", "text", "Never Ready", "--timeout", "50ms", "--poll", "10ms", "--json"}},
+		{"selector", []string{"wait", "selector", "missing", "--timeout", "50ms", "--poll", "10ms", "--json"}},
+		{"eval", []string{"wait", "eval", "window.__never === true", "--timeout", "50ms", "--poll", "10ms", "--json"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), tt.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitTimeout {
+				t.Fatalf("wait timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+			}
+			var got struct {
+				OK   bool   `json:"ok"`
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("wait timeout output is invalid JSON: %v", err)
+			}
+			if got.OK || got.Code != "timeout" {
+				t.Fatalf("wait timeout output = %+v, want fail-closed timeout", got)
+			}
+		})
+	}
+}
+
+func TestEmulateNetworkJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "network", "--preset", "fast-3g", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate network exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			Preset  string `json:"preset"`
+			Network struct {
+				Offline            bool    `json:"offline"`
+				Latency            int     `json:"latency"`
+				DownloadThroughput float64 `json:"downloadThroughput"`
+				UploadThroughput   float64 `json:"uploadThroughput"`
+			} `json:"network"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate network output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.Preset != "fast-3g" || got.Emulation.Network.Offline || got.Emulation.Network.Latency != 150 || got.Emulation.Network.DownloadThroughput != 200000 || got.Emulation.Network.UploadThroughput != 93750 || !strings.Contains(got.Emulation.CleanupCommand, "--preset none") {
+		t.Fatalf("emulate network output = %+v, want fast-3g params and cleanup command", got)
+	}
+}
+
+func TestEmulateNetworkCustomJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "network", "--latency", "100", "--download-kbps", "750", "--upload-kbps", "250", "--offline", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate network custom exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			Preset  string `json:"preset"`
+			Network struct {
+				Offline            bool    `json:"offline"`
+				Latency            int     `json:"latency"`
+				DownloadThroughput float64 `json:"downloadThroughput"`
+				UploadThroughput   float64 `json:"uploadThroughput"`
+			} `json:"network"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate network custom output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.Preset != "custom" || !got.Emulation.Network.Offline || got.Emulation.Network.Latency != 100 || got.Emulation.Network.DownloadThroughput != 93750 || got.Emulation.Network.UploadThroughput != 31250 {
+		t.Fatalf("emulate network custom output = %+v, want custom params with kbps converted to bytes/sec", got)
+	}
+}
+
+func TestEmulateNetworkInvalidArgsJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"unknown preset", []string{"emulate", "network", "--preset", "bogus", "--json"}},
+		{"negative latency", []string{"emulate", "network", "--latency", "-1", "--json"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), tt.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitUsage {
+				t.Fatalf("emulate network invalid exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+			}
+		})
 	}
 }
 
@@ -1148,6 +1345,124 @@ func TestScreenshotRenderJSON(t *testing.T) {
 	}
 	if !got.OK || !got.Render.Served || got.Render.WaitFor != "window.__rendered === true" || got.Render.Viewport.Width != 800 || got.Screenshot.Path != outPath {
 		t.Fatalf("screenshot render output = %+v, want render metadata", got)
+	}
+}
+
+func TestEmulateUserAgentJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "user-agent", "--user-agent", "AgentTest/1.0", "--platform", "Linux", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate user-agent exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			UserAgent      string `json:"user_agent"`
+			Platform       string `json:"platform"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate user-agent output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.UserAgent != "AgentTest/1.0" || got.Emulation.Platform != "Linux" || !strings.Contains(got.Emulation.CleanupCommand, "cdp emulate clear") {
+		t.Fatalf("emulate user-agent output = %+v, want applied override and cleanup command", got)
+	}
+}
+
+func TestEmulateGeolocationJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "geolocation", "--latitude", "55.6761", "--longitude", "12.5683", "--accuracy", "50", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate geolocation exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			Geolocation struct {
+				Latitude  float64 `json:"latitude"`
+				Longitude float64 `json:"longitude"`
+				Accuracy  float64 `json:"accuracy"`
+			} `json:"geolocation"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate geolocation output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.Geolocation.Latitude != 55.6761 || got.Emulation.Geolocation.Longitude != 12.5683 || got.Emulation.Geolocation.Accuracy != 50 || !strings.Contains(got.Emulation.CleanupCommand, "cdp emulate clear") {
+		t.Fatalf("emulate geolocation output = %+v, want applied override and cleanup command", got)
+	}
+}
+
+func TestEmulateCPUJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "cpu", "--rate", "4", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate cpu exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			CPU struct {
+				Rate float64 `json:"rate"`
+			} `json:"cpu"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate cpu output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.CPU.Rate != 4 || !strings.Contains(got.Emulation.CleanupCommand, "--rate 1") {
+		t.Fatalf("emulate cpu output = %+v, want applied override and cleanup command", got)
+	}
+}
+
+func TestEmulateClearJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "clear", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate clear exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			ClearedOverrides []string `json:"cleared_overrides"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate clear output is invalid JSON: %v", err)
+	}
+	if !got.OK || !containsString(got.Emulation.ClearedOverrides, "network") {
+		t.Fatalf("emulate clear output = %+v, want network cleared", got)
 	}
 }
 

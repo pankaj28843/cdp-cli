@@ -36,10 +36,13 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"doctor-capabilities": {
 			Name:        "doctor-capabilities",
-			Description: "Implemented and planned cdp-cli capability areas.",
+			Description: "Implemented and planned cdp-cli capability areas plus agent bootstrap guidance.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when capability metadata was generated."},
-				{Name: "capabilities", Type: "array<capability>", Required: true, Description: "Capability rows with name, status, and related commands."},
+				{Name: "capabilities", Type: "array<capability>", Required: true, Description: "Capability rows with name, status, related commands, verification commands, and evidence commands."},
+				{Name: "agent_readiness", Type: "object", Required: true, Description: "Agent-first readiness summary with safe defaults and bootstrap commands."},
+				{Name: "bootstrap_path", Type: "object", Required: true, Description: "Ordered setup, validation, recovery, and stop-signal commands for safe agent bootstrap."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Recommended safe commands for validating live browser access."},
 			},
 		},
 		"connection-add": {
@@ -306,6 +309,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "frames", Type: "array<frame_summary>", Required: true, Description: "Flattened frame metadata including id, URL, parent id, and child count."},
 			},
 		},
+		"observe": {
+			Name:        "observe",
+			Description: "Visible interactive element summaries for agent planning before action.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when observation completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "observe", Type: "observe_result", Required: true, Description: "URL, title, selector, count, and visible interactive candidates."},
+				{Name: "interactive", Type: "array<observe_node>", Required: true, Description: "Interactive candidates duplicated for jq convenience."},
+			},
+		},
 		"html": {
 			Name:        "html",
 			Description: "Compact HTML extracted from a CSS selector.",
@@ -352,7 +365,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition, match status, count, elapsed time, and poll interval."},
+				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition, match status, evidence, count, elapsed time, and poll interval."},
 			},
 		},
 		"snapshot": {
@@ -703,7 +716,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when examples were generated."},
 				{Name: "entity", Type: "protocol_entity", Required: true, Description: "Protocol command metadata and raw schema."},
-				{Name: "examples", Type: "array<protocol_exec_example>", Required: true, Description: "Runnable cdp protocol exec command examples with scope and params."},
+				{Name: "examples", Type: "array<protocol_exec_example>", Required: true, Description: "Runnable cdp protocol exec command examples with scope, params, required/optional param names, sample params, and scope notes."},
 				{Name: "source", Type: "string", Required: true, Description: "Protocol source endpoint."},
 			},
 		},

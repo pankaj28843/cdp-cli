@@ -3,9 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
-	"path/filepath"
 )
 
 func (a *app) newFocusCommand() *cobra.Command {
@@ -163,6 +164,10 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateViewportCommand())
 	cmd.AddCommand(a.newEmulateClearCommand())
 	cmd.AddCommand(a.newEmulateMediaCommand())
+	cmd.AddCommand(a.newEmulateUserAgentCommand())
+	cmd.AddCommand(a.newEmulateGeolocationCommand())
+	cmd.AddCommand(a.newEmulateCPUCommand())
+	cmd.AddCommand(a.newEmulateNetworkCommand())
 	return cmd
 }
 
@@ -208,7 +213,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 
 func (a *app) newEmulateClearCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
-	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, and geolocation emulation", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, CPU, and network emulation", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -216,10 +221,26 @@ func (a *app) newEmulateClearCommand() *cobra.Command {
 			return err
 		}
 		defer session.Close(ctx)
-		_ = execSessionJSON(ctx, session, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
-		_ = execSessionJSON(ctx, session, "Emulation.clearGeolocationOverride", map[string]any{}, nil)
-		_ = execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{}, nil)
-		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true}})
+		cleared := []string{}
+		if err := execSessionJSON(ctx, session, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil); err == nil {
+			cleared = append(cleared, "viewport")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.clearGeolocationOverride", map[string]any{}, nil); err == nil {
+			cleared = append(cleared, "geolocation")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{}, nil); err == nil {
+			cleared = append(cleared, "media")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setUserAgentOverride", map[string]any{"userAgent": ""}, nil); err == nil {
+			cleared = append(cleared, "user-agent")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", map[string]any{"rate": 1}, nil); err == nil {
+			cleared = append(cleared, "cpu")
+		}
+		if err := execSessionJSON(ctx, session, "Network.emulateNetworkConditions", networkEmulationResetParams(), nil); err == nil {
+			cleared = append(cleared, "network")
+		}
+		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true, "cleared_overrides": cleared}})
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
@@ -251,6 +272,182 @@ func (a *app) newEmulateMediaCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&colorScheme, "prefers-color-scheme", "", "emulate prefers-color-scheme: light or dark")
 	return cmd
+}
+
+func (a *app) newEmulateUserAgentCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, userAgent, platform string
+	cmd := &cobra.Command{Use: "user-agent", Short: "Apply user-agent emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		if userAgent == "" {
+			return commandError("usage", "usage", "--user-agent is required", ExitUsage, []string{"cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"userAgent": userAgent}
+		if platform != "" {
+			params["platform"] = platform
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setUserAgentOverride", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate user-agent: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setUserAgentOverride --json"})
+		}
+		return a.render(ctx, "user-agent emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"user_agent": userAgent, "platform": platform, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&userAgent, "user-agent", "", "user-agent string to apply")
+	cmd.Flags().StringVar(&platform, "platform", "", "optional navigator platform override")
+	return cmd
+}
+
+func (a *app) newEmulateGeolocationCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var latitude, longitude, accuracy float64
+	cmd := &cobra.Command{Use: "geolocation", Short: "Apply geolocation emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		if latitude < -90 || latitude > 90 {
+			return commandError("usage", "usage", "--latitude must be between -90 and 90", ExitUsage, []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --json"})
+		}
+		if longitude < -180 || longitude > 180 {
+			return commandError("usage", "usage", "--longitude must be between -180 and 180", ExitUsage, []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --json"})
+		}
+		if accuracy < 0 {
+			return commandError("usage", "usage", "--accuracy must be non-negative", ExitUsage, []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --accuracy 100 --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"latitude": latitude, "longitude": longitude, "accuracy": accuracy}
+		if err := execSessionJSON(ctx, session, "Emulation.setGeolocationOverride", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate geolocation: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setGeolocationOverride --json"})
+		}
+		return a.render(ctx, "geolocation emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"geolocation": params, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().Float64Var(&latitude, "latitude", 0, "latitude to emulate")
+	cmd.Flags().Float64Var(&longitude, "longitude", 0, "longitude to emulate")
+	cmd.Flags().Float64Var(&accuracy, "accuracy", 100, "geolocation accuracy in meters")
+	return cmd
+}
+
+func (a *app) newEmulateCPUCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var rate float64
+	cmd := &cobra.Command{Use: "cpu", Short: "Apply CPU throttling emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		if rate < 1 {
+			return commandError("usage", "usage", "--rate must be >= 1; 1 disables CPU throttling", ExitUsage, []string{"cdp emulate cpu --rate 4 --json", "cdp emulate cpu --rate 1 --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"rate": rate}
+		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate cpu: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setCPUThrottlingRate --json"})
+		}
+		return a.render(ctx, fmt.Sprintf("cpu throttling	%.2fx", rate), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cpu": params, "cleanup_command": fmt.Sprintf("cdp emulate cpu --rate 1 --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().Float64Var(&rate, "rate", 4, "CPU slowdown multiplier; use 1 to disable throttling")
+	return cmd
+}
+
+func (a *app) newEmulateNetworkCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, preset string
+	var latency int
+	var downloadKbps, uploadKbps float64
+	var offline bool
+	cmd := &cobra.Command{Use: "network", Short: "Apply network throttling emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		params, label, err := networkEmulationParams(preset, offline, latency, downloadKbps, uploadKbps)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		if err := execSessionJSON(ctx, session, "Network.emulateNetworkConditions", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate network: %v", err), ExitConnection, []string{"cdp protocol describe Network.emulateNetworkConditions --json"})
+		}
+		return a.render(ctx, fmt.Sprintf("network throttling\t%s", label), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"network": params, "preset": label, "cleanup_command": fmt.Sprintf("cdp emulate network --preset none --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&preset, "preset", "", "network preset: none, offline, slow-3g, fast-3g, wifi")
+	cmd.Flags().BoolVar(&offline, "offline", false, "emulate offline network state")
+	cmd.Flags().IntVar(&latency, "latency", 0, "round-trip latency in milliseconds")
+	cmd.Flags().Float64Var(&downloadKbps, "download-kbps", 0, "download throughput in kilobits per second; 0 disables throttling")
+	cmd.Flags().Float64Var(&uploadKbps, "upload-kbps", 0, "upload throughput in kilobits per second; 0 disables throttling")
+	return cmd
+}
+
+type networkPreset struct {
+	Latency      int
+	DownloadKbps float64
+	UploadKbps   float64
+	Offline      bool
+}
+
+func networkEmulationParams(preset string, offline bool, latency int, downloadKbps, uploadKbps float64) (map[string]any, string, error) {
+	if latency < 0 || downloadKbps < 0 || uploadKbps < 0 {
+		return nil, "", commandError("usage", "usage", "--latency, --download-kbps, and --upload-kbps must be non-negative", ExitUsage, []string{"cdp emulate network --preset slow-3g --json", "cdp emulate network --latency 100 --download-kbps 750 --upload-kbps 250 --json"})
+	}
+	label := strings.TrimSpace(strings.ToLower(preset))
+	if label == "" {
+		label = "custom"
+	}
+	presets := map[string]networkPreset{
+		"none":    {},
+		"offline": {Offline: true},
+		"slow-3g": {Latency: 400, DownloadKbps: 400, UploadKbps: 400},
+		"fast-3g": {Latency: 150, DownloadKbps: 1600, UploadKbps: 750},
+		"wifi":    {Latency: 20, DownloadKbps: 30000, UploadKbps: 15000},
+	}
+	if presetValues, ok := presets[label]; ok {
+		latency = presetValues.Latency
+		downloadKbps = presetValues.DownloadKbps
+		uploadKbps = presetValues.UploadKbps
+		offline = presetValues.Offline
+	} else if strings.TrimSpace(preset) != "" {
+		return nil, "", commandError("usage", "usage", "unknown network preset", ExitUsage, []string{"cdp emulate network --preset slow-3g --json", "cdp emulate network --preset none --json"})
+	}
+	return map[string]any{
+		"offline":            offline,
+		"latency":            latency,
+		"downloadThroughput": kbpsToBytesPerSecond(downloadKbps),
+		"uploadThroughput":   kbpsToBytesPerSecond(uploadKbps),
+	}, label, nil
+}
+
+func networkEmulationResetParams() map[string]any {
+	return map[string]any{
+		"offline":            false,
+		"latency":            0,
+		"downloadThroughput": 0.0,
+		"uploadThroughput":   0.0,
+	}
+}
+
+func kbpsToBytesPerSecond(kbps float64) float64 {
+	return kbps * 1000 / 8
 }
 
 func (a *app) newA11yCommand() *cobra.Command {

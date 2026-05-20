@@ -8,77 +8,37 @@ the behavior is stable and covered by E2E checks.
 ## Recently Verified
 
 - Daemon-backed auto-connect status, command routing, target/page listing,
-  screenshots, console capture, raw protocol discovery, and raw protocol exec
-  all pass `make verify`, installed E2E, and smoke checks.
+  screenshots, console/network capture, raw protocol discovery/examples/exec,
+  storage controls, page control, wait/query/observe commands, input automation,
+  accessibility/perf/memory probes, and emulation for viewport/media/user-agent/
+  geolocation/CPU/network are covered by unit checks and installed E2E metadata.
 - Cross-agent layout is normalized: `AGENTS.md` is canonical, compatibility
   instruction/skill paths are relative symlinks, and Copilot instructions point
   back to `AGENTS.md`.
 
 ## Near-Term Queue
 
-1. Implement `cdp page reload`.
-2. Implement `cdp page back`.
-3. Implement `cdp page forward`.
-4. Implement `cdp page close`.
-5. Implement `cdp page activate`.
-6. Add `cdp wait text <needle>`.
-7. Add `cdp wait selector <css>`.
-8. Add `cdp text <selector>` as a compact visible-text command.
-9. Add `cdp html <selector>` with truncation and artifact fallback.
-10. Add `cdp dom query <selector>` with tag, text, role, rect, href, and uid.
-11. Add `cdp css inspect <selector>` for computed style and box data.
-12. Add `cdp layout overflow` for text/container overflow diagnostics.
-13. Implement target-scoped `cdp network` request capture.
-14. Add `cdp workflow console-errors`.
-15. Add `cdp workflow network-failures`.
-16. Add `cdp workflow verify <url>`.
-17. ✅ Add `cdp workflow debug-bundle` with console, network, snapshot,
-    screenshot, page metadata, and artifact references. (implemented and covered
-    with unit + e2e checks)
-18. Add `cdp protocol examples <Domain.method>`.
-19. Add `cdp doctor --capabilities`.
-20. Add schema catalog entries for every new JSON shape.
-21. Split `internal/cli/commands.go` into focused files without changing
-    behavior.
-22. Add a public-safe artifact redaction check for bundles, traces, and logs.
-23. Add page-selection memory for the last explicitly selected target.
-24. Add project-scoped default page selection.
-25. Add `--include-url` and `--exclude-url` filters for page/target commands.
-26. Add bounded daemon event buffering for console and network events.
-27. Add `cdp daemon logs` with redaction and no page content by default.
-28. Add typed error codes for invalid JSON, artifact failures, and unsupported
-    browser capabilities instead of generic `usage` or `internal`.
-29. Add viewport emulation.
-30. Add media/color-scheme emulation.
-31. Add user-agent emulation.
-32. Add geolocation emulation.
-33. Add network throttling presets.
-34. Add CPU throttling.
-35. Add click/fill/type/press/hover input commands.
-36. Add dialog observe/accept/dismiss commands.
-37. Add file upload.
-38. Add frame listing and `--frame` selection.
-39. Add accessibility-tree snapshots.
-40. Add screenshot device presets.
-41. Add full-page screenshot tiling for very tall pages.
-42. Add HAR export.
-43. Add request/response body artifact saving.
-44. Add WebSocket frame observation.
-45. Add request blocking.
-46. Add response mocking.
-47. Add performance trace start/stop.
-48. Add performance insight summaries for LCP, CLS, long tasks, and blocking
+1. Split `internal/cli/commands.go` into focused files without changing
+   behavior.
+2. Add a public-safe artifact redaction check for bundles, traces, storage
+   dumps, heap snapshots, and logs.
+3. Add screenshot device presets.
+4. Add full-page screenshot tiling for very tall pages.
+5. Add HAR export.
+6. Add request/response body artifact saving.
+7. Add WebSocket frame observation.
+8. Add request blocking.
+9. Add response mocking.
+10. Add performance trace start/stop.
+11. Add performance insight summaries for LCP, CLS, long tasks, and blocking
     requests.
-49. Add Lighthouse wrapper with report artifacts.
-50. Add JS heap snapshot artifact capture.
-51. Add CPU and heap metric probes.
-52. Add storage inspection with redaction.
-53. Add storage clear with explicit confirmation.
-54. Add ServiceWorker inspection and unregister/reload workflows.
-55. Add extension list/reload/action support where Chrome permits it.
-56. Add isolated browser context support for safe test flows.
-57. Add replayable workflow transcripts that reference artifact paths.
-58. Add comparison/diff support for two debug bundles.
+12. Add Lighthouse wrapper with report artifacts.
+13. Add isolated browser context support for safe test flows.
+14. Add replayable workflow transcripts that reference artifact paths.
+15. Add comparison/diff support for two debug bundles.
+16. Add extension list/reload/action support where Chrome permits it.
+17. Add frame-scoped command execution beyond frame listing.
+18. Add richer protocol compatibility hints for workflows before execution.
 
 ## Research Signals
 

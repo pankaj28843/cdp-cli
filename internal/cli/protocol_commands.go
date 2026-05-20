@@ -199,7 +199,7 @@ func (a *app) newProtocolExamplesCommand() *cobra.Command {
 			examples := protocolExecExamples(desc)
 			lines := make([]string, 0, len(examples))
 			for _, example := range examples {
-				lines = append(lines, example["command"])
+				lines = append(lines, example.Command)
 			}
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
 				"ok":       true,
@@ -211,19 +211,64 @@ func (a *app) newProtocolExamplesCommand() *cobra.Command {
 	}
 }
 
-func protocolExecExamples(desc cdp.EntityDescription) []map[string]string {
+type protocolExecExample struct {
+	Scope          string         `json:"scope"`
+	Command        string         `json:"command"`
+	Params         string         `json:"params"`
+	RequiredParams []string       `json:"required_params"`
+	OptionalParams []string       `json:"optional_params"`
+	ParamsSample   map[string]any `json:"params_sample"`
+	ScopeNote      string         `json:"scope_note"`
+	Notes          []string       `json:"notes"`
+}
+
+func protocolExecExamples(desc cdp.EntityDescription) []protocolExecExample {
 	params := sampleProtocolParams(desc.Schema)
 	paramsJSON, _ := json.Marshal(params)
+	requiredParams, optionalParams := protocolParamNames(desc.Schema)
 	scope := protocolCommandScope(desc.Domain)
 	command := fmt.Sprintf("cdp protocol exec %s --params '%s' --json", desc.Path, paramsJSON)
+	scopeNote := "Browser-scoped command; do not pass --target."
 	if scope == "target" {
 		command = fmt.Sprintf("cdp protocol exec %s --target <target-id> --params '%s' --json", desc.Path, paramsJSON)
+		scopeNote = "Target-scoped command; pass --target or a unique page selector flag."
 	}
-	return []map[string]string{{
-		"scope":   scope,
-		"command": command,
-		"params":  string(paramsJSON),
+	notes := []string{"params_sample includes required parameters only; add optional_params when needed."}
+	if len(requiredParams) == 0 {
+		notes = []string{"This command has no required params in the live protocol schema."}
+	}
+	return []protocolExecExample{{
+		Scope:          scope,
+		Command:        command,
+		Params:         string(paramsJSON),
+		RequiredParams: requiredParams,
+		OptionalParams: optionalParams,
+		ParamsSample:   params,
+		ScopeNote:      scopeNote,
+		Notes:          notes,
 	}}
+}
+
+func protocolParamNames(schema json.RawMessage) ([]string, []string) {
+	var command struct {
+		Parameters []struct {
+			Name     string `json:"name"`
+			Optional bool   `json:"optional"`
+		} `json:"parameters"`
+	}
+	if len(schema) == 0 || json.Unmarshal(schema, &command) != nil {
+		return nil, nil
+	}
+	var required []string
+	var optional []string
+	for _, param := range command.Parameters {
+		if param.Optional {
+			optional = append(optional, param.Name)
+			continue
+		}
+		required = append(required, param.Name)
+	}
+	return required, optional
 }
 
 func protocolCommandScope(domain string) string {
