@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -422,7 +423,8 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 		return ManagedLaunch{}, err
 	}
 
-	cmd := exec.CommandContext(ctx, chromePath, ManagedLaunchArgs(chromePath, metadata.UserDataDir)[1:]...)
+	cmd := exec.Command(chromePath, ManagedLaunchArgs(chromePath, metadata.UserDataDir)[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return ManagedLaunch{}, fmt.Errorf("start managed chrome: %w", err)
 	}
@@ -447,7 +449,44 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 		_ = cmd.Wait()
 		return ManagedLaunch{}, err
 	}
+	if err := cmd.Process.Release(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return ManagedLaunch{}, fmt.Errorf("release managed chrome process: %w", err)
+	}
 	return ManagedLaunch{Endpoint: endpoint, Command: cmd, Metadata: metadata}, nil
+}
+
+func ReuseManagedChrome(ctx context.Context, stateDir string) (ManagedLaunch, bool, error) {
+	metadata, ok, err := LoadManagedMetadata(stateDir)
+	if err != nil || !ok {
+		return ManagedLaunch{}, false, err
+	}
+	if metadata.BrowserMode != "headless" || metadata.ChromePID <= 0 || strings.TrimSpace(metadata.UserDataDir) == "" {
+		return ManagedLaunch{}, false, nil
+	}
+	process, err := os.FindProcess(metadata.ChromePID)
+	if err != nil {
+		return ManagedLaunch{}, false, nil
+	}
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return ManagedLaunch{}, false, nil
+	}
+	select {
+	case <-ctx.Done():
+		return ManagedLaunch{}, false, ctx.Err()
+	default:
+	}
+	port, path, err := ReadActivePortFile(metadata.UserDataDir)
+	if err != nil {
+		return ManagedLaunch{}, false, nil
+	}
+	metadata.DebuggingPort = port
+	endpoint := fmt.Sprintf("ws://%s%s", net.JoinHostPort("127.0.0.1", port), path)
+	if err := ValidateLoopbackEndpoint(endpoint); err != nil {
+		return ManagedLaunch{}, false, err
+	}
+	return ManagedLaunch{Endpoint: endpoint, Metadata: metadata}, true, nil
 }
 
 func WaitManagedActivePort(ctx context.Context, userDataDir string) (string, string, error) {

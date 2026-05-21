@@ -87,9 +87,9 @@ another keepalive already owns that lock, and starts or repairs the selected-mod
 daemon only when the selected connection is not healthy.
 
 ```cron
-* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1
-* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1
-*/5 * * * * flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp CDP_LOG_DIR=$HOME/.cdp-cli bash /path/to/cdp-cli/scripts/cdp-headless-healthcheck.sh >> $HOME/.cdp-cli/headless-health.log 2>&1
+* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --reconnect 30s --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1
+* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1
+* * * * * flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp CDP_LOG_DIR=$HOME/.cdp-cli bash /path/to/cdp-cli/scripts/cdp-headless-healthcheck.sh >> $HOME/.cdp-cli/headless-health.log 2>&1
 0 */6 * * * flock -n $HOME/.cdp-cli/locks/headless-profile-seed.lock $HOME/.local/bin/cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json >> $HOME/.cdp-cli/profile-seed-headless.log 2>&1
 * * * * * flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1
 ```
@@ -103,6 +103,8 @@ feature-request candidate after repeated failures. Verify the current Linux user
 ```bash
 cdp doctor --check scheduled-tasks --json
 crontab -l | grep cdp
+make cron-install
+make cron-show
 ```
 
 ## Principles

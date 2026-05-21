@@ -136,6 +136,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			}
 			browserStatus := browserDoctorStatus(a.opts.autoConnect, &probe)
 			daemonStatus := a.daemonStatus(ctx, probe)
+			processesByMode := a.daemonProcessesByMode(ctx)
 			daemonCheckStatus := daemonDoctorStatus(daemonStatus.State)
 			browserMessage := probe.Message
 			browserRemediation := probe.RemediationCommands
@@ -147,12 +148,13 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			checks := []map[string]any{
 				{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
 				{
-					"name":            "daemon",
-					"status":          daemonCheckStatus,
-					"state":           daemonStatus.State,
-					"message":         daemonStatus.Message,
-					"connection_mode": daemonStatus.ConnectionMode,
-					"details":         daemonStatus,
+					"name":              "daemon",
+					"status":            daemonCheckStatus,
+					"state":             daemonStatus.State,
+					"message":           daemonStatus.Message,
+					"connection_mode":   daemonStatus.ConnectionMode,
+					"processes_by_mode": processesByMode,
+					"details":           daemonStatus,
 				},
 			}
 			checks = append(checks, map[string]any{
@@ -389,10 +391,12 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 			"has_unflocked_cdp_task":         summary.HasUnflockedCDPTask,
 		},
 		"next_commands": []string{
+			"make cron-install",
+			"make cron-show",
 			"crontab -l | grep cdp",
-			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null; echo '*/5 * * * * flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp CDP_LOG_DIR=$HOME/.cdp-cli bash /path/to/cdp-cli/scripts/cdp-headless-healthcheck.sh >> $HOME/.cdp-cli/headless-health.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --reconnect 30s --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp CDP_LOG_DIR=$HOME/.cdp-cli bash /path/to/cdp-cli/scripts/cdp-headless-healthcheck.sh >> $HOME/.cdp-cli/headless-health.log 2>&1') | crontab -`,
 			`(crontab -l 2>/dev/null; echo '0 */6 * * * flock -n $HOME/.cdp-cli/locks/headless-profile-seed.lock $HOME/.local/bin/cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json >> $HOME/.cdp-cli/profile-seed-headless.log 2>&1') | crontab -`,
 			`(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1') | crontab -`,
 			"cdp doctor --check scheduled-tasks --json",

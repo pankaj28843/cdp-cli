@@ -611,6 +611,36 @@ func TestDoctorReportsDaemonConnectedWhenBrowserIsAvailable(t *testing.T) {
 	t.Fatalf("doctor checks = %+v, want daemon check", got.Checks)
 }
 
+func TestDoctorDaemonIncludesProcessSummaryByBrowserMode(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--check", "daemon", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		Checks []struct {
+			Name            string                    `json:"name"`
+			ProcessesByMode map[string]map[string]any `json:"processes_by_mode"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	if len(got.Checks) != 1 || got.Checks[0].Name != "daemon" {
+		t.Fatalf("doctor checks = %+v, want only daemon check", got.Checks)
+	}
+	for _, mode := range []string{"headed", "headless"} {
+		summary, ok := got.Checks[0].ProcessesByMode[mode]
+		if !ok {
+			t.Fatalf("processes_by_mode missing %s: %+v", mode, got.Checks[0].ProcessesByMode)
+		}
+		if summary["browser_mode"] != mode || summary["state"] != "not_running" {
+			t.Fatalf("process summary for %s = %+v, want not_running", mode, summary)
+		}
+	}
+}
+
 func TestDoctorAutoConnectReportsPermissionFlow(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"doctor", "--auto-connect", "--user-data-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
