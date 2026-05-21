@@ -28,7 +28,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect")))' >/dev/null
-"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
+"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("cdp-headless-healthcheck.sh")))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
 "$binary" describe --command "doctor" --json | jq -e '.ok == true and .commands.name == "doctor" and (.commands.examples | any(contains("scheduled-tasks")))' >/dev/null
 "$binary" describe --command "browser mode get" --json | jq -e '.ok == true and .commands.name == "get" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
@@ -40,7 +40,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
-"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].details.has_unflocked_cdp_task | type == "boolean") and (.[0].next_commands | index("crontab -l | grep cdp")) and (.[0].next_commands | any(contains("flock -n"))) and (.[0].next_commands | any(contains("--browser-mode headed daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless page cleanup")))' >/dev/null
+"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].details.has_unflocked_cdp_task | type == "boolean") and (.[0].next_commands | index("crontab -l | grep cdp")) and (.[0].next_commands | any(contains("flock -n"))) and (.[0].next_commands | any(contains("--browser-mode headed daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless daemon keepalive"))) and (.[0].next_commands | any(contains("cdp-headless-healthcheck.sh"))) and (.[0].next_commands | any(contains("--browser-mode headless page cleanup")))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities | map(.name) | index("raw_protocol"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "advanced_storage" and .status == "implemented"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "raw_protocol" and (.verify_commands | index("cdp protocol metadata --json"))))' >/dev/null
@@ -50,7 +50,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "memory" and .status == "implemented" and (.verify_commands | index("cdp memory counters --json"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "emulation" and .status == "implemented" and (.verify_commands | index("cdp emulate user-agent --help")) and (.verify_commands | index("cdp emulate cpu --help")) and (.verify_commands | index("cdp emulate network --help"))))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and ([.capabilities[] | select(.name == "network_throttling")] | length == 0)' >/dev/null
-"$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp daemon health --json")) and (.bootstrap_path.recover_commands | index("cdp daemon logs --tail 50 --json")) and (.bootstrap_path.stop_signals | index("human_required"))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp daemon health --json")) and (.bootstrap_path.validate_commands | index("bash scripts/cdp-headless-healthcheck.sh")) and (.bootstrap_path.recover_commands | index("cdp daemon logs --tail 50 --json")) and (.bootstrap_path.recover_commands | index("bash scripts/cdp-headless-healthcheck.sh")) and (.bootstrap_path.stop_signals | index("human_required"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp doctor --check scheduled-tasks --json"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp doctor --check headless-security --json"))' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
@@ -89,6 +89,21 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("lock"))' >/dev/null
 "$binary" schema daemon-status --json | jq -e '.ok == true and .schema.name == "daemon-status" and (.schema.fields | map(.name) | index("daemon"))' >/dev/null
 "$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("entries"))' >/dev/null
+health_state_dir="$(mktemp -d)"
+health_log_dir="$state_dir/health-log"
+mkdir -p "$health_log_dir"
+set +e
+CDP_BIN="$binary" CDP_STATE_DIR="$health_state_dir" CDP_LOG_DIR="$health_log_dir" CDP_ARTIFACT_DIR="$health_log_dir/artifacts" CDP_LOCK_PATH="$health_log_dir/locks/headless-health.lock" CDP_FAILURE_THRESHOLD=1 bash scripts/cdp-headless-healthcheck.sh >"$state_dir/headless-healthcheck.json" 2>"$state_dir/headless-healthcheck.stderr"
+healthcheck_code=$?
+set -e
+if [[ "$healthcheck_code" -eq 0 ]]; then
+  jq -e '.ok == true and .state == "healthy" and .artifacts.run_dir' "$state_dir/headless-healthcheck.json" >/dev/null
+else
+  jq -e '.ok == false and .state == "failed" and (.failure | type == "string") and .artifacts.run_dir and .failure_count >= 1 and (.next_commands | any(contains("daemon health")))' "$state_dir/headless-healthcheck.json" >/dev/null
+  test -s "$health_log_dir/artifacts/feature-request-candidate.md"
+fi
+test -s "$health_log_dir/artifacts/latest.json"
+
 "$binary" schema daemon-health --json | jq -e '.ok == true and .schema.name == "daemon-health" and (.schema.fields | map(.name) | index("health"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "click" --json | jq -e '.ok == true and .commands.name == "click" and (.commands.examples | length > 0)' >/dev/null
@@ -152,7 +167,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "workflow page-load" --json | jq -e '.ok == true and .commands.name == "page-load" and (.commands.examples | any(contains("--reload")))' >/dev/null
 "$binary" describe --command "workflow rendered-extract" --json | jq -e '.ok == true and .commands.name == "rendered-extract" and (.commands.examples | any(contains("--serp google"))) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 "$binary" describe --command "workflow web-research" --json | jq -e '.ok == true and .commands.name == "web-research" and (.commands.children | map(.name) | index("extract"))' >/dev/null
-"$binary" describe --command "workflow web-research serp" --json | jq -e '.ok == true and .commands.name == "serp" and (.commands.examples | any(contains("--result-pages 3"))) and (.commands.examples | any(contains("--fast-fail-blocked"))) and (.commands.examples | any(contains("--progress stderr"))) and (.commands.flags[] | select(.name == "candidate-out")) and (.commands.flags[] | select(.name == "result-pages")) and (.commands.flags[] | select(.name == "fast-fail-blocked")) and (.commands.flags[] | select(.name == "blocked-failure-threshold")) and (.commands.flags[] | select(.name == "progress"))' >/dev/null
+"$binary" describe --command "workflow web-research serp" --json | jq -e '.ok == true and .commands.name == "serp" and (.commands.examples | any(contains("--serp google"))) and (.commands.examples | any(contains("--serp duckduckgo"))) and (.commands.examples | any(contains("--result-pages 3"))) and (.commands.examples | any(contains("--fast-fail-blocked"))) and (.commands.examples | any(contains("--progress stderr"))) and (.commands.flags[] | select(.name == "serp" and (.usage | contains("duckduckgo")))) and (.commands.flags[] | select(.name == "candidate-out")) and (.commands.flags[] | select(.name == "result-pages")) and (.commands.flags[] | select(.name == "fast-fail-blocked")) and (.commands.flags[] | select(.name == "blocked-failure-threshold")) and (.commands.flags[] | select(.name == "progress"))' >/dev/null
 "$binary" describe --command "workflow web-research extract" --json | jq -e '.ok == true and .commands.name == "extract" and (.commands.examples | any(contains("--parallel 4"))) and (.commands.examples | any(contains("--parallel 10"))) and (.commands.flags[] | select(.name == "url-file"))' >/dev/null
 "$binary" describe --command "workflow verify" --json | jq -e '.ok == true and .commands.name == "verify" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow perf" --json | jq -e '.ok == true and .commands.name == "perf" and (.commands.examples | length > 0)' >/dev/null
@@ -242,8 +257,11 @@ profile_copy_config_dir="$profile_copy_home/xdg-config"
 mkdir -p "$profile_copy_config_dir/google-chrome/Default"
 printf 'local-state' > "$profile_copy_config_dir/google-chrome/Local State"
 printf 'cookie-db' > "$profile_copy_config_dir/google-chrome/Default/Cookies"
-HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --json | jq -e '.ok == true and .seeded == true and .exists == true and .seed_strategy == "copy-default" and .managed_browser.browser_mode == "headless" and .managed_browser.profile_seed_strategy == "copy-default" and .managed_browser.default_profile_copied == true and .managed_browser.copied_file_count >= 2 and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' >/dev/null
+HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --json | jq -e '.ok == true and .seeded == true and .exists == true and .seed_action == "seeded" and .seed_strategy == "copy-default" and .managed_browser.browser_mode == "headless" and .managed_browser.profile_seed_strategy == "copy-default" and .managed_browser.default_profile_copied == true and .managed_browser.copied_file_count >= 2 and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' >/dev/null
 test -s "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
+printf 'managed-cookie-db' > "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
+HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --if-older-than 6h --json | jq -e '.ok == true and .seed_action == "skipped" and .seed_strategy == "copy-default" and .seed_interval_seconds == 21600 and .managed_browser.profile_seed_strategy == "copy-default"' >/dev/null
+grep -q 'managed-cookie-db' "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
 "$binary" --state-dir "$state_dir" browser profile status --json | jq -e '.ok == true and .state == "ready" and .profile_perm == "700" and .metadata_perm == "600" and (.next_commands | index("cdp --browser-mode headless daemon keepalive --repair --json"))' >/dev/null
 "$binary" doctor --check headless-security --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "headless-security" and .checks[0].status == "pass" and .checks[0].details.profile_owner_only == true and .checks[0].details.metadata_owner_only == true and .checks[0].details.managed_profile_selected == true and .checks[0].details.seed_strategy == "managed" and (.. | objects | has("ownership_token") | not) and (.. | objects | has("process_start_time") | not)' >/dev/null
 set +e

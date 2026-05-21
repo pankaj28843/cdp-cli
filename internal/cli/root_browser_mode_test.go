@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/config"
 )
@@ -414,6 +415,85 @@ func TestBrowserProfileSeedCopyDefaultUsesSyntheticProfile(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "cookie-db") || strings.Contains(out.String(), "local-state") {
 		t.Fatalf("browser profile seed leaked copied profile values: %s", out.String())
+	}
+}
+
+func TestBrowserProfileSeedIfOlderThanSkipsRecentCopyDefault(t *testing.T) {
+	stateDir := t.TempDir()
+	homeDir := t.TempDir()
+	sourceRoot := filepath.Join(homeDir, ".config", "google-chrome")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "Default"), 0o700); err != nil {
+		t.Fatalf("create source profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "Local State"), []byte("local-state"), 0o600); err != nil {
+		t.Fatalf("write local state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "Default", "Cookies"), []byte("cookie-db"), 0o600); err != nil {
+		t.Fatalf("write cookies: %v", err)
+	}
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", homeDir)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	if code != ExitOK {
+		t.Fatalf("initial copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
+	}
+
+	cookiePath := filepath.Join(stateDir, "browser", "headless-profile", "Default", "Cookies")
+	if err := os.WriteFile(cookiePath, []byte("managed-cookie-db"), 0o600); err != nil {
+		t.Fatalf("overwrite managed cookie fixture: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "6h", "--json"}, &out, &errOut, BuildInfo{})
+	if code != ExitOK {
+		t.Fatalf("age-gated copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK                  bool   `json:"ok"`
+		SeedAction          string `json:"seed_action"`
+		SeedAgeSeconds      int64  `json:"seed_age_seconds"`
+		SeedIntervalSeconds int64  `json:"seed_interval_seconds"`
+		ManagedBrowser      struct {
+			ProfileSeedStrategy string `json:"profile_seed_strategy"`
+		} `json:"managed_browser"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("age-gated seed output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.SeedAction != "skipped" || got.SeedIntervalSeconds != int64((6*time.Hour).Seconds()) || got.ManagedBrowser.ProfileSeedStrategy != "copy-default" {
+		t.Fatalf("age-gated seed = %+v, want skipped copy-default", got)
+	}
+	content, err := os.ReadFile(cookiePath)
+	if err != nil {
+		t.Fatalf("read managed cookie fixture: %v", err)
+	}
+	if string(content) != "managed-cookie-db" {
+		t.Fatalf("age-gated seed recopied profile; cookie fixture = %q", content)
+	}
+}
+
+func TestBrowserProfileSeedRejectsNegativeIfOlderThan(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Execute(context.Background(), []string{"--state-dir", t.TempDir(), "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "-1s", "--json"}, &out, &errOut, BuildInfo{})
+	if code != ExitUsage {
+		t.Fatalf("browser profile seed negative age exit code = %d, want %d; stdout=%s stderr=%s", code, ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("error output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if got.OK || got.Code != "invalid_profile_seed_age" {
+		t.Fatalf("error envelope = %+v, want invalid profile seed age", got)
 	}
 }
 

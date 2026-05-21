@@ -587,6 +587,7 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 			} `json:"report"`
 		} `json:"serps"`
 		Candidates []struct {
+			Serp       string `json:"serp"`
 			Query      string `json:"query"`
 			TimeFilter string `json:"time_filter"`
 			SerpPage   int    `json:"serp_page"`
@@ -600,6 +601,7 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 		} `json:"artifacts"`
 		Workflow struct {
 			Name        string `json:"name"`
+			Serp        string `json:"serp"`
 			QueryCount  int    `json:"query_count"`
 			ResultPages int    `json:"result_pages"`
 			Parallel    int    `json:"parallel"`
@@ -608,13 +610,13 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("workflow web-research serp output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Workflow.Name != "web-research-serp" || got.Workflow.QueryCount != 1 || got.Workflow.ResultPages != 2 || got.Workflow.Parallel != 3 {
+	if !got.OK || got.Workflow.Name != "web-research-serp" || got.Workflow.Serp != "google" || got.Workflow.QueryCount != 1 || got.Workflow.ResultPages != 2 || got.Workflow.Parallel != 3 {
 		t.Fatalf("workflow web-research serp metadata = %+v", got.Workflow)
 	}
 	if len(got.SERPs) != 2 || got.SERPs[0].SerpPage != 1 || got.SERPs[1].SerpPage != 2 {
 		t.Fatalf("workflow web-research serp pages = %+v", got.SERPs)
 	}
-	if len(got.Candidates) != 1 || got.Candidates[0].SerpPage != 1 || got.Candidates[0].RankOnPage != 1 || got.Candidates[0].GlobalRank != 1 || got.Candidates[0].TimeFilter != "qdr:m" {
+	if len(got.Candidates) != 1 || got.Candidates[0].Serp != "google" || got.Candidates[0].SerpPage != 1 || got.Candidates[0].RankOnPage != 1 || got.Candidates[0].GlobalRank != 1 || got.Candidates[0].TimeFilter != "qdr:m" {
 		t.Fatalf("workflow web-research candidates = %+v", got.Candidates)
 	}
 	for _, path := range []string{got.SERPs[0].Report.Artifacts.Markdown, got.SERPs[1].Report.Artifacts.Markdown, got.Artifacts.CandidatesJSON, got.Artifacts.CandidatesTSV} {
@@ -627,6 +629,47 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 	}
 	if !strings.Contains(got.SERPs[0].Report.Artifacts.Markdown, filepath.Join("serps", "agentic-engineering", "page-1", "page.md")) || !strings.Contains(got.SERPs[1].Report.Artifacts.Markdown, filepath.Join("serps", "agentic-engineering", "page-2", "page.md")) {
 		t.Fatalf("workflow web-research serp artifact layout = %+v", got.SERPs)
+	}
+}
+
+func TestWorkflowWebResearchSERPSupportsMultipleEngines(t *testing.T) {
+	engines := []string{"google", "bing", "brave", "duckduckgo", "kagi"}
+	for _, engine := range engines {
+		t.Run(engine, func(t *testing.T) {
+			server := newFakeCDPServer(t, nil)
+			defer server.Close()
+			startFakeDaemon(t, server, "browser_url")
+
+			tmpDir := t.TempDir()
+			queryFile := filepath.Join(tmpDir, "queries.txt")
+			if err := os.WriteFile(queryFile, []byte("agentic engineering\n"), 0o600); err != nil {
+				t.Fatalf("write query file: %v", err)
+			}
+			outDir := filepath.Join(tmpDir, "research")
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", engine, "--result-pages", "1", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitOK {
+				t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+			}
+			var got struct {
+				OK    bool `json:"ok"`
+				SERPs []struct {
+					Serp string `json:"serp"`
+				} `json:"serps"`
+				Candidates []struct {
+					Serp string `json:"serp"`
+				} `json:"candidates"`
+				Workflow struct {
+					Serp string `json:"serp"`
+				} `json:"workflow"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("workflow web-research serp output is invalid JSON: %v", err)
+			}
+			if !got.OK || got.Workflow.Serp != engine || len(got.SERPs) != 1 || got.SERPs[0].Serp != engine || len(got.Candidates) != 1 || got.Candidates[0].Serp != engine {
+				t.Fatalf("workflow web-research serp engine metadata = %+v", got)
+			}
+		})
 	}
 }
 

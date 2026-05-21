@@ -101,6 +101,7 @@ func commandExamples(path string) []string {
 		"cdp daemon keepalive": {
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json",
 			"cdp --browser-mode headless daemon keepalive --repair --json",
+			"flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp bash scripts/cdp-headless-healthcheck.sh",
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp daemon keepalive --connection default --probe auto --json",
 		},
@@ -131,6 +132,7 @@ func commandExamples(path string) []string {
 		"cdp browser profile seed": {
 			"cdp --browser-mode headless browser profile seed --strategy managed --json",
 			"cdp --browser-mode headless browser profile seed --strategy copy-default --json",
+			"cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json",
 		},
 		"cdp connection": {
 			"cdp connection list --json",
@@ -471,8 +473,9 @@ func commandExamples(path string) []string {
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json",
 		},
 		"cdp workflow web-research serp": {
-			"cdp workflow web-research serp --query-file tmp/research/queries.txt --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
-			"cdp workflow web-research serp --query-file tmp/research/queries.txt --result-pages 3 --fast-fail-blocked --blocked-failure-threshold 3 --progress stderr --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp duckduckgo --result-pages 2 --out-dir tmp/research-ddg --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp bing --result-pages 3 --fast-fail-blocked --blocked-failure-threshold 3 --progress stderr --json",
 		},
 		"cdp workflow web-research extract": {
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 4 --out-dir tmp/research/pages --json",

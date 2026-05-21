@@ -87,13 +87,18 @@ another keepalive already owns that lock, and starts or repairs the selected-mod
 daemon only when the selected connection is not healthy.
 
 ```cron
-* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1
-* * * * * $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1
-* * * * * $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1
+* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1
+* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1
+*/5 * * * * flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp CDP_LOG_DIR=$HOME/.cdp-cli bash /path/to/cdp-cli/scripts/cdp-headless-healthcheck.sh >> $HOME/.cdp-cli/headless-health.log 2>&1
+0 */6 * * * flock -n $HOME/.cdp-cli/locks/headless-profile-seed.lock $HOME/.local/bin/cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json >> $HOME/.cdp-cli/profile-seed-headless.log 2>&1
+* * * * * flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1
 ```
 
 Use explicit `--browser-mode` for scheduled cleanup so headed and headless page
-records cannot be confused. Verify the current Linux user's scheduled tasks with:
+records cannot be confused. The headless health-check script validates keepalive,
+health telemetry, navigation, DOM text, JavaScript evaluation, and screenshots; it
+writes JSON artifacts under `$HOME/.cdp-cli/headless-health/` and creates a
+feature-request candidate after repeated failures. Verify the current Linux user's scheduled tasks with:
 
 ```bash
 cdp doctor --check scheduled-tasks --json

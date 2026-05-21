@@ -79,8 +79,8 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			if serp == "" {
 				serp = "google"
 			}
-			if serp != "google" {
-				return commandError("usage", "usage", "--serp must be google", ExitUsage, []string{"cdp workflow web-research serp --serp google --json"})
+			if !isWebResearchSupportedSERP(serp) {
+				return commandError("usage", "usage", "--serp must be one of: "+webResearchSERPList(), ExitUsage, []string{"cdp workflow web-research serp --serp google --json", "cdp workflow web-research serp --serp duckduckgo --json"})
 			}
 
 			ctx := cmd.Context()
@@ -111,7 +111,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			var wg sync.WaitGroup
 			runJob := func(job serpJob) serpResult {
 				query := queries[job.QueryIndex]
-				queryURL := googleSearchURL(query.Text, query.TimeFilter, (job.SerpPage-1)*10)
+				queryURL := webResearchSearchURL(serp, query.Text, query.TimeFilter, job.SerpPage)
 				result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
 					WorkflowName:       "web-research-serp",
 					ArtifactTypePrefix: "web-research-serp",
@@ -122,7 +122,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					WaitUntil:          waitUntil,
 					Formats:            "snapshot,text,html,markdown,links",
 					OutDir:             filepath.Join(outDir, "serps", webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
-					Serp:               "google",
+					Serp:               serp,
 					Limit:              80,
 					MinVisibleWords:    minVisibleWords,
 					MinMarkdownWords:   minMarkdownWords,
@@ -178,7 +178,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					return
 				}
 				blocked, signals := detectSERPBlocked(result.Result)
-				event := map[string]any{"event": "serp_page_complete", "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "completed_result_pages": completedJobs, "scheduled_result_pages": scheduledJobs, "blocked": blocked, "signals": signals}
+				event := map[string]any{"event": "serp_page_complete", "serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "completed_result_pages": completedJobs, "scheduled_result_pages": scheduledJobs, "blocked": blocked, "signals": signals}
 				if result.Err != nil {
 					event["err_class"] = classifyWorkflowSERPFailure(result.Err, result.Result)
 					event["error"] = result.Err.Error()
@@ -252,13 +252,13 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			seen := map[string]bool{}
 			for _, result := range serpResults {
 				if result.Err != nil {
-					failures = append(failures, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": classifyWorkflowSERPFailure(result.Err, result.Result), "error": result.Err.Error()})
+					failures = append(failures, map[string]any{"serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": classifyWorkflowSERPFailure(result.Err, result.Result), "error": result.Err.Error()})
 					continue
 				}
-				serpReports = append(serpReports, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
+				serpReports = append(serpReports, map[string]any{"serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
 				if blocked, signals := detectSERPBlocked(result.Result); blocked {
-					failures = append(failures, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": "serp_blocked", "message": "Google served a consent, CAPTCHA, or bot-check page", "signals": signals})
-					warnings = append(warnings, fmt.Sprintf("SERP page %d for query %q was blocked by a consent, CAPTCHA, or bot-check page", result.SerpPage, result.Query.Text))
+					failures = append(failures, map[string]any{"serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": "serp_blocked", "message": serp + " served a consent, CAPTCHA, auth, or bot-check page", "signals": signals})
+					warnings = append(warnings, fmt.Sprintf("%s SERP page %d for query %q was blocked by a consent, CAPTCHA, auth, or bot-check page", serp, result.SerpPage, result.Query.Text))
 					continue
 				}
 				for _, link := range result.Result.Links.Results {
@@ -268,7 +268,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					}
 					seen[key] = true
 					globalRank := (result.SerpPage-1)*10 + link.Rank
-					candidates = append(candidates, webResearchCandidate{Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, SerpPage: result.SerpPage, RankOnPage: link.Rank, GlobalRank: globalRank, Rank: globalRank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
+					candidates = append(candidates, webResearchCandidate{Serp: serp, Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, SerpPage: result.SerpPage, RankOnPage: link.Rank, GlobalRank: globalRank, Rank: globalRank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
 					if maxCandidates > 0 && len(candidates) >= maxCandidates {
 						break
 					}
@@ -338,20 +338,20 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			return a.render(ctx, fmt.Sprintf("web-research-serp\t%d queries\t%d candidates", len(queries), len(candidates)), report)
 		},
 	}
-	cmd.Flags().StringVar(&queryFile, "query-file", "", "newline-delimited Google queries to sample")
-	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google")
+	cmd.Flags().StringVar(&queryFile, "query-file", "", "newline-delimited search queries to sample")
+	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google, bing, brave, duckduckgo, or kagi")
 	cmd.Flags().IntVar(&maxCandidates, "max-candidates", 100, "maximum deduped candidates to emit; use 0 for no limit")
 	cmd.Flags().StringVar(&candidateOut, "candidate-out", "", "path for deduped candidates JSON")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for SERP artifacts and candidate files")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for each rendered SERP")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
 	cmd.Flags().IntVar(&parallel, "parallel", 3, "maximum parallel SERP tabs, capped at 3")
-	cmd.Flags().IntVar(&resultPages, "result-pages", 1, "Google result pages per query to sample, capped at 3")
+	cmd.Flags().IntVar(&resultPages, "result-pages", 1, "SERP result pages per query to sample, capped at 3")
 	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
 	cmd.Flags().StringVar(&progress, "progress", "none", "progress event stream: none or stderr")
-	cmd.Flags().BoolVar(&fastFailBlocked, "fast-fail-blocked", false, "stop SERP sampling early after repeated Google consent, CAPTCHA, or bot-check pages")
+	cmd.Flags().BoolVar(&fastFailBlocked, "fast-fail-blocked", false, "stop SERP sampling early after repeated consent, CAPTCHA, auth, or bot-check pages")
 	cmd.Flags().IntVar(&blockedFailureThreshold, "blocked-failure-threshold", 3, "consecutive blocked SERP pages required before --fast-fail-blocked stops scheduling")
 	return cmd
 }
@@ -370,18 +370,18 @@ func detectSERPBlocked(result renderedExtractResult) (bool, []string) {
 		finalURL = fmt.Sprint(workflow["final_url"])
 	}
 	lowerURL := strings.ToLower(finalURL)
-	if strings.Contains(lowerURL, "/sorry/") || strings.Contains(lowerURL, "captcha") || strings.Contains(lowerURL, "consent") || strings.Contains(lowerURL, "challenge") {
+	if strings.Contains(lowerURL, "/sorry/") || strings.Contains(lowerURL, "captcha") || strings.Contains(lowerURL, "consent") || strings.Contains(lowerURL, "challenge") || strings.Contains(lowerURL, "signin") || strings.Contains(lowerURL, "login") {
 		signals = append(signals, "blocked_final_url")
 	}
 	for _, warning := range result.Warnings {
 		lower := strings.ToLower(warning)
-		if strings.Contains(lower, "consent") || strings.Contains(lower, "captcha") || strings.Contains(lower, "bot-check") {
+		if strings.Contains(lower, "consent") || strings.Contains(lower, "captcha") || strings.Contains(lower, "bot-check") || strings.Contains(lower, "auth") {
 			signals = append(signals, "bot_check_warning")
 		}
-		if strings.Contains(lower, "unusual traffic") || strings.Contains(lower, "not a robot") || strings.Contains(lower, "enable javascript") {
+		if strings.Contains(lower, "unusual traffic") || strings.Contains(lower, "not a robot") || strings.Contains(lower, "enable javascript") || strings.Contains(lower, "sign in") || strings.Contains(lower, "login") {
 			signals = append(signals, "block_page_text")
 		}
-		if strings.Contains(lower, "serp extraction found no decoded external result links") {
+		if strings.Contains(lower, "serp extraction found no") && strings.Contains(lower, "external result links") {
 			signals = append(signals, "no_external_result_links")
 		}
 	}

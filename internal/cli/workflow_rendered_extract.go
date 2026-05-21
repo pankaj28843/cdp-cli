@@ -158,8 +158,8 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if options.Serp == "" {
 		options.Serp = "auto"
 	}
-	if options.Serp != "auto" && options.Serp != "google" && options.Serp != "none" {
-		return renderedExtractResult{}, commandError("usage", "usage", "--serp must be auto, google, or none", ExitUsage, []string{options.UsageCommand + " 'https://www.google.com/search?q=test' --serp google --json"})
+	if options.Serp != "auto" && options.Serp != "none" && !isWebResearchSupportedSERP(options.Serp) {
+		return renderedExtractResult{}, commandError("usage", "usage", "--serp must be auto, none, or one of: "+webResearchSERPList(), ExitUsage, []string{options.UsageCommand + " 'https://www.google.com/search?q=test' --serp google --json"})
 	}
 
 	fallback := options.Wait + 15*time.Second
@@ -389,14 +389,29 @@ func renderedExtractSERPMode(rawURL, mode string) string {
 	if mode == "none" {
 		return "none"
 	}
-	if mode == "google" {
-		return "google"
+	if isWebResearchSupportedSERP(mode) {
+		return mode
 	}
 	parsed, err := url.Parse(rawURL)
-	if err == nil && strings.Contains(strings.ToLower(parsed.Hostname()), "google.") && strings.HasPrefix(parsed.EscapedPath(), "/search") {
-		return "google"
+	if err != nil {
+		return "generic"
 	}
-	return "generic"
+	host := strings.ToLower(parsed.Hostname())
+	path := parsed.EscapedPath()
+	switch {
+	case strings.Contains(host, "google.") && strings.HasPrefix(path, "/search"):
+		return "google"
+	case strings.Contains(host, "bing.com") && strings.HasPrefix(path, "/search"):
+		return "bing"
+	case host == "search.brave.com" && strings.HasPrefix(path, "/search"):
+		return "brave"
+	case strings.Contains(host, "duckduckgo.com"):
+		return "duckduckgo"
+	case strings.Contains(host, "kagi.com") && strings.HasPrefix(path, "/search"):
+		return "kagi"
+	default:
+		return "generic"
+	}
 }
 
 func waitForRenderedExtractReadiness(ctx context.Context, session *cdp.PageSession, selector string, wait time.Duration, waitUntil string, minWords, minHTMLChars int) (renderedExtractReadiness, error) {
@@ -570,10 +585,18 @@ func renderedExtractLinksExpression(serpMode string) string {
       return href;
     }
   };
-  const isGoogleInternal = (href) => {
+  const internalHosts = {
+    google: ["google."],
+    bing: ["bing.com"],
+    brave: ["search.brave.com", "brave.com"],
+    duckduckgo: ["duckduckgo.com", "duck.com"],
+    kagi: ["kagi.com"]
+  };
+  const isInternal = (href) => {
     try {
       const parsed = new URL(href, document.baseURI);
-      return parsed.hostname.includes("google.") && parsed.pathname !== "/url";
+      if (serp === "google") return parsed.hostname.includes("google.") && parsed.pathname !== "/url";
+      return (internalHosts[serp] || []).some((host) => host.endsWith(".") ? parsed.hostname.includes(host) : parsed.hostname === host || parsed.hostname.endsWith("." + host));
     } catch (error) {
       return true;
     }
@@ -590,7 +613,7 @@ func renderedExtractLinksExpression(serpMode string) string {
       continue;
     }
     if (!/^https?:\/\//i.test(decoded)) continue;
-    if (serp === "google" && isGoogleInternal(decoded)) continue;
+    if (serp !== "generic" && isInternal(decoded)) continue;
     if (seen.has(decoded)) continue;
     seen.add(decoded);
     const title = normalize(anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || decoded);
@@ -687,12 +710,12 @@ func renderedExtractWarnings(readiness renderedExtractReadiness, snapshotCount, 
 	if markdownWords < minMarkdownWords {
 		warnings = append(warnings, "markdown word count is below threshold")
 	}
-	if serpMode == "google" && externalLinks == 0 {
-		warnings = append(warnings, "google SERP extraction found no decoded external result links")
+	if isWebResearchSupportedSERP(serpMode) && externalLinks == 0 {
+		warnings = append(warnings, serpMode+" SERP extraction found no external result links")
 	}
 	lowerSignal := strings.ToLower(readiness.URL)
-	if strings.Contains(lowerSignal, "sorry") || strings.Contains(lowerSignal, "captcha") || strings.Contains(lowerSignal, "consent") {
-		warnings = append(warnings, "final URL suggests consent, CAPTCHA, or bot-check handling")
+	if strings.Contains(lowerSignal, "sorry") || strings.Contains(lowerSignal, "captcha") || strings.Contains(lowerSignal, "consent") || strings.Contains(lowerSignal, "challenge") || strings.Contains(lowerSignal, "signin") || strings.Contains(lowerSignal, "login") {
+		warnings = append(warnings, "final URL suggests consent, CAPTCHA, auth, or bot-check handling")
 	}
 	return warnings
 }

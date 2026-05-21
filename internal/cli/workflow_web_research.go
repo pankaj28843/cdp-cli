@@ -15,6 +15,7 @@ type webResearchQuery struct {
 }
 
 type webResearchCandidate struct {
+	Serp       string `json:"serp"`
 	Query      string `json:"query"`
 	TimeFilter string `json:"time_filter,omitempty"`
 	SerpPage   int    `json:"serp_page"`
@@ -91,17 +92,61 @@ func readWebResearchURLs(path string, maxPages int) ([]string, error) {
 	return urls, nil
 }
 
-func googleSearchURL(query, timeFilter string, start int) string {
+func webResearchSupportedSERPs() []string {
+	return []string{"google", "bing", "brave", "duckduckgo", "kagi"}
+}
+
+func isWebResearchSupportedSERP(serp string) bool {
+	for _, supported := range webResearchSupportedSERPs() {
+		if serp == supported {
+			return true
+		}
+	}
+	return false
+}
+
+func webResearchSERPList() string {
+	return strings.Join(webResearchSupportedSERPs(), ", ")
+}
+
+func webResearchSearchURL(serp, query, timeFilter string, page int) string {
+	if page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * 10
 	values := url.Values{}
 	values.Set("q", query)
-	values.Set("safe", "active")
-	if strings.TrimSpace(timeFilter) != "" {
-		values.Set("tbs", strings.TrimSpace(timeFilter))
+	switch serp {
+	case "bing":
+		if offset > 0 {
+			values.Set("first", strconv.Itoa(offset+1))
+		}
+		return "https://www.bing.com/search?" + values.Encode()
+	case "brave":
+		if offset > 0 {
+			values.Set("offset", strconv.Itoa(offset))
+		}
+		return "https://search.brave.com/search?" + values.Encode()
+	case "duckduckgo":
+		if offset > 0 {
+			values.Set("s", strconv.Itoa(offset))
+		}
+		return "https://duckduckgo.com/?" + values.Encode()
+	case "kagi":
+		if page > 1 {
+			values.Set("page", strconv.Itoa(page))
+		}
+		return "https://kagi.com/search?" + values.Encode()
+	default:
+		values.Set("safe", "active")
+		if strings.TrimSpace(timeFilter) != "" {
+			values.Set("tbs", strings.TrimSpace(timeFilter))
+		}
+		if offset > 0 {
+			values.Set("start", strconv.Itoa(offset))
+		}
+		return "https://www.google.com/search?" + values.Encode()
 	}
-	if start > 0 {
-		values.Set("start", strconv.Itoa(start))
-	}
-	return "https://www.google.com/search?" + values.Encode()
 }
 
 func normalizeResearchURL(rawURL string) string {
@@ -148,9 +193,9 @@ func webResearchURLSlug(rawURL string) string {
 
 func webResearchCandidatesTSV(candidates []webResearchCandidate) string {
 	var b strings.Builder
-	b.WriteString("global_rank\tserp_page\trank_on_page\tquery\ttime_filter\ttitle\tsource\turl\tpreview\n")
+	b.WriteString("serp\tglobal_rank\tserp_page\trank_on_page\tquery\ttime_filter\ttitle\tsource\turl\tpreview\n")
 	for _, candidate := range candidates {
-		fields := []string{strconv.Itoa(candidate.GlobalRank), strconv.Itoa(candidate.SerpPage), strconv.Itoa(candidate.RankOnPage), candidate.Query, candidate.TimeFilter, candidate.Title, candidate.Source, candidate.URL, candidate.Preview}
+		fields := []string{candidate.Serp, strconv.Itoa(candidate.GlobalRank), strconv.Itoa(candidate.SerpPage), strconv.Itoa(candidate.RankOnPage), candidate.Query, candidate.TimeFilter, candidate.Title, candidate.Source, candidate.URL, candidate.Preview}
 		for i, field := range fields {
 			field = strings.ReplaceAll(field, "\t", " ")
 			field = strings.ReplaceAll(field, "\n", " ")

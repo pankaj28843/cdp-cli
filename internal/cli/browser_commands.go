@@ -100,6 +100,7 @@ func (a *app) newBrowserProfileStatusCommand() *cobra.Command {
 
 func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 	var strategy string
+	var ifOlderThan time.Duration
 	cmd := &cobra.Command{
 		Use:   "seed",
 		Short: "Create managed headless browser profile metadata",
@@ -120,11 +121,22 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 				)
 			}
 
+			if ifOlderThan < 0 {
+				return commandError(
+					"invalid_profile_seed_age",
+					"usage",
+					"--if-older-than must be non-negative",
+					ExitUsage,
+					[]string{"cdp browser profile seed --strategy copy-default --if-older-than 6h --json"},
+				)
+			}
+
 			store, err := a.stateStore()
 			if err != nil {
 				return err
 			}
-			metadata, err := browser.PrepareManagedProfileWithStrategy(store.Dir, strategy, time.Now().UTC())
+			now := time.Now().UTC()
+			metadata, skipped, seedAgeSeconds, err := prepareManagedProfileWithAgeGate(store.Dir, strategy, now, ifOlderThan)
 			if err != nil {
 				return err
 			}
@@ -134,30 +146,64 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 			}
 			status.Seeded = true
 			status.ManagedBrowser = browser.ManagedMetadataStatus(metadata)
-			return a.render(ctx, "browser profile seeded", status)
+			if skipped {
+				status.SeedAction = "skipped"
+			} else {
+				status.SeedAction = "seeded"
+			}
+			if ifOlderThan > 0 {
+				status.SeedIntervalSeconds = int64(ifOlderThan.Seconds())
+				status.SeedAgeSeconds = seedAgeSeconds
+			}
+			return a.render(ctx, "browser profile "+status.SeedAction, status)
 		},
 	}
 	cmd.Flags().StringVar(&strategy, "strategy", "managed", "profile seed strategy: managed or copy-default")
+	cmd.Flags().DurationVar(&ifOlderThan, "if-older-than", 0, "skip seeding when existing metadata is newer than this duration")
 	return cmd
 }
 
+func prepareManagedProfileWithAgeGate(stateDir, strategy string, now time.Time, ifOlderThan time.Duration) (browser.ManagedMetadata, bool, int64, error) {
+	if ifOlderThan <= 0 {
+		metadata, err := browser.PrepareManagedProfileWithStrategy(stateDir, strategy, now)
+		return metadata, false, 0, err
+	}
+	metadata, ok, err := browser.LoadManagedMetadata(stateDir)
+	if err != nil {
+		return browser.ManagedMetadata{}, false, 0, err
+	}
+	if ok && browser.NormalizeProfileSeedStrategy(metadata.ProfileSeedStrategy) == strategy {
+		if lastSeededAt, err := time.Parse(time.RFC3339, metadata.LastSeededAt); err == nil {
+			age := now.Sub(lastSeededAt)
+			if age >= 0 && age < ifOlderThan {
+				return metadata, true, int64(age.Seconds()), nil
+			}
+		}
+	}
+	metadata, err = browser.PrepareManagedProfileWithStrategy(stateDir, strategy, now)
+	return metadata, false, 0, err
+}
+
 type browserProfileStatus struct {
-	OK             bool                  `json:"ok"`
-	BrowserMode    string                `json:"browser_mode"`
-	StateDir       string                `json:"state_dir"`
-	ProfileDir     string                `json:"profile_dir"`
-	MetadataPath   string                `json:"metadata_path"`
-	State          string                `json:"state"`
-	Exists         bool                  `json:"exists"`
-	Seeded         bool                  `json:"seeded"`
-	ProfilePerm    string                `json:"profile_perm,omitempty"`
-	MetadataPerm   string                `json:"metadata_perm,omitempty"`
-	SeedStrategy   string                `json:"seed_strategy,omitempty"`
-	LastSeededAt   string                `json:"last_seeded_at,omitempty"`
-	LastLaunchAt   string                `json:"last_launch_at,omitempty"`
-	ManagedBrowser browser.ManagedStatus `json:"managed_browser,omitempty"`
-	Warnings       []string              `json:"warnings,omitempty"`
-	NextCommands   []string              `json:"next_commands"`
+	OK                  bool                  `json:"ok"`
+	BrowserMode         string                `json:"browser_mode"`
+	StateDir            string                `json:"state_dir"`
+	ProfileDir          string                `json:"profile_dir"`
+	MetadataPath        string                `json:"metadata_path"`
+	State               string                `json:"state"`
+	Exists              bool                  `json:"exists"`
+	Seeded              bool                  `json:"seeded"`
+	ProfilePerm         string                `json:"profile_perm,omitempty"`
+	MetadataPerm        string                `json:"metadata_perm,omitempty"`
+	SeedStrategy        string                `json:"seed_strategy,omitempty"`
+	LastSeededAt        string                `json:"last_seeded_at,omitempty"`
+	LastLaunchAt        string                `json:"last_launch_at,omitempty"`
+	ManagedBrowser      browser.ManagedStatus `json:"managed_browser,omitempty"`
+	Warnings            []string              `json:"warnings,omitempty"`
+	SeedAction          string                `json:"seed_action,omitempty"`
+	SeedAgeSeconds      int64                 `json:"seed_age_seconds,omitempty"`
+	SeedIntervalSeconds int64                 `json:"seed_interval_seconds,omitempty"`
+	NextCommands        []string              `json:"next_commands"`
 }
 
 func (a *app) browserProfileStatus(ctx context.Context) (browserProfileStatus, error) {
