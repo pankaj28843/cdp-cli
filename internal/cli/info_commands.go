@@ -550,8 +550,8 @@ func (a *app) headlessSecurityDoctorCheck(ctx context.Context) map[string]any {
 		if !details.ManagedProfileSelected {
 			details.Reasons = append(details.Reasons, "metadata_user_data_dir_not_managed")
 		}
-		if metadata.ProfileSeedStrategy != "managed" {
-			details.Reasons = append(details.Reasons, "metadata_seed_strategy_not_managed")
+		if !browser.SupportedProfileSeedStrategy(metadata.ProfileSeedStrategy) {
+			details.Reasons = append(details.Reasons, "metadata_seed_strategy_unsupported")
 		}
 		if strings.TrimSpace(metadata.DebuggingPort) != "" && !details.LoopbackEndpoint {
 			details.Reasons = append(details.Reasons, "debugging_port_not_loopback")
@@ -581,7 +581,7 @@ func (a *app) headlessSecurityDoctorCheck(ctx context.Context) map[string]any {
 	if (profileExists && !details.ProfileOwnerOnly) || (metadataExists && !details.MetadataOwnerOnly) || (runtimeExists && !details.RuntimeOwnerOnly) {
 		return headlessSecurityCheck("fail", "managed headless files are not owner-only", details)
 	}
-	if hasMetadata && (!details.ModeMatches || !details.ManagedProfileSelected || details.SeedStrategy != "managed" || (strings.TrimSpace(details.DebuggingPort) != "" && !details.LoopbackEndpoint)) {
+	if hasMetadata && (!details.ModeMatches || !details.ManagedProfileSelected || !browser.SupportedProfileSeedStrategy(details.SeedStrategy) || (strings.TrimSpace(details.DebuggingPort) != "" && !details.LoopbackEndpoint)) {
 		return headlessSecurityCheck("fail", "managed headless metadata violates security invariants", details)
 	}
 	if len(details.Reasons) > 0 {
@@ -605,6 +605,7 @@ func headlessSecurityCommands() []string {
 	return []string{
 		"cdp --browser-mode headless browser profile status --json",
 		"cdp --browser-mode headless browser profile seed --strategy managed --json",
+		"cdp --browser-mode headless browser profile seed --strategy copy-default --json",
 		"cdp --browser-mode headless daemon status --json",
 		"cdp --browser-mode headless daemon keepalive --repair --json",
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
@@ -73,7 +72,7 @@ func (a *app) newBrowserProfileCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
 		Short: "Inspect and seed managed headless browser profiles",
-		Long:  "Inspect and seed the cdp-owned managed profile used by --browser-mode headless. The managed strategy creates an empty owner-only profile and never copies the default Chrome profile.",
+		Long:  "Inspect and seed the cdp-owned managed profile used by --browser-mode headless. The managed strategy creates an empty owner-only profile; copy-default fully replaces it from Chrome's default profile for local authenticated automation.",
 	}
 	cmd.AddCommand(a.newBrowserProfileStatusCommand())
 	cmd.AddCommand(a.newBrowserProfileSeedCommand())
@@ -104,19 +103,20 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "seed",
 		Short: "Create managed headless browser profile metadata",
-		Long:  "Create the cdp-owned managed profile metadata for --browser-mode headless. The managed strategy does not copy cookies, passwords, history, autofill, or default-profile files.",
+		Long:  "Create the cdp-owned managed profile metadata for --browser-mode headless. Use --strategy managed for an empty owner-only profile, or --strategy copy-default to fully replace the managed profile with a local copy of Chrome's default profile.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
 
-			if strings.TrimSpace(strategy) != "managed" {
+			strategy = browser.NormalizeProfileSeedStrategy(strategy)
+			if !browser.SupportedProfileSeedStrategy(strategy) {
 				return commandError(
 					"invalid_profile_seed_strategy",
 					"usage",
-					"--strategy must be managed",
+					"--strategy must be managed or copy-default",
 					ExitUsage,
-					[]string{"cdp browser profile seed --strategy managed --json"},
+					[]string{"cdp browser profile seed --strategy managed --json", "cdp browser profile seed --strategy copy-default --json"},
 				)
 			}
 
@@ -124,7 +124,7 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			metadata, err := browser.PrepareManagedProfile(store.Dir, time.Now().UTC())
+			metadata, err := browser.PrepareManagedProfileWithStrategy(store.Dir, strategy, time.Now().UTC())
 			if err != nil {
 				return err
 			}
@@ -137,7 +137,7 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 			return a.render(ctx, "browser profile seeded", status)
 		},
 	}
-	cmd.Flags().StringVar(&strategy, "strategy", "managed", "profile seed strategy; only managed is supported")
+	cmd.Flags().StringVar(&strategy, "strategy", "managed", "profile seed strategy: managed or copy-default")
 	return cmd
 }
 
@@ -182,7 +182,7 @@ func browserProfileStatusForStore(ctx context.Context, stateDir string) (browser
 		ProfileDir:   browser.ManagedProfileDir(stateDir),
 		MetadataPath: browser.ManagedMetadataPath(stateDir),
 		State:        "missing",
-		SeedStrategy: "managed",
+		SeedStrategy: browser.ProfileSeedStrategyManaged,
 		NextCommands: browserProfileNextCommands(false),
 	}
 
@@ -242,6 +242,7 @@ func browserProfileNextCommands(seeded bool) []string {
 	}
 	return []string{
 		"cdp browser profile seed --strategy managed --json",
+		"cdp browser profile seed --strategy copy-default --json",
 		"cdp browser profile status --json",
 	}
 }

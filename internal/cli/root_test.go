@@ -595,6 +595,50 @@ func TestDoctorHeadlessSecurityPassesForManagedStateJSON(t *testing.T) {
 	}
 }
 
+func TestDoctorHeadlessSecurityPassesForCopyDefaultSeedJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	metadata, err := browser.PrepareManagedProfile(stateDir, time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("PrepareManagedProfile returned error: %v", err)
+	}
+	metadata.ProfileSeedStrategy = "copy-default"
+	metadata.DefaultProfileCopied = true
+	metadata.CopiedFileCount = 3
+	metadata.StartedAt = "2026-05-21T12:00:00Z"
+	metadata.ChromePID = os.Getpid()
+	metadata.DebuggingPort = "9222"
+	metadata.OwnedMarker = "owned-token"
+	metadata.ProcessStartTime = "2026-05-21T12:00:00Z"
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", daemon.Runtime{PID: os.Getpid(), BrowserMode: "headless", ConnectionMode: "browser_url", UserDataDir: metadata.UserDataDir, SocketPath: daemon.RuntimeSocketPathForMode(stateDir, "headless")}); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"doctor", "--check", "headless-security", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor headless-security exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK     bool `json:"ok"`
+		Checks []struct {
+			Status  string `json:"status"`
+			Details struct {
+				SeedStrategy string   `json:"seed_strategy"`
+				Reasons      []string `json:"reasons"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("doctor headless-security output is invalid JSON: %v", err)
+	}
+	if !got.OK || len(got.Checks) != 1 || got.Checks[0].Status != "pass" || got.Checks[0].Details.SeedStrategy != "copy-default" || len(got.Checks[0].Details.Reasons) != 0 {
+		t.Fatalf("headless security copy-default check = %+v, want pass", got.Checks)
+	}
+}
+
 func TestDoctorHeadlessSecurityFailsForUnsafeMetadataJSON(t *testing.T) {
 	stateDir := t.TempDir()
 	metadata, err := browser.PrepareManagedProfile(stateDir, time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC))
@@ -602,7 +646,7 @@ func TestDoctorHeadlessSecurityFailsForUnsafeMetadataJSON(t *testing.T) {
 		t.Fatalf("PrepareManagedProfile returned error: %v", err)
 	}
 	metadata.UserDataDir = filepath.Join(stateDir, "default-profile")
-	metadata.ProfileSeedStrategy = "copy-default"
+	metadata.ProfileSeedStrategy = "unsupported"
 	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
 		t.Fatalf("SaveManagedMetadata returned error: %v", err)
 	}
@@ -626,7 +670,7 @@ func TestDoctorHeadlessSecurityFailsForUnsafeMetadataJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("doctor headless-security output is invalid JSON: %v", err)
 	}
-	if got.OK || len(got.Checks) != 1 || got.Checks[0].Status != "fail" || got.Checks[0].Details.ManagedProfileSelected || got.Checks[0].Details.SeedStrategy != "copy-default" || !containsString(got.Checks[0].Details.Reasons, "metadata_user_data_dir_not_managed") {
+	if got.OK || len(got.Checks) != 1 || got.Checks[0].Status != "fail" || got.Checks[0].Details.ManagedProfileSelected || got.Checks[0].Details.SeedStrategy != "unsupported" || !containsString(got.Checks[0].Details.Reasons, "metadata_user_data_dir_not_managed") {
 		t.Fatalf("headless security check = %+v, want fail for unsafe metadata", got.Checks)
 	}
 }

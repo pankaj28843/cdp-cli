@@ -99,7 +99,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"browser-profile-seed": {
 			Name:        "browser-profile-seed",
-			Description: "Managed profile seed result; creates cdp-owned profile metadata without copying a default profile.",
+			Description: "Managed profile seed result; creates cdp-owned profile metadata and can optionally fully copy the default Chrome profile.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the managed profile was seeded."},
 				{Name: "seeded", Type: "boolean", Required: true, Description: "True when managed metadata exists after seeding."},
@@ -108,7 +108,9 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "exists", Type: "boolean", Required: true, Description: "True when the managed profile directory exists."},
 				{Name: "profile_dir", Type: "string", Required: true, Description: "Managed cdp-owned profile directory path."},
 				{Name: "metadata_path", Type: "string", Required: true, Description: "Managed profile metadata path."},
-				{Name: "seed_strategy", Type: "string", Required: true, Description: "Profile seed strategy; MVP supports managed only."},
+				{Name: "seed_strategy", Type: "string", Required: true, Description: "Profile seed strategy: managed or copy-default."},
+				{Name: "default_profile_copied", Type: "boolean", Required: false, Description: "True when copy-default fully replaced the managed profile from Chrome's default profile."},
+				{Name: "copied_file_count", Type: "number", Required: false, Description: "Number of profile filesystem entries copied; values are never exposed."},
 				{Name: "managed_browser", Type: "managed_browser", Required: true, Description: "Safe managed browser metadata without ownership token or process start time."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe commands for starting or inspecting the headless runtime."},
 			},

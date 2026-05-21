@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,87 @@ func TestPrepareManagedProfileWritesOwnerOnlyMetadata(t *testing.T) {
 	}
 	if !ok || loaded.UserDataDir != metadata.UserDataDir || loaded.LastSeededAt != now.Format(time.RFC3339) {
 		t.Fatalf("LoadManagedMetadata() = %+v, %v, want saved metadata", loaded, ok)
+	}
+}
+
+func TestPrepareManagedProfileCopyDefaultFullyReplacesProfile(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	srcRoot := filepath.Join(t.TempDir(), "chrome")
+	if err := os.MkdirAll(filepath.Join(srcRoot, "Default", "Local Storage", "leveldb"), 0o700); err != nil {
+		t.Fatalf("create source profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcRoot, "Local State"), []byte("local-state"), 0o600); err != nil {
+		t.Fatalf("write local state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcRoot, "Default", "Cookies"), []byte("cookie-db"), 0o600); err != nil {
+		t.Fatalf("write cookies: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcRoot, "Default", "Local Storage", "leveldb", "token.log"), []byte("token"), 0o600); err != nil {
+		t.Fatalf("write local storage: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcRoot, "SingletonLock"), []byte("runtime-lock"), 0o600); err != nil {
+		t.Fatalf("write singleton lock: %v", err)
+	}
+
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(filepath.Join(profileDir, "Default"), 0o700); err != nil {
+		t.Fatalf("create old profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "Default", "stale"), []byte("stale"), 0o600); err != nil {
+		t.Fatalf("write stale profile file: %v", err)
+	}
+
+	copied, err := browser.ReplaceManagedProfileFromDefault(profileDir, srcRoot)
+	if err != nil {
+		t.Fatalf("ReplaceManagedProfileFromDefault returned error: %v", err)
+	}
+	if copied < 3 {
+		t.Fatalf("copied file count = %d, want source files copied", copied)
+	}
+	for _, rel := range []string{"Local State", filepath.Join("Default", "Cookies"), filepath.Join("Default", "Local Storage", "leveldb", "token.log")} {
+		if _, err := os.Stat(filepath.Join(profileDir, rel)); err != nil {
+			t.Fatalf("copied profile missing %s: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(profileDir, "Default", "stale")); !os.IsNotExist(err) {
+		t.Fatalf("stale destination file still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(profileDir, "SingletonLock")); !os.IsNotExist(err) {
+		t.Fatalf("runtime artifact copied into managed profile: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(profileDir, "Default", "Cookies"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("copied Cookies mode = %o, want 600", got)
+		}
+	}
+}
+
+func TestManagedMetadataStatusIncludesSafeCopyDefaultFields(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	metadata := browser.ManagedMetadata{
+		BrowserMode:          "headless",
+		UserDataDir:          browser.ManagedProfileDir(stateDir),
+		ProfileSeedStrategy:  browser.ProfileSeedStrategyCopyDefault,
+		LastSeededAt:         "2026-05-21T12:00:00Z",
+		DefaultProfileCopied: true,
+		CopiedFileCount:      3,
+		OwnedMarker:          "secret-token",
+		ProcessStartTime:     "2026-05-21T12:00:00Z",
+	}
+	status := browser.ManagedMetadataStatus(metadata)
+	if status.ProfileSeedStrategy != browser.ProfileSeedStrategyCopyDefault || !status.DefaultProfileCopied || status.CopiedFileCount != 3 {
+		t.Fatalf("ManagedMetadataStatus() = %+v, want safe copy-default fields", status)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	if strings.Contains(string(encoded), "secret-token") || strings.Contains(string(encoded), "process_start_time") {
+		t.Fatalf("ManagedMetadataStatus leaked internal ownership fields: %s", string(encoded))
 	}
 }
 

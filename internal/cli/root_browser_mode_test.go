@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -188,8 +189,8 @@ func TestDescribeIncludesBrowserModeMetadata(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &command); err != nil {
 		t.Fatalf("describe browser profile seed output is invalid JSON: %v", err)
 	}
-	if command.Commands.Name != "seed" || !containsSubstring(command.Commands.Examples, "--strategy managed") {
-		t.Fatalf("browser profile seed metadata = %+v, want managed seed example", command.Commands)
+	if command.Commands.Name != "seed" || !containsSubstring(command.Commands.Examples, "--strategy managed") || !containsSubstring(command.Commands.Examples, "--strategy copy-default") {
+		t.Fatalf("browser profile seed metadata = %+v, want managed and copy-default seed examples", command.Commands)
 	}
 }
 
@@ -307,8 +308,8 @@ func TestBrowserProfileStatusAndSeedManaged(t *testing.T) {
 	if !missing.OK || missing.BrowserMode != "headless" || missing.State != "missing" || missing.Exists || missing.Seeded || missing.SeedStrategy != "managed" {
 		t.Fatalf("browser profile status = %+v, want missing managed headless profile", missing)
 	}
-	if !containsSubstring(missing.NextCommands, "browser profile seed --strategy managed") {
-		t.Fatalf("profile status next commands = %+v, want managed seed command", missing.NextCommands)
+	if !containsSubstring(missing.NextCommands, "browser profile seed --strategy managed") || !containsSubstring(missing.NextCommands, "browser profile seed --strategy copy-default") {
+		t.Fatalf("profile status next commands = %+v, want managed and copy-default seed commands", missing.NextCommands)
 	}
 
 	out.Reset()
@@ -366,9 +367,59 @@ func TestBrowserProfileStatusAndSeedManaged(t *testing.T) {
 	}
 }
 
+func TestBrowserProfileSeedCopyDefaultUsesSyntheticProfile(t *testing.T) {
+	stateDir := t.TempDir()
+	homeDir := t.TempDir()
+	sourceRoot := filepath.Join(homeDir, ".config", "google-chrome")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "Default"), 0o700); err != nil {
+		t.Fatalf("create source profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "Local State"), []byte("local-state"), 0o600); err != nil {
+		t.Fatalf("write local state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "Default", "Cookies"), []byte("cookie-db"), 0o600); err != nil {
+		t.Fatalf("write cookies: %v", err)
+	}
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", homeDir)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	if code != ExitOK {
+		t.Fatalf("browser profile seed copy-default exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK             bool   `json:"ok"`
+		Seeded         bool   `json:"seeded"`
+		Exists         bool   `json:"exists"`
+		SeedStrategy   string `json:"seed_strategy"`
+		ManagedBrowser struct {
+			ProfileSeedStrategy  string `json:"profile_seed_strategy"`
+			DefaultProfileCopied bool   `json:"default_profile_copied"`
+			CopiedFileCount      int    `json:"copied_file_count"`
+		} `json:"managed_browser"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("browser profile seed copy-default output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || !got.Seeded || !got.Exists || got.SeedStrategy != "copy-default" || got.ManagedBrowser.ProfileSeedStrategy != "copy-default" || !got.ManagedBrowser.DefaultProfileCopied || got.ManagedBrowser.CopiedFileCount == 0 {
+		t.Fatalf("browser profile seed copy-default = %+v, want copied profile metadata", got)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "browser", "headless-profile", "Default", "Cookies")); err != nil {
+		t.Fatalf("managed profile missing copied Cookies fixture: %v", err)
+	}
+	if strings.Contains(out.String(), "cookie-db") || strings.Contains(out.String(), "local-state") {
+		t.Fatalf("browser profile seed leaked copied profile values: %s", out.String())
+	}
+}
+
 func TestBrowserProfileSeedRejectsUnsupportedStrategy(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--state-dir", t.TempDir(), "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	code := Execute(context.Background(), []string{"--state-dir", t.TempDir(), "browser", "profile", "seed", "--strategy", "redacted", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitUsage {
 		t.Fatalf("browser profile seed invalid strategy exit code = %d, want %d; stdout=%s stderr=%s", code, ExitUsage, out.String(), errOut.String())
 	}

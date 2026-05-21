@@ -10,6 +10,7 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
@@ -856,7 +857,11 @@ func (a *app) connectionStateName(ctx context.Context) string {
 
 func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chromeCommand string) (*managedKeepAlive, keepaliveChromeStatus, error) {
 	status := keepaliveChromeStatus{Checked: true, Command: chromeCommand}
-	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromeCommand})
+	seedStrategy := ""
+	if cfg, cfgErr := config.Load(a.opts.config); cfgErr == nil {
+		seedStrategy = cfg.Browser.Headless.ProfileSeedStrategy
+	}
+	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromeCommand, ProfileSeedStrategy: seedStrategy})
 	if err != nil {
 		return nil, status, err
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -19,34 +20,43 @@ import (
 const (
 	ManagedProfileDirName = "headless-profile"
 	ManagedMetadataName   = "managed-browser.json"
+
+	ProfileSeedStrategyManaged     = "managed"
+	ProfileSeedStrategyCopyDefault = "copy-default"
 )
 
 type ManagedOptions struct {
-	StateDir string
-	Chrome   string
-	Now      func() time.Time
+	StateDir            string
+	Chrome              string
+	ProfileSeedStrategy string
+	ProfileRefreshAfter time.Duration
+	Now                 func() time.Time
 }
 
 type ManagedMetadata struct {
-	BrowserMode         string `json:"browser_mode"`
-	ChromePID           int    `json:"chrome_pid,omitempty"`
-	StartedAt           string `json:"started_at,omitempty"`
-	UserDataDir         string `json:"user_data_dir"`
-	DebuggingPort       string `json:"debugging_port,omitempty"`
-	ProfileSeedStrategy string `json:"profile_seed_strategy"`
-	LastSeededAt        string `json:"last_seeded_at,omitempty"`
-	OwnedMarker         string `json:"ownership_token,omitempty"`
-	ProcessStartTime    string `json:"process_start_time,omitempty"`
+	BrowserMode          string `json:"browser_mode"`
+	ChromePID            int    `json:"chrome_pid,omitempty"`
+	StartedAt            string `json:"started_at,omitempty"`
+	UserDataDir          string `json:"user_data_dir"`
+	DebuggingPort        string `json:"debugging_port,omitempty"`
+	ProfileSeedStrategy  string `json:"profile_seed_strategy"`
+	LastSeededAt         string `json:"last_seeded_at,omitempty"`
+	DefaultProfileCopied bool   `json:"default_profile_copied,omitempty"`
+	CopiedFileCount      int    `json:"copied_file_count,omitempty"`
+	OwnedMarker          string `json:"ownership_token,omitempty"`
+	ProcessStartTime     string `json:"process_start_time,omitempty"`
 }
 
 type ManagedStatus struct {
-	BrowserMode         string `json:"browser_mode"`
-	ChromePID           int    `json:"chrome_pid,omitempty"`
-	StartedAt           string `json:"started_at,omitempty"`
-	UserDataDir         string `json:"user_data_dir"`
-	DebuggingPort       string `json:"debugging_port,omitempty"`
-	ProfileSeedStrategy string `json:"profile_seed_strategy"`
-	LastSeededAt        string `json:"last_seeded_at,omitempty"`
+	BrowserMode          string `json:"browser_mode"`
+	ChromePID            int    `json:"chrome_pid,omitempty"`
+	StartedAt            string `json:"started_at,omitempty"`
+	UserDataDir          string `json:"user_data_dir"`
+	DebuggingPort        string `json:"debugging_port,omitempty"`
+	ProfileSeedStrategy  string `json:"profile_seed_strategy"`
+	LastSeededAt         string `json:"last_seeded_at,omitempty"`
+	DefaultProfileCopied bool   `json:"default_profile_copied,omitempty"`
+	CopiedFileCount      int    `json:"copied_file_count,omitempty"`
 }
 
 type ManagedLaunch struct {
@@ -96,20 +106,217 @@ func ManagedLaunchArgs(chromePath, userDataDir string) []string {
 }
 
 func PrepareManagedProfile(stateDir string, now time.Time) (ManagedMetadata, error) {
-	profileDir := ManagedProfileDir(stateDir)
-	if err := os.MkdirAll(profileDir, 0o700); err != nil {
-		return ManagedMetadata{}, fmt.Errorf("create managed profile directory: %w", err)
+	return PrepareManagedProfileWithStrategy(stateDir, ProfileSeedStrategyManaged, now)
+}
+
+func PrepareManagedProfileWithStrategy(stateDir, strategy string, now time.Time) (ManagedMetadata, error) {
+	strategy = NormalizeProfileSeedStrategy(strategy)
+	if !SupportedProfileSeedStrategy(strategy) {
+		return ManagedMetadata{}, fmt.Errorf("unsupported managed profile seed strategy %q", strategy)
 	}
+	profileDir := ManagedProfileDir(stateDir)
 	metadata := ManagedMetadata{
 		BrowserMode:         "headless",
 		UserDataDir:         profileDir,
-		ProfileSeedStrategy: "managed",
+		ProfileSeedStrategy: strategy,
 		LastSeededAt:        now.UTC().Format(time.RFC3339),
+	}
+	if strategy == ProfileSeedStrategyCopyDefault {
+		copied, err := ReplaceManagedProfileFromDefault(profileDir, DefaultChromeUserDataDir())
+		if err != nil {
+			return ManagedMetadata{}, err
+		}
+		metadata.DefaultProfileCopied = true
+		metadata.CopiedFileCount = copied
+	} else if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		return ManagedMetadata{}, fmt.Errorf("create managed profile directory: %w", err)
+	}
+	if err := os.Chmod(profileDir, 0o700); err != nil {
+		return ManagedMetadata{}, fmt.Errorf("secure managed profile directory: %w", err)
 	}
 	if err := SaveManagedMetadata(stateDir, metadata); err != nil {
 		return ManagedMetadata{}, err
 	}
 	return metadata, nil
+}
+
+func NormalizeProfileSeedStrategy(strategy string) string {
+	strategy = strings.TrimSpace(strings.ToLower(strategy))
+	if strategy == "" {
+		return ProfileSeedStrategyManaged
+	}
+	return strategy
+}
+
+func SupportedProfileSeedStrategy(strategy string) bool {
+	switch NormalizeProfileSeedStrategy(strategy) {
+	case ProfileSeedStrategyManaged, ProfileSeedStrategyCopyDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+func DefaultChromeUserDataDir() string {
+	home, _ := os.UserHomeDir()
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "Google", "Chrome")
+	case "windows":
+		return filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "User Data")
+	default:
+		if xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgConfig != "" {
+			return filepath.Join(xdgConfig, "google-chrome")
+		}
+		return filepath.Join(home, ".config", "google-chrome")
+	}
+}
+
+func ReplaceManagedProfileFromDefault(dstRoot, srcRoot string) (int, error) {
+	if strings.TrimSpace(srcRoot) == "" {
+		return 0, fmt.Errorf("default Chrome profile directory is unavailable")
+	}
+	srcRoot = filepath.Clean(srcRoot)
+	dstRoot = filepath.Clean(dstRoot)
+	if srcRoot == dstRoot || strings.HasPrefix(srcRoot, dstRoot+string(os.PathSeparator)) || strings.HasPrefix(dstRoot, srcRoot+string(os.PathSeparator)) {
+		return 0, fmt.Errorf("managed profile copy source and destination must be separate")
+	}
+	if info, err := os.Stat(filepath.Join(srcRoot, "Default")); err != nil || !info.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("not a directory")
+		}
+		return 0, fmt.Errorf("default Chrome profile not found: %w", err)
+	}
+	parent := filepath.Dir(dstRoot)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return 0, fmt.Errorf("create managed profile parent: %w", err)
+	}
+	tmpRoot, err := os.MkdirTemp(parent, ".headless-profile-copy-*")
+	if err != nil {
+		return 0, fmt.Errorf("create managed profile copy temp dir: %w", err)
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(tmpRoot)
+		}
+	}()
+	copied, err := copyProfileTree(srcRoot, tmpRoot)
+	if err != nil {
+		return 0, err
+	}
+	if err := removeChromeRuntimeArtifacts(tmpRoot); err != nil {
+		return 0, err
+	}
+	if err := os.Chmod(tmpRoot, 0o700); err != nil {
+		return 0, fmt.Errorf("secure managed profile copy: %w", err)
+	}
+	if err := os.RemoveAll(dstRoot); err != nil {
+		return 0, fmt.Errorf("replace old managed profile: %w", err)
+	}
+	if err := os.Rename(tmpRoot, dstRoot); err != nil {
+		return 0, fmt.Errorf("install managed profile copy: %w", err)
+	}
+	complete = true
+	return copied, nil
+}
+
+func copyProfileTree(srcRoot, dstRoot string) (int, error) {
+	copied := 0
+	err := filepath.WalkDir(srcRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcRoot, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if chromeRuntimeArtifact(entry.Name()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		dstPath := filepath.Join(dstRoot, rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(dstPath), 0o700); err != nil {
+				return err
+			}
+			_ = os.Remove(dstPath)
+			if err := os.Symlink(target, dstPath); err != nil {
+				return err
+			}
+			copied++
+			return nil
+		}
+		if info.IsDir() {
+			if err := os.MkdirAll(dstPath, info.Mode().Perm()); err != nil {
+				return err
+			}
+			return os.Chmod(dstPath, info.Mode().Perm())
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if err := copyProfileFile(path, dstPath, info.Mode().Perm()); err != nil {
+			return err
+		}
+		copied++
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("copy default Chrome profile: %w", err)
+	}
+	return copied, nil
+}
+
+func copyProfileFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return os.Chmod(dst, mode)
+}
+
+func removeChromeRuntimeArtifacts(root string) error {
+	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"} {
+		if err := os.Remove(filepath.Join(root, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove Chrome runtime artifact %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func chromeRuntimeArtifact(name string) bool {
+	switch name {
+	case "SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort":
+		return true
+	default:
+		return false
+	}
 }
 
 func SaveManagedMetadata(stateDir string, metadata ManagedMetadata) error {
@@ -144,13 +351,15 @@ func LoadManagedMetadata(stateDir string) (ManagedMetadata, bool, error) {
 
 func ManagedMetadataStatus(metadata ManagedMetadata) ManagedStatus {
 	return ManagedStatus{
-		BrowserMode:         metadata.BrowserMode,
-		ChromePID:           metadata.ChromePID,
-		StartedAt:           metadata.StartedAt,
-		UserDataDir:         metadata.UserDataDir,
-		DebuggingPort:       metadata.DebuggingPort,
-		ProfileSeedStrategy: metadata.ProfileSeedStrategy,
-		LastSeededAt:        metadata.LastSeededAt,
+		BrowserMode:          metadata.BrowserMode,
+		ChromePID:            metadata.ChromePID,
+		StartedAt:            metadata.StartedAt,
+		UserDataDir:          metadata.UserDataDir,
+		DebuggingPort:        metadata.DebuggingPort,
+		ProfileSeedStrategy:  metadata.ProfileSeedStrategy,
+		LastSeededAt:         metadata.LastSeededAt,
+		DefaultProfileCopied: metadata.DefaultProfileCopied,
+		CopiedFileCount:      metadata.CopiedFileCount,
 	}
 }
 
@@ -197,7 +406,13 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
-	metadata, err := PrepareManagedProfile(opts.StateDir, now)
+	strategy := NormalizeProfileSeedStrategy(opts.ProfileSeedStrategy)
+	if strategy == ProfileSeedStrategyManaged {
+		if existing, ok, loadErr := LoadManagedMetadata(opts.StateDir); loadErr == nil && ok {
+			strategy = NormalizeProfileSeedStrategy(existing.ProfileSeedStrategy)
+		}
+	}
+	metadata, err := PrepareManagedProfileWithStrategy(opts.StateDir, strategy, now)
 	if err != nil {
 		return ManagedLaunch{}, err
 	}

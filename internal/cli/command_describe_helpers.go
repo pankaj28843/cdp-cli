@@ -130,6 +130,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp browser profile seed": {
 			"cdp --browser-mode headless browser profile seed --strategy managed --json",
+			"cdp --browser-mode headless browser profile seed --strategy copy-default --json",
 		},
 		"cdp connection": {
 			"cdp connection list --json",
