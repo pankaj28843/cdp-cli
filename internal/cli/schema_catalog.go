@@ -421,6 +421,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, WebSocket options, redaction mode, warning, and collector errors."},
 				{Name: "capture.artifact_safety", Type: "artifact_safety", Required: true, Description: "Shared artifact safety metadata: redaction mode, shareability classification, unsafe opt-in warning, and changed sensitive fields."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
+				{Name: "har", Type: "artifact", Required: false, Description: "HAR 1.2 artifact metadata when --har-out is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
 			},
 		},

@@ -118,7 +118,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "screenshot render" --json | jq -e '.ok == true and .commands.name == "render" and (.commands.examples | any(contains("--serve"))) and (.commands.flags[] | select(.name == "wait-for"))' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--failed")))' >/dev/null
-"$binary" describe --command "network capture" --json | jq -e '.ok == true and .commands.name == "capture" and (.commands.examples | any(contains("--redact")))' >/dev/null
+"$binary" describe --command "network capture" --json | jq -e '.ok == true and .commands.name == "capture" and (.commands.examples | any(contains("--redact"))) and (.commands.examples | any(contains("--har-out"))) and (.commands.flags[] | select(.name == "har-out"))' >/dev/null
 "$binary" describe --command "storage" --json | jq -e '.ok == true and .commands.name == "storage" and (.commands.children | map(.name) | index("snapshot"))' >/dev/null
 "$binary" describe --command "storage cookies set" --json | jq -e '.ok == true and .commands.name == "set" and (.commands.examples | any(contains("--name")))' >/dev/null
 "$binary" describe --command "storage indexeddb" --json | jq -e '.ok == true and .commands.name == "indexeddb" and (.commands.children | map(.name) | index("put"))' >/dev/null
@@ -145,7 +145,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
 "$binary" schema console --json | jq -e '.ok == true and .schema.name == "console"' >/dev/null
 "$binary" schema network --json | jq -e '.ok == true and .schema.name == "network"' >/dev/null
-"$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture")) and (.schema.fields | map(.name) | index("capture.artifact_safety"))' >/dev/null
+"$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture")) and (.schema.fields | map(.name) | index("capture.artifact_safety")) and (.schema.fields | map(.name) | index("har"))' >/dev/null
 "$binary" schema storage --json | jq -e '.ok == true and .schema.name == "storage"' >/dev/null
 "$binary" schema storage-cache --json | jq -e '.ok == true and .schema.name == "storage-cache" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema storage-indexeddb --json | jq -e '.ok == true and .schema.name == "storage-indexeddb" and (.schema.fields | map(.name) | index("storage"))' >/dev/null

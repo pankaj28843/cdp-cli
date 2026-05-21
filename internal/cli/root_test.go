@@ -219,11 +219,13 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	outPath := filepath.Join(t.TempDir(), "network.local.json")
+	harPath := filepath.Join(t.TempDir(), "network.har")
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{
 		"network", "capture",
 		"--wait", "250ms",
 		"--out", outPath,
+		"--har-out", harPath,
 		"--redact", "safe",
 		"--json",
 	}, &out, &errOut, cli.BuildInfo{})
@@ -255,11 +257,15 @@ func TestNetworkCaptureJSON(t *testing.T) {
 		Artifact struct {
 			Path string `json:"path"`
 		} `json:"artifact"`
+		HAR struct {
+			Type string `json:"type"`
+			Path string `json:"path"`
+		} `json:"har"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("network capture output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Capture.Count != 2 || len(got.Requests) != 2 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath {
+	if !got.OK || got.Capture.Count != 2 || len(got.Requests) != 2 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath || got.HAR.Type != "network-har" || got.HAR.Path != harPath {
 		t.Fatalf("network capture = %+v, want two safe-redacted requests and artifact", got)
 	}
 	if got.Capture.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !got.Capture.ArtifactSafety.Shareable || got.Capture.ArtifactSafety.ChangedFieldCount == 0 {
@@ -284,6 +290,37 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	scan := artifacts.ScanBytes(artifactBytes, []string{"Bearer secret", "session=secret", `"token":"secret"`, "csrf=secret"}, 0)
 	if len(scan.Findings) != 0 {
 		t.Fatalf("network capture artifact leaked synthetic secrets: %+v", scan.Findings)
+	}
+	harBytes, err := os.ReadFile(harPath)
+	if err != nil {
+		t.Fatalf("read network HAR artifact: %v", err)
+	}
+	scan = artifacts.ScanBytes(harBytes, []string{"Bearer secret", "session=secret", `"token":"secret"`, "csrf=secret"}, 0)
+	if len(scan.Findings) != 0 {
+		t.Fatalf("network HAR artifact leaked synthetic secrets: %+v", scan.Findings)
+	}
+	var har struct {
+		Log struct {
+			Version string `json:"version"`
+			Entries []struct {
+				Request struct {
+					URL     string              `json:"url"`
+					Headers []map[string]string `json:"headers"`
+				} `json:"request"`
+				Response struct {
+					Status  int `json:"status"`
+					Content struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"response"`
+			} `json:"entries"`
+		} `json:"log"`
+	}
+	if err := json.Unmarshal(harBytes, &har); err != nil {
+		t.Fatalf("HAR artifact is invalid JSON: %v", err)
+	}
+	if har.Log.Version != "1.2" || len(har.Log.Entries) != 2 || har.Log.Entries[0].Response.Status != 200 || !strings.Contains(har.Log.Entries[0].Response.Content.Text, `"ok":true`) {
+		t.Fatalf("HAR artifact = %+v, want redacted HAR entries", har)
 	}
 }
 

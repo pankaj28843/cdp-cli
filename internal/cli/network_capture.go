@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -298,6 +299,148 @@ func collectNetworkCapture(ctx context.Context, client browserEventClient, sessi
 		truncated = true
 	}
 	return records, truncated, collectorErrors, nil
+}
+
+func networkCaptureHAR(records []networkCaptureRecord) map[string]any {
+	entries := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		if record.WebSocket != nil {
+			continue
+		}
+		entry := map[string]any{
+			"startedDateTime": harStartedDateTime(record.WallTime),
+			"time":            0,
+			"request":         networkCaptureHARRequest(record),
+			"response":        networkCaptureHARResponse(record),
+			"cache":           map[string]any{},
+			"timings":         networkCaptureHARTimings(record),
+		}
+		if record.RemoteIPAddress != "" {
+			entry["serverIPAddress"] = record.RemoteIPAddress
+		}
+		if record.ConnectionID != 0 {
+			entry["connection"] = fmt.Sprintf("%.0f", record.ConnectionID)
+		}
+		entries = append(entries, entry)
+	}
+	return map[string]any{
+		"log": map[string]any{
+			"version": "1.2",
+			"creator": map[string]any{
+				"name":    "cdp-cli",
+				"version": "dev",
+			},
+			"entries": entries,
+		},
+	}
+}
+
+func networkCaptureHARRequest(record networkCaptureRecord) map[string]any {
+	request := map[string]any{
+		"method":      firstNonEmpty(record.Method, "GET"),
+		"url":         record.URL,
+		"httpVersion": firstNonEmpty(record.Protocol, "HTTP/1.1"),
+		"headers":     harHeaders(record.RequestHeaders),
+		"queryString": harQueryString(record.URL),
+		"headersSize": -1,
+		"bodySize":    -1,
+	}
+	if record.RequestPostData != nil && record.RequestPostData.Text != "" {
+		request["postData"] = map[string]any{
+			"mimeType": "text/plain",
+			"text":     record.RequestPostData.Text,
+		}
+		request["bodySize"] = record.RequestPostData.Bytes
+	}
+	return request
+}
+
+func networkCaptureHARResponse(record networkCaptureRecord) map[string]any {
+	content := map[string]any{
+		"size":     int(record.DecodedBodyLength),
+		"mimeType": record.MimeType,
+	}
+	if record.Body != nil {
+		content["size"] = record.Body.Bytes
+		if record.Body.Text != "" {
+			content["text"] = record.Body.Text
+		}
+		if record.Body.Base64Encoded {
+			content["encoding"] = "base64"
+		}
+	}
+	return map[string]any{
+		"status":      record.Status,
+		"statusText":  record.StatusText,
+		"httpVersion": firstNonEmpty(record.Protocol, "HTTP/1.1"),
+		"headers":     harHeaders(record.ResponseHeaders),
+		"content":     content,
+		"redirectURL": "",
+		"headersSize": -1,
+		"bodySize":    int(record.EncodedDataLength),
+	}
+}
+
+func networkCaptureHARTimings(record networkCaptureRecord) map[string]any {
+	blocked := 0
+	if record.FromDiskCache || record.FromServiceWorker {
+		blocked = -1
+	}
+	return map[string]any{
+		"blocked": blocked,
+		"dns":     -1,
+		"connect": -1,
+		"send":    0,
+		"wait":    0,
+		"receive": 0,
+		"ssl":     -1,
+	}
+}
+
+func harHeaders(headers map[string]any) []map[string]string {
+	out := make([]map[string]string, 0, len(headers))
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out = append(out, map[string]string{"name": name, "value": fmt.Sprint(headers[name])})
+	}
+	return out
+}
+
+func harQueryString(rawURL string) []map[string]string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return []map[string]string{}
+	}
+	values := parsed.Query()
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]map[string]string, 0, len(names))
+	for _, name := range names {
+		for _, value := range values[name] {
+			out = append(out, map[string]string{"name": name, "value": value})
+		}
+	}
+	return out
+}
+
+func harStartedDateTime(wallTime float64) string {
+	if wallTime <= 0 {
+		return time.Unix(0, 0).UTC().Format(time.RFC3339Nano)
+	}
+	sec, frac := mathModf(wallTime)
+	return time.Unix(int64(sec), int64(frac*1e9)).UTC().Format(time.RFC3339Nano)
+}
+
+func mathModf(f float64) (float64, float64) {
+	sec := float64(int64(f))
+	return sec, f - sec
 }
 
 func mergeCaptureRequestWillBeSent(paramsRaw json.RawMessage, ensure func(string) *networkCaptureRecord, opts networkCaptureOptions) {

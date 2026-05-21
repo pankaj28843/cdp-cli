@@ -277,6 +277,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp network capture": {
 			"cdp network capture --reload --wait 20s --out tmp/network.local.json --json",
+			"cdp network capture --redact safe --har-out tmp/network.har --json",
 			"cdp network capture --include-websockets --include-websocket-payloads --out tmp/network-with-ws.local.json --json",
 			"cdp network capture --url-contains localhost --redact safe --out tmp/network-shareable.json --json",
 		},

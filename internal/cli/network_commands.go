@@ -200,6 +200,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	var wait time.Duration
 	var limit int
 	var outPath string
+	var harOutPath string
 	var includeHeaders bool
 	var includeInitiators bool
 	var includeTiming bool
@@ -309,6 +310,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				"requests": records,
 				"capture":  capture,
 			}
+			artifactList := []map[string]any{}
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
@@ -319,7 +321,24 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 					return err
 				}
 				report["artifact"] = map[string]any{"type": "network-capture", "path": writtenPath, "bytes": len(b) + 1, "safety": artifactSafety}
-				report["artifacts"] = []map[string]any{{"type": "network-capture", "path": writtenPath}}
+				artifactList = append(artifactList, map[string]any{"type": "network-capture", "path": writtenPath})
+			}
+			if strings.TrimSpace(harOutPath) != "" {
+				har := networkCaptureHAR(records)
+				b, err := json.MarshalIndent(har, "", "  ")
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal network HAR artifact: %v", err), ExitInternal, []string{"cdp network capture --har-out tmp/network.har --json"})
+				}
+				writtenPath, err := writeArtifactFile(harOutPath, append(b, '\n'))
+				if err != nil {
+					return err
+				}
+				harArtifact := map[string]any{"type": "network-har", "path": writtenPath, "bytes": len(b) + 1, "safety": artifactSafety}
+				report["har"] = harArtifact
+				artifactList = append(artifactList, map[string]any{"type": "network-har", "path": writtenPath})
+			}
+			if len(artifactList) > 0 {
+				report["artifacts"] = artifactList
 			}
 			human := fmt.Sprintf("network-capture\t%d requests", len(records))
 			return a.render(ctx, human, report)
@@ -331,6 +350,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect network events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 0, "maximum requests to return; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON network capture artifact")
+	cmd.Flags().StringVar(&harOutPath, "har-out", "", "optional path for a HAR 1.2 artifact generated from captured records")
 	cmd.Flags().BoolVar(&includeHeaders, "include-headers", true, "include request and response headers")
 	cmd.Flags().BoolVar(&includeInitiators, "include-initiators", true, "include CDP initiator metadata and stack frames")
 	cmd.Flags().BoolVar(&includeTiming, "include-timing", true, "include response timing and connection metadata")
