@@ -86,16 +86,26 @@ mode-specific per-connection lock before any active probe, exits successfully wh
 another keepalive already owns that lock, and starts or repairs the selected-mode
 daemon only when the selected connection is not healthy.
 
+The managed path is available through first-class cron commands:
+
+```bash
+cdp cron status --json
+cdp cron diff --json
+cdp cron install --profile agent --json
+cdp cron remove --json
+cdp cron heal headed --json
+```
+
 ```cron
-* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --reconnect 30s --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1
-* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1
-* * * * * flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp CDP_LOG_DIR=$HOME/.cdp-cli bash /path/to/cdp-cli/scripts/cdp-headless-healthcheck.sh >> $HOME/.cdp-cli/headless-health.log 2>&1
-0 */6 * * * flock -n $HOME/.cdp-cli/locks/headless-profile-seed.lock $HOME/.local/bin/cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json >> $HOME/.cdp-cli/profile-seed-headless.log 2>&1
-* * * * * flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/.cdp-cli/locks/cron-headed-heal.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed cron heal headed --reconnect 30s --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/.cdp-cli/locks/headless-health.lock $HOME/.local/bin/cdp --browser-mode headless daemon health --json >> $HOME/.cdp-cli/headless-health.log 2>&1
+0 */6 * * * /usr/bin/flock -n $HOME/.cdp-cli/locks/headless-profile-seed.lock $HOME/.local/bin/cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json >> $HOME/.cdp-cli/profile-seed-headless.log 2>&1
+* * * * * /usr/bin/flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1
 ```
 
 Use explicit `--browser-mode` for scheduled cleanup so headed and headless page
-records cannot be confused. The headless health-check script validates keepalive,
+records cannot be confused. The standalone headless health-check script validates keepalive,
 health telemetry, navigation, DOM text, JavaScript evaluation, and screenshots; it
 writes JSON artifacts under `$HOME/.cdp-cli/headless-health/` and creates a
 feature-request candidate after repeated failures. Verify the current Linux user's scheduled tasks with:
@@ -103,8 +113,8 @@ feature-request candidate after repeated failures. Verify the current Linux user
 ```bash
 cdp doctor --check scheduled-tasks --json
 crontab -l | grep cdp
-make cron-install
-make cron-show
+cdp cron install --profile agent --json
+cdp cron status --json
 ```
 
 ## Principles

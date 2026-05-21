@@ -30,6 +30,8 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect")))' >/dev/null
 "$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("cdp-headless-healthcheck.sh")))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
+"$binary" describe --command "cron install" --json | jq -e '.ok == true and .commands.name == "install" and (.commands.examples | any(contains("--profile agent")))' >/dev/null
+"$binary" describe --command "cron heal headed" --json | jq -e '.ok == true and .commands.name == "headed" and (.commands.examples | any(contains("--reconnect 30s")))' >/dev/null
 "$binary" describe --command "doctor" --json | jq -e '.ok == true and .commands.name == "doctor" and (.commands.examples | any(contains("scheduled-tasks")))' >/dev/null
 "$binary" describe --command "browser mode get" --json | jq -e '.ok == true and .commands.name == "get" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
 "$binary" describe --command "browser profile status" --json | jq -e '.ok == true and .commands.name == "status" and .commands.short == "Show managed headless browser profile status" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
@@ -60,6 +62,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities")) and (.schema.fields | map(.name) | index("bootstrap_path"))' >/dev/null
 "$binary" schema scheduled-tasks --json | jq -e '.ok == true and .schema.name == "scheduled-tasks" and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
+"$binary" schema cron --json | jq -e '.ok == true and .schema.name == "cron" and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema headless-security --json | jq -e '.ok == true and .schema.name == "headless-security" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
 "$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("budget"))' >/dev/null
@@ -103,6 +106,37 @@ else
   test -s "$health_log_dir/artifacts/feature-request-candidate.md"
 fi
 test -s "$health_log_dir/artifacts/latest.json"
+
+fake_crontab_store="$state_dir/fake-crontab.txt"
+fake_crontab_bin="$state_dir/fake-crontab"
+cat >"$fake_crontab_store" <<'EOF_CRONTAB'
+SHELL=/bin/sh
+0 0 * * * /usr/local/bin/backup
+EOF_CRONTAB
+cat >"$fake_crontab_bin" <<'EOF_CRONTAB_BIN'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$#" -eq 1 && "$1" == "-l" ]]; then
+  cat "$CDP_FAKE_CRONTAB"
+  exit 0
+fi
+if [[ "$#" -eq 1 ]]; then
+  cat "$1" >"$CDP_FAKE_CRONTAB"
+  exit 0
+fi
+exit 2
+EOF_CRONTAB_BIN
+chmod +x "$fake_crontab_bin"
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and (.intended_block.entries | length == 5)' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron diff --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and .actions[0].action == "append_managed_block"' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.managed_block.entries | length == 5)' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == false and .action == "unchanged"' >/dev/null
+rg -q '^SHELL=/bin/sh$' "$fake_crontab_store"
+rg -q 'cron heal headed' "$fake_crontab_store"
+rg -q '/usr/bin/flock -n' "$fake_crontab_store"
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron remove --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and .removed == true' >/dev/null
+! rg -q 'cdp-cli managed browser runtime tasks' "$fake_crontab_store"
+rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
 
 "$binary" schema daemon-health --json | jq -e '.ok == true and .schema.name == "daemon-health" and (.schema.fields | map(.name) | index("health"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null

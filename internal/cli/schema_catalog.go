@@ -57,6 +57,20 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe crontab inspection and install commands with explicit browser modes and flock locks."},
 			},
 		},
+		"cron": {
+			Name:        "cron",
+			Description: "Managed user-crontab block for cdp browser runtime keepalive, health, profile seed, and cleanup tasks.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when cron metadata or mutation completed."},
+				{Name: "installed", Type: "boolean", Required: false, Description: "True when the cdp-managed block exists in the current user crontab."},
+				{Name: "matches_intended", Type: "boolean", Required: false, Description: "True when the installed block exactly matches the rendered agent profile block."},
+				{Name: "managed_block", Type: "cron_block", Required: false, Description: "Installed cdp-managed block entries."},
+				{Name: "intended_block", Type: "cron_block", Required: false, Description: "Rendered cdp-managed block entries."},
+				{Name: "actions", Type: "array<object>", Required: false, Description: "Diff or mutation actions taken or proposed."},
+				{Name: "warnings", Type: "array<string>", Required: false, Description: "Non-fatal installation warnings."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe follow-up commands for status, install, removal, and doctor validation."},
+			},
+		},
 		"headless-security": {
 			Name:        "headless-security",
 			Description: "Security readiness check for the managed headless browser runtime.",

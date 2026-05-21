@@ -109,6 +109,31 @@ func commandExamples(path string) []string {
 			"cdp daemon logs --tail 100 --json",
 			"cdp daemon logs --tail 0 --json",
 		},
+		"cdp cron": {
+			"cdp cron status --json",
+			"cdp cron install --profile agent --json",
+		},
+		"cdp cron status": {
+			"cdp cron status --json",
+			"cdp cron diff --json",
+		},
+		"cdp cron install": {
+			"cdp cron install --profile agent --json",
+			"cdp cron install --profile agent --cdp-bin $HOME/.local/bin/cdp --json",
+		},
+		"cdp cron remove": {
+			"cdp cron remove --json",
+		},
+		"cdp cron diff": {
+			"cdp cron diff --json",
+		},
+		"cdp cron heal": {
+			"cdp cron heal headed --json",
+		},
+		"cdp cron heal headed": {
+			"cdp cron heal headed --reconnect 30s --json",
+			"cdp cron heal headed --chrome-command google-chrome-stable --json",
+		},
 		"cdp browser": {
 			"cdp browser mode get --json",
 			"cdp browser profile status --json",

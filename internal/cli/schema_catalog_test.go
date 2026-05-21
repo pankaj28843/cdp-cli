@@ -45,6 +45,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"doctor",
 		"doctor-capabilities",
 		"error-envelope",
+		"cron",
 		"scheduled-tasks",
 		"headless-security",
 		"browser-mode",
@@ -81,6 +82,7 @@ func TestSchemaCatalogBrowserModeContracts(t *testing.T) {
 		"connection-resolve":     {"browser_mode", "browser_mode_source", "connection"},
 		"daemon-status":          {"daemon"},
 		"daemon-keepalive":       {"browser_mode", "connection", "mode", "lock"},
+		"cron":                   {"next_commands"},
 		"scheduled-tasks":        {"details", "next_commands"},
 		"headless-security":      {"browser_mode", "details", "next_commands"},
 	}

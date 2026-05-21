@@ -119,6 +119,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newExitCodesCommand())
 	root.AddCommand(a.newSchemaCommand())
 	root.AddCommand(a.newDaemonCommand())
+	root.AddCommand(a.newCronCommand())
 	root.AddCommand(a.newConnectionCommand())
 	root.AddCommand(a.newBrowserCommand())
 	root.AddCommand(a.newTargetsCommand())
