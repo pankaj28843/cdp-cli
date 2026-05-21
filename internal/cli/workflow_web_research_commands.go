@@ -148,14 +148,20 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 
 			serpReports := make([]map[string]any, 0, resultCount)
 			failures := make([]map[string]any, 0)
+			warnings := make([]string, 0)
 			candidates := make([]webResearchCandidate, 0)
 			seen := map[string]bool{}
 			for _, result := range serpResults {
 				if result.Err != nil {
-					failures = append(failures, map[string]any{"query": result.Query.Text, "serp_page": result.SerpPage, "error": result.Err.Error()})
+					failures = append(failures, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": classifyWorkflowSERPFailure(result.Err, result.Result), "error": result.Err.Error()})
 					continue
 				}
 				serpReports = append(serpReports, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
+				if blocked, signals := detectSERPBlocked(result.Result); blocked {
+					failures = append(failures, map[string]any{"query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": "serp_blocked", "message": "Google served a consent, CAPTCHA, or bot-check page", "signals": signals})
+					warnings = append(warnings, fmt.Sprintf("SERP page %d for query %q was blocked by a consent, CAPTCHA, or bot-check page", result.SerpPage, result.Query.Text))
+					continue
+				}
 				for _, link := range result.Result.Links.Results {
 					key := normalizeResearchURL(link.URL)
 					if key == "" || seen[key] {
@@ -171,6 +177,9 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				if maxCandidates > 0 && len(candidates) >= maxCandidates {
 					break
 				}
+			}
+			if len(candidates) == 0 && len(failures) > 0 {
+				warnings = append(warnings, "SERP sampling produced zero candidates because one or more pages were blocked or failed")
 			}
 
 			sort.SliceStable(candidates, func(i, j int) bool {
@@ -198,6 +207,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				"queries":    queries,
 				"serps":      serpReports,
 				"candidates": candidates,
+				"warnings":   warnings,
 				"failures":   failures,
 				"artifacts": map[string]string{
 					"queries_json":    queriesPath,
@@ -210,6 +220,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					"query_count":     len(queries),
 					"candidate_count": len(candidates),
 					"failure_count":   len(failures),
+					"warning_count":   len(warnings),
 					"max_candidates":  maxCandidates,
 					"result_pages":    resultPages,
 					"parallel":        parallel,
@@ -233,6 +244,47 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
 	return cmd
+}
+
+func classifyWorkflowSERPFailure(err error, result renderedExtractResult) string {
+	if blocked, _ := detectSERPBlocked(result); blocked {
+		return "serp_blocked"
+	}
+	return classifyWorkflowExtractFailure(err)
+}
+
+func detectSERPBlocked(result renderedExtractResult) (bool, []string) {
+	signals := make([]string, 0)
+	finalURL := ""
+	if workflow, ok := result.Report["workflow"].(map[string]any); ok {
+		finalURL = fmt.Sprint(workflow["final_url"])
+	}
+	lowerURL := strings.ToLower(finalURL)
+	if strings.Contains(lowerURL, "/sorry/") || strings.Contains(lowerURL, "captcha") || strings.Contains(lowerURL, "consent") || strings.Contains(lowerURL, "challenge") {
+		signals = append(signals, "blocked_final_url")
+	}
+	for _, warning := range result.Warnings {
+		lower := strings.ToLower(warning)
+		if strings.Contains(lower, "consent") || strings.Contains(lower, "captcha") || strings.Contains(lower, "bot-check") {
+			signals = append(signals, "bot_check_warning")
+		}
+		if strings.Contains(lower, "unusual traffic") || strings.Contains(lower, "not a robot") || strings.Contains(lower, "enable javascript") {
+			signals = append(signals, "block_page_text")
+		}
+		if strings.Contains(lower, "serp extraction found no decoded external result links") {
+			signals = append(signals, "no_external_result_links")
+		}
+	}
+	return stringListContains(signals, "blocked_final_url") || stringListContains(signals, "block_page_text") || (stringListContains(signals, "bot_check_warning") && stringListContains(signals, "no_external_result_links")), signals
+}
+
+func stringListContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
