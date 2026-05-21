@@ -57,12 +57,12 @@ func responsiveViewportPresets(raw string) ([]responsiveViewport, error) {
 		}
 		vp, ok := knownViewportPreset(name)
 		if !ok {
-			return nil, commandError("invalid_viewport", "usage", fmt.Sprintf("unknown viewport preset %q", name), ExitUsage, []string{"cdp workflow responsive-audit https://example.com --viewports desktop,tablet,mobile --json"})
+			return nil, commandError("invalid_viewport", "usage", fmt.Sprintf("unknown viewport preset %q", name), ExitUsage, []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --json"})
 		}
 		out = append(out, vp)
 	}
 	if len(out) == 0 {
-		return nil, commandError("invalid_viewport", "usage", "at least one viewport is required", ExitUsage, []string{"cdp workflow responsive-audit https://example.com --viewports mobile --json"})
+		return nil, commandError("invalid_viewport", "usage", "at least one viewport is required", ExitUsage, []string{"cdp workflow responsive-audit 'https://example.com' --viewports mobile --json"})
 	}
 	return out, nil
 }

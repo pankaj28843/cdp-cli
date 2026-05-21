@@ -413,7 +413,7 @@ func storageCommandURL(ctx context.Context, session *cdp.PageSession, target cdp
 	if strings.TrimSpace(target.URL) != "" {
 		return target.URL, nil
 	}
-	return "", commandError("usage", "usage", "--url is required when the selected page URL is unavailable", ExitUsage, []string{"cdp storage cookies list --url https://example.com --json"})
+	return "", commandError("usage", "usage", "--url is required when the selected page URL is unavailable", ExitUsage, []string{"cdp storage cookies list --url 'https://example.com' --json"})
 }
 
 func collectStoragePageInfo(ctx context.Context, session *cdp.PageSession) (storageSnapshot, error) {

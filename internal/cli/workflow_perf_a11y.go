@@ -19,7 +19,7 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 {
-				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow perf https://example.com --wait 5s --json"})
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow perf 'https://example.com' --wait 5s --json"})
 			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {
@@ -142,10 +142,10 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 {
-				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow a11y https://example.com --wait 5s --json"})
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow a11y 'https://example.com' --wait 5s --json"})
 			}
 			if limit < 0 {
-				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp workflow a11y https://example.com --limit 100 --json"})
+				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp workflow a11y 'https://example.com' --limit 100 --json"})
 			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {

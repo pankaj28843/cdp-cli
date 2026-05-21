@@ -59,7 +59,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 || limit < 0 {
-				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow page-load https://example.com --wait 10s --json"})
+				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow page-load 'https://example.com' --wait 10s --json"})
 			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {

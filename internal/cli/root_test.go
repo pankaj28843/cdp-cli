@@ -960,7 +960,7 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	if commands := capabilityVerifyCommands(got.Capabilities, "accessibility"); !containsString(commands, "cdp a11y tree --json") {
 		t.Fatalf("accessibility verify_commands = %v, want a11y tree check", commands)
 	}
-	if commands := capabilityEvidenceCommands(got.Capabilities, "performance"); !containsString(commands, "cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json") {
+	if commands := capabilityEvidenceCommands(got.Capabilities, "performance"); !containsString(commands, "cdp workflow perf 'https://example.com' --wait 1s --trace tmp/perf.local.json --json") {
 		t.Fatalf("performance evidence_commands = %v, want workflow perf trace evidence", commands)
 	}
 	if commands := capabilityVerifyCommands(got.Capabilities, "emulation"); !containsString(commands, "cdp emulate user-agent --help") || !containsString(commands, "cdp emulate cpu --help") || !containsString(commands, "cdp emulate network --help") {

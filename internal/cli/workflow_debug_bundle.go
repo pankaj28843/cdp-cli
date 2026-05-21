@@ -28,7 +28,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if since < 0 {
-				return commandError("usage", "usage", "--since must be non-negative", ExitUsage, []string{"cdp workflow debug-bundle --url https://example.com --since 2s --json"})
+				return commandError("usage", "usage", "--since must be non-negative", ExitUsage, []string{"cdp workflow debug-bundle --url 'https://example.com' --since 2s --json"})
 			}
 			if screenshotFull && screenshotView {
 				return commandError(
@@ -36,7 +36,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					"usage",
 					"--screenshot-full and --screenshot-view cannot be used together",
 					ExitUsage,
-					[]string{"cdp workflow debug-bundle --url https://example.com --screenshot-view --json"},
+					[]string{"cdp workflow debug-bundle --url 'https://example.com' --screenshot-view --json"},
 				)
 			}
 			if !screenshotFull && !screenshotView {

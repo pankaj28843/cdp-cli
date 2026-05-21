@@ -284,7 +284,7 @@ func commandExamples(path string) []string {
 			"cdp screenshot --target <target-id> --full-page --out tmp/page.png --json",
 			"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --json",
 			"cdp screenshot --url-contains localhost --out tmp/page.png --json",
-			"cdp screenshot --navigate https://example.com --wait 2s --out tmp/page.png --json",
+			"cdp screenshot --navigate 'https://example.com' --wait 2s --out tmp/page.png --json",
 			"cdp screenshot --element '.mermaid svg' --out tmp/diagram.png --json",
 			"cdp screenshot --out tmp/page.png --crop --crop-padding 10 --json",
 		},
@@ -340,16 +340,16 @@ func commandExamples(path string) []string {
 			"cdp storage diff --left tmp/before.local.json --right tmp/after.local.json --json",
 		},
 		"cdp storage cookies": {
-			"cdp storage cookies list --url https://example.com --json",
+			"cdp storage cookies list --url 'https://example.com' --json",
 		},
 		"cdp storage cookies list": {
 			"cdp storage cookies list --url-contains localhost --json",
 		},
 		"cdp storage cookies set": {
-			"cdp storage cookies set --url https://example.com --name feature_flag --value enabled --json",
+			"cdp storage cookies set --url 'https://example.com' --name feature_flag --value enabled --json",
 		},
 		"cdp storage cookies delete": {
-			"cdp storage cookies delete --url https://example.com --name feature_flag --json",
+			"cdp storage cookies delete --url 'https://example.com' --name feature_flag --json",
 		},
 		"cdp storage indexeddb": {
 			"cdp storage indexeddb list --url-contains localhost --json",
@@ -428,27 +428,27 @@ func commandExamples(path string) []string {
 			"cdp protocol exec DOM.getDocument --url-contains localhost --json",
 		},
 		"cdp workflow verify": {
-			"cdp workflow verify https://example.com --json",
+			"cdp workflow verify 'https://example.com' --json",
 		},
 		"cdp workflow debug-bundle": {
-			"cdp workflow debug-bundle --url https://example.com --since 5s --screenshot-view --out-dir tmp/debug-bundle --json",
+			"cdp workflow debug-bundle --url 'https://example.com' --since 5s --screenshot-view --out-dir tmp/debug-bundle --json",
 			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --json",
 		},
 		"cdp workflow a11y": {
-			"cdp workflow a11y https://example.com --wait 5s --json",
-			"cdp workflow a11y https://example.com --limit 50 --wait 5s --json",
+			"cdp workflow a11y 'https://example.com' --wait 5s --json",
+			"cdp workflow a11y 'https://example.com' --limit 50 --wait 5s --json",
 		},
 		"cdp workflow visible-posts": {
-			"cdp workflow visible-posts https://x.com/<handle> --limit 5 --json",
-			"cdp workflow visible-posts https://example.com/feed --selector article --wait 30s --json",
+			"cdp workflow visible-posts 'https://x.com/<handle>' --limit 5 --json",
+			"cdp workflow visible-posts 'https://example.com/feed' --selector article --wait 30s --json",
 		},
 		"cdp workflow hacker-news": {
 			"cdp workflow hacker-news --limit 10 --json",
-			"cdp workflow hacker-news https://news.ycombinator.com/news --wait 30s --json",
+			"cdp workflow hacker-news 'https://news.ycombinator.com/news' --wait 30s --json",
 		},
 		"cdp workflow perf": {
-			"cdp workflow perf https://example.com --wait 5s --json",
-			"cdp workflow perf https://example.com --wait 5s --trace tmp/perf.local.json --json",
+			"cdp workflow perf 'https://example.com' --wait 5s --json",
+			"cdp workflow perf 'https://example.com' --wait 5s --trace tmp/perf.local.json --json",
 		},
 		"cdp workflow console-errors": {
 			"cdp workflow console-errors --wait 2s --json",
@@ -459,11 +459,11 @@ func commandExamples(path string) []string {
 			"cdp workflow network-failures --url-contains localhost --json",
 		},
 		"cdp workflow page-load": {
-			"cdp workflow page-load https://example.com --wait 10s --json",
+			"cdp workflow page-load 'https://example.com' --wait 10s --json",
 			"cdp workflow page-load --url-contains localhost --reload --include console,network,performance --out tmp/page-load.local.json --json",
 		},
 		"cdp workflow rendered-extract": {
-			"cdp workflow rendered-extract https://example.com --out-dir tmp/rendered-example --json",
+			"cdp workflow rendered-extract 'https://example.com' --out-dir tmp/rendered-example --json",
 			"cdp workflow rendered-extract 'https://www.google.com/search?q=agentic+engineering&safe=active&tbs=qdr:m' --serp google --out-dir tmp/rendered-google --json",
 		},
 		"cdp workflow web-research": {
@@ -503,9 +503,9 @@ func commandExamples(path string) []string {
 	examples["cdp events"] = []string{"cdp events tap --duration 10s --json"}
 	examples["cdp events tap"] = []string{"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json"}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
-	examples["cdp workflow feeds"] = []string{"cdp workflow feeds https://example.com --wait-load 10s --json", "cdp workflow feeds https://example.com --keep-open --json"}
-	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit https://example.com --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}
-	examples["cdp workflow lighthouse"] = []string{"cdp workflow lighthouse https://example.com --categories accessibility,best-practices --out-dir tmp/lighthouse --json"}
+	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}
+	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}
+	examples["cdp workflow lighthouse"] = []string{"cdp workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --json"}
 	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json"}
 	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json"}
 	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --json"}

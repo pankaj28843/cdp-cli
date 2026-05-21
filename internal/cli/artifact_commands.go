@@ -289,7 +289,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 					select {
 					case <-ctx.Done():
 						timer.Stop()
-						return commandError("timeout", "timeout", ctx.Err().Error(), ExitTimeout, []string{"cdp screenshot --navigate https://example.com --wait 5s --json"})
+						return commandError("timeout", "timeout", ctx.Err().Error(), ExitTimeout, []string{"cdp screenshot --navigate 'https://example.com' --wait 5s --json"})
 					case <-timer.C:
 					}
 				}

@@ -14,7 +14,7 @@ func (a *app) newWorkflowFeedsCommand() *cobra.Command {
 	var keepOpen bool
 	cmd := &cobra.Command{Use: "feeds <url>", Short: "Discover RSS, Atom, and JSON Feed links", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if wait < 0 {
-			return commandError("usage", "usage", "--wait-load must be non-negative", ExitUsage, []string{"cdp workflow feeds https://example.com --wait-load 10s --json"})
+			return commandError("usage", "usage", "--wait-load must be non-negative", ExitUsage, []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json"})
 		}
 		ctx, cancel := a.commandContextWithDefault(cmd, wait+10*time.Second)
 		defer cancel()

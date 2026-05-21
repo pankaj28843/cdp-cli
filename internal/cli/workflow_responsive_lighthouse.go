@@ -16,7 +16,7 @@ func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 || limit < 0 {
-				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow responsive-audit https://example.com --wait 5s --json"})
+				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow responsive-audit 'https://example.com' --wait 5s --json"})
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, wait+30*time.Second)
 			defer cancel()
@@ -40,7 +40,7 @@ func (a *app) newWorkflowLighthouseCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 {
-				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow lighthouse https://example.com --wait 5s --json"})
+				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow lighthouse 'https://example.com' --wait 5s --json"})
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 2*time.Minute)
 			defer cancel()

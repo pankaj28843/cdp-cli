@@ -235,11 +235,11 @@ func capabilityCatalog() []map[string]any {
 		capabilityRow("storage", "implemented", "storage list/get/set/delete/clear/snapshot/diff, storage cookies", []string{"cdp storage list --json", "cdp storage snapshot --json"}, []string{"cdp storage cookies list --json"}),
 		capabilityRow("raw_protocol", "implemented", "protocol metadata/domains/search/describe/exec", []string{"cdp protocol metadata --json", "cdp protocol search screenshot --json"}, []string{"cdp protocol exec Browser.getVersion --json"}),
 		capabilityRow("input_automation", "implemented", "click, fill, type, press, hover, drag", []string{"cdp form values --json"}, []string{"cdp click <selector> --json"}),
-		capabilityRow("accessibility", "implemented", "a11y tree/find/node, workflow a11y", []string{"cdp a11y tree --json", "cdp a11y find --role button --json"}, []string{"cdp workflow a11y https://example.com --json"}),
-		capabilityRow("performance", "implemented", "perf summary, workflow perf, workflow page-load metrics", []string{"cdp perf summary --duration 1s --json"}, []string{"cdp workflow perf https://example.com --wait 1s --trace tmp/perf.local.json --json"}),
+		capabilityRow("accessibility", "implemented", "a11y tree/find/node, workflow a11y", []string{"cdp a11y tree --json", "cdp a11y find --role button --json"}, []string{"cdp workflow a11y 'https://example.com' --json"}),
+		capabilityRow("performance", "implemented", "perf summary, workflow perf, workflow page-load metrics", []string{"cdp perf summary --duration 1s --json"}, []string{"cdp workflow perf 'https://example.com' --wait 1s --trace tmp/perf.local.json --json"}),
 		capabilityRow("memory", "implemented", "memory counters, heap snapshot artifact", []string{"cdp memory counters --json"}, []string{"cdp memory heap-snapshot --out tmp/heap.heapsnapshot --json"}),
 		capabilityRow("advanced_storage", "implemented", "storage indexeddb, storage cache, storage service-workers", []string{"cdp storage indexeddb list --json", "cdp storage cache list --json", "cdp storage service-workers list --json"}, []string{"cdp storage snapshot --json"}),
-		capabilityRow("emulation", "implemented", "viewport, media, user-agent, geolocation, CPU throttling, network throttling, responsive audit", []string{"cdp emulate viewport --help", "cdp emulate user-agent --help", "cdp emulate geolocation --help", "cdp emulate cpu --help", "cdp emulate network --help"}, []string{"cdp workflow responsive-audit https://example.com --json", "cdp emulate network --preset slow-3g --json"}),
+		capabilityRow("emulation", "implemented", "viewport, media, user-agent, geolocation, CPU throttling, network throttling, responsive audit", []string{"cdp emulate viewport --help", "cdp emulate user-agent --help", "cdp emulate geolocation --help", "cdp emulate cpu --help", "cdp emulate network --help"}, []string{"cdp workflow responsive-audit 'https://example.com' --json", "cdp emulate network --preset slow-3g --json"}),
 	}
 }
 
