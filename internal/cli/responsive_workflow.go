@@ -66,7 +66,7 @@ func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts
 
 func collectResponsiveViewport(ctx context.Context, client browserEventClient, session *cdp.PageSession, rawURL string, vp responsiveViewport, includeSet map[string]bool, outDir string, wait time.Duration, limit int) (map[string]any, []map[string]any, error) {
 	_ = client.CallSession(ctx, session.SessionID, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
-	params := map[string]any{"width": vp.Width, "height": vp.Height, "deviceScaleFactor": vp.DeviceScaleFactor, "mobile": vp.Mobile}
+	params := viewportPresetParams(vp)
 	if err := client.CallSession(ctx, session.SessionID, "Emulation.setDeviceMetricsOverride", params, nil); err != nil {
 		return nil, nil, commandError("connection_failed", "connection", fmt.Sprintf("set viewport %s: %v", vp.Name, err), ExitConnection, []string{"cdp emulate viewport --preset mobile --json"})
 	}

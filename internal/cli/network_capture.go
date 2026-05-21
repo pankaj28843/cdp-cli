@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 )
 
@@ -690,148 +690,39 @@ func shouldCaptureResponseBody(record networkCaptureRecord, kinds map[string]boo
 	return false
 }
 
-func applyNetworkCaptureRedaction(records []networkCaptureRecord, redact string) {
-	if redact == "" || redact == "none" {
+func applyNetworkCaptureRedaction(records []networkCaptureRecord, redactor *artifacts.Redactor) {
+	if redactor == nil || redactor.Mode() == artifacts.ModeNone {
 		return
 	}
 	for i := range records {
-		redactCaptureRecord(&records[i], redact)
+		redactCaptureRecord(&records[i], redactor, "requests")
 	}
 }
 
-func redactCaptureRecord(record *networkCaptureRecord, redact string) {
-	record.URL = redactURL(record.URL, redact)
-	record.DocumentURL = redactURL(record.DocumentURL, redact)
-	record.RequestHeaders = redactHeaderMap(record.RequestHeaders, redact)
-	record.ResponseHeaders = redactHeaderMap(record.ResponseHeaders, redact)
+func redactCaptureRecord(record *networkCaptureRecord, redactor *artifacts.Redactor, prefix string) {
+	record.URL = redactor.URL(record.URL, prefix+".url")
+	record.DocumentURL = redactor.URL(record.DocumentURL, prefix+".document_url")
+	record.RequestHeaders = redactor.HeaderMap(record.RequestHeaders, prefix+".request_headers")
+	record.ResponseHeaders = redactor.HeaderMap(record.ResponseHeaders, prefix+".response_headers")
 	if record.RequestPostData != nil && record.RequestPostData.Text != "" {
-		record.RequestPostData.Text = redactBodyText(record.RequestPostData.Text, redact)
+		record.RequestPostData.Text = redactor.BodyText(record.RequestPostData.Text, prefix+".request_post_data.text")
 	}
 	if record.Body != nil && record.Body.Text != "" {
-		record.Body.Text = redactBodyText(record.Body.Text, redact)
+		record.Body.Text = redactor.BodyText(record.Body.Text, prefix+".body.text")
 	}
 	if record.WebSocket != nil {
-		record.WebSocket.URL = redactURL(record.WebSocket.URL, redact)
-		record.WebSocket.RequestHeaders = redactHeaderMap(record.WebSocket.RequestHeaders, redact)
-		record.WebSocket.ResponseHeaders = redactHeaderMap(record.WebSocket.ResponseHeaders, redact)
+		record.WebSocket.URL = redactor.URL(record.WebSocket.URL, prefix+".websocket.url")
+		record.WebSocket.RequestHeaders = redactor.HeaderMap(record.WebSocket.RequestHeaders, prefix+".websocket.request_headers")
+		record.WebSocket.ResponseHeaders = redactor.HeaderMap(record.WebSocket.ResponseHeaders, prefix+".websocket.response_headers")
 		for i := range record.WebSocket.Frames {
 			if record.WebSocket.Frames[i].Payload != nil && record.WebSocket.Frames[i].Payload.Text != "" {
-				record.WebSocket.Frames[i].Payload.Text = redactBodyText(record.WebSocket.Frames[i].Payload.Text, redact)
+				record.WebSocket.Frames[i].Payload.Text = redactor.BodyText(record.WebSocket.Frames[i].Payload.Text, prefix+".websocket.frames.payload.text")
 			}
 		}
 	}
 	for i := range record.Redirects {
-		redactCaptureRecord(&record.Redirects[i], redact)
+		redactCaptureRecord(&record.Redirects[i], redactor, prefix+".redirects")
 	}
-}
-
-func redactHeaderMap(headers map[string]any, redact string) map[string]any {
-	if len(headers) == 0 {
-		return headers
-	}
-	out := map[string]any{}
-	for key, value := range headers {
-		if redact == "headers" || sensitiveName(key) || sensitiveHeaderValue(value) {
-			out[key] = "<redacted>"
-			continue
-		}
-		out[key] = value
-	}
-	return out
-}
-
-func sensitiveHeaderValue(value any) bool {
-	text, ok := value.(string)
-	return ok && strings.Contains(strings.ToLower(text), "bearer ")
-}
-
-func redactURL(rawURL, redact string) string {
-	if rawURL == "" || redact != "safe" {
-		return rawURL
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	query := parsed.Query()
-	changed := false
-	for key := range query {
-		if sensitiveName(key) {
-			query.Set(key, "<redacted>")
-			changed = true
-		}
-	}
-	if changed {
-		parsed.RawQuery = query.Encode()
-	}
-	return parsed.String()
-}
-
-func redactBodyText(text, redact string) string {
-	if redact == "headers" {
-		return "<redacted>"
-	}
-	var decoded any
-	if err := json.Unmarshal([]byte(text), &decoded); err == nil {
-		return marshalCompact(redactJSONValue(decoded))
-	}
-	values, err := url.ParseQuery(text)
-	if err == nil && len(values) > 0 {
-		changed := false
-		for key := range values {
-			if sensitiveName(key) {
-				values.Set(key, "<redacted>")
-				changed = true
-			}
-		}
-		if changed {
-			return values.Encode()
-		}
-	}
-	if strings.Contains(strings.ToLower(text), "bearer ") {
-		return "<redacted>"
-	}
-	return text
-}
-
-func redactJSONValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := map[string]any{}
-		for key, child := range typed {
-			if sensitiveName(key) {
-				out[key] = "<redacted>"
-			} else {
-				out[key] = redactJSONValue(child)
-			}
-		}
-		return out
-	case []any:
-		for i := range typed {
-			typed[i] = redactJSONValue(typed[i])
-		}
-		return typed
-	default:
-		return value
-	}
-}
-
-func marshalCompact(value any) string {
-	b, err := json.Marshal(value)
-	if err != nil {
-		return "<redacted>"
-	}
-	return string(b)
-}
-
-func sensitiveName(name string) bool {
-	lower := strings.ToLower(name)
-	for _, needle := range []string{"authorization", "cookie", "csrf", "xsrf", "token", "secret", "password", "session", "client-transaction-id"} {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 func networkRequestFromEvent(event cdp.Event) (networkRequest, bool) {

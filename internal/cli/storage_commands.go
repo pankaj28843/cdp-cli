@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/spf13/cobra"
 )
 
@@ -239,14 +240,18 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			applyStorageRedaction(&snapshot, redact)
+			redactor := artifacts.NewRedactor(redact)
+			applyStorageRedaction(&snapshot, redactor)
+			artifactWarning := "storage snapshot may include cookies, tokens, localStorage values, and sessionStorage values; keep this artifact local"
+			artifactSafety := redactor.Metadata(strings.TrimSpace(outPath) != "", artifactWarning)
 			meta := map[string]any{
 				"include":          setKeys(includeSet),
 				"redact":           redact,
 				"collector_errors": collectorErrors,
+				"artifact_safety":  artifactSafety,
 			}
 			if strings.TrimSpace(outPath) != "" && redact == "none" {
-				meta["local_artifact_warning"] = "storage snapshot may include cookies, tokens, localStorage values, and sessionStorage values; keep this artifact local"
+				meta["local_artifact_warning"] = artifactWarning
 			}
 			report := map[string]any{
 				"ok":       true,
@@ -263,7 +268,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				report["artifact"] = map[string]any{"type": "storage-snapshot", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifact"] = map[string]any{"type": "storage-snapshot", "path": writtenPath, "bytes": len(b) + 1, "safety": artifactSafety}
 				report["artifacts"] = []map[string]any{{"type": "storage-snapshot", "path": writtenPath}}
 			}
 			human := fmt.Sprintf("storage-snapshot\tlocal:%d\tsession:%d\tcookies:%d", snapshot.LocalStorage.Count, snapshot.SessionStorage.Count, len(snapshot.Cookies))

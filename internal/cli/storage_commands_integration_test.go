@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 )
 
@@ -77,12 +78,18 @@ func TestStorageListAndSnapshotJSON(t *testing.T) {
 		Artifact struct {
 			Path string `json:"path"`
 		} `json:"artifact"`
+		Storage struct {
+			ArtifactSafety artifacts.SafetyMetadata `json:"artifact_safety"`
+		} `json:"storage"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &snap); err != nil {
 		t.Fatalf("storage snapshot output is invalid JSON: %v", err)
 	}
 	if snap.Artifact.Path != outPath {
 		t.Fatalf("storage snapshot artifact = %+v, want %q", snap.Artifact, outPath)
+	}
+	if snap.Storage.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !snap.Storage.ArtifactSafety.Shareable || snap.Storage.ArtifactSafety.ChangedFieldCount == 0 {
+		t.Fatalf("storage snapshot artifact safety = %+v, want public-safe redaction metadata", snap.Storage.ArtifactSafety)
 	}
 	for _, entry := range snap.Snapshot.LocalStorage.Entries {
 		if entry.Value != "<redacted>" {
@@ -96,6 +103,14 @@ func TestStorageListAndSnapshotJSON(t *testing.T) {
 	}
 	if snap.Snapshot.Cookies[0]["value"] != "<redacted>" {
 		t.Fatalf("storage snapshot cookies = %+v, want redacted values", snap.Snapshot.Cookies)
+	}
+	artifactBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read storage snapshot artifact: %v", err)
+	}
+	scan := artifacts.ScanBytes(artifactBytes, []string{"secret", "session-secret"}, 0)
+	if len(scan.Findings) != 0 {
+		t.Fatalf("storage snapshot artifact leaked synthetic secrets: %+v", scan.Findings)
 	}
 }
 

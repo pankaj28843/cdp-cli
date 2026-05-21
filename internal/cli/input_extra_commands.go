@@ -180,8 +180,14 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 		Use:   "viewport",
 		Short: "Apply device metrics emulation to a page target",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			normalizedPreset := strings.ToLower(strings.TrimSpace(preset))
 			if preset != "" {
-				width, height, dpr, mobile = viewportPreset(preset)
+				selected, ok := knownViewportPreset(preset)
+				if !ok {
+					return commandError("usage", "usage", "unknown viewport preset", ExitUsage, []string{"cdp emulate viewport --preset mobile --json"})
+				}
+				width, height, dpr, mobile = selected.Width, selected.Height, selected.DeviceScaleFactor, selected.Mobile
+				normalizedPreset = selected.Name
 			}
 			if width <= 0 || height <= 0 || dpr <= 0 {
 				return commandError("usage", "usage", "--width, --height, and --dpr must be positive", ExitUsage, []string{"cdp emulate viewport --preset mobile --json"})
@@ -197,7 +203,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 			if err := execSessionJSON(ctx, session, "Emulation.setDeviceMetricsOverride", params, nil); err != nil {
 				return commandError("connection_failed", "connection", fmt.Sprintf("emulate viewport: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setDeviceMetricsOverride --json"})
 			}
-			return a.render(ctx, fmt.Sprintf("viewport\t%dx%d", width, height), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"viewport": params, "preset": preset, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+			return a.render(ctx, fmt.Sprintf("viewport\t%dx%d", width, height), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"viewport": params, "preset": normalizedPreset, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")

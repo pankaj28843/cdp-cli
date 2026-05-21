@@ -254,6 +254,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp screenshot": {
 			"cdp screenshot --out tmp/page.png --json",
+			"cdp screenshot --preset mobile --out tmp/mobile.png --json",
 			"cdp screenshot --target <target-id> --full-page --out tmp/page.png --json",
 			"cdp screenshot --url-contains localhost --out tmp/page.png --json",
 			"cdp screenshot --navigate https://example.com --wait 2s --out tmp/page.png --json",

@@ -735,21 +735,6 @@ func a11yNodeExpression(selector string) string {
 	return fmt.Sprintf(`(() => { const selector = %s; const el = document.querySelector(selector); if (!el) return {selector, found:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; const label = el.getAttribute("aria-label") || el.getAttribute("alt") || el.innerText || el.textContent || el.value || ""; return {selector, found:true, role: el.getAttribute("role") || el.tagName.toLowerCase(), name: String(label).trim(), disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"), ignored: false}; })()`, jsStringLiteral(selector))
 }
 
-func viewportPreset(name string) (int, int, float64, bool) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "desktop":
-		return 1440, 900, 1, false
-	case "laptop":
-		return 1366, 768, 1, false
-	case "tablet":
-		return 768, 1024, 1, true
-	case "mobile", "iphone-12":
-		return 390, 844, 3, true
-	default:
-		return 0, 0, 0, false
-	}
-}
-
 func collectA11yNodes(ctx context.Context, session *cdp.PageSession, depth, limit int, includeIgnored bool) ([]a11yNode, bool, error) {
 	var raw struct {
 		Nodes []map[string]any `json:"nodes"`

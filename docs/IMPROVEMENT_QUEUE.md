@@ -12,6 +12,11 @@ the behavior is stable and covered by E2E checks.
   storage controls, page control, wait/query/observe commands, input automation,
   accessibility/perf/memory probes, and emulation for viewport/media/user-agent/
   geolocation/CPU/network are covered by unit checks and installed E2E metadata.
+- Network capture, WebSocket capture, and storage snapshot now share artifact
+  safety metadata with redaction mode, shareability classification, unsafe
+  opt-in warnings, changed sensitive fields, and synthetic leak-scan tests.
+- Screenshot capture now supports shared viewport presets (`desktop`, `laptop`,
+  `tablet`, `mobile`, `iphone-12`) and emits viewport/DPR metadata in JSON.
 - Page cleanup dry-runs now expose close intent (`would_close_count`,
   `close_required`, and follow-up commands), so agents can tell when a cron-safe
   cleanup is observing versus actually closing candidates.
@@ -27,20 +32,22 @@ public-safe plan identifiers and outcomes.
 
 | Lane | Queue items | Status | External PRP | Gate |
 | --- | --- | --- | --- | --- |
-| Artifact safety | 2 | planned | `2026-05-20T215839-public-safe-artifact-redaction-guard.md` | Must land before any new browser-content artifacts are advertised as shareable. |
-| Screenshot ergonomics | 3-4 | planned | `2026-05-21T002011-screenshot-presets-and-tall-page-tiling.md` | Can proceed after command-file split or in parallel if files stay focused. |
-| Network evidence artifacts | 5-7 | planned | `2026-05-21T002011-network-evidence-artifacts.md` | Blocked on artifact safety guard. |
-| Network controls | 8-9 | planned | `2026-05-21T002011-network-control-workflows.md` | Blocked on guard plus Fetch pause/cleanup contracts. |
-| Performance evidence | 10-12 | planned | `2026-05-21T002011-performance-trace-and-insights.md` | Blocked on guard for trace/report artifacts. |
+| Artifact safety | 2 | implemented | `2026-05-20T215839-public-safe-artifact-redaction-guard.md` | Reuse `internal/artifacts` for future HAR, trace, body, heap, and transcript artifacts. |
+| Screenshot ergonomics | 3-4 | partial | `2026-05-21T002011-screenshot-presets-and-tall-page-tiling.md` | Presets landed; tall-page tiling still planned. |
+| Network evidence artifacts | 5-7 | planned | `2026-05-21T002011-network-evidence-artifacts.md` | Can proceed using `internal/artifacts` for artifact safety metadata and scans. |
+| Network controls | 8-9 | planned | `2026-05-21T002011-network-control-workflows.md` | Blocked on Fetch pause/cleanup contracts. |
+| Performance evidence | 10-12 | planned | `2026-05-21T002011-performance-trace-and-insights.md` | Can proceed using `internal/artifacts` for trace/report safety metadata and scans. |
 | Isolation and handoff | 13-18 | queued | none yet | Plan after the first four lanes settle. |
 
 ## Near-Term Queue
 
 1. Split `internal/cli/commands.go` into focused files without changing
    behavior.
-2. Add a shared public-safe artifact redaction guard for bundles, traces,
-   storage dumps, heap snapshots, logs, HAR, and request/response body artifacts.
-3. Add screenshot device presets.
+2. Extend the shared public-safe artifact guard from network/storage into
+   bundles, traces, heap snapshots, logs, HAR, and request/response body
+   artifacts.
+3. Extend screenshot device presets into any remaining screenshot subcommands
+   that need reproducible viewport metadata.
 4. Add full-page screenshot tiling for very tall pages.
 5. Add HAR export.
 6. Add request/response body artifact saving.
@@ -60,10 +67,9 @@ public-safe plan identifiers and outcomes.
 
 ## Dependency Notes
 
-- The artifact guard is the next P1 because HAR, response bodies, WebSocket
-  payloads, traces, heap snapshots, and debug bundles can contain private page
-  state. New artifact commands should use the shared guard instead of adding
-  more command-local redaction helpers.
+- The artifact guard is now the required shared path for HAR, response bodies,
+  WebSocket payloads, traces, heap snapshots, and debug bundles because those
+  artifacts can contain private page state.
 - Screenshot presets and tall-page tiling are a lower privacy risk because they
   already write image artifacts by path, but they still need artifact metadata
   that tells agents exactly which viewport, DPR, clip, tile count, and stitch

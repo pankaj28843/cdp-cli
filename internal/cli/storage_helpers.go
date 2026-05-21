@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
@@ -1155,57 +1156,60 @@ func originForURL(rawURL string) string {
 	return parsed.Scheme + "://" + parsed.Host
 }
 
-func applyStorageRedaction(snapshot *storageSnapshot, redact string) {
-	if redact == "" || redact == "none" {
+func applyStorageRedaction(snapshot *storageSnapshot, redactor *artifacts.Redactor) {
+	if redactor == nil || redactor.Mode() == artifacts.ModeNone {
 		return
 	}
-	redactStorageArea(&snapshot.LocalStorage, redact)
-	redactStorageArea(&snapshot.SessionStorage, redact)
-	redactStorageCookies(snapshot.Cookies, redact)
-	redactCacheStorage(snapshot.CacheStorage, redact)
-	redactServiceWorkers(snapshot.ServiceWorkers, redact)
+	redactStorageArea(&snapshot.LocalStorage, redactor, "snapshot.local_storage")
+	redactStorageArea(&snapshot.SessionStorage, redactor, "snapshot.session_storage")
+	redactStorageCookies(snapshot.Cookies, redactor)
+	redactCacheStorage(snapshot.CacheStorage, redactor)
+	redactServiceWorkers(snapshot.ServiceWorkers, redactor)
 }
 
-func redactStorageArea(area *storageAreaSnapshot, redact string) {
+func redactStorageArea(area *storageAreaSnapshot, redactor *artifacts.Redactor, field string) {
 	for i := range area.Entries {
-		if redact == "safe" || sensitiveName(area.Entries[i].Key) {
-			area.Entries[i].Value = "<redacted>"
+		entryField := field + ".entries." + area.Entries[i].Key
+		if redactor.Mode() == artifacts.ModeSafe || artifacts.SensitiveName(area.Entries[i].Key) {
+			area.Entries[i].Value = artifacts.Redacted
+			redactor.RecordChanged(entryField)
 			continue
 		}
-		area.Entries[i].Value = redactBodyText(area.Entries[i].Value, redact)
+		area.Entries[i].Value = redactor.BodyText(area.Entries[i].Value, entryField)
 	}
 }
 
-func redactStorageCookies(cookies []map[string]any, redact string) {
+func redactStorageCookies(cookies []map[string]any, redactor *artifacts.Redactor) {
 	for _, cookie := range cookies {
 		value, _ := cookie["value"].(string)
-		if redact == "safe" || sensitiveHeaderValue(value) {
-			cookie["value"] = "<redacted>"
+		if redactor.Mode() == artifacts.ModeSafe || artifacts.SensitiveValue(value) {
+			cookie["value"] = artifacts.Redacted
+			redactor.RecordChanged("snapshot.cookies.value")
 		} else if value != "" {
-			cookie["value"] = redactBodyText(value, redact)
+			cookie["value"] = redactor.BodyText(value, "snapshot.cookies.value")
 		}
 	}
 }
 
-func redactCacheStorage(caches []cacheStorageCache, redact string) {
+func redactCacheStorage(caches []cacheStorageCache, redactor *artifacts.Redactor) {
 	for i := range caches {
 		for j := range caches[i].Requests {
-			caches[i].Requests[j].URL = redactURL(caches[i].Requests[j].URL, redact)
+			caches[i].Requests[j].URL = redactor.URL(caches[i].Requests[j].URL, "snapshot.cache_storage.requests.url")
 		}
 	}
 }
 
-func redactServiceWorkers(registrations []serviceWorkerRegistration, redact string) {
+func redactServiceWorkers(registrations []serviceWorkerRegistration, redactor *artifacts.Redactor) {
 	for i := range registrations {
-		registrations[i].ScopeURL = redactURL(registrations[i].ScopeURL, redact)
+		registrations[i].ScopeURL = redactor.URL(registrations[i].ScopeURL, "snapshot.service_workers.scope_url")
 		if registrations[i].Active != nil {
-			registrations[i].Active.ScriptURL = redactURL(registrations[i].Active.ScriptURL, redact)
+			registrations[i].Active.ScriptURL = redactor.URL(registrations[i].Active.ScriptURL, "snapshot.service_workers.active.script_url")
 		}
 		if registrations[i].Waiting != nil {
-			registrations[i].Waiting.ScriptURL = redactURL(registrations[i].Waiting.ScriptURL, redact)
+			registrations[i].Waiting.ScriptURL = redactor.URL(registrations[i].Waiting.ScriptURL, "snapshot.service_workers.waiting.script_url")
 		}
 		if registrations[i].Installing != nil {
-			registrations[i].Installing.ScriptURL = redactURL(registrations[i].Installing.ScriptURL, redact)
+			registrations[i].Installing.ScriptURL = redactor.URL(registrations[i].Installing.ScriptURL, "snapshot.service_workers.installing.script_url")
 		}
 	}
 }

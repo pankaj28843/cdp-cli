@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/spf13/cobra"
 )
 
@@ -130,7 +131,10 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 				)
 			}
 			websockets := filterWebSocketRecords(records)
-			applyNetworkCaptureRedaction(websockets, redact)
+			redactor := artifacts.NewRedactor(redact)
+			applyNetworkCaptureRedaction(websockets, redactor)
+			artifactWarning := "websocket capture may include cookies, authorization headers, tokens, and frame payloads; keep this artifact local"
+			artifactSafety := redactor.Metadata(strings.TrimSpace(outPath) != "", artifactWarning)
 			capture := map[string]any{
 				"count":            len(websockets),
 				"wait":             durationString(wait),
@@ -140,9 +144,10 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 				"payload_limit":    payloadLimit,
 				"redact":           redact,
 				"collector_errors": collectorErrors,
+				"artifact_safety":  artifactSafety,
 			}
 			if strings.TrimSpace(outPath) != "" && redact == "none" {
-				capture["local_artifact_warning"] = "websocket capture may include cookies, authorization headers, tokens, and frame payloads; keep this artifact local"
+				capture["local_artifact_warning"] = artifactWarning
 			}
 			report := map[string]any{
 				"ok":         true,
@@ -159,7 +164,7 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				report["artifact"] = map[string]any{"type": "network-websocket", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifact"] = map[string]any{"type": "network-websocket", "path": writtenPath, "bytes": len(b) + 1, "safety": artifactSafety}
 				report["artifacts"] = []map[string]any{{"type": "network-websocket", "path": writtenPath}}
 			}
 			human := fmt.Sprintf("websocket-capture\t%d sockets", len(websockets))
@@ -271,7 +276,10 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
 			}
-			applyNetworkCaptureRedaction(records, redact)
+			redactor := artifacts.NewRedactor(redact)
+			applyNetworkCaptureRedaction(records, redactor)
+			artifactWarning := "network capture may include cookies, authorization headers, tokens, request bodies, and response bodies; keep this artifact local"
+			artifactSafety := redactor.Metadata(strings.TrimSpace(outPath) != "", artifactWarning)
 			capture := map[string]any{
 				"count":                      len(records),
 				"wait":                       durationString(wait),
@@ -290,9 +298,10 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				"trigger":                    trigger,
 				"ignore_cache":               ignoreCache,
 				"collector_errors":           collectorErrors,
+				"artifact_safety":            artifactSafety,
 			}
 			if strings.TrimSpace(outPath) != "" && redact == "none" {
-				capture["local_artifact_warning"] = "network capture may include cookies, authorization headers, tokens, request bodies, and response bodies; keep this artifact local"
+				capture["local_artifact_warning"] = artifactWarning
 			}
 			report := map[string]any{
 				"ok":       true,
@@ -309,7 +318,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				report["artifact"] = map[string]any{"type": "network-capture", "path": writtenPath, "bytes": len(b) + 1}
+				report["artifact"] = map[string]any{"type": "network-capture", "path": writtenPath, "bytes": len(b) + 1, "safety": artifactSafety}
 				report["artifacts"] = []map[string]any{{"type": "network-capture", "path": writtenPath}}
 			}
 			human := fmt.Sprintf("network-capture\t%d requests", len(records))

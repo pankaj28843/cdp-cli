@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 )
 
@@ -247,8 +248,9 @@ func TestNetworkCaptureJSON(t *testing.T) {
 			Timing    json.RawMessage `json:"timing"`
 		} `json:"requests"`
 		Capture struct {
-			Count  int    `json:"count"`
-			Redact string `json:"redact"`
+			Count          int                      `json:"count"`
+			Redact         string                   `json:"redact"`
+			ArtifactSafety artifacts.SafetyMetadata `json:"artifact_safety"`
 		} `json:"capture"`
 		Artifact struct {
 			Path string `json:"path"`
@@ -259,6 +261,9 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	}
 	if !got.OK || got.Capture.Count != 2 || len(got.Requests) != 2 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath {
 		t.Fatalf("network capture = %+v, want two safe-redacted requests and artifact", got)
+	}
+	if got.Capture.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !got.Capture.ArtifactSafety.Shareable || got.Capture.ArtifactSafety.ChangedFieldCount == 0 {
+		t.Fatalf("network capture artifact safety = %+v, want public-safe redaction metadata", got.Capture.ArtifactSafety)
 	}
 	if got.Requests[0].RequestHeaders["Authorization"] != "<redacted>" || got.Requests[0].ResponseHeaders["Set-Cookie"] != "<redacted>" {
 		t.Fatalf("network capture headers = request=%+v response=%+v, want sensitive headers redacted", got.Requests[0].RequestHeaders, got.Requests[0].ResponseHeaders)
@@ -271,6 +276,14 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	}
 	if _, err := os.Stat(outPath); err != nil {
 		t.Fatalf("network capture artifact was not written: %v", err)
+	}
+	artifactBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read network capture artifact: %v", err)
+	}
+	scan := artifacts.ScanBytes(artifactBytes, []string{"Bearer secret", "session=secret", `"token":"secret"`, "csrf=secret"}, 0)
+	if len(scan.Findings) != 0 {
+		t.Fatalf("network capture artifact leaked synthetic secrets: %+v", scan.Findings)
 	}
 }
 
@@ -319,10 +332,11 @@ func TestNetworkWebSocketCaptureJSON(t *testing.T) {
 			} `json:"websocket"`
 		} `json:"websockets"`
 		Capture struct {
-			Count           int    `json:"count"`
-			IncludePayloads bool   `json:"include_payloads"`
-			PayloadLimit    int    `json:"payload_limit"`
-			Redact          string `json:"redact"`
+			Count           int                      `json:"count"`
+			IncludePayloads bool                     `json:"include_payloads"`
+			PayloadLimit    int                      `json:"payload_limit"`
+			Redact          string                   `json:"redact"`
+			ArtifactSafety  artifacts.SafetyMetadata `json:"artifact_safety"`
 		} `json:"capture"`
 		Artifact struct {
 			Path string `json:"path"`
@@ -334,6 +348,9 @@ func TestNetworkWebSocketCaptureJSON(t *testing.T) {
 	if !got.OK || got.Capture.Count != 1 || !got.Capture.IncludePayloads || got.Capture.PayloadLimit != 12 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath {
 		t.Fatalf("network websocket = %+v, want one safe-redacted websocket artifact", got)
 	}
+	if got.Capture.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !got.Capture.ArtifactSafety.Shareable || got.Capture.ArtifactSafety.ChangedFieldCount == 0 {
+		t.Fatalf("network websocket artifact safety = %+v, want public-safe redaction metadata", got.Capture.ArtifactSafety)
+	}
 	ws := got.WebSockets[0].WebSocket
 	if got.WebSockets[0].ID != "ws-1" || ws.Status != 101 || !ws.Closed || len(ws.Frames) != 2 || len(ws.Errors) != 1 {
 		t.Fatalf("network websocket record = %+v, want lifecycle, frames, error, and close", got.WebSockets[0])
@@ -343,6 +360,14 @@ func TestNetworkWebSocketCaptureJSON(t *testing.T) {
 	}
 	if strings.Contains(ws.Frames[0].Payload.Text, "secret") || !ws.Frames[0].Payload.Truncated {
 		t.Fatalf("network websocket payload = %+v, want redacted truncated payload", ws.Frames[0].Payload)
+	}
+	artifactBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read websocket artifact: %v", err)
+	}
+	scan := artifacts.ScanBytes(artifactBytes, []string{"Bearer secret", "session=secret", "secret-frame"}, 0)
+	if len(scan.Findings) != 0 {
+		t.Fatalf("websocket artifact leaked synthetic secrets: %+v", scan.Findings)
 	}
 }
 

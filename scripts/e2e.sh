@@ -114,7 +114,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "wait selector" --json | jq -e '.ok == true and .commands.name == "selector" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "wait eval" --json | jq -e '.ok == true and .commands.name == "eval" and (.commands.examples | any(contains("__rendered")))' >/dev/null
 "$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | any(contains("--diagnose-empty"))) and (.commands.flags[] | select(.name == "debug-empty"))' >/dev/null
-"$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | any(contains("--element"))) and (.commands.flags[] | select(.name == "crop")) and (.commands.flags[] | select(.name == "navigate"))' >/dev/null
+"$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | any(contains("--preset mobile"))) and (.commands.examples | any(contains("--element"))) and (.commands.flags[] | select(.name == "crop")) and (.commands.flags[] | select(.name == "navigate")) and (.commands.flags[] | select(.name == "preset"))' >/dev/null
 "$binary" describe --command "screenshot render" --json | jq -e '.ok == true and .commands.name == "render" and (.commands.examples | any(contains("--serve"))) and (.commands.flags[] | select(.name == "wait-for"))' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and .commands.name == "console" and (.commands.examples | any(contains("--errors")))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--failed")))' >/dev/null
@@ -145,12 +145,12 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot"' >/dev/null
 "$binary" schema console --json | jq -e '.ok == true and .schema.name == "console"' >/dev/null
 "$binary" schema network --json | jq -e '.ok == true and .schema.name == "network"' >/dev/null
-"$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture"))' >/dev/null
+"$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture")) and (.schema.fields | map(.name) | index("capture.artifact_safety"))' >/dev/null
 "$binary" schema storage --json | jq -e '.ok == true and .schema.name == "storage"' >/dev/null
 "$binary" schema storage-cache --json | jq -e '.ok == true and .schema.name == "storage-cache" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema storage-indexeddb --json | jq -e '.ok == true and .schema.name == "storage-indexeddb" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema storage-service-workers --json | jq -e '.ok == true and .schema.name == "storage-service-workers" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
-"$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields[] | select(.name == "snapshot").description | contains("--redact safe"))' >/dev/null
+"$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields | map(.name) | index("storage.artifact_safety")) and (.schema.fields[] | select(.name == "snapshot").description | contains("--redact safe"))' >/dev/null
 "$binary" schema storage-diff --json | jq -e '.ok == true and .schema.name == "storage-diff" and (.schema.fields | map(.name) | index("diff"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text"' >/dev/null

@@ -1315,6 +1315,42 @@ func TestScreenshotJSON(t *testing.T) {
 	}
 }
 
+func TestScreenshotPresetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outPath := filepath.Join(t.TempDir(), "mobile.png")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "--out", outPath, "--preset", "mobile", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("screenshot preset exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK         bool `json:"ok"`
+		Screenshot struct {
+			Path     string `json:"path"`
+			FullPage bool   `json:"full_page"`
+			Viewport struct {
+				Preset            string  `json:"preset"`
+				Width             int     `json:"width"`
+				Height            int     `json:"height"`
+				DeviceScaleFactor float64 `json:"device_scale_factor"`
+				Mobile            bool    `json:"mobile"`
+			} `json:"viewport"`
+		} `json:"screenshot"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("screenshot preset output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Screenshot.Path != outPath || got.Screenshot.FullPage || got.Screenshot.Viewport.Preset != "mobile" || got.Screenshot.Viewport.Width != 390 || got.Screenshot.Viewport.Height != 844 || got.Screenshot.Viewport.DeviceScaleFactor != 3 || !got.Screenshot.Viewport.Mobile {
+		t.Fatalf("screenshot preset output = %+v, want mobile viewport metadata", got)
+	}
+}
+
 func TestScreenshotRenderJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

@@ -186,6 +186,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	var format string
 	var quality int
 	var fullPage bool
+	var preset string
 	var element string
 	var crop bool
 	var cropPadding int
@@ -237,12 +238,28 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 			if crop && normalizedFormat != "png" {
 				return commandError("usage", "usage", "--crop is currently supported only for png screenshots", ExitUsage, []string{"cdp screenshot --format png --out tmp/page.png --crop --json"})
 			}
+			var selectedPreset responsiveViewport
+			if strings.TrimSpace(preset) != "" {
+				var ok bool
+				selectedPreset, ok = knownViewportPreset(preset)
+				if !ok {
+					return commandError("usage", "usage", "unknown screenshot preset", ExitUsage, []string{"cdp screenshot --preset mobile --out tmp/page.png --json"})
+				}
+			}
 
 			session, target, err := a.attachOrCreateScreenshotSession(ctx, targetID, urlContains, titleContains, navigateURL)
 			if err != nil {
 				return err
 			}
 			defer session.Close(ctx)
+
+			if strings.TrimSpace(preset) != "" {
+				params := viewportPresetParams(selectedPreset)
+				if err := execSessionJSON(ctx, session, "Emulation.setDeviceMetricsOverride", params, nil); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("emulate screenshot viewport: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setDeviceMetricsOverride --json"})
+				}
+				defer execSessionJSON(context.Background(), session, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
+			}
 
 			if strings.TrimSpace(navigateURL) != "" {
 				if _, err := session.Navigate(ctx, navigateURL); err != nil {
@@ -301,6 +318,15 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 			if quality > 0 {
 				screenshot["quality"] = quality
 			}
+			if strings.TrimSpace(preset) != "" {
+				screenshot["viewport"] = map[string]any{
+					"preset":              selectedPreset.Name,
+					"width":               selectedPreset.Width,
+					"height":              selectedPreset.Height,
+					"device_scale_factor": selectedPreset.DeviceScaleFactor,
+					"mobile":              selectedPreset.Mobile,
+				}
+			}
 			if strings.TrimSpace(element) != "" {
 				screenshot["element"] = element
 				screenshot["clip"] = clip
@@ -329,6 +355,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "", "screenshot format: png, jpeg, or webp; defaults to file extension or png")
 	cmd.Flags().IntVar(&quality, "quality", 0, "jpeg/webp quality from 1 to 100; 0 uses Chrome's default")
 	cmd.Flags().BoolVar(&fullPage, "full-page", false, "capture beyond the viewport when Chrome supports it")
+	cmd.Flags().StringVar(&preset, "preset", "", "viewport preset before capture: desktop, laptop, tablet, mobile, iphone-12")
 	cmd.Flags().StringVar(&element, "element", "", "CSS selector whose first element bounding box is used as the screenshot clip")
 	cmd.Flags().BoolVar(&crop, "crop", false, "auto-crop white transparent margins from png screenshots")
 	cmd.Flags().IntVar(&cropPadding, "crop-padding", 10, "padding in pixels to keep around --crop content")
