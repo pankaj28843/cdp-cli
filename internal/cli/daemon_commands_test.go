@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 )
@@ -28,15 +30,17 @@ func TestDaemonStatusJSON(t *testing.T) {
 	var got struct {
 		OK     bool `json:"ok"`
 		Daemon struct {
-			State          string `json:"state"`
-			ConnectionMode string `json:"connection_mode"`
+			State          string   `json:"state"`
+			BrowserMode    string   `json:"browser_mode"`
+			ConnectionMode string   `json:"connection_mode"`
+			NextCommands   []string `json:"next_commands"`
 		} `json:"daemon"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon status output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Daemon.State != "not_running" || got.Daemon.ConnectionMode != "browser_url" {
-		t.Fatalf("daemon status = %+v, want not_running browser_url", got)
+	if !got.OK || got.Daemon.State != "not_running" || got.Daemon.BrowserMode != "headed" || got.Daemon.ConnectionMode != "browser_url" || !containsString(got.Daemon.NextCommands, "cdp daemon start --help") {
+		t.Fatalf("daemon status = %+v, want not_running headed browser_url", got)
 	}
 }
 
@@ -69,15 +73,72 @@ func TestDaemonStatusReportsRuntimeJSON(t *testing.T) {
 			State          string `json:"state"`
 			ProcessRunning bool   `json:"process_running"`
 			Runtime        struct {
-				PID int `json:"pid"`
+				PID         int    `json:"pid"`
+				BrowserMode string `json:"browser_mode"`
 			} `json:"runtime"`
 		} `json:"daemon"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon status output is invalid JSON: %v", err)
 	}
-	if got.Daemon.State != "running" || !got.Daemon.ProcessRunning || got.Daemon.Runtime.PID != os.Getpid() {
-		t.Fatalf("daemon status = %+v, want running current pid", got.Daemon)
+	if got.Daemon.State != "running" || !got.Daemon.ProcessRunning || got.Daemon.Runtime.PID != os.Getpid() || got.Daemon.Runtime.BrowserMode != "headed" {
+		t.Fatalf("daemon status = %+v, want running current pid headed runtime", got.Daemon)
+	}
+}
+
+func TestDaemonStatusUsesSelectedBrowserModeRuntime(t *testing.T) {
+	stateDir := filepath.Join(os.TempDir(), "cdp-cli-mode-runtime-test")
+	if err := os.RemoveAll(stateDir); err != nil {
+		t.Fatalf("RemoveAll state dir returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll state dir returned error: %v", err)
+	}
+	headedSocketPath := filepath.Join(stateDir, "daemon.sock")
+	headedListener, err := net.Listen("unix", headedSocketPath)
+	if err != nil {
+		t.Fatalf("Listen headed returned error: %v", err)
+	}
+	defer headedListener.Close()
+	headlessSocketPath := daemon.RuntimeSocketPathForMode(stateDir, "headless")
+	if err := os.MkdirAll(filepath.Dir(headlessSocketPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll headless socket dir returned error: %v", err)
+	}
+	headlessListener, err := net.Listen("unix", headlessSocketPath)
+	if err != nil {
+		t.Fatalf("Listen headless returned error: %v", err)
+	}
+	defer headlessListener.Close()
+
+	if err := daemon.SaveRuntime(context.Background(), stateDir, daemon.Runtime{PID: os.Getpid(), BrowserMode: "headed", ConnectionMode: "browser_url", SocketPath: headedSocketPath}); err != nil {
+		t.Fatalf("SaveRuntime headed returned error: %v", err)
+	}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", daemon.Runtime{PID: os.Getpid(), BrowserMode: "headless", ConnectionMode: "browser_url", SocketPath: headlessSocketPath}); err != nil {
+		t.Fatalf("SaveRuntimeForMode headless returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "status", "--browser-mode", "headless", "--browser-url", "http://localhost/devtools", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon status headless exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Daemon struct {
+			State        string   `json:"state"`
+			BrowserMode  string   `json:"browser_mode"`
+			NextCommands []string `json:"next_commands"`
+			Runtime      struct {
+				BrowserMode string `json:"browser_mode"`
+				SocketPath  string `json:"socket_path"`
+			} `json:"runtime"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon status headless output is invalid JSON: %v", err)
+	}
+	if got.Daemon.State != "running" || got.Daemon.BrowserMode != "headless" || got.Daemon.Runtime.BrowserMode != "headless" || got.Daemon.Runtime.SocketPath != headlessSocketPath || !containsString(got.Daemon.NextCommands, "cdp --browser-mode headless daemon stop --json") {
+		t.Fatalf("daemon status headless = %+v, want headless runtime and next commands", got.Daemon)
 	}
 }
 
@@ -96,6 +157,50 @@ func TestDaemonStopNotRunningJSON(t *testing.T) {
 	}
 	if !got.OK || got.Stopped {
 		t.Fatalf("daemon stop = %+v, want ok not stopped", got)
+	}
+}
+
+func TestDaemonStopHeadlessReportsManagedOwnershipJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           123456,
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: "managed",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon stop exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK                    bool   `json:"ok"`
+		BrowserMode           string `json:"browser_mode"`
+		DaemonStopped         bool   `json:"daemon_stopped"`
+		ManagedBrowserStopped bool   `json:"managed_browser_stopped"`
+		ManagedBrowser        struct {
+			Checked bool   `json:"checked"`
+			Skipped bool   `json:"skipped"`
+			Reason  string `json:"reason"`
+			Browser struct {
+				DebuggingPort string `json:"debugging_port"`
+			} `json:"browser"`
+		} `json:"managed_browser"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon stop output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.BrowserMode != "headless" || got.DaemonStopped || got.ManagedBrowserStopped || !got.ManagedBrowser.Checked || !got.ManagedBrowser.Skipped || got.ManagedBrowser.Reason == "" || got.ManagedBrowser.Browser.DebuggingPort != "9222" {
+		t.Fatalf("daemon stop = %+v, want headless managed ownership checked and skipped safely", got)
+	}
+	if strings.Contains(out.String(), "ownership_token") || strings.Contains(out.String(), "process_start_time") {
+		t.Fatalf("daemon stop leaked internal managed ownership metadata: %s", out.String())
 	}
 }
 
@@ -207,15 +312,7 @@ func TestDaemonKeepaliveLockedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	stateDir := t.TempDir()
-	lockDir := filepath.Join(stateDir, "locks")
-	if err := os.MkdirAll(lockDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll returned error: %v", err)
-	}
-	lockPath := filepath.Join(lockDir, "daemon-keepalive-browser_url-browser-url.lock")
-	lockBody := []byte(`{"name":"daemon-keepalive-browser_url-browser-url","pid":1234,"started_at":"2099-01-01T00:00:00Z","phase":"active_probe"}` + "\n")
-	if err := os.WriteFile(lockPath, lockBody, 0o600); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
+	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headed-browser_url-browser-url", "active_probe")
 
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
@@ -236,6 +333,46 @@ func TestDaemonKeepaliveLockedJSON(t *testing.T) {
 	}
 	if !got.OK || got.State != "locked" || got.Action != "skipped" || !got.Locked || got.Lock.Phase != "active_probe" {
 		t.Fatalf("daemon keepalive = %+v, want locked skip", got)
+	}
+}
+
+func TestDaemonKeepaliveLockIsScopedByBrowserMode(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := t.TempDir()
+	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headless-browser_url-browser-url", "headless_active_probe")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Lock   struct {
+			Name string `json:"name"`
+		} `json:"lock"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.State != "started" || got.Action != "started" || got.Lock.Name != "daemon-keepalive-headed-browser_url-browser-url" {
+		t.Fatalf("daemon keepalive = %+v, want headed lock independent from existing headless lock", got)
+	}
+}
+
+func writeKeepaliveLock(t *testing.T, stateDir, name, phase string) {
+	t.Helper()
+	lockDir := filepath.Join(stateDir, "locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	lockPath := filepath.Join(lockDir, name+".lock")
+	lockBody := []byte(fmt.Sprintf(`{"name":%q,"pid":1234,"started_at":"2099-01-01T00:00:00Z","phase":%q}`+"\n", name, phase))
+	if err := os.WriteFile(lockPath, lockBody, 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
 	}
 }
 
@@ -497,5 +634,39 @@ func TestAutoConnectPagesRequiresRunningDaemon(t *testing.T) {
 	}
 	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running cdp daemon") {
 		t.Fatalf("pages error = %+v, want daemon-required remediation", got)
+	}
+}
+
+func TestHeadlessPagesRequireDaemonEvenWithManagedMetadata(t *testing.T) {
+	stateDir := t.TempDir()
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           123456,
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: "managed",
+		OwnedMarker:         "owned-token",
+		ProcessStartTime:    "2026-05-21T12:00:00Z",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitConnection {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitConnection, errOut.String())
+	}
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages error output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running cdp daemon") {
+		t.Fatalf("pages error = %+v, want daemon-required failure without direct managed endpoint fallback", got)
 	}
 }

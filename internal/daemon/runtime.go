@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"nhooyr.io/websocket"
 )
@@ -30,25 +32,46 @@ const (
 )
 
 type Runtime struct {
-	PID               int    `json:"pid"`
-	StartedAt         string `json:"started_at"`
-	ConnectionMode    string `json:"connection_mode"`
-	ReconnectInterval string `json:"reconnect_interval,omitempty"`
-	SocketPath        string `json:"socket_path,omitempty"`
-	LogPath           string `json:"log_path,omitempty"`
-	Endpoint          string `json:"-"`
-	UserDataDir       string `json:"user_data_dir,omitempty"`
+	PID                 int                    `json:"pid"`
+	StartedAt           string                 `json:"started_at"`
+	BrowserMode         string                 `json:"browser_mode,omitempty"`
+	ConnectionMode      string                 `json:"connection_mode"`
+	ReconnectInterval   string                 `json:"reconnect_interval,omitempty"`
+	SocketPath          string                 `json:"socket_path,omitempty"`
+	LogPath             string                 `json:"log_path,omitempty"`
+	Endpoint            string                 `json:"-"`
+	UserDataDir         string                 `json:"user_data_dir,omitempty"`
+	ManagedBrowser      *browser.ManagedStatus `json:"managed_browser,omitempty"`
+	ManagedProfilePath  string                 `json:"managed_profile_path,omitempty"`
+	ProfileSeedStrategy string                 `json:"profile_seed_strategy,omitempty"`
+	ChromePID           int                    `json:"chrome_pid,omitempty"`
+	ChromePort          string                 `json:"chrome_port,omitempty"`
+}
+
+type KeepAliveMetadata struct {
+	UserDataDir         string
+	ManagedBrowser      *browser.ManagedStatus
+	ManagedProfilePath  string
+	ProfileSeedStrategy string
+	ChromePID           int
+	ChromePort          string
 }
 
 type runtimeFile struct {
-	PID               int    `json:"pid"`
-	StartedAt         string `json:"started_at"`
-	ConnectionMode    string `json:"connection_mode"`
-	ReconnectInterval string `json:"reconnect_interval,omitempty"`
-	SocketPath        string `json:"socket_path,omitempty"`
-	LogPath           string `json:"log_path,omitempty"`
-	Endpoint          string `json:"endpoint,omitempty"`
-	UserDataDir       string `json:"user_data_dir,omitempty"`
+	PID                 int                    `json:"pid"`
+	StartedAt           string                 `json:"started_at"`
+	BrowserMode         string                 `json:"browser_mode,omitempty"`
+	ConnectionMode      string                 `json:"connection_mode"`
+	ReconnectInterval   string                 `json:"reconnect_interval,omitempty"`
+	SocketPath          string                 `json:"socket_path,omitempty"`
+	LogPath             string                 `json:"log_path,omitempty"`
+	Endpoint            string                 `json:"endpoint,omitempty"`
+	UserDataDir         string                 `json:"user_data_dir,omitempty"`
+	ManagedBrowser      *browser.ManagedStatus `json:"managed_browser,omitempty"`
+	ManagedProfilePath  string                 `json:"managed_profile_path,omitempty"`
+	ProfileSeedStrategy string                 `json:"profile_seed_strategy,omitempty"`
+	ChromePID           int                    `json:"chrome_pid,omitempty"`
+	ChromePort          string                 `json:"chrome_port,omitempty"`
 }
 
 type LogEntry struct {
@@ -108,25 +131,57 @@ func defaultHoldOptions() holdOptions {
 }
 
 func RuntimePath(stateDir string) string {
-	return filepath.Join(stateDir, RuntimeFileName)
+	return RuntimePathForMode(stateDir, "headed")
 }
 
 func RuntimeSocketPath(stateDir string) string {
-	return filepath.Join(stateDir, RuntimeSocketFileName)
+	return RuntimeSocketPathForMode(stateDir, "headed")
 }
 
 func RuntimeLogPath(stateDir string) string {
+	return RuntimeLogPathForMode(stateDir, "headed")
+}
+
+func RuntimePathForMode(stateDir, browserMode string) string {
+	if runtimeModeName(browserMode) == "headless" {
+		return filepath.Join(stateDir, "headless", RuntimeFileName)
+	}
+	return filepath.Join(stateDir, RuntimeFileName)
+}
+
+func RuntimeSocketPathForMode(stateDir, browserMode string) string {
+	if runtimeModeName(browserMode) == "headless" {
+		return filepath.Join(stateDir, "headless", RuntimeSocketFileName)
+	}
+	return filepath.Join(stateDir, RuntimeSocketFileName)
+}
+
+func RuntimeLogPathForMode(stateDir, browserMode string) string {
+	if runtimeModeName(browserMode) == "headless" {
+		return filepath.Join(stateDir, "headless", RuntimeLogFileName)
+	}
 	return filepath.Join(stateDir, RuntimeLogFileName)
 }
 
+func runtimeModeName(browserMode string) string {
+	if strings.EqualFold(strings.TrimSpace(browserMode), "headless") {
+		return "headless"
+	}
+	return "headed"
+}
+
 func LoadRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
+	return LoadRuntimeForMode(ctx, stateDir, "headed")
+}
+
+func LoadRuntimeForMode(ctx context.Context, stateDir, browserMode string) (Runtime, bool, error) {
 	select {
 	case <-ctx.Done():
 		return Runtime{}, false, ctx.Err()
 	default:
 	}
 
-	b, err := os.ReadFile(RuntimePath(stateDir))
+	b, err := os.ReadFile(RuntimePathForMode(stateDir, browserMode))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Runtime{}, false, nil
@@ -141,20 +196,28 @@ func LoadRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 }
 
 func SaveRuntime(ctx context.Context, stateDir string, runtime Runtime) error {
+	return SaveRuntimeForMode(ctx, stateDir, "headed", runtime)
+}
+
+func SaveRuntimeForMode(ctx context.Context, stateDir, browserMode string, runtime Runtime) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	runtimePath := RuntimePathForMode(stateDir, browserMode)
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o700); err != nil {
 		return fmt.Errorf("create daemon state directory: %w", err)
+	}
+	if strings.TrimSpace(runtime.BrowserMode) == "" {
+		runtime.BrowserMode = runtimeModeName(browserMode)
 	}
 	b, err := json.MarshalIndent(runtimeFileFromRuntime(runtime), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal daemon runtime state: %w", err)
 	}
 	b = append(b, '\n')
-	if err := os.WriteFile(RuntimePath(stateDir), b, 0o600); err != nil {
+	if err := os.WriteFile(runtimePath, b, 0o600); err != nil {
 		return fmt.Errorf("write daemon runtime state: %w", err)
 	}
 	return nil
@@ -162,39 +225,55 @@ func SaveRuntime(ctx context.Context, stateDir string, runtime Runtime) error {
 
 func runtimeFromFile(file runtimeFile) Runtime {
 	return Runtime{
-		PID:               file.PID,
-		StartedAt:         file.StartedAt,
-		ConnectionMode:    file.ConnectionMode,
-		ReconnectInterval: file.ReconnectInterval,
-		SocketPath:        file.SocketPath,
-		LogPath:           file.LogPath,
-		Endpoint:          file.Endpoint,
-		UserDataDir:       file.UserDataDir,
+		PID:                 file.PID,
+		StartedAt:           file.StartedAt,
+		BrowserMode:         file.BrowserMode,
+		ConnectionMode:      file.ConnectionMode,
+		ReconnectInterval:   file.ReconnectInterval,
+		SocketPath:          file.SocketPath,
+		LogPath:             file.LogPath,
+		Endpoint:            file.Endpoint,
+		UserDataDir:         file.UserDataDir,
+		ManagedBrowser:      file.ManagedBrowser,
+		ManagedProfilePath:  file.ManagedProfilePath,
+		ProfileSeedStrategy: file.ProfileSeedStrategy,
+		ChromePID:           file.ChromePID,
+		ChromePort:          file.ChromePort,
 	}
 }
 
 func runtimeFileFromRuntime(runtime Runtime) runtimeFile {
 	return runtimeFile{
-		PID:               runtime.PID,
-		StartedAt:         runtime.StartedAt,
-		ConnectionMode:    runtime.ConnectionMode,
-		ReconnectInterval: runtime.ReconnectInterval,
-		SocketPath:        runtime.SocketPath,
-		LogPath:           runtime.LogPath,
-		Endpoint:          runtime.Endpoint,
-		UserDataDir:       runtime.UserDataDir,
+		PID:                 runtime.PID,
+		StartedAt:           runtime.StartedAt,
+		BrowserMode:         runtime.BrowserMode,
+		ConnectionMode:      runtime.ConnectionMode,
+		ReconnectInterval:   runtime.ReconnectInterval,
+		SocketPath:          runtime.SocketPath,
+		LogPath:             runtime.LogPath,
+		Endpoint:            runtime.Endpoint,
+		UserDataDir:         runtime.UserDataDir,
+		ManagedBrowser:      runtime.ManagedBrowser,
+		ManagedProfilePath:  runtime.ManagedProfilePath,
+		ProfileSeedStrategy: runtime.ProfileSeedStrategy,
+		ChromePID:           runtime.ChromePID,
+		ChromePort:          runtime.ChromePort,
 	}
 }
 
 func ClearRuntime(ctx context.Context, stateDir string, pid int) error {
-	runtime, ok, err := LoadRuntime(ctx, stateDir)
+	return ClearRuntimeForMode(ctx, stateDir, "headed", pid)
+}
+
+func ClearRuntimeForMode(ctx context.Context, stateDir, browserMode string, pid int) error {
+	runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode)
 	if err != nil || !ok {
 		return err
 	}
 	if pid > 0 && runtime.PID != pid {
 		return nil
 	}
-	if err := os.Remove(RuntimePath(stateDir)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(RuntimePathForMode(stateDir, browserMode)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove daemon runtime state: %w", err)
 	}
 	return nil
@@ -215,24 +294,44 @@ func RuntimeRunning(runtime Runtime) bool {
 }
 
 func StartKeepAlive(ctx context.Context, executable, stateDir, endpoint, connectionMode, userDataDir string, reconnect time.Duration) (Runtime, bool, error) {
-	if runtime, ok, err := LoadRuntime(ctx, stateDir); err != nil {
+	return StartKeepAliveForMode(ctx, executable, stateDir, "headed", endpoint, connectionMode, userDataDir, reconnect)
+}
+
+func StartKeepAliveForMode(ctx context.Context, executable, stateDir, browserMode, endpoint, connectionMode, userDataDir string, reconnect time.Duration) (Runtime, bool, error) {
+	return StartKeepAliveForModeWithMetadata(ctx, executable, stateDir, browserMode, endpoint, connectionMode, KeepAliveMetadata{UserDataDir: userDataDir}, reconnect)
+}
+
+func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir, browserMode, endpoint, connectionMode string, metadata KeepAliveMetadata, reconnect time.Duration) (Runtime, bool, error) {
+	if runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode); err != nil {
 		return Runtime{}, false, err
 	} else if ok && RuntimeRunning(runtime) {
 		if RuntimeSocketReady(ctx, runtime) {
 			return runtime, true, nil
 		}
-		_, _, _ = StopRuntime(ctx, stateDir)
+		_, _, _ = StopRuntimeForMode(ctx, stateDir, browserMode)
 	}
 
 	cmd := exec.Command(executable, "daemon", "hold")
-	socketPath := RuntimeSocketPath(stateDir)
+	socketPath := RuntimeSocketPathForMode(stateDir, browserMode)
+	managedBrowser := ""
+	if metadata.ManagedBrowser != nil {
+		if b, err := json.Marshal(metadata.ManagedBrowser); err == nil {
+			managedBrowser = string(b)
+		}
+	}
 	cmd.Env = append(os.Environ(),
 		"CDP_DAEMON_HOLD_ENDPOINT="+endpoint,
 		"CDP_DAEMON_STATE_DIR="+stateDir,
 		"CDP_DAEMON_CONNECTION_MODE="+connectionMode,
 		"CDP_DAEMON_RECONNECT="+reconnect.String(),
 		"CDP_DAEMON_SOCKET="+socketPath,
-		"CDP_DAEMON_USER_DATA_DIR="+userDataDir,
+		"CDP_DAEMON_BROWSER_MODE="+runtimeModeName(browserMode),
+		"CDP_DAEMON_USER_DATA_DIR="+metadata.UserDataDir,
+		"CDP_DAEMON_MANAGED_BROWSER="+managedBrowser,
+		"CDP_DAEMON_MANAGED_PROFILE_PATH="+metadata.ManagedProfilePath,
+		"CDP_DAEMON_PROFILE_SEED_STRATEGY="+metadata.ProfileSeedStrategy,
+		"CDP_DAEMON_CHROME_PID="+strconv.Itoa(metadata.ChromePID),
+		"CDP_DAEMON_CHROME_PORT="+metadata.ChromePort,
 	)
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -250,30 +349,34 @@ func StartKeepAlive(ctx context.Context, executable, stateDir, endpoint, connect
 	pid := cmd.Process.Pid
 	_ = cmd.Process.Release()
 
-	runtime, err := waitForRuntime(ctx, stateDir, pid)
+	runtime, err := waitForRuntimeForMode(ctx, stateDir, browserMode, pid)
 	if err != nil {
 		if process, findErr := os.FindProcess(pid); findErr == nil {
 			_ = process.Kill()
 		}
-		_ = ClearRuntime(context.Background(), stateDir, pid)
+		_ = ClearRuntimeForMode(context.Background(), stateDir, browserMode, pid)
 		return Runtime{}, false, err
 	}
 	return runtime, false, nil
 }
 
 func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
-	runtime, ok, err := LoadRuntime(ctx, stateDir)
+	return StopRuntimeForMode(ctx, stateDir, "headed")
+}
+
+func StopRuntimeForMode(ctx context.Context, stateDir, browserMode string) (Runtime, bool, error) {
+	runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode)
 	if err != nil || !ok {
 		return Runtime{}, false, err
 	}
 	if !RuntimeRunning(runtime) {
 		_ = os.Remove(runtime.SocketPath)
-		return runtime, false, ClearRuntime(ctx, stateDir, runtime.PID)
+		return runtime, false, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
 	}
 	process, err := os.FindProcess(runtime.PID)
 	if err != nil {
 		_ = os.Remove(runtime.SocketPath)
-		return runtime, false, ClearRuntime(ctx, stateDir, runtime.PID)
+		return runtime, false, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
 	}
 	if err := process.Signal(os.Interrupt); err != nil {
 		if killErr := process.Kill(); killErr != nil {
@@ -284,7 +387,7 @@ func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 	for time.Now().Before(deadline) {
 		if !RuntimeRunning(runtime) {
 			_ = os.Remove(runtime.SocketPath)
-			return runtime, true, ClearRuntime(ctx, stateDir, runtime.PID)
+			return runtime, true, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -292,7 +395,7 @@ func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {
 		return runtime, true, fmt.Errorf("kill daemon process: %w", err)
 	}
 	_ = os.Remove(runtime.SocketPath)
-	return runtime, true, ClearRuntime(ctx, stateDir, runtime.PID)
+	return runtime, true, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
 }
 
 func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconnect time.Duration) error {
@@ -309,36 +412,37 @@ func holdWithOptions(ctx context.Context, stateDir, endpoint, connectionMode str
 	if strings.TrimSpace(stateDir) == "" {
 		return fmt.Errorf("daemon hold state directory is required")
 	}
+	browserMode := runtimeModeName(os.Getenv("CDP_DAEMON_BROWSER_MODE"))
 	pid := os.Getpid()
-	defer ClearRuntime(context.Background(), stateDir, pid)
-	appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "hold_start", Message: "daemon hold process starting", PID: pid})
+	defer ClearRuntimeForMode(context.Background(), stateDir, browserMode, pid)
+	appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "hold_start", Message: "daemon hold process starting", PID: pid})
 
 	socketPath := os.Getenv("CDP_DAEMON_SOCKET")
 	if strings.TrimSpace(socketPath) == "" {
-		socketPath = RuntimeSocketPath(stateDir)
+		socketPath = RuntimeSocketPathForMode(stateDir, browserMode)
 	}
 
 	for {
 		client, err := cdp.Dial(ctx, endpoint)
 		if err == nil {
-			appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "browser_connected", Message: "connected to browser endpoint", PID: pid})
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "browser_connected", Message: "connected to browser endpoint", PID: pid})
 			err = holdConnection(ctx, stateDir, socketPath, client, pid, connectionMode, reconnect, opts)
 			if err != nil {
-				appendLog(context.Background(), stateDir, LogEntry{Level: "warn", Event: "hold_connection_ended", Message: err.Error(), PID: pid})
+				appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "hold_connection_ended", Message: err.Error(), PID: pid})
 			}
-			_ = ClearRuntime(context.Background(), stateDir, pid)
+			_ = ClearRuntimeForMode(context.Background(), stateDir, browserMode, pid)
 		} else {
-			appendLog(context.Background(), stateDir, LogEntry{Level: "warn", Event: "browser_dial_failed", Message: err.Error(), PID: pid})
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "browser_dial_failed", Message: err.Error(), PID: pid})
 		}
 		if reconnect <= 0 {
 			return err
 		}
 		select {
 		case <-ctx.Done():
-			appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "hold_stop", Message: ctx.Err().Error(), PID: pid})
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "hold_stop", Message: ctx.Err().Error(), PID: pid})
 			return ctx.Err()
 		case <-time.After(reconnect):
-			appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "reconnect_wait_elapsed", Message: "attempting browser reconnect", PID: pid})
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "reconnect_wait_elapsed", Message: "attempting browser reconnect", PID: pid})
 		}
 	}
 }
@@ -504,12 +608,16 @@ func RuntimeSocketReady(ctx context.Context, runtime Runtime) bool {
 }
 
 func waitForRuntime(ctx context.Context, stateDir string, pid int) (Runtime, error) {
+	return waitForRuntimeForMode(ctx, stateDir, "headed", pid)
+}
+
+func waitForRuntimeForMode(ctx context.Context, stateDir, browserMode string, pid int) (Runtime, error) {
 	deadline := time.Now().Add(60 * time.Second)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
 	for time.Now().Before(deadline) {
-		runtime, ok, err := LoadRuntime(ctx, stateDir)
+		runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode)
 		if err != nil {
 			return Runtime{}, err
 		}
@@ -526,38 +634,65 @@ func waitForRuntime(ctx context.Context, stateDir string, pid int) (Runtime, err
 }
 
 func holdConnection(ctx context.Context, stateDir, socketPath string, client *cdp.Client, pid int, connectionMode string, reconnect time.Duration, opts holdOptions) error {
+	browserMode := runtimeModeName(os.Getenv("CDP_DAEMON_BROWSER_MODE"))
 	listener, err := listenRuntimeSocket(socketPath)
 	if err != nil {
 		_ = client.Close(websocket.StatusInternalError, "rpc listen failed")
-		appendLog(context.Background(), stateDir, LogEntry{Level: "error", Event: "rpc_listen_failed", Message: err.Error(), PID: pid})
+		appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "error", Event: "rpc_listen_failed", Message: err.Error(), PID: pid})
 		return err
 	}
 	defer listener.Close()
 	defer os.Remove(socketPath)
-	appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "rpc_listening", Message: "daemon rpc socket ready", PID: pid})
+	appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "rpc_listening", Message: "daemon rpc socket ready", PID: pid})
 
 	runtime := Runtime{
-		PID:               pid,
-		StartedAt:         time.Now().UTC().Format(time.RFC3339),
-		ConnectionMode:    connectionMode,
-		ReconnectInterval: durationString(reconnect),
-		SocketPath:        socketPath,
-		LogPath:           RuntimeLogPath(stateDir),
-		Endpoint:          client.Endpoint(),
-		UserDataDir:       os.Getenv("CDP_DAEMON_USER_DATA_DIR"),
+		PID:                 pid,
+		StartedAt:           time.Now().UTC().Format(time.RFC3339),
+		BrowserMode:         browserMode,
+		ConnectionMode:      connectionMode,
+		ReconnectInterval:   durationString(reconnect),
+		SocketPath:          socketPath,
+		LogPath:             RuntimeLogPathForMode(stateDir, browserMode),
+		Endpoint:            client.Endpoint(),
+		UserDataDir:         os.Getenv("CDP_DAEMON_USER_DATA_DIR"),
+		ManagedBrowser:      managedBrowserFromEnv(),
+		ManagedProfilePath:  os.Getenv("CDP_DAEMON_MANAGED_PROFILE_PATH"),
+		ProfileSeedStrategy: os.Getenv("CDP_DAEMON_PROFILE_SEED_STRATEGY"),
+		ChromePID:           intEnv("CDP_DAEMON_CHROME_PID"),
+		ChromePort:          os.Getenv("CDP_DAEMON_CHROME_PORT"),
 	}
-	if err := SaveRuntime(ctx, stateDir, runtime); err != nil {
+	if err := SaveRuntimeForMode(ctx, stateDir, browserMode, runtime); err != nil {
 		_ = client.Close(websocket.StatusInternalError, "state write failed")
-		appendLog(context.Background(), stateDir, LogEntry{Level: "error", Event: "runtime_write_failed", Message: err.Error(), PID: pid})
+		appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "error", Event: "runtime_write_failed", Message: err.Error(), PID: pid})
 		return err
 	}
-	appendLog(context.Background(), stateDir, LogEntry{Level: "info", Event: "runtime_saved", Message: "daemon runtime state saved", PID: pid})
+	appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "runtime_saved", Message: "daemon runtime state saved", PID: pid})
 
 	cycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var mu sync.Mutex
 	go serveRPC(cycleCtx, listener, client, &mu, opts)
 	return keepAlive(cycleCtx, client, reconnect, &mu)
+}
+
+func managedBrowserFromEnv() *browser.ManagedStatus {
+	raw := strings.TrimSpace(os.Getenv("CDP_DAEMON_MANAGED_BROWSER"))
+	if raw == "" {
+		return nil
+	}
+	var status browser.ManagedStatus
+	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+		return nil
+	}
+	return &status
+}
+
+func intEnv(key string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil {
+		return 0
+	}
+	return value
 }
 
 func listenRuntimeSocket(socketPath string) (net.Listener, error) {
@@ -728,6 +863,10 @@ func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration,
 }
 
 func appendLog(ctx context.Context, stateDir string, entry LogEntry) {
+	appendLogForMode(ctx, stateDir, "headed", entry)
+}
+
+func appendLogForMode(ctx context.Context, stateDir, browserMode string, entry LogEntry) {
 	if strings.TrimSpace(stateDir) == "" {
 		return
 	}
@@ -742,10 +881,11 @@ func appendLog(ctx context.Context, stateDir string, entry LogEntry) {
 	if entry.Level == "" {
 		entry.Level = "info"
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	logPath := RuntimeLogPathForMode(stateDir, browserMode)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return
 	}
-	file, err := os.OpenFile(RuntimeLogPath(stateDir), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
@@ -758,12 +898,16 @@ func appendLog(ctx context.Context, stateDir string, entry LogEntry) {
 }
 
 func ReadLogs(ctx context.Context, stateDir string, tail int) ([]LogEntry, error) {
+	return ReadLogsForMode(ctx, stateDir, "headed", tail)
+}
+
+func ReadLogsForMode(ctx context.Context, stateDir, browserMode string, tail int) ([]LogEntry, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
-	b, err := os.ReadFile(RuntimeLogPath(stateDir))
+	b, err := os.ReadFile(RuntimeLogPathForMode(stateDir, browserMode))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []LogEntry{}, nil

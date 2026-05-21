@@ -12,9 +12,15 @@ architecture is intentionally small: keep browser protocol mechanics in
 - Browser access is explicit. Default-profile auto-connect requires user
   approval and the CLI must not persist cookies, headers, screenshots, traces,
   page text, or private profile data.
+- Browser runtime mode is separate from connection mode. `browser_mode` chooses
+  the runtime (`headed` or `headless`); `connection_mode` chooses how the daemon
+  reaches Chrome (`browser_url` or `auto_connect`).
 - Browser commands use the daemon as their only CDP entry point. The daemon owns
   the approved browser WebSocket and local RPC socket; short CLI invocations
   route through that socket instead of dialing Chrome directly.
+- Headless mode uses a cdp-owned managed profile only. It launches Chrome with a
+  non-default owner-only user data dir, loopback remote debugging, and no copy of
+  the user's default Chrome profile.
 - Page listing stays lazy. Use browser target metadata for discovery; attach to
   a page only when a page-scoped command actually needs it.
 - Heavy outputs are artifacts. Screenshots, traces, heap snapshots, HAR files,
@@ -32,10 +38,28 @@ architecture is intentionally small: keep browser protocol mechanics in
 | `cmd/cdp` | Binary entry point and build metadata wiring | Browser logic |
 | `internal/cli` | Cobra commands, output shaping, error envelopes | Raw WebSocket protocol loops |
 | `internal/cdp` | CDP transport, target/page helpers, protocol metadata | CLI flag policy |
-| `internal/browser` | Browser endpoint probing and auto-connect endpoint resolution | Persistent state |
-| `internal/daemon` | Keepalive runtime files, process status, runtime client | User-facing command formatting |
-| `internal/state` | Disk-backed connection metadata | Browser/page content |
+| `internal/browser` | Browser endpoint probing, auto-connect endpoint resolution, managed headless profile metadata and launch helpers | CLI output policy |
+| `internal/daemon` | Mode-specific keepalive runtime files, sockets, logs, process status, runtime client | User-facing command formatting |
+| `internal/state` | Disk-backed connection metadata and mode-scoped page selection | Browser/page content |
 | `internal/output` | JSON, compact JSON, jq filtering | Command semantics |
+
+## Browser Runtime Modes
+
+`headed` is the default runtime mode. It preserves the existing visible Chrome
+flow: a human-approved default-profile browser session is held by the daemon, and
+short commands talk to the daemon RPC socket.
+
+`headless` is a daemon-held managed runtime for unattended agents. The CLI creates
+only cdp-owned local state, launches Chrome with `--headless`,
+`--remote-debugging-port=0`, and `--user-data-dir` pointing at the managed
+profile, then validates the resulting endpoint is loopback-only. Managed status
+and doctor output expose safe metadata such as pid, mode, profile path, seed
+strategy, and debugging port, but not ownership internals.
+
+Runtime artifacts are mode-specific so headed and headless can coexist: headed
+keeps the historical singleton paths, while headless uses its own runtime file,
+socket, log, keepalive lock, selected page, and cleanup scope. Cleanup and page
+selection must always resolve against the selected browser mode.
 
 ## Validation Contract
 

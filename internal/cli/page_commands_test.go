@@ -180,6 +180,94 @@ func TestPageCleanupJSON(t *testing.T) {
 	}
 }
 
+func TestPageCleanupStateIsScopedByBrowserModeJSON(t *testing.T) {
+	headlessServer := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "headless-page", "type": "page", "title": "Headless Page", "url": "https://example.test/headless", "attached": false},
+	})
+	defer headlessServer.Close()
+
+	stateDir := shortCLIStateDir(t)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	cleanupStatePath := filepath.Join(stateDir, "page-cleanup.json")
+	cleanupState := []byte(`{
+  "pages": [
+    {"browser_mode":"headed","connection":"default","target_id":"headed-page","first_seen":"2026-05-21T12:00:00Z","last_seen":"2026-05-21T12:00:00Z"},
+    {"browser_mode":"headless","connection":"default","target_id":"stale-headless-page","first_seen":"2026-05-21T12:00:00Z","last_seen":"2026-05-21T12:00:00Z"}
+  ]
+}
+`)
+	if err := os.WriteFile(cleanupStatePath, cleanupState, 0o600); err != nil {
+		t.Fatalf("write cleanup state: %v", err)
+	}
+
+	headlessCtx, headlessCancel := context.WithCancel(context.Background())
+	headlessErr := make(chan error, 1)
+	go func() {
+		oldMode := os.Getenv("CDP_DAEMON_BROWSER_MODE")
+		_ = os.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+		defer os.Setenv("CDP_DAEMON_BROWSER_MODE", oldMode)
+		headlessErr <- daemon.Hold(headlessCtx, stateDir, fakeWebSocketEndpoint(t, headlessServer.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, headlessCtx, stateDir, "headless")
+	defer func() {
+		headlessCancel()
+		select {
+		case err := <-headlessErr:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("headless daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("headless daemon hold did not stop")
+		}
+	}()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "page", "cleanup", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headless cleanup exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Cleanup struct {
+			BrowserMode string `json:"browser_mode"`
+		} `json:"cleanup"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("headless cleanup output is invalid JSON: %v", err)
+	}
+	if got.Cleanup.BrowserMode != "headless" {
+		t.Fatalf("cleanup browser mode = %q, want headless", got.Cleanup.BrowserMode)
+	}
+
+	b, err := os.ReadFile(cleanupStatePath)
+	if err != nil {
+		t.Fatalf("read cleanup state: %v", err)
+	}
+	var saved struct {
+		Pages []struct {
+			BrowserMode string `json:"browser_mode"`
+			Connection  string `json:"connection"`
+			TargetID    string `json:"target_id"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(b, &saved); err != nil {
+		t.Fatalf("cleanup state is invalid JSON: %v", err)
+	}
+	var sawHeaded, sawStaleHeadless bool
+	for _, page := range saved.Pages {
+		if page.BrowserMode == "headed" && page.TargetID == "headed-page" {
+			sawHeaded = true
+		}
+		if page.BrowserMode == "headless" && page.TargetID == "stale-headless-page" {
+			sawStaleHeadless = true
+		}
+	}
+	if !sawHeaded || sawStaleHeadless {
+		t.Fatalf("cleanup state = %+v, want headed preserved and stale headless pruned", saved.Pages)
+	}
+}
+
 func TestPageSelectJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "First Page", "url": "https://example.test/first", "attached": false},
@@ -196,9 +284,10 @@ func TestPageSelectJSON(t *testing.T) {
 	var got struct {
 		OK           bool `json:"ok"`
 		SelectedPage struct {
-			Connection string `json:"connection"`
-			TargetID   string `json:"target_id"`
-			URL        string `json:"url"`
+			BrowserMode string `json:"browser_mode"`
+			Connection  string `json:"connection"`
+			TargetID    string `json:"target_id"`
+			URL         string `json:"url"`
 		} `json:"selected_page"`
 		Target struct {
 			ID string `json:"id"`
@@ -207,8 +296,8 @@ func TestPageSelectJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("page select output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.SelectedPage.TargetID != "page-2" || got.SelectedPage.Connection != "default" || got.Target.ID != "page-2" {
-		t.Fatalf("page select = %+v, want default page-2 selection", got)
+	if !got.OK || got.SelectedPage.TargetID != "page-2" || got.SelectedPage.Connection != "default" || got.SelectedPage.BrowserMode != "headed" || got.Target.ID != "page-2" {
+		t.Fatalf("page select = %+v, want headed default page-2 selection", got)
 	}
 
 	out.Reset()
@@ -228,6 +317,108 @@ func TestPageSelectJSON(t *testing.T) {
 	}
 	if !evalOut.OK || evalOut.Target.ID != "page-2" {
 		t.Fatalf("eval target = %+v, want selected page-2", evalOut.Target)
+	}
+}
+
+func TestPageSelectionIsScopedByBrowserMode(t *testing.T) {
+	headedServer := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "headed-page", "type": "page", "title": "Headed Page", "url": "https://example.test/headed", "attached": false},
+	})
+	defer headedServer.Close()
+	headlessServer := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "headless-page", "type": "page", "title": "Headless Page", "url": "https://example.test/headless", "attached": false},
+	})
+	defer headlessServer.Close()
+
+	stateDir := shortCLIStateDir(t)
+	t.Setenv("CDP_STATE_DIR", stateDir)
+
+	headedCtx, headedCancel := context.WithCancel(context.Background())
+	headedErr := make(chan error, 1)
+	go func() {
+		headedErr <- daemon.Hold(headedCtx, stateDir, fakeWebSocketEndpoint(t, headedServer.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntime(t, headedCtx, stateDir)
+	defer func() {
+		headedCancel()
+		select {
+		case err := <-headedErr:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("headed daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("headed daemon hold did not stop")
+		}
+	}()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "select", "headed-page", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headed page select exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	headlessCtx, headlessCancel := context.WithCancel(context.Background())
+	headlessErr := make(chan error, 1)
+	go func() {
+		oldMode := os.Getenv("CDP_DAEMON_BROWSER_MODE")
+		_ = os.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+		defer os.Setenv("CDP_DAEMON_BROWSER_MODE", oldMode)
+		headlessErr <- daemon.Hold(headlessCtx, stateDir, fakeWebSocketEndpoint(t, headlessServer.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, headlessCtx, stateDir, "headless")
+	defer func() {
+		headlessCancel()
+		select {
+		case err := <-headlessErr:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("headless daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("headless daemon hold did not stop")
+		}
+	}()
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "page", "select", "headless-page", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headless page select exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"eval", "document.title", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headed eval exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var headedEval struct {
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &headedEval); err != nil {
+		t.Fatalf("headed eval output is invalid JSON: %v", err)
+	}
+	if headedEval.Target.ID != "headed-page" {
+		t.Fatalf("headed eval target = %+v, want headed-page", headedEval.Target)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "eval", "document.title", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headless eval exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var headlessEval struct {
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &headlessEval); err != nil {
+		t.Fatalf("headless eval output is invalid JSON: %v", err)
+	}
+	if headlessEval.Target.ID != "headless-page" {
+		t.Fatalf("headless eval target = %+v, want headless-page", headlessEval.Target)
 	}
 }
 

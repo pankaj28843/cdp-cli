@@ -45,6 +45,74 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Recommended safe commands for validating live browser access."},
 			},
 		},
+
+		"scheduled-tasks": {
+			Name:        "scheduled-tasks",
+			Description: "User crontab readiness check for mode-explicit daemon keepalive and page cleanup tasks.",
+			Fields: []schemaField{
+				{Name: "name", Type: "string", Required: true, Description: "Doctor check name: scheduled-tasks."},
+				{Name: "status", Type: "string", Required: true, Description: "Check status: pass, warn, pending, or fail."},
+				{Name: "message", Type: "string", Required: true, Description: "Human-readable readiness summary."},
+				{Name: "details", Type: "scheduled_tasks_details", Required: true, Description: "Crontab availability, cdp entry counts, mode-explicit keepalive, and cleanup ambiguity flags."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe crontab inspection and install commands with explicit browser modes."},
+			},
+		},
+		"headless-security": {
+			Name:        "headless-security",
+			Description: "Security readiness check for the managed headless browser runtime.",
+			Fields: []schemaField{
+				{Name: "name", Type: "string", Required: true, Description: "Doctor check name: headless-security."},
+				{Name: "status", Type: "string", Required: true, Description: "Check status: pass, warn, pending, or fail."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Browser mode inspected by this check, always headless."},
+				{Name: "details", Type: "headless_security_details", Required: true, Description: "Owner-only file checks, loopback endpoint state, and managed metadata consistency."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe remediation commands for managed headless runtime setup and repair."},
+			},
+		},
+		"browser-mode": {
+			Name:        "browser-mode",
+			Description: "Effective browser runtime mode after applying flag, environment, config, and default precedence.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when browser mode metadata was resolved."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Resolved browser runtime mode: headed or headless."},
+				{Name: "browser_mode_source", Type: "string", Required: true, Description: "Source of the resolved mode: flag, env, config, or default."},
+				{Name: "config_path", Type: "string", Required: true, Description: "Config file path used while resolving browser mode."},
+				{Name: "selected_connection", Type: "connection_summary", Required: false, Description: "Safe selected connection summary when one is configured."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe commands for validating or preparing the selected runtime mode."},
+			},
+		},
+		"browser-profile-status": {
+			Name:        "browser-profile-status",
+			Description: "Privacy-preserving status for the managed headless browser profile.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when profile status was inspected."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Browser runtime mode for this profile, currently headless."},
+				{Name: "state", Type: "string", Required: true, Description: "Managed profile state: missing, profile_exists, metadata_only, or ready."},
+				{Name: "exists", Type: "boolean", Required: true, Description: "True when the managed profile directory exists."},
+				{Name: "seeded", Type: "boolean", Required: true, Description: "True when managed metadata exists."},
+				{Name: "profile_dir", Type: "string", Required: true, Description: "Managed cdp-owned profile directory path."},
+				{Name: "metadata_path", Type: "string", Required: true, Description: "Managed profile metadata path."},
+				{Name: "profile_perm", Type: "string", Required: false, Description: "Octal permission bits for the managed profile directory when present."},
+				{Name: "metadata_perm", Type: "string", Required: false, Description: "Octal permission bits for managed metadata when present."},
+				{Name: "managed_browser", Type: "managed_browser", Required: false, Description: "Safe managed browser metadata without ownership token or process start time."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe commands for seeding or starting the headless runtime."},
+			},
+		},
+		"browser-profile-seed": {
+			Name:        "browser-profile-seed",
+			Description: "Managed profile seed result; creates cdp-owned profile metadata without copying a default profile.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the managed profile was seeded."},
+				{Name: "seeded", Type: "boolean", Required: true, Description: "True when managed metadata exists after seeding."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Browser runtime mode for this profile, currently headless."},
+				{Name: "state", Type: "string", Required: true, Description: "Managed profile state after seeding."},
+				{Name: "exists", Type: "boolean", Required: true, Description: "True when the managed profile directory exists."},
+				{Name: "profile_dir", Type: "string", Required: true, Description: "Managed cdp-owned profile directory path."},
+				{Name: "metadata_path", Type: "string", Required: true, Description: "Managed profile metadata path."},
+				{Name: "seed_strategy", Type: "string", Required: true, Description: "Profile seed strategy; MVP supports managed only."},
+				{Name: "managed_browser", Type: "managed_browser", Required: true, Description: "Safe managed browser metadata without ownership token or process start time."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe commands for starting or inspecting the headless runtime."},
+			},
+		},
 		"connection-add": {
 			Name:        "connection-add",
 			Description: "Saved browser connection metadata after adding or updating a named connection.",
@@ -104,7 +172,17 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when an effective connection was resolved."},
 				{Name: "source", Type: "string", Required: true, Description: "Selection source such as explicit, project, selected, environment, or none."},
-				{Name: "connection", Type: "connection", Required: false, Description: "Resolved connection metadata when available."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Resolved browser runtime mode: headed or headless."},
+				{Name: "browser_mode_source", Type: "string", Required: true, Description: "Source of the resolved browser runtime mode."},
+				{Name: "connection", Type: "connection", Required: false, Description: "Resolved connection metadata when available; connection.mode remains browser_url or auto_connect."},
+			},
+		},
+		"daemon-status": {
+			Name:        "daemon-status",
+			Description: "Selected browser-mode daemon status and safe next commands.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when daemon status was assembled."},
+				{Name: "daemon", Type: "daemon_status", Required: true, Description: "Daemon status for the selected browser runtime mode."},
 			},
 		},
 		"daemon-restart": {
@@ -123,6 +201,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Cron-safe daemon health check and repair result.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when keepalive completed or skipped due to an existing lock."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Selected browser runtime mode for this keepalive check."},
 				{Name: "connection", Type: "string", Required: true, Description: "Connection name used for the keepalive lock."},
 				{Name: "mode", Type: "string", Required: true, Description: "Connection mode such as auto_connect or browser_url."},
 				{Name: "state", Type: "string", Required: true, Description: "Keepalive state: healthy, started, repaired, passive, or locked."},
@@ -136,10 +215,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"daemon-logs": {
 			Name:        "daemon-logs",
-			Description: "Daemon JSONL log entries from the local state directory.",
+			Description: "Daemon JSONL log entries for the selected browser runtime mode.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the log file was read or found absent."},
-				{Name: "log", Type: "object", Required: true, Description: "Log path, requested tail, and returned count."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Selected browser runtime mode for the log path."},
+				{Name: "log", Type: "object", Required: true, Description: "Mode-specific log path, requested tail, and returned count."},
 				{Name: "entries", Type: "array<daemon_log_entry>", Required: true, Description: "Log entries with time, level, event, message, and pid."},
 			},
 		},
@@ -149,7 +229,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when health telemetry was assembled."},
 				{Name: "daemon", Type: "daemon_status", Required: true, Description: "Daemon status with embedded health."},
-				{Name: "health", Type: "browser_health", Required: true, Description: "Safe tab/window/resource and daemon RPC health summary."},
+				{Name: "health", Type: "browser_health", Required: true, Description: "Safe tab/window/resource and daemon RPC health summary including browser_mode."},
 			},
 		},
 		"pages": {
@@ -203,7 +283,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Selected default page target for the effective browser connection.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page selection was saved."},
-				{Name: "selected_page", Type: "page_selection", Required: true, Description: "Connection-scoped selected target id, url, title, and timestamp."},
+				{Name: "selected_page", Type: "page_selection", Required: true, Description: "Browser-mode and connection-scoped selected target id, url, title, and timestamp."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
 				{Name: "state_path", Type: "string", Required: true, Description: "Local state file path where the selection was saved."},
 			},
@@ -732,6 +812,19 @@ func schemaCatalog() map[string]schemaInfo {
 		"perf-summary":    {Name: "perf-summary", Description: "Lightweight performance metric summary.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when metrics were collected."}, {Name: "metrics", Type: "object", Required: true, Description: "Performance metrics summary."}}},
 		"memory":          {Name: "memory", Description: "Memory counters or heap artifact result.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when memory command completed."}, {Name: "memory", Type: "object", Required: false, Description: "Memory counters."}, {Name: "artifact", Type: "artifact", Required: false, Description: "Heap snapshot artifact metadata."}}},
 
+		"managed-browser": {
+			Name:        "managed-browser",
+			Description: "Privacy-safe managed headless Chrome metadata.",
+			Fields: []schemaField{
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Browser runtime mode, currently headless."},
+				{Name: "chrome_pid", Type: "number", Required: false, Description: "Managed Chrome process id when running or recorded."},
+				{Name: "started_at", Type: "string", Required: false, Description: "Managed Chrome start timestamp when recorded."},
+				{Name: "user_data_dir", Type: "string", Required: true, Description: "cdp-owned managed profile directory."},
+				{Name: "debugging_port", Type: "string", Required: false, Description: "Loopback remote debugging port when recorded."},
+				{Name: "profile_seed_strategy", Type: "string", Required: true, Description: "Profile seed strategy, currently managed."},
+				{Name: "last_seeded_at", Type: "string", Required: false, Description: "Managed profile seed timestamp when recorded."},
+			},
+		},
 		"error-envelope": {
 			Name:        "error-envelope",
 			Description: "Stable JSON shape emitted when a command fails with --json or --jq.",

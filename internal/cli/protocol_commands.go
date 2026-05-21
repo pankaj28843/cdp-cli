@@ -7,8 +7,8 @@ import (
 
 	"encoding/base64"
 	"encoding/json"
+
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
-	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -606,7 +606,7 @@ func saveProtocolExecArtifact(path string, result json.RawMessage) (map[string]a
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
-	runtime, err := a.requiredDaemonRuntime(ctx)
+	client, err := a.daemonRuntimeClient(ctx)
 	if err != nil {
 		return cdp.Protocol{}, commandError(
 			"connection_not_configured",
@@ -616,7 +616,7 @@ func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
 			a.connectionRemediationCommands(),
 		)
 	}
-	protocol, err := daemon.RuntimeClient{Runtime: runtime}.FetchProtocol(ctx)
+	protocol, err := client.FetchProtocol(ctx)
 	if err != nil {
 		return cdp.Protocol{}, commandError(
 			"connection_failed",

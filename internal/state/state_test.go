@@ -137,7 +137,40 @@ func TestPageSelectionForConnection(t *testing.T) {
 		SelectedAt: "2026-04-29T00:01:00Z",
 	})
 	got, ok := state.PageSelectionForConnection(file, "local")
-	if !ok || got.TargetID != "page-2" || len(file.PageSelections) != 1 {
-		t.Fatalf("PageSelectionForConnection() = %+v ok=%v selections=%+v, want updated page-2", got, ok, file.PageSelections)
+	if !ok || got.TargetID != "page-2" || got.BrowserMode != "headed" || len(file.PageSelections) != 1 {
+		t.Fatalf("PageSelectionForConnection() = %+v ok=%v selections=%+v, want headed page-2", got, ok, file.PageSelections)
+	}
+}
+
+func TestPageSelectionForModeKeepsBrowserModesSeparate(t *testing.T) {
+	file := state.UpsertPageSelectionForMode(state.File{}, "headed", state.PageSelection{
+		Connection: "default",
+		TargetID:   "headed-page",
+		SelectedAt: "2026-04-29T00:00:00Z",
+	})
+	file = state.UpsertPageSelectionForMode(file, "headless", state.PageSelection{
+		Connection: "default",
+		TargetID:   "headless-page",
+		SelectedAt: "2026-04-29T00:01:00Z",
+	})
+
+	headed, ok := state.PageSelectionForMode(file, "headed", "default")
+	if !ok || headed.TargetID != "headed-page" || headed.BrowserMode != "headed" {
+		t.Fatalf("PageSelectionForMode headed = %+v ok=%v, want headed-page", headed, ok)
+	}
+	headless, ok := state.PageSelectionForMode(file, "headless", "default")
+	if !ok || headless.TargetID != "headless-page" || headless.BrowserMode != "headless" {
+		t.Fatalf("PageSelectionForMode headless = %+v ok=%v, want headless-page", headless, ok)
+	}
+	if len(file.PageSelections) != 2 {
+		t.Fatalf("page selections = %+v, want separate headed and headless entries", file.PageSelections)
+	}
+
+	file = state.RemovePageSelectionForMode(file, "headless", "default")
+	if _, ok := state.PageSelectionForMode(file, "headless", "default"); ok {
+		t.Fatalf("headless selection still exists after removal: %+v", file.PageSelections)
+	}
+	if headed, ok := state.PageSelectionForMode(file, "headed", "default"); !ok || headed.TargetID != "headed-page" {
+		t.Fatalf("headed selection after headless removal = %+v ok=%v, want preserved headed-page", headed, ok)
 	}
 }

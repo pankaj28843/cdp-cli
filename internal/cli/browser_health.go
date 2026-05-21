@@ -76,6 +76,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	health := map[string]any{
 		"state":                  daemonHealthState(status),
 		"reasons":                []string{},
+		"browser_mode":           status.BrowserMode,
 		"connection_mode":        status.ConnectionMode,
 		"daemon_process_running": status.ProcessRunning,
 		"daemon_rpc_ready":       false,
@@ -84,9 +85,10 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	}
 	if status.Runtime != nil {
 		health["runtime"] = map[string]any{
-			"pid":         status.Runtime.PID,
-			"started_at":  status.Runtime.StartedAt,
-			"socket_path": status.Runtime.SocketPath,
+			"pid":          status.Runtime.PID,
+			"browser_mode": status.Runtime.BrowserMode,
+			"started_at":   status.Runtime.StartedAt,
+			"socket_path":  status.Runtime.SocketPath,
 		}
 	}
 	logs := a.daemonLogHealth(ctx, 50)
@@ -146,7 +148,7 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 	if err != nil {
 		return out
 	}
-	entries, err := daemon.ReadLogs(ctx, store.Dir, tail)
+	entries, err := daemon.ReadLogsForMode(ctx, store.Dir, a.browserModeName(), tail)
 	if err != nil {
 		return out
 	}

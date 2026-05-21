@@ -164,9 +164,11 @@ func TestConnectionResolveJSON(t *testing.T) {
 		t.Fatalf("connection resolve exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
 	var got struct {
-		OK         bool   `json:"ok"`
-		Source     string `json:"source"`
-		Connection struct {
+		OK                bool   `json:"ok"`
+		Source            string `json:"source"`
+		BrowserMode       string `json:"browser_mode"`
+		BrowserModeSource string `json:"browser_mode_source"`
+		Connection        struct {
 			Name string `json:"name"`
 			Mode string `json:"mode"`
 		} `json:"connection"`
@@ -174,8 +176,8 @@ func TestConnectionResolveJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("connection resolve output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Source != "selected" || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" {
-		t.Fatalf("connection resolve = %+v, want selected default", got)
+	if !got.OK || got.Source != "selected" || got.BrowserMode != "headed" || got.BrowserModeSource != "default" || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" {
+		t.Fatalf("connection resolve = %+v, want selected default with headed/default browser mode", got)
 	}
 }
 

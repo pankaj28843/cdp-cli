@@ -27,11 +27,12 @@ type Connection struct {
 }
 
 type PageSelection struct {
-	Connection string `json:"connection"`
-	TargetID   string `json:"target_id"`
-	URL        string `json:"url,omitempty"`
-	Title      string `json:"title,omitempty"`
-	SelectedAt string `json:"selected_at"`
+	BrowserMode string `json:"browser_mode,omitempty"`
+	Connection  string `json:"connection"`
+	TargetID    string `json:"target_id"`
+	URL         string `json:"url,omitempty"`
+	Title       string `json:"title,omitempty"`
+	SelectedAt  string `json:"selected_at"`
 }
 
 type File struct {
@@ -221,8 +222,13 @@ func comparableProjectPath(path string) string {
 }
 
 func UpsertPageSelection(file File, selection PageSelection) File {
+	return UpsertPageSelectionForMode(file, selectionBrowserMode(selection.BrowserMode), selection)
+}
+
+func UpsertPageSelectionForMode(file File, browserMode string, selection PageSelection) File {
+	selection.BrowserMode = selectionBrowserMode(browserMode)
 	for i, existing := range file.PageSelections {
-		if existing.Connection == selection.Connection {
+		if samePageSelectionScope(existing, selection.BrowserMode, selection.Connection) {
 			file.PageSelections[i] = selection
 			sortPageSelections(file.PageSelections)
 			return file
@@ -234,9 +240,14 @@ func UpsertPageSelection(file File, selection PageSelection) File {
 }
 
 func PageSelectionForConnection(file File, connection string) (PageSelection, bool) {
+	return PageSelectionForMode(file, "headed", connection)
+}
+
+func PageSelectionForMode(file File, browserMode, connection string) (PageSelection, bool) {
+	browserMode = selectionBrowserMode(browserMode)
 	for _, selection := range file.PageSelections {
-		if selection.Connection == connection {
-			return selection, true
+		if samePageSelectionScope(selection, browserMode, connection) {
+			return selectionWithBrowserMode(selection), true
 		}
 	}
 	return PageSelection{}, false
@@ -246,6 +257,19 @@ func RemovePageSelection(file File, connection string) File {
 	filtered := file.PageSelections[:0]
 	for _, selection := range file.PageSelections {
 		if selection.Connection == connection {
+			continue
+		}
+		filtered = append(filtered, selection)
+	}
+	file.PageSelections = filtered
+	return file
+}
+
+func RemovePageSelectionForMode(file File, browserMode, connection string) File {
+	browserMode = selectionBrowserMode(browserMode)
+	filtered := file.PageSelections[:0]
+	for _, selection := range file.PageSelections {
+		if samePageSelectionScope(selection, browserMode, connection) {
 			continue
 		}
 		filtered = append(filtered, selection)
@@ -271,6 +295,26 @@ func sortConnections(conns []Connection) {
 
 func sortPageSelections(selections []PageSelection) {
 	sort.Slice(selections, func(i, j int) bool {
-		return selections[i].Connection < selections[j].Connection
+		if selectionBrowserMode(selections[i].BrowserMode) == selectionBrowserMode(selections[j].BrowserMode) {
+			return selections[i].Connection < selections[j].Connection
+		}
+		return selectionBrowserMode(selections[i].BrowserMode) < selectionBrowserMode(selections[j].BrowserMode)
 	})
+}
+
+func samePageSelectionScope(selection PageSelection, browserMode, connection string) bool {
+	return selectionBrowserMode(selection.BrowserMode) == selectionBrowserMode(browserMode) && selection.Connection == connection
+}
+
+func selectionWithBrowserMode(selection PageSelection) PageSelection {
+	selection.BrowserMode = selectionBrowserMode(selection.BrowserMode)
+	return selection
+}
+
+func selectionBrowserMode(browserMode string) string {
+	browserMode = strings.TrimSpace(browserMode)
+	if browserMode == "" {
+		return "headed"
+	}
+	return browserMode
 }

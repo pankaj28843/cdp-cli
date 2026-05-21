@@ -6,7 +6,7 @@ These invariants define the safety and liveness rules for cdp-cli browser workfl
 
 | Invariant | Owner | Existing coverage | Next checks |
 | --- | --- | --- | --- |
-| Browser commands route through the daemon runtime; short CLI invocations must not bypass the approved daemon socket to dial Chrome directly. | `internal/cli/page_commands.go`, `internal/daemon/runtime.go` | `TestPagesUsesRunningDaemonByDefaultJSON`, daemon runtime tests | Add a negative test for stale socket/connection mismatch returning a structured connection error. |
+| Browser commands route through the daemon runtime; short CLI invocations must not bypass the selected-mode daemon socket to dial Chrome directly, even when managed headless metadata records a Chrome endpoint. | `internal/cli/page_commands.go`, `internal/cli/protocol_commands.go`, `internal/daemon/runtime.go` | `TestPagesUsesRunningDaemonByDefaultJSON`, `TestHeadlessPagesRequireDaemonEvenWithManagedMetadata`, daemon runtime tests | Add a negative test for stale socket/connection mismatch returning a structured connection error. |
 | Default-profile access is explicit and recoverable; diagnostics must not silently trigger repeated approval prompts. | `internal/cli/daemon_commands.go`, `internal/daemon/status.go` | daemon status and doctor tests | Add a status test proving approval-pending output includes human recovery commands and no active probe by default. |
 | Page and target listing stay lazy; discovery may read target metadata but must not attach to pages. | `internal/cli/page_commands.go`, `internal/cdp/targets.go` | `TestEvalExactTargetIDSkipsTargetListing`, page/target JSON tests | Add explicit `pages`/`targets` tests that fail if `Target.attachToTarget` is called. |
 | Page creation is bounded by tab/window budget; at the configured limit is already a hard stop. | `internal/cdp/budget.go`, `internal/cli/open_commands.go` | `TestOpenRefusesOverBudgetJSON`, budget package tests | Add a window-limit boundary test and document any future policy change from `>=` to `>`. |
@@ -20,6 +20,10 @@ These invariants define the safety and liveness rules for cdp-cli browser workfl
 | Isolated browser contexts must be explicitly created, reported, and disposed without changing default-profile command behavior. | future context workflow commands, `internal/cdp/page.go`, `internal/cdp/targets.go` | target rows expose `browser_context_id`; open/page tests cover default behavior | Add forced-error tests proving created contexts are disposed or returned with recovery commands. |
 | Workflow transcripts must preserve ordered evidence while referencing artifacts by path and redacting private payloads. | future transcript helpers, workflow command files, `internal/artifacts` | debug bundle artifact-list tests and artifact safety scans | Add transcript schema tests and synthetic leak scans for safe transcript mode. |
 | Debug-bundle diffs must be deterministic and summarize private sections instead of copying full browser payloads. | future debug-bundle diff helpers, `internal/cli/workflow_debug_bundle.go` | debug bundle fixture tests, storage diff pattern | Add identical-input, partial-bundle, and missing-section tests. |
+| Browser runtime mode and connection mode remain distinct; `browser_mode` may be headed/headless while `connection_mode` remains browser_url/auto_connect. | `internal/config/config.go`, `internal/cli/root.go`, `internal/cli/connection_commands.go` | browser mode resolver tests, `TestConnectionResolveIncludesBrowserModeJSON`, schema/E2E checks | Add migration coverage if future config files introduce more browser modes. |
+| Managed headless profile state is cdp-owned, owner-only, and never seeded by copying the default Chrome profile. | `internal/browser/managed.go`, `internal/cli/browser_commands.go` | managed profile tests, browser profile command tests, headless-security doctor tests | Add explicit copy-default rejection tests if new seed strategies are proposed. |
+| Headless remote debugging endpoints must be loopback-only and held behind the daemon boundary. | `internal/browser/managed.go`, `internal/cli/daemon_commands.go`, `internal/cli/info_commands.go` | loopback endpoint tests, managed keepalive tests, headless-security doctor tests | Add OS process-start verification before strengthening owned-process signaling. |
+| Headed and headless runtime artifacts must not collide: runtime files, sockets, logs, keepalive locks, selections, and cleanup records are mode-scoped. | `internal/daemon/runtime.go`, `internal/state/state.go`, `internal/cli/page_commands.go` | runtime path tests, keepalive lock tests, page selection/cleanup mode tests | Add a full coexistence E2E once live Chrome coverage can run both modes in one fixture. |
 | Extension workflows must classify unsupported or experimental protocol support before mutating browser state. | future extension command files, `internal/cli/protocol_commands.go` | protocol discovery and compat tests | Add fixture tests for missing `Extensions.*` methods and local-path redaction. |
 | Frame-scoped execution must fail ambiguous frame selection before evaluating user code. | future frame resolver helpers, `internal/cli/frame_commands.go`, eval/query commands | frame listing tests and target ambiguity tests | Add call-count tests proving `Runtime.evaluate` is not called for ambiguous frames. |
 
@@ -27,7 +31,7 @@ These invariants define the safety and liveness rules for cdp-cli browser workfl
 
 | Property | Owner | Existing coverage | Next checks |
 | --- | --- | --- | --- |
-| `daemon keepalive` either reaches a ready runtime or fails with bounded, structured recovery information. | `internal/cli/daemon_commands.go`, `internal/daemon/runtime.go` | daemon keepalive tests | Add stale runtime/socket cleanup coverage on failed start. |
+| `daemon keepalive` either reaches a ready selected-mode runtime or fails with bounded, structured recovery information. Headless keepalive may create/reuse managed Chrome before daemon hold. | `internal/cli/daemon_commands.go`, `internal/browser/managed.go`, `internal/daemon/runtime.go` | daemon keepalive tests, managed metadata persistence tests | Add stale runtime/socket cleanup coverage on failed start. |
 | Once the daemon runtime is ready, page commands can make progress through the RPC loop without requiring source inspection. | `internal/daemon/runtime.go`, `internal/cli/page_commands.go` | installed E2E, daemon runtime tests | Add RPC envelope tests for invalid request, missing method, timeout, and cancellation. |
 | Protocol metadata remains usable when live `/json/protocol` is unavailable, and fallback source is labeled. | `internal/cdp/protocol.go`, `internal/cli/protocol_commands.go` | protocol command tests | Add an explicit live-unavailable fallback test with source labeling. |
 | Rendered extraction waits for useful/stable content but remains bounded by timeout and artifact limits. | `internal/cli/workflow_rendered_extract.go` | rendered extraction tests | Add timeout-path coverage with partial artifact metadata. |
@@ -48,6 +52,7 @@ For browser-facing changes, also exercise the installed binary against the live/
 ```bash
 cdp --help
 cdp doctor --json
+cdp doctor --check headless-security --json
 cdp pages --json
 make e2e-demo-installed
 ```

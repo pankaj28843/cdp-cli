@@ -45,6 +45,17 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"doctor",
 		"doctor-capabilities",
 		"error-envelope",
+		"scheduled-tasks",
+		"headless-security",
+		"browser-mode",
+		"browser-profile-status",
+		"browser-profile-seed",
+		"managed-browser",
+		"connection-resolve",
+		"daemon-status",
+		"daemon-keepalive",
+		"daemon-health",
+		"daemon-logs",
 		"pages",
 		"page-cleanup",
 		"protocol-examples",
@@ -58,4 +69,39 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 			t.Fatalf("schemaCatalog() missing critical schema %q", name)
 		}
 	}
+}
+
+func TestSchemaCatalogBrowserModeContracts(t *testing.T) {
+	catalog := schemaCatalog()
+	cases := map[string][]string{
+		"browser-mode":           {"browser_mode", "browser_mode_source", "next_commands"},
+		"browser-profile-status": {"browser_mode", "state", "managed_browser", "profile_perm", "metadata_perm"},
+		"browser-profile-seed":   {"browser_mode", "state", "seed_strategy", "managed_browser"},
+		"managed-browser":        {"browser_mode", "user_data_dir", "profile_seed_strategy", "debugging_port"},
+		"connection-resolve":     {"browser_mode", "browser_mode_source", "connection"},
+		"daemon-status":          {"daemon"},
+		"daemon-keepalive":       {"browser_mode", "connection", "mode", "lock"},
+		"scheduled-tasks":        {"details", "next_commands"},
+		"headless-security":      {"browser_mode", "details", "next_commands"},
+	}
+	for schemaName, fieldNames := range cases {
+		info, ok := catalog[schemaName]
+		if !ok {
+			t.Fatalf("schemaCatalog() missing %q", schemaName)
+		}
+		for _, fieldName := range fieldNames {
+			if !catalogSchemaHasField(info, fieldName) {
+				t.Fatalf("schemaCatalog()[%q] missing field %q", schemaName, fieldName)
+			}
+		}
+	}
+}
+
+func catalogSchemaHasField(info schemaInfo, name string) bool {
+	for _, field := range info.Fields {
+		if field.Name == name {
+			return true
+		}
+	}
+	return false
 }

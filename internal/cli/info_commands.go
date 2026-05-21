@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
+	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -79,6 +82,8 @@ func (a *app) newDescribeCommand() *cobra.Command {
 					"--channel",
 					"--user-data-dir",
 					"--state-dir",
+					"--browser-mode",
+					"--browserMode",
 					"--active-browser-probe",
 					"--connection",
 				},
@@ -189,6 +194,9 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			if checkName == "" || checkName == "scheduled-tasks" {
 				checks = append(checks, scheduledTasksDoctorCheck(ctx))
 			}
+			if checkName == "" || checkName == "headless-security" {
+				checks = append(checks, a.headlessSecurityDoctorCheck(ctx))
+			}
 			if checkName != "" {
 				checks = filterChecksByName(checks, checkName)
 				if len(checks) == 0 {
@@ -292,6 +300,7 @@ func agentBootstrapPath() map[string]any {
 			"cdp daemon status --json",
 			"cdp doctor --check daemon --json",
 			"cdp doctor --check scheduled-tasks --json",
+			"cdp doctor --check headless-security --json",
 			"cdp doctor --check browser-health --json",
 			"cdp daemon health --json",
 			"cdp pages --json",
@@ -299,6 +308,7 @@ func agentBootstrapPath() map[string]any {
 		"recover_commands": []string{
 			"cdp daemon status --json",
 			"cdp doctor --check daemon --json",
+			"cdp doctor --check headless-security --json",
 			"cdp doctor --check browser-health --json",
 			"cdp daemon health --json",
 			"cdp daemon logs --tail 50 --json",
@@ -313,9 +323,13 @@ func agentBootstrapPath() map[string]any {
 }
 
 type crontabSummary struct {
-	EntryCount         int
-	HasDaemonKeepalive bool
-	HasPageCleanup     bool
+	EntryCount                 int
+	HasDaemonKeepalive         bool
+	HasHeadedDaemonKeepalive   bool
+	HasHeadlessDaemonKeepalive bool
+	HasPageCleanup             bool
+	HasModeExplicitPageCleanup bool
+	HasAmbiguousPageCleanup    bool
 }
 
 func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
@@ -345,25 +359,33 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 	} else if !summary.HasPageCleanup {
 		status = "warn"
 		message = "current user crontab has cdp daemon keepalive but no page cleanup task"
+	} else if summary.HasAmbiguousPageCleanup {
+		status = "warn"
+		message = "current user crontab has page cleanup task without explicit browser mode"
 	} else {
-		message = "user crontab includes cdp daemon keepalive and page cleanup"
+		message = "user crontab includes cdp daemon keepalive and mode-explicit page cleanup"
 	}
 	return map[string]any{
 		"name":    "scheduled-tasks",
 		"status":  status,
 		"message": message,
 		"details": map[string]any{
-			"source":               "crontab -l",
-			"user_level":           true,
-			"crontab_available":    available,
-			"cdp_entries_count":    summary.EntryCount,
-			"has_daemon_keepalive": summary.HasDaemonKeepalive,
-			"has_page_cleanup":     summary.HasPageCleanup,
+			"source":                         "crontab -l",
+			"user_level":                     true,
+			"crontab_available":              available,
+			"cdp_entries_count":              summary.EntryCount,
+			"has_daemon_keepalive":           summary.HasDaemonKeepalive,
+			"has_headed_daemon_keepalive":    summary.HasHeadedDaemonKeepalive,
+			"has_headless_daemon_keepalive":  summary.HasHeadlessDaemonKeepalive,
+			"has_page_cleanup":               summary.HasPageCleanup,
+			"has_mode_explicit_page_cleanup": summary.HasModeExplicitPageCleanup,
+			"has_ambiguous_page_cleanup":     summary.HasAmbiguousPageCleanup,
 		},
 		"next_commands": []string{
 			"crontab -l | grep cdp",
-			`(crontab -l 2>/dev/null; echo '* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * $HOME/.local/bin/cdp page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null; echo '* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null; echo '* * * * * $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1') | crontab -`,
 			"cdp doctor --check scheduled-tasks --json",
 		},
 	}
@@ -380,14 +402,202 @@ func summarizeCrontab(text string) crontabSummary {
 			continue
 		}
 		summary.EntryCount++
+		mode := scheduledTaskBrowserMode(line)
 		if strings.Contains(line, "cdp daemon keepalive") {
 			summary.HasDaemonKeepalive = true
+			switch mode {
+			case "headed":
+				summary.HasHeadedDaemonKeepalive = true
+			case "headless":
+				summary.HasHeadlessDaemonKeepalive = true
+			}
 		}
 		if strings.Contains(line, "cdp page cleanup") {
 			summary.HasPageCleanup = true
+			if mode == "" {
+				summary.HasAmbiguousPageCleanup = true
+			} else {
+				summary.HasModeExplicitPageCleanup = true
+			}
 		}
 	}
 	return summary
+}
+
+func scheduledTaskBrowserMode(line string) string {
+	fields := strings.Fields(line)
+	for i, field := range fields {
+		field = strings.Trim(field, "'\"")
+		if strings.HasPrefix(field, "CDP_BROWSER_MODE=") {
+			return normalizeScheduledTaskBrowserMode(strings.TrimPrefix(field, "CDP_BROWSER_MODE="))
+		}
+		if strings.HasPrefix(field, "--browser-mode=") {
+			return normalizeScheduledTaskBrowserMode(strings.TrimPrefix(field, "--browser-mode="))
+		}
+		if strings.HasPrefix(field, "--browserMode=") {
+			return normalizeScheduledTaskBrowserMode(strings.TrimPrefix(field, "--browserMode="))
+		}
+		if (field == "--browser-mode" || field == "--browserMode") && i+1 < len(fields) {
+			return normalizeScheduledTaskBrowserMode(fields[i+1])
+		}
+	}
+	return ""
+}
+
+func normalizeScheduledTaskBrowserMode(value string) string {
+	value = strings.Trim(strings.TrimSpace(value), "'\"")
+	if value == "headed" || value == "headless" {
+		return value
+	}
+	return ""
+}
+
+type headlessSecurityDetails struct {
+	ProfileDir             string   `json:"profile_dir"`
+	MetadataPath           string   `json:"metadata_path"`
+	RuntimePath            string   `json:"runtime_path"`
+	ProfileExists          bool     `json:"profile_exists"`
+	MetadataExists         bool     `json:"metadata_exists"`
+	RuntimeExists          bool     `json:"runtime_exists"`
+	ProfileOwnerOnly       bool     `json:"profile_owner_only"`
+	MetadataOwnerOnly      bool     `json:"metadata_owner_only"`
+	RuntimeOwnerOnly       bool     `json:"runtime_owner_only"`
+	LoopbackEndpoint       bool     `json:"loopback_endpoint"`
+	ManagedProfileSelected bool     `json:"managed_profile_selected"`
+	ModeMatches            bool     `json:"mode_matches"`
+	SeedStrategy           string   `json:"seed_strategy,omitempty"`
+	DebuggingPort          string   `json:"debugging_port,omitempty"`
+	Reasons                []string `json:"reasons,omitempty"`
+}
+
+func (a *app) headlessSecurityDoctorCheck(ctx context.Context) map[string]any {
+	store, err := a.stateStore()
+	if err != nil {
+		return headlessSecurityCheck("fail", "state directory is unavailable", headlessSecurityDetails{Reasons: []string{err.Error()}})
+	}
+	details := headlessSecurityDetails{
+		ProfileDir:   browser.ManagedProfileDir(store.Dir),
+		MetadataPath: browser.ManagedMetadataPath(store.Dir),
+		RuntimePath:  daemon.RuntimePathForMode(store.Dir, "headless"),
+	}
+	profileInfo, profileExists, profileErr := statPath(details.ProfileDir)
+	metadataInfo, metadataExists, metadataErr := statPath(details.MetadataPath)
+	runtimeInfo, runtimeExists, runtimeErr := statPath(details.RuntimePath)
+	details.ProfileExists = profileExists
+	details.MetadataExists = metadataExists
+	details.RuntimeExists = runtimeExists
+	details.ProfileOwnerOnly = profileExists && ownerOnlyMode(profileInfo, 0o700)
+	details.MetadataOwnerOnly = metadataExists && ownerOnlyMode(metadataInfo, 0o600)
+	details.RuntimeOwnerOnly = runtimeExists && ownerOnlyMode(runtimeInfo, 0o600)
+
+	if profileErr != nil {
+		details.Reasons = append(details.Reasons, "profile_stat_failed")
+	}
+	if metadataErr != nil {
+		details.Reasons = append(details.Reasons, "metadata_stat_failed")
+	}
+	if runtimeErr != nil {
+		details.Reasons = append(details.Reasons, "runtime_stat_failed")
+	}
+	metadata, hasMetadata, err := browser.LoadManagedMetadata(store.Dir)
+	if err != nil {
+		details.Reasons = append(details.Reasons, "metadata_unreadable")
+	} else if hasMetadata {
+		details.ModeMatches = metadata.BrowserMode == "headless"
+		details.ManagedProfileSelected = filepath.Clean(metadata.UserDataDir) == filepath.Clean(details.ProfileDir)
+		details.SeedStrategy = metadata.ProfileSeedStrategy
+		details.DebuggingPort = metadata.DebuggingPort
+		details.LoopbackEndpoint = validLoopbackPort(metadata.DebuggingPort)
+		if !details.ModeMatches {
+			details.Reasons = append(details.Reasons, "metadata_browser_mode_mismatch")
+		}
+		if !details.ManagedProfileSelected {
+			details.Reasons = append(details.Reasons, "metadata_user_data_dir_not_managed")
+		}
+		if metadata.ProfileSeedStrategy != "managed" {
+			details.Reasons = append(details.Reasons, "metadata_seed_strategy_not_managed")
+		}
+		if strings.TrimSpace(metadata.DebuggingPort) != "" && !details.LoopbackEndpoint {
+			details.Reasons = append(details.Reasons, "debugging_port_not_loopback")
+		}
+	} else {
+		details.Reasons = append(details.Reasons, "managed_metadata_missing")
+	}
+
+	runtime, hasRuntime, err := daemon.LoadRuntimeForMode(ctx, store.Dir, "headless")
+	if err != nil {
+		details.Reasons = append(details.Reasons, "runtime_unreadable")
+	} else if hasRuntime {
+		if strings.TrimSpace(runtime.BrowserMode) != "" && runtime.BrowserMode != "headless" {
+			details.Reasons = append(details.Reasons, "runtime_browser_mode_mismatch")
+		}
+		if strings.TrimSpace(runtime.UserDataDir) != "" && filepath.Clean(runtime.UserDataDir) != filepath.Clean(details.ProfileDir) {
+			details.Reasons = append(details.Reasons, "runtime_user_data_dir_not_managed")
+		}
+	}
+
+	if profileErr != nil || metadataErr != nil || runtimeErr != nil || err != nil {
+		return headlessSecurityCheck("fail", "headless security state could not be inspected", details)
+	}
+	if !profileExists && !metadataExists && !runtimeExists {
+		return headlessSecurityCheck("pending", "managed headless runtime has not been seeded or started", details)
+	}
+	if (profileExists && !details.ProfileOwnerOnly) || (metadataExists && !details.MetadataOwnerOnly) || (runtimeExists && !details.RuntimeOwnerOnly) {
+		return headlessSecurityCheck("fail", "managed headless files are not owner-only", details)
+	}
+	if hasMetadata && (!details.ModeMatches || !details.ManagedProfileSelected || details.SeedStrategy != "managed" || (strings.TrimSpace(details.DebuggingPort) != "" && !details.LoopbackEndpoint)) {
+		return headlessSecurityCheck("fail", "managed headless metadata violates security invariants", details)
+	}
+	if len(details.Reasons) > 0 {
+		return headlessSecurityCheck("warn", "managed headless security metadata is incomplete", details)
+	}
+	return headlessSecurityCheck("pass", "managed headless profile and runtime metadata are owner-only and loopback-scoped", details)
+}
+
+func headlessSecurityCheck(status, message string, details headlessSecurityDetails) map[string]any {
+	return map[string]any{
+		"name":          "headless-security",
+		"status":        status,
+		"message":       message,
+		"browser_mode":  "headless",
+		"details":       details,
+		"next_commands": headlessSecurityCommands(),
+	}
+}
+
+func headlessSecurityCommands() []string {
+	return []string{
+		"cdp --browser-mode headless browser profile status --json",
+		"cdp --browser-mode headless browser profile seed --strategy managed --json",
+		"cdp --browser-mode headless daemon status --json",
+		"cdp --browser-mode headless daemon keepalive --repair --json",
+	}
+}
+
+func statPath(path string) (os.FileInfo, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return info, true, nil
+}
+
+func ownerOnlyMode(info os.FileInfo, want os.FileMode) bool {
+	if info == nil {
+		return false
+	}
+	return info.Mode().Perm() == want
+}
+
+func validLoopbackPort(port string) bool {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return true
+	}
+	return browser.ValidateLoopbackEndpoint("ws://127.0.0.1:"+port+"/devtools/browser/check") == nil
 }
 
 func filterChecksByName(checks []map[string]any, name string) []map[string]any {

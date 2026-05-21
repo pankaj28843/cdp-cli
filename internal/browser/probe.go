@@ -295,11 +295,19 @@ func activePort(userDataDir, channel string) (string, string, error) {
 			return "", "", err
 		}
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "DevToolsActivePort"))
+	return ReadActivePortFile(dir)
+}
+
+func ReadActivePortFile(userDataDir string) (string, string, error) {
+	b, err := os.ReadFile(filepath.Join(userDataDir, "DevToolsActivePort"))
 	if err != nil {
 		return "", "", fmt.Errorf("read DevToolsActivePort: %w", err)
 	}
-	lines := strings.Fields(string(b))
+	return ParseActivePort(b)
+}
+
+func ParseActivePort(data []byte) (string, string, error) {
+	lines := strings.Fields(string(data))
 	if len(lines) < 2 {
 		return "", "", fmt.Errorf("parse DevToolsActivePort: missing port or path")
 	}

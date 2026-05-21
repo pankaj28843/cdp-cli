@@ -105,6 +105,38 @@ func TestProbeAutoConnectAvailable(t *testing.T) {
 	}
 }
 
+func TestParseActivePort(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     string
+		wantPort string
+		wantPath string
+		wantErr  bool
+	}{
+		{"valid", "12345\n/devtools/browser/test\n", "12345", "/devtools/browser/test", false},
+		{"missing path", "12345\n", "", "", true},
+		{"invalid port", "bad\n/devtools/browser/test\n", "", "", true},
+		{"bad path", "12345\ndevtools/browser/test\n", "", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port, path, err := browser.ParseActivePort([]byte(tt.data))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseActivePort error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if port != tt.wantPort || path != tt.wantPath {
+				t.Fatalf("ParseActivePort() = %q, %q, want %q, %q", port, path, tt.wantPort, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestReadActivePortFileMissing(t *testing.T) {
+	if _, _, err := browser.ReadActivePortFile(t.TempDir()); err == nil {
+		t.Fatalf("ReadActivePortFile returned nil error, want missing file")
+	}
+}
+
 func TestProbeAutoConnectPermissionPending(t *testing.T) {
 	got, err := browser.Probe(context.Background(), browser.ProbeOptions{AutoConnect: true, UserDataDir: t.TempDir()})
 	if err != nil {

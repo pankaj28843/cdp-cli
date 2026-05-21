@@ -69,6 +69,7 @@ func commandExamples(path string) []string {
 			"cdp doctor --check scheduled-tasks --json",
 			"cdp doctor --check browser-health --json",
 			"cdp doctor --check browser-budget --json",
+			"cdp doctor --check headless-security --json",
 		},
 		"cdp explain-error": {
 			"cdp explain-error not_implemented --json",
@@ -98,13 +99,37 @@ func commandExamples(path string) []string {
 			"cdp daemon restart --browser-url <browser-url> --json",
 		},
 		"cdp daemon keepalive": {
-			"cdp daemon keepalive --auto-connect --repair --display :0 --json",
+			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json",
+			"cdp --browser-mode headless daemon keepalive --repair --json",
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp daemon keepalive --connection default --probe auto --json",
 		},
 		"cdp daemon logs": {
 			"cdp daemon logs --tail 100 --json",
 			"cdp daemon logs --tail 0 --json",
+		},
+		"cdp browser": {
+			"cdp browser mode get --json",
+			"cdp browser profile status --json",
+			"CDP_BROWSER_MODE=headless cdp browser mode get --json",
+		},
+		"cdp browser mode": {
+			"cdp browser mode get --json",
+		},
+		"cdp browser mode get": {
+			"cdp browser mode get --json",
+			"cdp --browser-mode headless browser mode get --json",
+			"CDP_BROWSER_MODE=headless cdp browser mode get --json",
+		},
+		"cdp browser profile": {
+			"cdp --browser-mode headless browser profile status --json",
+			"cdp --browser-mode headless browser profile seed --strategy managed --json",
+		},
+		"cdp browser profile status": {
+			"cdp --browser-mode headless browser profile status --json",
+		},
+		"cdp browser profile seed": {
+			"cdp --browser-mode headless browser profile seed --strategy managed --json",
 		},
 		"cdp connection": {
 			"cdp connection list --json",
@@ -132,7 +157,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp connection resolve": {
 			"cdp connection resolve --json",
-			"cdp connection resolve --connection default --json",
+			"cdp --browser-mode headless connection resolve --connection default --json",
 		},
 		"cdp targets": {
 			"cdp targets --json",
@@ -166,8 +191,8 @@ func commandExamples(path string) []string {
 			"cdp page close --target <target-id> --json",
 		},
 		"cdp page cleanup": {
-			"cdp page cleanup --json",
-			"cdp page cleanup --created-by cdp --idle-for 30m --close --json",
+			"cdp --browser-mode headed page cleanup --json",
+			"cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --json",
 			"cdp page cleanup --workflow-created --close --include-url localhost --json",
 			"cdp page cleanup --target <target-id> --force --json",
 			"cdp page cleanup --close --max 10 --exclude-url localhost --json",

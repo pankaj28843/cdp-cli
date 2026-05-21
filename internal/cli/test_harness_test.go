@@ -94,19 +94,23 @@ func shortCLIStateDir(t *testing.T) string {
 }
 
 func waitForDaemonRuntime(t *testing.T, ctx context.Context, stateDir string) {
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headed")
+}
+
+func waitForDaemonRuntimeForMode(t *testing.T, ctx context.Context, stateDir, browserMode string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		runtime, ok, err := daemon.LoadRuntime(ctx, stateDir)
+		runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
 		if err != nil {
-			t.Fatalf("LoadRuntime returned error: %v", err)
+			t.Fatalf("LoadRuntimeForMode returned error: %v", err)
 		}
 		if ok && daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("daemon runtime did not become ready")
+	t.Fatalf("%s daemon runtime did not become ready", browserMode)
 }
 
 func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {

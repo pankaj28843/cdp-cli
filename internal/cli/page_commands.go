@@ -267,11 +267,12 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 				return err
 			}
 			selection := state.PageSelection{
-				Connection: a.connectionStateName(ctx),
-				TargetID:   target.TargetID,
-				URL:        target.URL,
-				Title:      target.Title,
-				SelectedAt: time.Now().UTC().Format(time.RFC3339),
+				BrowserMode: a.browserModeName(),
+				Connection:  a.connectionStateName(ctx),
+				TargetID:    target.TargetID,
+				URL:         target.URL,
+				Title:       target.Title,
+				SelectedAt:  time.Now().UTC().Format(time.RFC3339),
 			}
 			store, err := a.stateStore()
 			if err != nil {
@@ -431,14 +432,15 @@ type cleanupCandidate struct {
 }
 
 type pageCleanupRecord struct {
-	Connection string `json:"connection"`
-	TargetID   string `json:"target_id"`
-	URL        string `json:"url,omitempty"`
-	Title      string `json:"title,omitempty"`
-	CreatedBy  string `json:"created_by,omitempty"`
-	Workflow   string `json:"workflow,omitempty"`
-	FirstSeen  string `json:"first_seen"`
-	LastSeen   string `json:"last_seen"`
+	BrowserMode string `json:"browser_mode,omitempty"`
+	Connection  string `json:"connection"`
+	TargetID    string `json:"target_id"`
+	URL         string `json:"url,omitempty"`
+	Title       string `json:"title,omitempty"`
+	CreatedBy   string `json:"created_by,omitempty"`
+	Workflow    string `json:"workflow,omitempty"`
+	FirstSeen   string `json:"first_seen"`
+	LastSeen    string `json:"last_seen"`
 }
 
 type pageCleanupState struct {
@@ -506,6 +508,7 @@ run; pass --close to close candidates after they have remained inactive for
 			if err != nil {
 				return err
 			}
+			browserMode := a.browserModeName()
 			connectionName := a.connectionStateName(ctx)
 			selectedID := a.selectedPageID(ctx)
 			records, err := loadPageCleanupRecords(ctx, store.Dir)
@@ -514,6 +517,7 @@ run; pass --close to close candidates after they have remained inactive for
 			}
 			now := time.Now().UTC()
 			candidates := cleanupCandidates(ctx, client, targets, cleanupOptions{
+				BrowserMode:     browserMode,
 				Connection:      connectionName,
 				SelectedID:      selectedID,
 				IncludeAttached: includeAttached,
@@ -539,7 +543,7 @@ run; pass --close to close candidates after they have remained inactive for
 						candidates[i].CloseError = err.Error()
 						continue
 					}
-					delete(records, pageCleanupKey(connectionName, candidates[i].Target.TargetID))
+					delete(records, pageCleanupKey(browserMode, connectionName, candidates[i].Target.TargetID))
 					closed = append(closed, candidates[i])
 				}
 			}
@@ -568,6 +572,7 @@ run; pass --close to close candidates after they have remained inactive for
 			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
 				"ok": true,
 				"cleanup": map[string]any{
+					"browser_mode":      browserMode,
 					"dry_run":           !closePages,
 					"close":             closePages,
 					"candidate_count":   readyCount,
@@ -612,6 +617,7 @@ run; pass --close to close candidates after they have remained inactive for
 }
 
 type cleanupOptions struct {
+	BrowserMode     string
 	Connection      string
 	SelectedID      string
 	IncludeAttached bool
@@ -646,7 +652,7 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 		if excludeURL != "" && strings.Contains(urlText, excludeURL) {
 			continue
 		}
-		key := pageCleanupKey(opts.Connection, target.TargetID)
+		key := pageCleanupKey(opts.BrowserMode, opts.Connection, target.TargetID)
 		record, hasRecord := opts.Records[key]
 		if forceTarget != "" && target.TargetID != forceTarget && !strings.HasPrefix(target.TargetID, forceTarget) {
 			continue
@@ -689,7 +695,7 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 		}
 	}
 	for key := range opts.Records {
-		if strings.HasPrefix(key, opts.Connection+"|") && !seen[key] {
+		if strings.HasPrefix(key, pageCleanupScopePrefix(opts.BrowserMode, opts.Connection)) && !seen[key] {
 			delete(opts.Records, key)
 		}
 	}
@@ -700,13 +706,15 @@ func updateCleanupRecord(candidate *cleanupCandidate, opts cleanupOptions, key s
 	record, ok := opts.Records[key]
 	if !ok || candidate.KeepReason != "" {
 		record = pageCleanupRecord{
-			Connection: opts.Connection,
-			TargetID:   candidate.Target.TargetID,
-			URL:        candidate.Target.URL,
-			Title:      candidate.Target.Title,
-			FirstSeen:  opts.Now.Format(time.RFC3339),
+			BrowserMode: cleanupBrowserMode(opts.BrowserMode),
+			Connection:  opts.Connection,
+			TargetID:    candidate.Target.TargetID,
+			URL:         candidate.Target.URL,
+			Title:       candidate.Target.Title,
+			FirstSeen:   opts.Now.Format(time.RFC3339),
 		}
 	}
+	record.BrowserMode = cleanupBrowserMode(opts.BrowserMode)
 	record.LastSeen = opts.Now.Format(time.RFC3339)
 	record.URL = candidate.Target.URL
 	record.Title = candidate.Target.Title
@@ -759,8 +767,20 @@ func pageCleanupStatePath(stateDir string) string {
 	return filepath.Join(stateDir, "page-cleanup.json")
 }
 
-func pageCleanupKey(connection, targetID string) string {
-	return connection + "|" + targetID
+func pageCleanupKey(browserMode, connection, targetID string) string {
+	return pageCleanupScopePrefix(browserMode, connection) + targetID
+}
+
+func pageCleanupScopePrefix(browserMode, connection string) string {
+	return cleanupBrowserMode(browserMode) + "|" + connection + "|"
+}
+
+func cleanupBrowserMode(browserMode string) string {
+	browserMode = strings.TrimSpace(browserMode)
+	if browserMode == "" {
+		return "headed"
+	}
+	return browserMode
 }
 
 func loadPageCleanupRecords(ctx context.Context, stateDir string) (map[string]pageCleanupRecord, error) {
@@ -783,7 +803,8 @@ func loadPageCleanupRecords(ctx context.Context, stateDir string) (map[string]pa
 	}
 	records := map[string]pageCleanupRecord{}
 	for _, record := range file.Pages {
-		records[pageCleanupKey(record.Connection, record.TargetID)] = record
+		record.BrowserMode = cleanupBrowserMode(record.BrowserMode)
+		records[pageCleanupKey(record.BrowserMode, record.Connection, record.TargetID)] = record
 	}
 	return records, nil
 }
@@ -799,10 +820,13 @@ func savePageCleanupRecords(ctx context.Context, stateDir string, records map[st
 		pages = append(pages, record)
 	}
 	sort.Slice(pages, func(i, j int) bool {
-		if pages[i].Connection == pages[j].Connection {
-			return pages[i].TargetID < pages[j].TargetID
+		if cleanupBrowserMode(pages[i].BrowserMode) == cleanupBrowserMode(pages[j].BrowserMode) {
+			if pages[i].Connection == pages[j].Connection {
+				return pages[i].TargetID < pages[j].TargetID
+			}
+			return pages[i].Connection < pages[j].Connection
 		}
-		return pages[i].Connection < pages[j].Connection
+		return cleanupBrowserMode(pages[i].BrowserMode) < cleanupBrowserMode(pages[j].BrowserMode)
 	})
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return err
@@ -824,7 +848,7 @@ func (a *app) selectedPageID(ctx context.Context) string {
 		return ""
 	}
 	connection := a.connectionStateName(ctx)
-	selection, ok := state.PageSelectionForConnection(file, connection)
+	selection, ok := state.PageSelectionForMode(file, a.browserModeName(), connection)
 	if !ok {
 		return ""
 	}
@@ -888,19 +912,27 @@ type browserEventClient interface {
 }
 
 func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(context.Context) error, error) {
-	runtime, err := a.requiredDaemonRuntime(ctx)
+	client, err := a.daemonRuntimeClient(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	return daemon.RuntimeClient{Runtime: runtime}, func(context.Context) error { return nil }, nil
+	return client, func(context.Context) error { return nil }, nil
 }
 
 func (a *app) browserEventCDPClient(ctx context.Context) (browserEventClient, func(context.Context) error, error) {
-	runtime, err := a.requiredDaemonRuntime(ctx)
+	client, err := a.daemonRuntimeClient(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	return daemon.RuntimeClient{Runtime: runtime}, func(context.Context) error { return nil }, nil
+	return client, func(context.Context) error { return nil }, nil
+}
+
+func (a *app) daemonRuntimeClient(ctx context.Context) (daemon.RuntimeClient, error) {
+	runtime, err := a.requiredDaemonRuntime(ctx)
+	if err != nil {
+		return daemon.RuntimeClient{}, err
+	}
+	return daemon.RuntimeClient{Runtime: runtime}, nil
 }
 
 func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error) {
@@ -911,7 +943,7 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 	if err != nil {
 		return daemon.Runtime{}, err
 	}
-	runtime, ok, err := daemon.LoadRuntime(ctx, store.Dir)
+	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, store.Dir, a.browserModeName())
 	if err != nil {
 		return daemon.Runtime{}, err
 	}
@@ -1062,7 +1094,7 @@ func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) 
 	if err != nil {
 		return cdp.TargetInfo{}, false
 	}
-	selection, ok := state.PageSelectionForConnection(file, a.connectionStateName(ctx))
+	selection, ok := state.PageSelectionForMode(file, a.browserModeName(), a.connectionStateName(ctx))
 	if !ok || strings.TrimSpace(selection.TargetID) == "" {
 		return cdp.TargetInfo{}, false
 	}
@@ -1119,8 +1151,10 @@ func (a *app) recordCreatedPageTarget(ctx context.Context, targetID, rawURL, cre
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	key := pageCleanupKey(a.connectionStateName(ctx), targetID)
-	records[key] = pageCleanupRecord{Connection: a.connectionStateName(ctx), TargetID: targetID, URL: rawURL, CreatedBy: createdBy, Workflow: workflow, FirstSeen: now, LastSeen: now}
+	browserMode := a.browserModeName()
+	connection := a.connectionStateName(ctx)
+	key := pageCleanupKey(browserMode, connection, targetID)
+	records[key] = pageCleanupRecord{BrowserMode: cleanupBrowserMode(browserMode), Connection: connection, TargetID: targetID, URL: rawURL, CreatedBy: createdBy, Workflow: workflow, FirstSeen: now, LastSeen: now}
 	return savePageCleanupRecords(ctx, store.Dir, records)
 }
 

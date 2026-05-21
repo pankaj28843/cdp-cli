@@ -38,6 +38,7 @@ type options struct {
 	channel         string
 	userDataDir     string
 	stateDir        string
+	browserMode     string
 	activeProbe     bool
 	connection      string
 	allowOverBudget bool
@@ -80,6 +81,10 @@ func (a *app) newRoot() *cobra.Command {
 		Short:         "Agent-oriented Chrome DevTools Protocol CLI",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			_, err := a.resolveBrowserMode(cmd)
+			return err
+		},
 		Long: "cdp is a shell-first Chrome DevTools Protocol CLI for coding agents.\n\n" +
 			"The project is being built around a long-running local attach daemon, compact\n" +
 			"JSON output, jq-friendly filtering, high-level browser debugging workflows, and\n" +
@@ -101,6 +106,8 @@ func (a *app) newRoot() *cobra.Command {
 	root.PersistentFlags().StringVar(&a.opts.channel, "channel", envDefault("CDP_CHANNEL", "stable"), "Chrome channel for --auto-connect: stable, beta, canary, or dev")
 	root.PersistentFlags().StringVar(&a.opts.userDataDir, "user-data-dir", os.Getenv("CDP_USER_DATA_DIR"), "Chrome user data directory for --auto-connect")
 	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
+	root.PersistentFlags().StringVar(&a.opts.browserMode, "browser-mode", "", "browser runtime mode: headed or headless; can also be set with CDP_BROWSER_MODE")
+	root.PersistentFlags().StringVar(&a.opts.browserMode, "browserMode", "", "alias for --browser-mode")
 	root.PersistentFlags().BoolVar(&a.opts.activeProbe, "active-browser-probe", os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "1" || os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "true", "actively connect to Chrome during daemon status/start checks; may trigger a Chrome remote-debugging prompt")
 	root.PersistentFlags().StringVar(&a.opts.connection, "connection", os.Getenv("CDP_CONNECTION"), "named browser connection from local state to use for this command")
 	root.PersistentFlags().BoolVar(&a.opts.allowOverBudget, "allow-over-budget", envBool("CDP_ALLOW_OVER_BUDGET"), "human override: allow creating browser tabs even when the selected profile is over the cdp resource budget")
@@ -113,6 +120,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newSchemaCommand())
 	root.AddCommand(a.newDaemonCommand())
 	root.AddCommand(a.newConnectionCommand())
+	root.AddCommand(a.newBrowserCommand())
 	root.AddCommand(a.newTargetsCommand())
 	root.AddCommand(a.newPagesCommand())
 	root.AddCommand(a.newPageCommand())
@@ -156,6 +164,67 @@ func (a *app) newRoot() *cobra.Command {
 	return root
 }
 
+func (a *app) resolveBrowserMode(cmd *cobra.Command) (browserModeState, error) {
+	cfg, err := config.Load(a.opts.config)
+	if err != nil {
+		return browserModeState{}, commandError(
+			"invalid_config",
+			"usage",
+			err.Error(),
+			ExitUsage,
+			[]string{"cdp --config <path> browser mode get --json"},
+		)
+	}
+
+	flagValue := ""
+	if root := cmd.Root(); root != nil {
+		flags := root.PersistentFlags()
+		if flags.Changed("browser-mode") || flags.Changed("browserMode") {
+			flagValue = a.opts.browserMode
+		}
+	}
+
+	resolution, err := config.ResolveBrowserMode(flagValue, os.Getenv("CDP_BROWSER_MODE"), cfg)
+	if err != nil {
+		return browserModeState{}, commandError(
+			"invalid_browser_mode",
+			"usage",
+			err.Error(),
+			ExitUsage,
+			[]string{"cdp --browser-mode headed --json", "cdp --browser-mode headless --json"},
+		)
+	}
+
+	return browserModeState{
+		Mode:         resolution.Mode,
+		Source:       resolution.Source,
+		ConfigPath:   cfg.Path,
+		Warnings:     nil,
+		NextCommands: browserModeNextCommands(resolution.Mode),
+	}, nil
+}
+
+type browserModeState struct {
+	Mode         config.BrowserMode       `json:"browser_mode"`
+	Source       config.BrowserModeSource `json:"browser_mode_source"`
+	ConfigPath   string                   `json:"config_path,omitempty"`
+	Warnings     []string                 `json:"warnings,omitempty"`
+	NextCommands []string                 `json:"next_commands"`
+}
+
+func browserModeNextCommands(mode config.BrowserMode) []string {
+	if mode == config.BrowserModeHeadless {
+		return []string{
+			"cdp daemon keepalive --browser-mode headless --repair --json",
+			"cdp daemon status --browser-mode headless --json",
+		}
+	}
+	return []string{
+		"cdp daemon status --browser-mode headed --json",
+		"cdp daemon start --auto-connect --json",
+	}
+}
+
 func (a *app) browserProbe(ctx context.Context) (browser.ProbeResult, error) {
 	opts, err := a.browserOptions(ctx)
 	if err != nil {
@@ -196,13 +265,14 @@ func (a *app) connectionMode() string {
 }
 
 func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemon.Status {
-	status := daemon.Snapshot(a.connectionMode(), a.opts.autoConnect, probe)
+	browserMode := a.browserModeName()
+	status := daemon.SnapshotForMode(browserMode, a.connectionMode(), a.opts.autoConnect, probe)
 	store, err := a.stateStore()
 	if err != nil {
 		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
 	}
-	runtime, ok, err := daemon.LoadRuntime(ctx, store.Dir)
+	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, store.Dir, browserMode)
 	if err != nil || !ok {
 		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
@@ -216,8 +286,23 @@ func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemo
 	return status
 }
 
+func (a *app) browserModeName() string {
+	mode, err := a.resolveBrowserMode(a.root)
+	if err != nil {
+		return string(config.BrowserModeHeaded)
+	}
+	return string(mode.Mode)
+}
+
 func (a *app) runtimeMatchesConnection(runtime daemon.Runtime) bool {
 	if runtime.ConnectionMode != a.connectionMode() {
+		return false
+	}
+	runtimeMode := strings.TrimSpace(runtime.BrowserMode)
+	if runtimeMode == "" {
+		runtimeMode = string(config.BrowserModeHeaded)
+	}
+	if runtimeMode != a.browserModeName() {
 		return false
 	}
 	if a.opts.userDataDir != "" && runtime.UserDataDir != a.opts.userDataDir {

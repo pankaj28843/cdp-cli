@@ -374,11 +374,17 @@ func (a *app) newConnectionResolveCommand() *cobra.Command {
 					[]string{"cdp connection add default --auto-connect --json", "cdp connection list --json"},
 				)
 			}
+			browserMode, err := a.resolveBrowserMode(cmd)
+			if err != nil {
+				return err
+			}
 			return a.render(ctx, fmt.Sprintf("%s %s", source, conn.Name), map[string]any{
-				"ok":         true,
-				"source":     source,
-				"connection": conn,
-				"state_path": store.Path(),
+				"ok":                  true,
+				"source":              source,
+				"browser_mode":        browserMode.Mode,
+				"browser_mode_source": browserMode.Source,
+				"connection":          conn,
+				"state_path":          store.Path(),
 			})
 		},
 	}

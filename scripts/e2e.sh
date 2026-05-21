@@ -18,22 +18,27 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --jq '.globals | index("--json")' >/dev/null
 "$binary" describe --jq '.globals | index("--compact")' >/dev/null
 "$binary" describe --jq '.globals | index("--connection")' >/dev/null
+"$binary" describe --jq '.globals | index("--browser-mode")' >/dev/null
+"$binary" describe --jq '.globals | index("--browserMode")' >/dev/null
 "$binary" describe --command "version" --json | jq -e '.ok == true and .commands.name == "version" and (.commands.examples | any(contains("version --json")))' >/dev/null
 "$binary" describe --command "pages" --json | jq -e '.ok == true and .commands.name == "pages" and (.commands.flags[] | select(.name == "title-contains" and .type == "string"))' >/dev/null
 "$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect")))' >/dev/null
-"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--display")))' >/dev/null
+"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
 "$binary" describe --command "doctor" --json | jq -e '.ok == true and .commands.name == "doctor" and (.commands.examples | any(contains("scheduled-tasks")))' >/dev/null
+"$binary" describe --command "browser mode get" --json | jq -e '.ok == true and .commands.name == "get" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
+"$binary" describe --command "browser profile status" --json | jq -e '.ok == true and .commands.name == "status" and .commands.short == "Show managed headless browser profile status" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
+"$binary" describe --command "browser profile seed" --json | jq -e '.ok == true and .commands.name == "seed" and .commands.short == "Create managed headless browser profile metadata" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--strategy managed"))) and (.commands.flags[] | select(.name == "strategy"))' >/dev/null
 "$binary" describe --command "connection" --json | jq -e '.ok == true and .commands.name == "connection" and (.commands.examples | any(contains("connection list")))' >/dev/null
 "$binary" describe --command "connection add" --json | jq -e '.ok == true and .commands.name == "add" and (.commands.examples | any(contains("--auto-connect")))' >/dev/null
 "$binary" describe --command "connection select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("connection select")))' >/dev/null
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
-"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].next_commands | index("crontab -l | grep cdp"))' >/dev/null
+"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].next_commands | index("crontab -l | grep cdp")) and (.[0].next_commands | any(contains("--browser-mode headed daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless page cleanup")))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities | map(.name) | index("raw_protocol"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "advanced_storage" and .status == "implemented"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "raw_protocol" and (.verify_commands | index("cdp protocol metadata --json"))))' >/dev/null
@@ -45,12 +50,15 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" doctor --capabilities --json | jq -e '.ok == true and ([.capabilities[] | select(.name == "network_throttling")] | length == 0)' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp daemon health --json")) and (.bootstrap_path.recover_commands | index("cdp daemon logs --tail 50 --json")) and (.bootstrap_path.stop_signals | index("human_required"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp doctor --check scheduled-tasks --json"))' >/dev/null
+"$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp doctor --check headless-security --json"))' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
 "$binary" schema describe --json | jq -e '.ok == true and .schema.name == "describe" and (.schema.fields | map(.name) | index("commands"))' >/dev/null
 "$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities")) and (.schema.fields | map(.name) | index("bootstrap_path"))' >/dev/null
+"$binary" schema scheduled-tasks --json | jq -e '.ok == true and .schema.name == "scheduled-tasks" and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
+"$binary" schema headless-security --json | jq -e '.ok == true and .schema.name == "headless-security" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
 "$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("budget"))' >/dev/null
 "$binary" schema targets --json | jq -e '.ok == true and .schema.name == "targets" and (.schema.fields | map(.name) | index("targets"))' >/dev/null
@@ -64,7 +72,11 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema connection-current --json | jq -e '.ok == true and .schema.name == "connection-current" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
 "$binary" schema connection-remove --json | jq -e '.ok == true and .schema.name == "connection-remove" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
 "$binary" schema connection-prune --json | jq -e '.ok == true and .schema.name == "connection-prune" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
-"$binary" schema connection-resolve --json | jq -e '.ok == true and .schema.name == "connection-resolve" and (.schema.fields | map(.name) | index("source"))' >/dev/null
+"$binary" schema browser-mode --json | jq -e '.ok == true and .schema.name == "browser-mode" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("browser_mode_source"))' >/dev/null
+"$binary" schema browser-profile-status --json | jq -e '.ok == true and .schema.name == "browser-profile-status" and (.schema.fields | map(.name) | index("managed_browser")) and (.schema.fields | map(.name) | index("profile_perm")) and (.schema.fields | map(.name) | index("metadata_perm")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
+"$binary" schema browser-profile-seed --json | jq -e '.ok == true and .schema.name == "browser-profile-seed" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("seed_strategy")) and (.schema.fields | map(.name) | index("managed_browser"))' >/dev/null
+"$binary" schema managed-browser --json | jq -e '.ok == true and .schema.name == "managed-browser" and (.schema.fields | map(.name) | index("user_data_dir")) and (.schema.fields | map(.name) | index("profile_seed_strategy"))' >/dev/null
+"$binary" schema connection-resolve --json | jq -e '.ok == true and .schema.name == "connection-resolve" and (.schema.fields | map(.name) | index("source")) and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("browser_mode_source"))' >/dev/null
 "$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.fields | map(.name) | index("scope")) and (.schema.fields | map(.name) | index("artifact"))' >/dev/null
 "$binary" schema protocol-examples --json | jq -e '.ok == true and .schema.name == "protocol-examples" and (.schema.fields[] | select(.name == "examples").description | contains("required/optional param names"))' >/dev/null
 "$binary" schema protocol-metadata --json | jq -e '.ok == true and .schema.name == "protocol-metadata"' >/dev/null
@@ -72,8 +84,9 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema protocol-search --json | jq -e '.ok == true and .schema.name == "protocol-search"' >/dev/null
 "$binary" schema protocol-describe --json | jq -e '.ok == true and .schema.name == "protocol-describe"' >/dev/null
 "$binary" schema daemon-restart --json | jq -e '.ok == true and .schema.name == "daemon-restart" and (.schema.fields | map(.name) | index("restart"))' >/dev/null
-"$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("lock"))' >/dev/null
-"$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("entries"))' >/dev/null
+"$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("lock"))' >/dev/null
+"$binary" schema daemon-status --json | jq -e '.ok == true and .schema.name == "daemon-status" and (.schema.fields | map(.name) | index("daemon"))' >/dev/null
+"$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("entries"))' >/dev/null
 "$binary" schema daemon-health --json | jq -e '.ok == true and .schema.name == "daemon-health" and (.schema.fields | map(.name) | index("health"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "click" --json | jq -e '.ok == true and .commands.name == "click" and (.commands.examples | length > 0)' >/dev/null
@@ -100,8 +113,8 @@ help_output="$("$binary" --help)"
 rg -q "cleanup routine|page cleanup|clean" <<<"$help_output"
 page_cleanup_describe="$("$binary" describe --command "page cleanup" --json)"
 page_cleanup_examples="$(jq -r '.commands.examples[]' <<<"$page_cleanup_describe")"
-rg -q 'cdp page cleanup --close' <<<"$page_cleanup_examples"
-rg -q 'cdp page cleanup --created-by cdp --idle-for 30m --close' <<<"$page_cleanup_examples"
+rg -q -- '--browser-mode headed page cleanup' <<<"$page_cleanup_examples"
+rg -q -- '--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close' <<<"$page_cleanup_examples"
 page_cleanup_short="$(jq -r '.commands.short' <<<"$page_cleanup_describe")"
 rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null
@@ -218,9 +231,25 @@ if [[ "$daemon_restart_code" -ne 4 ]]; then
 fi
 printf '%s\n' "$daemon_restart_output" | jq -e '.ok == false and .code == "permission_pending" and .human_required == true and .agent_should_stop == true and (.remediation_commands | index("open chrome://inspect/#remote-debugging")) and (.safe_diagnostics | index("cdp daemon status --json"))' >/dev/null
 
+"$binary" browser mode get --state-dir "$state_dir" --json | jq -e '.ok == true and .browser_mode == "headed" and .browser_mode_source == "default" and (.next_commands | length > 0)' >/dev/null
+CDP_BROWSER_MODE=headless "$binary" browser mode get --state-dir "$state_dir" --json | jq -e '.ok == true and .browser_mode == "headless" and .browser_mode_source == "env" and (.next_commands | length > 0)' >/dev/null
+"$binary" --state-dir "$state_dir" browser profile status --json | jq -e '.ok == true and .browser_mode == "headless" and .state == "missing" and .seeded == false and (.next_commands | index("cdp browser profile seed --strategy managed --json"))' >/dev/null
+"$binary" --state-dir "$state_dir" browser profile seed --strategy managed --json | jq -e '.ok == true and .seeded == true and .exists == true and .seed_strategy == "managed" and .managed_browser.browser_mode == "headless" and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' >/dev/null
+"$binary" --state-dir "$state_dir" browser profile status --json | jq -e '.ok == true and .state == "ready" and .profile_perm == "700" and .metadata_perm == "600" and (.next_commands | index("cdp --browser-mode headless daemon keepalive --repair --json"))' >/dev/null
+"$binary" doctor --check headless-security --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "headless-security" and .checks[0].status == "pass" and .checks[0].details.profile_owner_only == true and .checks[0].details.metadata_owner_only == true and .checks[0].details.managed_profile_selected == true and .checks[0].details.seed_strategy == "managed" and (.. | objects | has("ownership_token") | not) and (.. | objects | has("process_start_time") | not)' >/dev/null
+set +e
+invalid_mode_output="$(CDP_BROWSER_MODE=hidden "$binary" browser mode get --state-dir "$state_dir" --json 2>/tmp/cdp-cli-browser-mode.err)"
+invalid_mode_code=$?
+set -e
+if [[ "$invalid_mode_code" -ne 2 ]]; then
+  echo "browser mode invalid exit code = $invalid_mode_code, want 2" >&2
+  exit 1
+fi
+printf '%s
+' "$invalid_mode_output" | jq -e '.ok == false and .code == "invalid_browser_mode" and .err_class == "usage"' >/dev/null
 "$binary" connection add default --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
 "$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default"' >/dev/null
-"$binary" connection resolve --state-dir "$state_dir" --json | jq -e '.ok == true and .source == "selected" and .connection.name == "default"' >/dev/null
+"$binary" connection resolve --state-dir "$state_dir" --json | jq -e '.ok == true and .source == "selected" and .browser_mode == "headed" and .browser_mode_source == "default" and .connection.name == "default" and .connection.mode == "auto_connect"' >/dev/null
 "$binary" connection list --state-dir "$state_dir" --json | jq -e '.ok == true and (.connections | length == 1)' >/dev/null
 "$binary" connection add extra --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "extra"' >/dev/null
 "$binary" connection remove extra --state-dir "$state_dir" --json | jq -e '.ok == true and .removed == "extra" and (.connections | length == 1)' >/dev/null
@@ -349,8 +378,11 @@ elif [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   "$binary" daemon stop --state-dir "$state_dir/live-browser" --json >/dev/null
 fi
 
-"$binary" daemon status --state-dir "$state_dir" --json | jq -e '.ok == true and .daemon.state' >/dev/null
-"$binary" daemon logs --state-dir "$state_dir" --json | jq -e '.ok == true and .log.count == 0 and (.entries | length == 0)' >/dev/null
+mode_status_dir="$state_dir/mode-status"
+"$binary" daemon status --state-dir "$mode_status_dir" --json | jq -e '.ok == true and .daemon.browser_mode == "headed" and .daemon.state' >/dev/null
+"$binary" --browser-mode headless daemon status --state-dir "$mode_status_dir" --json | jq -e '.ok == true and .daemon.browser_mode == "headless" and (.daemon.next_commands | index("cdp --browser-mode headless browser profile status --json"))' >/dev/null
+"$binary" daemon logs --state-dir "$mode_status_dir" --json | jq -e '.ok == true and .browser_mode == "headed" and .log.count == 0 and (.entries | length == 0)' >/dev/null
+"$binary" --browser-mode headless daemon logs --state-dir "$mode_status_dir" --json | jq -e '.ok == true and .browser_mode == "headless" and (.log.path | contains("headless/daemon.log")) and .log.count == 0 and (.entries | length == 0)' >/dev/null
 
 set +e
 snapshot_output="$("$binary" snapshot --state-dir "$state_dir" --json 2>/tmp/cdp-cli-snapshot.err)"

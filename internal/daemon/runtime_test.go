@@ -14,11 +14,108 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
+
+func TestRuntimePathsAreModeAware(t *testing.T) {
+	stateDir := t.TempDir()
+	if got := daemon.RuntimePath(stateDir); got != filepath.Join(stateDir, "daemon.json") {
+		t.Fatalf("RuntimePath() = %q, want headed-compatible daemon.json", got)
+	}
+	if got := daemon.RuntimeSocketPath(stateDir); got != filepath.Join(stateDir, "daemon.sock") {
+		t.Fatalf("RuntimeSocketPath() = %q, want headed-compatible daemon.sock", got)
+	}
+	if got := daemon.RuntimeLogPath(stateDir); got != filepath.Join(stateDir, "daemon.log") {
+		t.Fatalf("RuntimeLogPath() = %q, want headed-compatible daemon.log", got)
+	}
+
+	if got := daemon.RuntimePathForMode(stateDir, "headed"); got != daemon.RuntimePath(stateDir) {
+		t.Fatalf("RuntimePathForMode headed = %q, want %q", got, daemon.RuntimePath(stateDir))
+	}
+	if got := daemon.RuntimePathForMode(stateDir, ""); got != daemon.RuntimePath(stateDir) {
+		t.Fatalf("RuntimePathForMode default = %q, want %q", got, daemon.RuntimePath(stateDir))
+	}
+	if got := daemon.RuntimePathForMode(stateDir, "headless"); got != filepath.Join(stateDir, "headless", "daemon.json") {
+		t.Fatalf("RuntimePathForMode headless = %q, want mode-specific daemon.json", got)
+	}
+	if got := daemon.RuntimeSocketPathForMode(stateDir, "headless"); got != filepath.Join(stateDir, "headless", "daemon.sock") {
+		t.Fatalf("RuntimeSocketPathForMode headless = %q, want mode-specific daemon.sock", got)
+	}
+	if got := daemon.RuntimeLogPathForMode(stateDir, "headless"); got != filepath.Join(stateDir, "headless", "daemon.log") {
+		t.Fatalf("RuntimeLogPathForMode headless = %q, want mode-specific daemon.log", got)
+	}
+}
+
+func TestRuntimeOperationsAreModeAware(t *testing.T) {
+	stateDir := t.TempDir()
+	headedRuntime := daemon.Runtime{PID: 111, ConnectionMode: "browser_url", SocketPath: daemon.RuntimeSocketPath(stateDir)}
+	headlessRuntime := daemon.Runtime{PID: 222, BrowserMode: "headless", ConnectionMode: "browser_url", SocketPath: daemon.RuntimeSocketPathForMode(stateDir, "headless")}
+
+	if err := daemon.SaveRuntime(context.Background(), stateDir, headedRuntime); err != nil {
+		t.Fatalf("SaveRuntime headed returned error: %v", err)
+	}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", headlessRuntime); err != nil {
+		t.Fatalf("SaveRuntimeForMode headless returned error: %v", err)
+	}
+
+	loadedHeaded, ok, err := daemon.LoadRuntime(context.Background(), stateDir)
+	if err != nil || !ok || loadedHeaded.PID != 111 || loadedHeaded.BrowserMode != "headed" {
+		t.Fatalf("LoadRuntime headed = %+v, ok=%v, err=%v; want headed pid 111", loadedHeaded, ok, err)
+	}
+	loadedHeadless, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil || !ok || loadedHeadless.PID != 222 || loadedHeadless.BrowserMode != "headless" {
+		t.Fatalf("LoadRuntimeForMode headless = %+v, ok=%v, err=%v; want headless pid 222", loadedHeadless, ok, err)
+	}
+
+	if err := daemon.ClearRuntimeForMode(context.Background(), stateDir, "headless", 111); err != nil {
+		t.Fatalf("ClearRuntimeForMode mismatched pid returned error: %v", err)
+	}
+	if _, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless"); err != nil || !ok {
+		t.Fatalf("headless runtime removed by mismatched pid: ok=%v err=%v", ok, err)
+	}
+	if err := daemon.ClearRuntimeForMode(context.Background(), stateDir, "headless", 222); err != nil {
+		t.Fatalf("ClearRuntimeForMode headless returned error: %v", err)
+	}
+	if _, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless"); err != nil || ok {
+		t.Fatalf("LoadRuntimeForMode headless after clear ok=%v err=%v, want missing", ok, err)
+	}
+	if _, ok, err := daemon.LoadRuntime(context.Background(), stateDir); err != nil || !ok {
+		t.Fatalf("headed runtime was affected by clearing headless: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRuntimeLogsAreModeAware(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.WriteFile(daemon.RuntimeLogPath(stateDir), []byte(`{"event":"headed_event"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write headed log returned error: %v", err)
+	}
+	headlessLogPath := daemon.RuntimeLogPathForMode(stateDir, "headless")
+	if err := os.MkdirAll(filepath.Dir(headlessLogPath), 0o700); err != nil {
+		t.Fatalf("create headless log directory returned error: %v", err)
+	}
+	if err := os.WriteFile(headlessLogPath, []byte(`{"event":"headless_event"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write headless log returned error: %v", err)
+	}
+
+	headedEntries, err := daemon.ReadLogs(context.Background(), stateDir, 10)
+	if err != nil {
+		t.Fatalf("ReadLogs headed returned error: %v", err)
+	}
+	if len(headedEntries) != 1 || headedEntries[0].Event != "headed_event" {
+		t.Fatalf("ReadLogs headed = %+v, want headed_event only", headedEntries)
+	}
+	headlessEntries, err := daemon.ReadLogsForMode(context.Background(), stateDir, "headless", 10)
+	if err != nil {
+		t.Fatalf("ReadLogsForMode headless returned error: %v", err)
+	}
+	if len(headlessEntries) != 1 || headlessEntries[0].Event != "headless_event" {
+		t.Fatalf("ReadLogsForMode headless = %+v, want headless_event only", headlessEntries)
+	}
+}
 
 func TestRuntimeEndpointPersistsButDoesNotMarshal(t *testing.T) {
 	stateDir := t.TempDir()
@@ -48,6 +145,107 @@ func TestRuntimeEndpointPersistsButDoesNotMarshal(t *testing.T) {
 	}
 	if strings.Contains(string(b), "endpoint") || strings.Contains(string(b), wantEndpoint) {
 		t.Fatalf("Runtime JSON exposed endpoint: %s", b)
+	}
+}
+
+func TestRuntimeManagedMetadataRoundTripAndRedaction(t *testing.T) {
+	stateDir := t.TempDir()
+	runtime := daemon.Runtime{
+		PID:                 os.Getpid(),
+		StartedAt:           "2026-05-21T15:00:00Z",
+		BrowserMode:         "headless",
+		ConnectionMode:      "browser_url",
+		SocketPath:          daemon.RuntimeSocketPathForMode(stateDir, "headless"),
+		LogPath:             daemon.RuntimeLogPathForMode(stateDir, "headless"),
+		Endpoint:            "ws://localhost/devtools/browser/test",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		ManagedProfilePath:  browser.ManagedProfileDir(stateDir),
+		ProfileSeedStrategy: "managed",
+		ChromePID:           456,
+		ChromePort:          "9222",
+		ManagedBrowser: &browser.ManagedStatus{
+			BrowserMode:         "headless",
+			ChromePID:           456,
+			StartedAt:           "2026-05-21T15:00:00Z",
+			UserDataDir:         browser.ManagedProfileDir(stateDir),
+			DebuggingPort:       "9222",
+			ProfileSeedStrategy: "managed",
+			LastSeededAt:        "2026-05-21T14:00:00Z",
+		},
+	}
+	if err := daemon.SaveRuntime(context.Background(), stateDir, runtime); err != nil {
+		t.Fatalf("SaveRuntime returned error: %v", err)
+	}
+	loaded, ok, err := daemon.LoadRuntime(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("LoadRuntime returned error: %v", err)
+	}
+	if !ok || loaded.BrowserMode != "headless" || loaded.ChromePID != 456 || loaded.ChromePort != "9222" || loaded.ProfileSeedStrategy != "managed" {
+		t.Fatalf("LoadRuntime() = %+v, want managed headless metadata", loaded)
+	}
+	if loaded.ManagedBrowser == nil || loaded.ManagedBrowser.DebuggingPort != "9222" || loaded.ManagedBrowser.ProfileSeedStrategy != "managed" {
+		t.Fatalf("ManagedBrowser = %+v, want safe managed browser metadata", loaded.ManagedBrowser)
+	}
+
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if strings.Contains(string(encoded), "devtools/browser/test") || strings.Contains(string(encoded), "endpoint") || strings.Contains(string(encoded), "ownership_token") || strings.Contains(string(encoded), "process_start_time") {
+		t.Fatalf("Runtime JSON leaked internal endpoint or ownership metadata: %s", string(encoded))
+	}
+}
+
+func TestHoldPersistsManagedKeepAliveMetadata(t *testing.T) {
+	server := newRuntimeRPCFakeServer(t)
+	defer server.Close()
+
+	stateDir := shortStateDir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	managedStatus := browser.ManagedStatus{
+		BrowserMode:         "headless",
+		ChromePID:           456,
+		StartedAt:           "2026-05-21T15:00:00Z",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: "managed",
+		LastSeededAt:        "2026-05-21T14:00:00Z",
+	}
+	managedJSON, err := json.Marshal(managedStatus)
+	if err != nil {
+		t.Fatalf("Marshal managed status returned error: %v", err)
+	}
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+	t.Setenv("CDP_DAEMON_USER_DATA_DIR", managedStatus.UserDataDir)
+	t.Setenv("CDP_DAEMON_MANAGED_BROWSER", string(managedJSON))
+	t.Setenv("CDP_DAEMON_MANAGED_PROFILE_PATH", managedStatus.UserDataDir)
+	t.Setenv("CDP_DAEMON_PROFILE_SEED_STRATEGY", "managed")
+	t.Setenv("CDP_DAEMON_CHROME_PID", "456")
+	t.Setenv("CDP_DAEMON_CHROME_PORT", "9222")
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	runtime := waitForRuntimeForMode(t, ctx, stateDir, "headless")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	if runtime.BrowserMode != "headless" || runtime.UserDataDir != managedStatus.UserDataDir || runtime.ChromePID != 456 || runtime.ChromePort != "9222" || runtime.ProfileSeedStrategy != "managed" {
+		t.Fatalf("runtime = %+v, want managed headless metadata", runtime)
+	}
+	if runtime.ManagedBrowser == nil || runtime.ManagedBrowser.DebuggingPort != "9222" || runtime.ManagedBrowser.ProfileSeedStrategy != "managed" {
+		t.Fatalf("ManagedBrowser = %+v, want safe managed browser metadata", runtime.ManagedBrowser)
 	}
 }
 
@@ -382,11 +580,16 @@ func shortStateDir(t *testing.T) string {
 
 func waitForRuntime(t *testing.T, ctx context.Context, stateDir string) daemon.Runtime {
 	t.Helper()
+	return waitForRuntimeForMode(t, ctx, stateDir, "headed")
+}
+
+func waitForRuntimeForMode(t *testing.T, ctx context.Context, stateDir, browserMode string) daemon.Runtime {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		runtime, ok, err := daemon.LoadRuntime(ctx, stateDir)
+		runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
 		if err != nil {
-			t.Fatalf("LoadRuntime returned error: %v", err)
+			t.Fatalf("LoadRuntimeForMode returned error: %v", err)
 		}
 		if ok && daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime) {
 			return runtime
