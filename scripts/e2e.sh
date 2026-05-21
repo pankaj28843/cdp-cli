@@ -9,6 +9,8 @@ if [[ ! -x "$binary" ]]; then
 fi
 
 state_dir="$(mktemp -d)"
+config_dir="$state_dir/config"
+export XDG_CONFIG_HOME="$config_dir"
 trap 'rm -rf "$state_dir"' EXIT
 
 "$binary" --help >/tmp/cdp-cli-help.txt
@@ -38,7 +40,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
-"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].next_commands | index("crontab -l | grep cdp")) and (.[0].next_commands | any(contains("--browser-mode headed daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless page cleanup")))' >/dev/null
+"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].details.has_unflocked_cdp_task | type == "boolean") and (.[0].next_commands | index("crontab -l | grep cdp")) and (.[0].next_commands | any(contains("flock -n"))) and (.[0].next_commands | any(contains("--browser-mode headed daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless daemon keepalive"))) and (.[0].next_commands | any(contains("--browser-mode headless page cleanup")))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities | map(.name) | index("raw_protocol"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "advanced_storage" and .status == "implemented"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "raw_protocol" and (.verify_commands | index("cdp protocol metadata --json"))))' >/dev/null
@@ -176,7 +178,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema workflow-console-errors --json | jq -e '.ok == true and .schema.name == "workflow-console-errors"' >/dev/null
 "$binary" schema workflow-network-failures --json | jq -e '.ok == true and .schema.name == "workflow-network-failures"' >/dev/null
 "$binary" schema workflow-a11y --json | jq -e '.ok == true and .schema.name == "workflow-a11y" and (.schema.fields | map(.name) | index("a11y"))' >/dev/null
-"$binary" schema workflow-page-load --json | jq -e '.ok == true and .schema.name == "workflow-page-load" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
+"$binary" schema workflow-page-load --json | jq -e '.ok == true and .schema.name == "workflow-page-load" and (.schema.fields | map(.name) | index("content_state")) and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema workflow-rendered-extract --json | jq -e '.ok == true and .schema.name == "workflow-rendered-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
 "$binary" schema workflow-web-research-serp --json | jq -e '.ok == true and .schema.name == "workflow-web-research-serp" and (.schema.fields | map(.name) | index("candidates")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
 "$binary" schema workflow-web-research-extract --json | jq -e '.ok == true and .schema.name == "workflow-web-research-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("failures")) and (.schema.fields[] | select(.name == "workflow").description | contains("backpressure"))' >/dev/null

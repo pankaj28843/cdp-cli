@@ -14,6 +14,8 @@ if [[ -z "$chrome" || ! -x "$chrome" ]]; then
 fi
 
 state_dir="$(mktemp -d)"
+config_dir="$state_dir/config"
+export XDG_CONFIG_HOME="$config_dir"
 app_log="$state_dir/demo-app.log"
 chrome_log="$state_dir/chrome.log"
 app_pid=""
@@ -130,7 +132,7 @@ fi
 "$binary" wait text "Ready from demo app" --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
-  | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
+  | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
 require_artifact "$state_dir/page-load.local.json"
 "$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null

@@ -35,11 +35,13 @@ func runWithShortTempDir(run func() int) int {
 		return run()
 	}
 	defer os.RemoveAll(dir)
-	oldTMPDIR, oldMarker := os.Getenv("TMPDIR"), os.Getenv("CDP_CLI_TEST_SHORT_TMPDIR")
+	oldTMPDIR, oldConfigHome, oldMarker := os.Getenv("TMPDIR"), os.Getenv("XDG_CONFIG_HOME"), os.Getenv("CDP_CLI_TEST_SHORT_TMPDIR")
 	_ = os.Setenv("TMPDIR", dir)
+	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	_ = os.Setenv("CDP_CLI_TEST_SHORT_TMPDIR", "1")
 	code := run()
 	_ = os.Setenv("TMPDIR", oldTMPDIR)
+	_ = os.Setenv("XDG_CONFIG_HOME", oldConfigHome)
 	if oldMarker == "" {
 		_ = os.Unsetenv("CDP_CLI_TEST_SHORT_TMPDIR")
 	} else {
@@ -979,6 +981,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 						"discussion_signal":     "score, author, age, and comment links live in the metadata row after each story row",
 					},
 				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "document.body ? (document.body.innerText || document.body.textContent || '')") {
+		return map[string]any{
+			"result": map[string]any{
+				"type":  "string",
+				"value": "Synthetic app content",
 			},
 		}
 	}

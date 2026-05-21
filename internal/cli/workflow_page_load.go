@@ -32,6 +32,17 @@ type workflowA11ySignals struct {
 	FocusableWithoutLabel   int `json:"focusable_without_label"`
 }
 
+type pageLoadContentState struct {
+	Class           string   `json:"class"`
+	Signals         []string `json:"signals,omitempty"`
+	FinalURL        string   `json:"final_url,omitempty"`
+	MainStatus      int      `json:"main_status,omitempty"`
+	Actionable      bool     `json:"actionable"`
+	Warning         string   `json:"warning,omitempty"`
+	NextCommands    []string `json:"next_commands,omitempty"`
+	TextSampleBytes int      `json:"text_sample_bytes,omitempty"`
+}
+
 func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
@@ -150,11 +161,17 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 				}
 			}
 
+			contentState, contentErr := classifyPageLoadContentState(ctx, session, rawURL, target, requests, history)
+			if contentErr != nil {
+				collectorErrors = append(collectorErrors, collectorError("content_state", contentErr))
+			}
+
 			report := map[string]any{
-				"ok":       true,
-				"target":   pageRow(target),
-				"requests": requests,
-				"messages": messages,
+				"ok":            true,
+				"target":        pageRow(target),
+				"requests":      requests,
+				"messages":      messages,
+				"content_state": contentState,
 				"workflow": map[string]any{
 					"name":               "page-load",
 					"trigger":            trigger,
@@ -455,4 +472,129 @@ func collectPerformanceMetrics(ctx context.Context, session *cdp.PageSession) ([
 		return nil, fmt.Errorf("decode performance metrics: %w", err)
 	}
 	return result.Metrics, nil
+}
+
+func classifyPageLoadContentState(ctx context.Context, session *cdp.PageSession, requestedURL string, target cdp.TargetInfo, requests []networkRequest, history cdp.NavigationHistory) (pageLoadContentState, error) {
+	finalURL := pageLoadFinalURL(target, history, requestedURL)
+	mainStatus := pageLoadMainDocumentStatus(requests, finalURL, requestedURL)
+	textSample, err := pageLoadBodyTextSample(ctx, session)
+	if err != nil {
+		return pageLoadContentState{Class: "content", FinalURL: finalURL, MainStatus: mainStatus, Actionable: true}, err
+	}
+	return classifyPageLoadContentEvidence(finalURL, target.TargetID, mainStatus, textSample), nil
+}
+
+func classifyPageLoadContentEvidence(finalURL, targetID string, mainStatus int, textSample string) pageLoadContentState {
+	state := pageLoadContentState{Class: "content", FinalURL: finalURL, MainStatus: mainStatus, Actionable: true, TextSampleBytes: len(textSample)}
+	lowerURL := strings.ToLower(finalURL)
+	lowerText := strings.ToLower(textSample)
+	addSignal := func(signal string) {
+		for _, existing := range state.Signals {
+			if existing == signal {
+				return
+			}
+		}
+		state.Signals = append(state.Signals, signal)
+	}
+	if state.MainStatus == 401 || state.MainStatus == 403 || state.MainStatus == 429 {
+		addSignal(fmt.Sprintf("main_document_http_%d", state.MainStatus))
+	}
+	if strings.Contains(lowerText, "you've been blocked by network security") || strings.Contains(lowerText, "you have been blocked") || strings.Contains(lowerText, "temporarily blocked") {
+		state.Class = "blocked"
+		addSignal("block_text")
+	}
+	if strings.Contains(lowerURL, "/sorry/") || strings.Contains(lowerURL, "captcha") || strings.Contains(lowerURL, "challenge") {
+		state.Class = "bot_check"
+		addSignal("challenge_url")
+	}
+	if strings.Contains(lowerURL, "/login") || strings.Contains(lowerURL, "/i/flow/login") || strings.Contains(lowerURL, "signin") || strings.Contains(lowerText, "sign in to x") || strings.Contains(lowerText, "log in to your reddit account") {
+		if state.Class == "content" {
+			state.Class = "login_wall"
+		}
+		addSignal("login_wall")
+	}
+	if strings.Contains(lowerText, "accept all cookies") || strings.Contains(lowerText, "refuse non-essential cookies") || strings.Contains(lowerText, "cookie use") {
+		if state.Class == "content" {
+			state.Class = "cookie_wall"
+		}
+		addSignal("cookie_wall")
+	}
+	if state.Class != "content" {
+		state.Actionable = false
+		state.Warning = "loaded page is not the requested content; it appears to be a " + strings.ReplaceAll(state.Class, "_", " ")
+		state.NextCommands = []string{
+			"cdp workflow debug-bundle --target " + targetID + " --out-dir tmp/page-load-debug --json",
+			"cdp storage snapshot --target " + targetID + " --include all --redact safe --json",
+		}
+	}
+	return state
+}
+
+func pageLoadFinalURL(target cdp.TargetInfo, history cdp.NavigationHistory, requestedURL string) string {
+	if history.CurrentIndex >= 0 && history.CurrentIndex < len(history.Entries) {
+		if url := strings.TrimSpace(history.Entries[history.CurrentIndex].URL); url != "" && url != "about:blank" {
+			return url
+		}
+	}
+	if url := strings.TrimSpace(target.URL); url != "" {
+		return url
+	}
+	return strings.TrimSpace(requestedURL)
+}
+
+func pageLoadMainDocumentStatus(requests []networkRequest, finalURL, requestedURL string) int {
+	for _, req := range requests {
+		if req.ResourceType == "Document" && pageLoadURLMatches(req.URL, finalURL, requestedURL) && req.Status != 0 {
+			return req.Status
+		}
+	}
+	for _, req := range requests {
+		if req.ResourceType == "Document" && req.Status != 0 {
+			return req.Status
+		}
+	}
+	for _, req := range requests {
+		if pageLoadURLMatches(req.URL, finalURL, requestedURL) && req.Status != 0 {
+			return req.Status
+		}
+	}
+	return 0
+}
+
+func pageLoadURLMatches(raw, finalURL, requestedURL string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	for _, candidate := range []string{finalURL, requestedURL} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if raw == candidate || strings.TrimRight(raw, "/") == strings.TrimRight(candidate, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+func pageLoadBodyTextSample(ctx context.Context, session *cdp.PageSession) (string, error) {
+	result, err := session.Evaluate(ctx, `(() => {
+  const text = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+  return text.replace(/\s+/g, ' ').trim().slice(0, 4096);
+})()`, true)
+	if err != nil {
+		return "", err
+	}
+	if result.Exception != nil {
+		return "", fmt.Errorf("evaluate body text sample: %s", result.Exception.Text)
+	}
+	if len(result.Object.Value) == 0 || string(result.Object.Value) == "null" {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(result.Object.Value, &text); err != nil {
+		return "", fmt.Errorf("decode body text sample: %w", err)
+	}
+	return text, nil
 }

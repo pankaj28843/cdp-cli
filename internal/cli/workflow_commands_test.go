@@ -440,6 +440,13 @@ func TestWorkflowPageLoadJSON(t *testing.T) {
 			RequestedURL string `json:"requested_url"`
 			Partial      bool   `json:"partial"`
 		} `json:"workflow"`
+		ContentState struct {
+			Class           string `json:"class"`
+			FinalURL        string `json:"final_url"`
+			MainStatus      int    `json:"main_status"`
+			Actionable      bool   `json:"actionable"`
+			TextSampleBytes int    `json:"text_sample_bytes"`
+		} `json:"content_state"`
 		Storage struct {
 			LocalStorageKeys []string `json:"local_storage_keys"`
 		} `json:"storage"`
@@ -458,6 +465,9 @@ func TestWorkflowPageLoadJSON(t *testing.T) {
 	}
 	if len(got.Requests) != 2 || got.Requests[0].Status != 200 || len(got.Messages) != 3 || !strings.Contains(got.Messages[1].Text, "failed to fetch dashboard") {
 		t.Fatalf("workflow page-load evidence requests=%+v messages=%+v, want network and rich console evidence", got.Requests, got.Messages)
+	}
+	if got.ContentState.Class != "content" || got.ContentState.FinalURL != "https://example.test/current" || got.ContentState.MainStatus != 200 || !got.ContentState.Actionable || got.ContentState.TextSampleBytes == 0 {
+		t.Fatalf("workflow page-load content_state = %+v, want actionable content classification", got.ContentState)
 	}
 	if len(got.Storage.LocalStorageKeys) != 1 || got.Storage.LocalStorageKeys[0] != "feature" || got.Performance.Count != 2 || got.Artifact.Path != outPath {
 		t.Fatalf("workflow page-load storage/performance/artifact = storage=%+v performance=%+v artifact=%+v", got.Storage, got.Performance, got.Artifact)

@@ -330,6 +330,7 @@ type crontabSummary struct {
 	HasPageCleanup             bool
 	HasModeExplicitPageCleanup bool
 	HasAmbiguousPageCleanup    bool
+	HasUnflockedCDPTask        bool
 }
 
 func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
@@ -362,8 +363,11 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 	} else if summary.HasAmbiguousPageCleanup {
 		status = "warn"
 		message = "current user crontab has page cleanup task without explicit browser mode"
+	} else if summary.HasUnflockedCDPTask {
+		status = "warn"
+		message = "current user crontab has cdp daemon or cleanup tasks without flock"
 	} else {
-		message = "user crontab includes cdp daemon keepalive and mode-explicit page cleanup"
+		message = "user crontab includes flocked cdp daemon keepalive and mode-explicit page cleanup"
 	}
 	return map[string]any{
 		"name":    "scheduled-tasks",
@@ -380,12 +384,13 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 			"has_page_cleanup":               summary.HasPageCleanup,
 			"has_mode_explicit_page_cleanup": summary.HasModeExplicitPageCleanup,
 			"has_ambiguous_page_cleanup":     summary.HasAmbiguousPageCleanup,
+			"has_unflocked_cdp_task":         summary.HasUnflockedCDPTask,
 		},
 		"next_commands": []string{
 			"crontab -l | grep cdp",
-			`(crontab -l 2>/dev/null; echo '* * * * * DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null; echo '* * * * * $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1') | crontab -`,
+			`(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1') | crontab -`,
 			"cdp doctor --check scheduled-tasks --json",
 		},
 	}
@@ -403,8 +408,11 @@ func summarizeCrontab(text string) crontabSummary {
 		}
 		summary.EntryCount++
 		mode := scheduledTaskBrowserMode(line)
-		if strings.Contains(line, "cdp daemon keepalive") {
+		if scheduledTaskContainsCDPCommand(line, "daemon", "keepalive") {
 			summary.HasDaemonKeepalive = true
+			if !scheduledTaskUsesFlock(line) {
+				summary.HasUnflockedCDPTask = true
+			}
 			switch mode {
 			case "headed":
 				summary.HasHeadedDaemonKeepalive = true
@@ -412,8 +420,11 @@ func summarizeCrontab(text string) crontabSummary {
 				summary.HasHeadlessDaemonKeepalive = true
 			}
 		}
-		if strings.Contains(line, "cdp page cleanup") {
+		if scheduledTaskContainsCDPCommand(line, "page", "cleanup") {
 			summary.HasPageCleanup = true
+			if !scheduledTaskUsesFlock(line) {
+				summary.HasUnflockedCDPTask = true
+			}
 			if mode == "" {
 				summary.HasAmbiguousPageCleanup = true
 			} else {
@@ -422,6 +433,31 @@ func summarizeCrontab(text string) crontabSummary {
 		}
 	}
 	return summary
+}
+
+func scheduledTaskContainsCDPCommand(line string, words ...string) bool {
+	fields := strings.Fields(line)
+	seenCDP := false
+	for _, field := range fields {
+		if field == "cdp" || strings.HasSuffix(field, "/cdp") {
+			seenCDP = true
+			break
+		}
+	}
+	if !seenCDP {
+		return false
+	}
+	return strings.Contains(line, strings.Join(words, " "))
+}
+
+func scheduledTaskUsesFlock(line string) bool {
+	fields := strings.Fields(line)
+	for _, field := range fields {
+		if field == "flock" || strings.HasSuffix(field, "/flock") {
+			return true
+		}
+	}
+	return false
 }
 
 func scheduledTaskBrowserMode(line string) string {

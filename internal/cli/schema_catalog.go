@@ -53,8 +53,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "name", Type: "string", Required: true, Description: "Doctor check name: scheduled-tasks."},
 				{Name: "status", Type: "string", Required: true, Description: "Check status: pass, warn, pending, or fail."},
 				{Name: "message", Type: "string", Required: true, Description: "Human-readable readiness summary."},
-				{Name: "details", Type: "scheduled_tasks_details", Required: true, Description: "Crontab availability, cdp entry counts, mode-explicit keepalive, and cleanup ambiguity flags."},
-				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe crontab inspection and install commands with explicit browser modes."},
+				{Name: "details", Type: "scheduled_tasks_details", Required: true, Description: "Crontab availability, cdp entry counts, mode-explicit keepalive, flock, and cleanup ambiguity flags."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe crontab inspection and install commands with explicit browser modes and flock locks."},
 			},
 		},
 		"headless-security": {
@@ -698,6 +698,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "target", Type: "page", Required: true, Description: "Selected or created page target metadata."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Network requests observed after collectors were attached."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console and log messages observed after collectors were attached."},
+				{Name: "content_state", Type: "page_load_content_state", Required: true, Description: "Machine-readable classification of content, block, bot-check, login-wall, or cookie-wall state."},
 				{Name: "storage", Type: "storage_keys", Required: false, Description: "Cookie, localStorage, and sessionStorage key names without values."},
 				{Name: "performance", Type: "performance_metrics", Required: false, Description: "Performance.getMetrics output after Performance.enable."},
 				{Name: "navigation", Type: "navigation_history", Required: false, Description: "Page navigation history after the load window."},
