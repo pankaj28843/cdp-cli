@@ -142,6 +142,83 @@ func TestDaemonStatusUsesSelectedBrowserModeRuntime(t *testing.T) {
 	}
 }
 
+func TestManagedHeadlessRuntimeOverridesSelectedAutoConnect(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	runtime, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil || !ok {
+		t.Fatalf("LoadRuntimeForMode headless ok=%v err=%v, want runtime", ok, err)
+	}
+	runtime.ManagedProfilePath = browser.ManagedProfileDir(stateDir)
+	runtime.ProfileSeedStrategy = "managed"
+	runtime.ChromePort = "9222"
+	managed := browser.ManagedStatus{BrowserMode: "headless", UserDataDir: browser.ManagedProfileDir(stateDir), DebuggingPort: "9222", ProfileSeedStrategy: "managed"}
+	runtime.ManagedBrowser = &managed
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", runtime); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "default", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var health struct {
+		Daemon struct {
+			State          string `json:"state"`
+			ConnectionMode string `json:"connection_mode"`
+			Runtime        struct {
+				BrowserMode    string `json:"browser_mode"`
+				ConnectionMode string `json:"connection_mode"`
+			} `json:"runtime"`
+		} `json:"daemon"`
+		Health struct {
+			State          string `json:"state"`
+			ConnectionMode string `json:"connection_mode"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &health); err != nil {
+		t.Fatalf("daemon health output is invalid JSON: %v", err)
+	}
+	if health.Daemon.State != "running" || health.Daemon.ConnectionMode != "browser_url" || health.Daemon.Runtime.BrowserMode != "headless" || health.Health.State != "healthy" || health.Health.ConnectionMode != "browser_url" {
+		t.Fatalf("daemon health = %+v, want healthy managed headless browser-url runtime despite selected auto_connect", health)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages exit code = %d, want %d; stderr=%s stdout=%s", code, cli.ExitOK, errOut.String(), out.String())
+	}
+}
+
 func TestDaemonStopNotRunningJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})

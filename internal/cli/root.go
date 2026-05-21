@@ -281,6 +281,9 @@ func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemo
 		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
 	}
+	if a.runtimeOverridesSelectedConnection(runtime) {
+		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
+	}
 	status = daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime))
 	status.Health = a.browserHealthSnapshot(ctx, status, false)
 	return status
@@ -295,9 +298,6 @@ func (a *app) browserModeName() string {
 }
 
 func (a *app) runtimeMatchesConnection(runtime daemon.Runtime) bool {
-	if runtime.ConnectionMode != a.connectionMode() {
-		return false
-	}
 	runtimeMode := strings.TrimSpace(runtime.BrowserMode)
 	if runtimeMode == "" {
 		runtimeMode = string(config.BrowserModeHeaded)
@@ -305,10 +305,27 @@ func (a *app) runtimeMatchesConnection(runtime daemon.Runtime) bool {
 	if runtimeMode != a.browserModeName() {
 		return false
 	}
+	if a.runtimeOverridesSelectedConnection(runtime) {
+		return true
+	}
 	if a.opts.userDataDir != "" && runtime.UserDataDir != a.opts.userDataDir {
 		return false
 	}
+	if runtime.ConnectionMode != a.connectionMode() {
+		return false
+	}
 	return true
+}
+
+func (a *app) runtimeOverridesSelectedConnection(runtime daemon.Runtime) bool {
+	runtimeMode := strings.TrimSpace(runtime.BrowserMode)
+	if runtimeMode == "" {
+		runtimeMode = string(config.BrowserModeHeaded)
+	}
+	if a.browserModeName() != string(config.BrowserModeHeadless) || runtimeMode != string(config.BrowserModeHeadless) || runtime.ConnectionMode != "browser_url" {
+		return false
+	}
+	return runtime.ManagedBrowser != nil || strings.TrimSpace(runtime.ManagedProfilePath) != "" || strings.TrimSpace(runtime.ProfileSeedStrategy) == "managed" || strings.TrimSpace(runtime.ChromePort) != ""
 }
 
 func signalContext(parent context.Context) (context.Context, context.CancelFunc) {

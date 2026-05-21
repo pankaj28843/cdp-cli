@@ -19,6 +19,10 @@ type responsiveAuditOptions struct {
 }
 
 func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts responsiveAuditOptions) error {
+	presets, err := responsiveViewportPresets(opts.Viewports)
+	if err != nil {
+		return err
+	}
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
@@ -37,10 +41,6 @@ func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts
 		_ = client.CallSession(ctx, session.SessionID, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
 	}()
 
-	presets, err := responsiveViewportPresets(opts.Viewports)
-	if err != nil {
-		return err
-	}
 	includeSet := parseCSVSet(opts.Include)
 	if len(includeSet) == 0 || includeSet["all"] {
 		includeSet = parseCSVSet("console,network,layout,screenshot,a11y")
