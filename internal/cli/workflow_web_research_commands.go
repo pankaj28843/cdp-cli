@@ -38,13 +38,23 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	var minVisibleWords int
 	var minMarkdownWords int
 	var minHTMLChars int
+	var progress string
+	var fastFailBlocked bool
+	var blockedFailureThreshold int
 	cmd := &cobra.Command{
 		Use:   "serp",
 		Short: "Collect rendered SERP artifacts and deduped research candidates",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
-				return commandError("usage", "usage", "--wait, --max-candidates, --parallel, --result-pages, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --result-pages 3 --out-dir tmp/research --json"})
+			if wait < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 || blockedFailureThreshold < 0 {
+				return commandError("usage", "usage", "--wait, --max-candidates, --parallel, --result-pages, --blocked-failure-threshold, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --result-pages 3 --out-dir tmp/research --fast-fail-blocked --json"})
+			}
+			progress = strings.TrimSpace(strings.ToLower(progress))
+			if progress == "" {
+				progress = "none"
+			}
+			if progress != "none" && progress != "stderr" {
+				return commandError("usage", "usage", "--progress must be none or stderr", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --progress stderr --json"})
 			}
 			queries, err := readWebResearchQueries(queryFile)
 			if err != nil {
@@ -99,46 +109,135 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			resultCount := len(queries) * resultPages
 			results := make(chan serpResult, resultCount)
 			var wg sync.WaitGroup
+			runJob := func(job serpJob) serpResult {
+				query := queries[job.QueryIndex]
+				queryURL := googleSearchURL(query.Text, query.TimeFilter, (job.SerpPage-1)*10)
+				result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
+					WorkflowName:       "web-research-serp",
+					ArtifactTypePrefix: "web-research-serp",
+					UsageCommand:       "cdp workflow web-research serp",
+					RawURL:             queryURL,
+					Selector:           "body",
+					Wait:               wait,
+					WaitUntil:          waitUntil,
+					Formats:            "snapshot,text,html,markdown,links",
+					OutDir:             filepath.Join(outDir, "serps", webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
+					Serp:               "google",
+					Limit:              80,
+					MinVisibleWords:    minVisibleWords,
+					MinMarkdownWords:   minMarkdownWords,
+					MinHTMLChars:       minHTMLChars,
+				})
+				return serpResult{QueryIndex: job.QueryIndex, SerpPage: job.SerpPage, Query: query, Result: result, Err: err}
+			}
 			for i := 0; i < parallel; i++ {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
 					for job := range jobs {
-						query := queries[job.QueryIndex]
-						queryURL := googleSearchURL(query.Text, query.TimeFilter, (job.SerpPage-1)*10)
-						result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
-							WorkflowName:       "web-research-serp",
-							ArtifactTypePrefix: "web-research-serp",
-							UsageCommand:       "cdp workflow web-research serp",
-							RawURL:             queryURL,
-							Selector:           "body",
-							Wait:               wait,
-							WaitUntil:          waitUntil,
-							Formats:            "snapshot,text,html,markdown,links",
-							OutDir:             filepath.Join(outDir, "serps", webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
-							Serp:               "google",
-							Limit:              80,
-							MinVisibleWords:    minVisibleWords,
-							MinMarkdownWords:   minMarkdownWords,
-							MinHTMLChars:       minHTMLChars,
-						})
-						results <- serpResult{QueryIndex: job.QueryIndex, SerpPage: job.SerpPage, Query: query, Result: result, Err: err}
+						results <- runJob(job)
 					}
 				}()
 			}
-			for i := range queries {
-				for page := 1; page <= resultPages; page++ {
-					jobs <- serpJob{QueryIndex: i, SerpPage: page}
+			blockedFailureLimit := blockedFailureThreshold
+			if blockedFailureLimit == 0 {
+				blockedFailureLimit = 3
+			}
+			scheduledJobs := 0
+			completedJobs := 0
+			activeJobs := 0
+			blockedFailures := 0
+			fastFailTriggered := false
+			serpResults := make([]serpResult, 0, resultCount)
+			nextQueryIndex := 0
+			nextSerpPage := 1
+			nextJob := func() (serpJob, bool) {
+				if nextQueryIndex >= len(queries) {
+					return serpJob{}, false
+				}
+				job := serpJob{QueryIndex: nextQueryIndex, SerpPage: nextSerpPage}
+				nextSerpPage++
+				if nextSerpPage > resultPages {
+					nextSerpPage = 1
+					nextQueryIndex++
+				}
+				return job, true
+			}
+			recordFastFailSignal := func(result serpResult) {
+				if blocked, _ := detectSERPBlocked(result.Result); blocked {
+					blockedFailures++
+				} else {
+					blockedFailures = 0
+				}
+				if blockedFailures >= blockedFailureLimit {
+					fastFailTriggered = true
+				}
+			}
+			emitProgress := func(result serpResult) {
+				if progress != "stderr" {
+					return
+				}
+				blocked, signals := detectSERPBlocked(result.Result)
+				event := map[string]any{"event": "serp_page_complete", "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "completed_result_pages": completedJobs, "scheduled_result_pages": scheduledJobs, "blocked": blocked, "signals": signals}
+				if result.Err != nil {
+					event["err_class"] = classifyWorkflowSERPFailure(result.Err, result.Result)
+					event["error"] = result.Err.Error()
+				} else if blocked {
+					event["err_class"] = "serp_blocked"
+				}
+				if payload, err := json.Marshal(event); err == nil {
+					fmt.Fprintln(a.err, string(payload))
+				}
+			}
+			scheduleNext := func() bool {
+				if fastFailTriggered {
+					return false
+				}
+				job, ok := nextJob()
+				if !ok {
+					return false
+				}
+				jobs <- job
+				scheduledJobs++
+				activeJobs++
+				return true
+			}
+			if fastFailBlocked && parallel == 1 {
+				for {
+					job, ok := nextJob()
+					if !ok {
+						break
+					}
+					result := runJob(job)
+					serpResults = append(serpResults, result)
+					scheduledJobs++
+					completedJobs++
+					recordFastFailSignal(result)
+					emitProgress(result)
+					if fastFailTriggered {
+						break
+					}
+				}
+			} else {
+				for activeJobs < parallel && scheduleNext() {
+				}
+				for activeJobs > 0 {
+					result := <-results
+					serpResults = append(serpResults, result)
+					completedJobs++
+					activeJobs--
+					if fastFailBlocked {
+						recordFastFailSignal(result)
+					}
+					emitProgress(result)
+					for activeJobs < parallel && scheduleNext() {
+					}
 				}
 			}
 			close(jobs)
 			wg.Wait()
 			close(results)
 
-			serpResults := make([]serpResult, 0, resultCount)
-			for result := range results {
-				serpResults = append(serpResults, result)
-			}
 			sort.SliceStable(serpResults, func(i, j int) bool {
 				if serpResults[i].QueryIndex == serpResults[j].QueryIndex {
 					return serpResults[i].SerpPage < serpResults[j].SerpPage
@@ -178,6 +277,9 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					break
 				}
 			}
+			if fastFailTriggered {
+				warnings = append(warnings, fmt.Sprintf("SERP sampling stopped early after %d consecutive blocked pages", blockedFailures))
+			}
 			if len(candidates) == 0 && len(failures) > 0 {
 				warnings = append(warnings, "SERP sampling produced zero candidates because one or more pages were blocked or failed")
 			}
@@ -215,17 +317,22 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					"candidates_tsv":  candidatesTSV,
 				},
 				"workflow": map[string]any{
-					"name":            "web-research-serp",
-					"serp":            serp,
-					"query_count":     len(queries),
-					"candidate_count": len(candidates),
-					"failure_count":   len(failures),
-					"warning_count":   len(warnings),
-					"max_candidates":  maxCandidates,
-					"result_pages":    resultPages,
-					"parallel":        parallel,
-					"out_dir":         outDir,
-					"next_commands":   []string{"jq -r '.[].url' " + candidateOut + " > " + filepath.Join(outDir, "visit-urls.txt"), "cdp workflow web-research extract --url-file " + filepath.Join(outDir, "visit-urls.txt") + " --out-dir " + filepath.Join(outDir, "pages") + " --json"},
+					"name":                      "web-research-serp",
+					"serp":                      serp,
+					"query_count":               len(queries),
+					"candidate_count":           len(candidates),
+					"failure_count":             len(failures),
+					"warning_count":             len(warnings),
+					"max_candidates":            maxCandidates,
+					"result_pages":              resultPages,
+					"scheduled_result_pages":    scheduledJobs,
+					"fast_fail_blocked":         fastFailBlocked,
+					"blocked_failure_threshold": blockedFailureLimit,
+					"fast_fail_triggered":       fastFailTriggered,
+					"progress":                  progress,
+					"parallel":                  parallel,
+					"out_dir":                   outDir,
+					"next_commands":             []string{"jq -r '.[].url' " + candidateOut + " > " + filepath.Join(outDir, "visit-urls.txt"), "cdp workflow web-research extract --url-file " + filepath.Join(outDir, "visit-urls.txt") + " --out-dir " + filepath.Join(outDir, "pages") + " --json"},
 				},
 			}
 			return a.render(ctx, fmt.Sprintf("web-research-serp\t%d queries\t%d candidates", len(queries), len(candidates)), report)
@@ -243,6 +350,9 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
+	cmd.Flags().StringVar(&progress, "progress", "none", "progress event stream: none or stderr")
+	cmd.Flags().BoolVar(&fastFailBlocked, "fast-fail-blocked", false, "stop SERP sampling early after repeated Google consent, CAPTCHA, or bot-check pages")
+	cmd.Flags().IntVar(&blockedFailureThreshold, "blocked-failure-threshold", 3, "consecutive blocked SERP pages required before --fast-fail-blocked stops scheduling")
 	return cmd
 }
 

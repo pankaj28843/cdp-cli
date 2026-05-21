@@ -472,6 +472,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow web-research serp": {
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --result-pages 3 --fast-fail-blocked --blocked-failure-threshold 3 --progress stderr --json",
 		},
 		"cdp workflow web-research extract": {
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 4 --out-dir tmp/research/pages --json",

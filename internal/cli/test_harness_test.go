@@ -171,6 +171,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 		}
 		defer conn.Close(websocket.StatusNormalClosure, "done")
 
+		blockedSessions := map[string]bool{}
 		for {
 			var req struct {
 				ID        int64           `json:"id"`
@@ -232,6 +233,12 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 				resp["result"] = map[string]any{"windowId": windowID, "bounds": map[string]any{"windowState": "normal"}}
 			} else if req.Method == "Page.navigate" {
+				var params struct {
+					URL string `json:"url"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				lowerURL := strings.ToLower(params.URL)
+				blockedSessions[req.SessionID] = strings.Contains(lowerURL, "serp+block+fixture") || strings.Contains(lowerURL, "serp%20block%20fixture") || strings.Contains(lowerURL, "serp-block-fixture") || strings.Contains(lowerURL, "serp block fixture")
 				resp["result"] = map[string]any{"frameId": "frame-1"}
 			} else if req.Method == "Page.enable" || req.Method == "Page.disable" {
 				resp["result"] = map[string]any{}
@@ -520,7 +527,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					}
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
 				} else {
-					resp["result"] = fakeRuntimeEvaluateResult(req.Params)
+					resp["result"] = fakeRuntimeEvaluateResult(req.Params, blockedSessions[req.SessionID])
 				}
 			} else if req.Method == "Page.captureScreenshot" {
 				resp["result"] = map[string]any{
@@ -547,7 +554,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	return server
 }
 
-func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
+func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[string]any {
 	var req struct {
 		Expression string `json:"expression"`
 	}
@@ -575,6 +582,25 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_rendered_extract_readiness__") {
+		if serpBlocked {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":                  "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Dserp-block-fixture",
+						"document_ready_state": "complete",
+						"selector_matched":     true,
+						"selector_match_count": 1,
+						"selected_text_length": 180,
+						"selected_html_length": 256,
+						"selected_word_count":  24,
+						"body_text_length":     180,
+						"body_html_length":     256,
+						"dom_signature":        "blocked",
+					},
+				},
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -594,6 +620,19 @@ func fakeRuntimeEvaluateResult(params json.RawMessage) map[string]any {
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_rendered_extract_links__") {
+		if serpBlocked {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"source_url": "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Dserp-block-fixture",
+						"serp":       "google",
+						"count":      0,
+						"results":    []map[string]any{},
+					},
+				},
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",

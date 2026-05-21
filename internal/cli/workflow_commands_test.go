@@ -630,6 +630,91 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 	}
 }
 
+func TestWorkflowWebResearchSERPFastFailsBlockedPages(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("serp block fixture one\nserp block fixture two\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	outDir := filepath.Join(tmpDir, "research")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--result-pages", "3", "--fast-fail-blocked", "--blocked-failure-threshold", "2", "--progress", "stderr", "--parallel", "1", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		SERPs []struct {
+			Query    string `json:"query"`
+			SerpPage int    `json:"serp_page"`
+		} `json:"serps"`
+		Failures []struct {
+			ErrClass string `json:"err_class"`
+		} `json:"failures"`
+		Warnings []string `json:"warnings"`
+		Workflow struct {
+			FailureCount            int  `json:"failure_count"`
+			ScheduledResultPages    int  `json:"scheduled_result_pages"`
+			FastFailBlocked         bool `json:"fast_fail_blocked"`
+			BlockedFailureThreshold int  `json:"blocked_failure_threshold"`
+			FastFailTriggered       bool `json:"fast_fail_triggered"`
+		} `json:"workflow"`
+		Artifacts struct {
+			CandidatesJSON string `json:"candidates_json"`
+			CandidatesTSV  string `json:"candidates_tsv"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research serp output is invalid JSON: %v", err)
+	}
+	if got.OK || len(got.SERPs) != 2 || len(got.Failures) != 2 || got.Workflow.FailureCount != 2 {
+		t.Fatalf("workflow web-research fast-fail summary = %+v, want two blocked failures", got)
+	}
+	if !got.Workflow.FastFailBlocked || !got.Workflow.FastFailTriggered || got.Workflow.BlockedFailureThreshold != 2 || got.Workflow.ScheduledResultPages != 2 {
+		t.Fatalf("workflow web-research fast-fail metadata = %+v, want early stop after two scheduled pages", got.Workflow)
+	}
+	for _, serp := range got.SERPs {
+		if serp.Query != "serp block fixture one" {
+			t.Fatalf("workflow web-research fast-fail scheduled query %q, want only first blocked query", serp.Query)
+		}
+	}
+	for _, failure := range got.Failures {
+		if failure.ErrClass != "serp_blocked" {
+			t.Fatalf("failure = %+v, want serp_blocked", failure)
+		}
+	}
+	if !testContainsSubstring(got.Warnings, "stopped early") {
+		t.Fatalf("warnings = %+v, want fast-fail warning", got.Warnings)
+	}
+	progressLines := strings.Split(strings.TrimSpace(errOut.String()), "\n")
+	if len(progressLines) != 2 {
+		t.Fatalf("progress stderr = %q, want two JSONL events", errOut.String())
+	}
+	for _, line := range progressLines {
+		var event struct {
+			Event    string `json:"event"`
+			Blocked  bool   `json:"blocked"`
+			ErrClass string `json:"err_class"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("progress event %q is invalid JSON: %v", line, err)
+		}
+		if event.Event != "serp_page_complete" || !event.Blocked || event.ErrClass != "serp_blocked" {
+			t.Fatalf("progress event = %+v, want blocked serp_page_complete", event)
+		}
+	}
+	for _, path := range []string{got.Artifacts.CandidatesJSON, got.Artifacts.CandidatesTSV} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("workflow web-research serp artifact %q was not written: %v", path, err)
+		}
+	}
+}
+
 func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -818,4 +903,13 @@ func TestWorkflowHackerNewsHumanTable(t *testing.T) {
 	if out.String() != want {
 		t.Fatalf("workflow hacker-news human output = %q, want %q", out.String(), want)
 	}
+}
+
+func testContainsSubstring(values []string, want string) bool {
+	for _, value := range values {
+		if strings.Contains(value, want) {
+			return true
+		}
+	}
+	return false
 }
