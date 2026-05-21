@@ -500,6 +500,11 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						}},
 					},
 				}
+			} else if req.Method == "Page.getLayoutMetrics" {
+				resp["result"] = map[string]any{
+					"cssLayoutViewport": map[string]any{"clientWidth": 800, "clientHeight": 600},
+					"cssContentSize":    map[string]any{"x": 0, "y": 0, "width": 800, "height": 1201},
+				}
 			} else if req.Method == "Runtime.evaluate" {
 				if strings.Contains(string(req.Params), "document.visibilityState") {
 					hidden := strings.Contains(req.SessionID, "hidden")

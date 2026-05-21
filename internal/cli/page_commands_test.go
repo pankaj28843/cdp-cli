@@ -1351,6 +1351,68 @@ func TestScreenshotPresetJSON(t *testing.T) {
 	}
 }
 
+func TestScreenshotTileFullPageJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/feed", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outDir := filepath.Join(t.TempDir(), "tiles")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "--tile-full-page", "--out-dir", outDir, "--tile-height", "600", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("screenshot tile exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK         bool `json:"ok"`
+		Screenshot struct {
+			Path           string `json:"path"`
+			Format         string `json:"format"`
+			FullPage       bool   `json:"full_page"`
+			TileFullPage   bool   `json:"tile_full_page"`
+			StitchMode     string `json:"stitch_mode"`
+			ManifestPath   string `json:"manifest_path"`
+			TileCount      int    `json:"tile_count"`
+			ContentHeight  int    `json:"content_height"`
+			ViewportHeight int    `json:"viewport_height"`
+			Tiles          []struct {
+				Index int    `json:"index"`
+				Path  string `json:"path"`
+				Clip  struct {
+					Y      float64 `json:"y"`
+					Height float64 `json:"height"`
+				} `json:"clip"`
+			} `json:"tiles"`
+		} `json:"screenshot"`
+		Artifacts []struct {
+			Type string `json:"type"`
+			Path string `json:"path"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("screenshot tile output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Screenshot.Path == "" || got.Screenshot.ManifestPath != got.Screenshot.Path || got.Screenshot.Format != "png" || !got.Screenshot.FullPage || !got.Screenshot.TileFullPage || got.Screenshot.StitchMode != "none" {
+		t.Fatalf("screenshot tile output = %+v, want manifest-backed full-page tile metadata", got.Screenshot)
+	}
+	if got.Screenshot.TileCount != 3 || got.Screenshot.ContentHeight != 1201 || got.Screenshot.ViewportHeight != 600 || len(got.Screenshot.Tiles) != 3 {
+		t.Fatalf("screenshot tile metrics = %+v, want three tiles over 1201px content", got.Screenshot)
+	}
+	if got.Screenshot.Tiles[2].Clip.Y != 1200 || got.Screenshot.Tiles[2].Clip.Height != 1 {
+		t.Fatalf("last tile = %+v, want one-extra-pixel coverage", got.Screenshot.Tiles[2])
+	}
+	if len(got.Artifacts) != 4 || got.Artifacts[0].Type != "screenshot-tile-manifest" {
+		t.Fatalf("screenshot tile artifacts = %+v, want manifest plus three tile artifacts", got.Artifacts)
+	}
+	for _, artifact := range got.Artifacts {
+		if _, err := os.Stat(artifact.Path); err != nil {
+			t.Fatalf("artifact %s was not written: %v", artifact.Path, err)
+		}
+	}
+}
+
 func TestScreenshotRenderJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

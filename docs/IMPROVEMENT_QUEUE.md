@@ -26,7 +26,8 @@ and PRPs first, then update this ledger with the public-safe plan identifier.
   safety metadata with redaction mode, shareability classification, unsafe
   opt-in warnings, changed sensitive fields, and synthetic leak-scan tests.
 - Screenshot capture supports shared viewport presets (`desktop`, `laptop`,
-  `tablet`, `mobile`, `iphone-12`) and emits viewport/DPR metadata in JSON.
+  `tablet`, `mobile`, `iphone-12`) and explicit tall-page tiling with tile
+  artifacts and a manifest path in JSON.
 - Page cleanup dry-runs expose close intent (`would_close_count`,
   `close_required`, and follow-up commands), so agents can tell when cleanup is
   observing versus actually closing candidates.
@@ -38,9 +39,9 @@ and PRPs first, then update this ledger with the public-safe plan identifier.
 
 | Lane | Previous items | Status | External PRP | Next gate |
 | --- | --- | --- | --- | --- |
-| CLI command composition | 1 | planned | `2026-05-21T050405-cli-command-composition-refactor.md` | Split command composition files without behavior changes. |
+| CLI command composition | 1 | implemented | `2026-05-21T050405-cli-command-composition-refactor.md` | Current `internal/cli/commands.go` is already only a package placeholder. |
 | Artifact safety | 2 | implemented | `2026-05-20T215839-public-safe-artifact-redaction-guard.md` | Reuse `internal/artifacts` for future HAR, trace, body, heap, bundle, and transcript artifacts. |
-| Screenshot ergonomics | 3-4 | partial | `2026-05-21T002011-screenshot-presets-and-tall-page-tiling.md` | Implement explicit tall-page tiling and manifest metadata. |
+| Screenshot ergonomics | 3-4 | implemented | `2026-05-21T002011-screenshot-presets-and-tall-page-tiling.md` | Reuse tile manifest metadata for future stitched-image workflows. |
 | Network evidence artifacts | 5-7 | ready | `2026-05-21T002011-network-evidence-artifacts.md` | Add HAR export first, then body and WebSocket artifact modes. |
 | Network controls | 8-9 | ready | `2026-05-21T002011-network-control-workflows.md` | Implement request blocking before Fetch-based response mocking. |
 | Performance evidence | 10-12 | ready | `2026-05-21T002011-performance-trace-and-insights.md` | Add bounded trace streaming before insight and Lighthouse report wrappers. |

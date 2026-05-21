@@ -386,7 +386,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when screenshot capture completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "screenshot", Type: "artifact", Required: true, Description: "Path, byte count, format, capture mode, optional viewport preset metadata, element clip, crop, and navigation metadata."},
+				{Name: "screenshot", Type: "artifact", Required: true, Description: "Path, byte count, format, capture mode, optional viewport preset metadata, tile manifest metadata, element clip, crop, and navigation metadata."},
 				{Name: "render", Type: "object", Required: false, Description: "HTML render source URL, viewport, serve mode, and wait metadata for screenshot render."},
 				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Artifact references for agent workflows."},
 			},

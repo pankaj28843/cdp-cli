@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -183,9 +184,13 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
 	var outPath string
+	var outDir string
 	var format string
 	var quality int
 	var fullPage bool
+	var tileFullPage bool
+	var tileHeight int
+	var tileMax int
 	var preset string
 	var element string
 	var crop bool
@@ -201,7 +206,8 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 			defer cancel()
 
 			outPath = strings.TrimSpace(outPath)
-			if outPath == "" {
+			outDir = strings.TrimSpace(outDir)
+			if outPath == "" && !tileFullPage {
 				return commandError(
 					"missing_output_path",
 					"usage",
@@ -210,9 +216,22 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 					[]string{"cdp screenshot --out tmp/page.png --json"},
 				)
 			}
-			normalizedFormat, err := normalizeScreenshotFormat(format, outPath)
+			formatPath := outPath
+			if tileFullPage && formatPath == "" {
+				formatPath = "tile.png"
+			}
+			normalizedFormat, err := normalizeScreenshotFormat(format, formatPath)
 			if err != nil {
 				return err
+			}
+			if tileFullPage && outDir == "" {
+				return commandError("missing_output_path", "usage", "--tile-full-page requires --out-dir <dir>", ExitUsage, []string{"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --json"})
+			}
+			if tileFullPage && (fullPage || strings.TrimSpace(element) != "" || crop) {
+				return commandError("usage", "usage", "--tile-full-page cannot be combined with --full-page, --element, or --crop", ExitUsage, []string{"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --json"})
+			}
+			if tileHeight < 0 || tileMax < 1 {
+				return commandError("usage", "usage", "--tile-height must be non-negative and --tile-max must be positive", ExitUsage, []string{"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --tile-max 50 --json"})
 			}
 			if quality < 0 || quality > 100 {
 				return commandError(
@@ -281,6 +300,9 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
+			}
+			if tileFullPage {
+				return a.captureTiledScreenshot(ctx, session, target, normalizedFormat, quality, outDir, tileHeight, tileMax, selectedPreset, strings.TrimSpace(preset) != "", navigateURL, wait)
 			}
 			shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{
 				Format:   normalizedFormat,
@@ -352,9 +374,13 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&outPath, "out", "", "required path to write the screenshot image")
+	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for --tile-full-page tile artifacts and manifest")
 	cmd.Flags().StringVar(&format, "format", "", "screenshot format: png, jpeg, or webp; defaults to file extension or png")
 	cmd.Flags().IntVar(&quality, "quality", 0, "jpeg/webp quality from 1 to 100; 0 uses Chrome's default")
 	cmd.Flags().BoolVar(&fullPage, "full-page", false, "capture beyond the viewport when Chrome supports it")
+	cmd.Flags().BoolVar(&tileFullPage, "tile-full-page", false, "capture the full page as viewport-sized tile artifacts plus a manifest")
+	cmd.Flags().IntVar(&tileHeight, "tile-height", 0, "CSS pixel tile height for --tile-full-page; 0 uses the current viewport height")
+	cmd.Flags().IntVar(&tileMax, "tile-max", 50, "maximum number of tiles allowed for --tile-full-page")
 	cmd.Flags().StringVar(&preset, "preset", "", "viewport preset before capture: desktop, laptop, tablet, mobile, iphone-12")
 	cmd.Flags().StringVar(&element, "element", "", "CSS selector whose first element bounding box is used as the screenshot clip")
 	cmd.Flags().BoolVar(&crop, "crop", false, "auto-crop white transparent margins from png screenshots")
@@ -363,6 +389,189 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", 0, "fixed delay after --navigate before capture")
 	cmd.AddCommand(a.newScreenshotRenderCommand())
 	return cmd
+}
+
+func (a *app) captureTiledScreenshot(ctx context.Context, session *cdp.PageSession, target cdp.TargetInfo, format string, quality int, outDir string, requestedTileHeight int, maxTiles int, selectedPreset responsiveViewport, hasPreset bool, navigateURL string, wait time.Duration) error {
+	metrics, err := screenshotLayout(ctx, session)
+	if err != nil {
+		return commandError("connection_failed", "connection", fmt.Sprintf("get screenshot layout metrics target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp protocol describe Page.getLayoutMetrics --json"})
+	}
+	tileHeight := float64(requestedTileHeight)
+	if tileHeight == 0 {
+		tileHeight = metrics.ViewportHeight
+	}
+	tiles, err := screenshotTiles(metrics.ContentWidth, metrics.ContentHeight, tileHeight, maxTiles)
+	if err != nil {
+		return err
+	}
+
+	tileMetas := make([]map[string]any, 0, len(tiles))
+	artifacts := make([]map[string]any, 0, len(tiles)+1)
+	for _, tile := range tiles {
+		shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{
+			Format:   format,
+			Quality:  quality,
+			FullPage: true,
+			Clip:     &tile.Clip,
+		})
+		if err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("capture screenshot tile %d target %s: %v", tile.Index, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+		}
+		tilePath := filepath.Join(outDir, fmt.Sprintf("tile-%03d.%s", tile.Index+1, screenshotExtension(format)))
+		writtenPath, err := writeArtifactFile(tilePath, shot.Data)
+		if err != nil {
+			return err
+		}
+		meta := map[string]any{
+			"index": tile.Index,
+			"path":  writtenPath,
+			"bytes": len(shot.Data),
+			"clip":  tile.Clip,
+		}
+		tileMetas = append(tileMetas, meta)
+		artifacts = append(artifacts, map[string]any{"type": "screenshot-tile", "path": writtenPath})
+	}
+
+	manifest := map[string]any{
+		"type":            "screenshot-tile-manifest",
+		"format":          format,
+		"stitch_mode":     "none",
+		"tile_count":      len(tileMetas),
+		"tile_height":     tileHeight,
+		"content_width":   metrics.ContentWidth,
+		"content_height":  metrics.ContentHeight,
+		"viewport_width":  metrics.ViewportWidth,
+		"viewport_height": metrics.ViewportHeight,
+		"tiles":           tileMetas,
+	}
+	rawManifest, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return commandError("internal", "internal", fmt.Sprintf("marshal screenshot tile manifest: %v", err), ExitInternal, []string{"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --json"})
+	}
+	manifestPath, err := writeArtifactFile(filepath.Join(outDir, "manifest.json"), append(rawManifest, '\n'))
+	if err != nil {
+		return err
+	}
+	artifacts = append([]map[string]any{{"type": "screenshot-tile-manifest", "path": manifestPath}}, artifacts...)
+
+	screenshot := map[string]any{
+		"path":            manifestPath,
+		"bytes":           len(rawManifest) + 1,
+		"format":          format,
+		"full_page":       true,
+		"tile_full_page":  true,
+		"stitch_mode":     "none",
+		"manifest_path":   manifestPath,
+		"tile_count":      len(tileMetas),
+		"tile_height":     tileHeight,
+		"content_width":   metrics.ContentWidth,
+		"content_height":  metrics.ContentHeight,
+		"viewport_width":  metrics.ViewportWidth,
+		"viewport_height": metrics.ViewportHeight,
+		"tiles":           tileMetas,
+	}
+	if quality > 0 {
+		screenshot["quality"] = quality
+	}
+	if hasPreset {
+		screenshot["viewport"] = map[string]any{
+			"preset":              selectedPreset.Name,
+			"width":               selectedPreset.Width,
+			"height":              selectedPreset.Height,
+			"device_scale_factor": selectedPreset.DeviceScaleFactor,
+			"mobile":              selectedPreset.Mobile,
+		}
+	}
+	if strings.TrimSpace(navigateURL) != "" {
+		screenshot["navigate"] = map[string]any{"url": navigateURL, "wait": durationString(wait)}
+	}
+	human := fmt.Sprintf("%s\t%d tiles", manifestPath, len(tileMetas))
+	return a.render(ctx, human, map[string]any{
+		"ok":         true,
+		"target":     pageRow(target),
+		"screenshot": screenshot,
+		"artifacts":  artifacts,
+	})
+}
+
+type screenshotLayoutMetrics struct {
+	ContentWidth   float64
+	ContentHeight  float64
+	ViewportWidth  float64
+	ViewportHeight float64
+}
+
+func screenshotLayout(ctx context.Context, session *cdp.PageSession) (screenshotLayoutMetrics, error) {
+	var result struct {
+		CSSContentSize struct {
+			Width  float64 `json:"width"`
+			Height float64 `json:"height"`
+		} `json:"cssContentSize"`
+		CSSLayoutViewport struct {
+			ClientWidth  float64 `json:"clientWidth"`
+			ClientHeight float64 `json:"clientHeight"`
+		} `json:"cssLayoutViewport"`
+	}
+	if err := execSessionJSON(ctx, session, "Page.getLayoutMetrics", map[string]any{}, &result); err != nil {
+		return screenshotLayoutMetrics{}, err
+	}
+	metrics := screenshotLayoutMetrics{
+		ContentWidth:   result.CSSContentSize.Width,
+		ContentHeight:  result.CSSContentSize.Height,
+		ViewportWidth:  result.CSSLayoutViewport.ClientWidth,
+		ViewportHeight: result.CSSLayoutViewport.ClientHeight,
+	}
+	if metrics.ViewportHeight <= 0 {
+		metrics.ViewportHeight = metrics.ContentHeight
+	}
+	if metrics.ViewportWidth <= 0 {
+		metrics.ViewportWidth = metrics.ContentWidth
+	}
+	return metrics, nil
+}
+
+type screenshotTile struct {
+	Index int
+	Clip  cdp.ScreenshotClip
+}
+
+func screenshotTiles(contentWidth, contentHeight, tileHeight float64, maxTiles int) ([]screenshotTile, error) {
+	if contentWidth <= 0 || contentHeight <= 0 {
+		return nil, commandError("invalid_layout_metrics", "check_failed", "page layout metrics reported non-positive content size", ExitCheckFailed, []string{"cdp protocol exec Page.getLayoutMetrics --json"})
+	}
+	if tileHeight <= 0 {
+		return nil, commandError("invalid_tile_height", "usage", "tile height must be positive", ExitUsage, []string{"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --tile-height 900 --json"})
+	}
+	if maxTiles < 1 {
+		return nil, commandError("usage", "usage", "--tile-max must be positive", ExitUsage, []string{"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --tile-max 50 --json"})
+	}
+	count := int(math.Ceil(contentHeight / tileHeight))
+	if count > maxTiles {
+		return nil, commandError("tile_count_exceeded", "check_failed", fmt.Sprintf("page requires %d tiles, above --tile-max %d", count, maxTiles), ExitCheckFailed, []string{"cdp screenshot --tile-full-page --out-dir tmp/page-tiles --tile-max " + fmt.Sprintf("%d", count) + " --json"})
+	}
+	tiles := make([]screenshotTile, 0, count)
+	for i := 0; i < count; i++ {
+		y := float64(i) * tileHeight
+		height := math.Min(tileHeight, contentHeight-y)
+		tiles = append(tiles, screenshotTile{
+			Index: i,
+			Clip: cdp.ScreenshotClip{
+				X:      0,
+				Y:      y,
+				Width:  contentWidth,
+				Height: height,
+				Scale:  1,
+			},
+		})
+	}
+	return tiles, nil
+}
+
+func screenshotExtension(format string) string {
+	if format == "jpeg" {
+		return "jpg"
+	}
+	return format
 }
 
 func (a *app) newScreenshotRenderCommand() *cobra.Command {
