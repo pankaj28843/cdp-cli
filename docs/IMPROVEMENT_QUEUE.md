@@ -1,9 +1,19 @@
 # Improvement Queue
 
-This queue turns current backlog, Chrome DevTools MCP research, CDP docs, HN
-signal, and GitHub issue signal into concrete implementation candidates. Items
-marked `planned` may be represented in help as `not_implemented`, but only if
-the behavior is stable and covered by E2E checks.
+This document is the public-safe ledger for cdp-cli improvement work. Durable
+execution plans live outside this public repository as PRPs; this file only
+records high-level lane status, safe plan identifiers, dependency notes, and
+research sources.
+
+## Queue Status
+
+Status checked 2026-05-21.
+
+Open loose queue items: **0**.
+
+All previously listed near-term items are either implemented or assigned to an
+external PRP with validation gates. Add new ideas to external feature requests
+and PRPs first, then update this ledger with the public-safe plan identifier.
 
 ## Recently Verified
 
@@ -15,74 +25,67 @@ the behavior is stable and covered by E2E checks.
 - Network capture, WebSocket capture, and storage snapshot now share artifact
   safety metadata with redaction mode, shareability classification, unsafe
   opt-in warnings, changed sensitive fields, and synthetic leak-scan tests.
-- Screenshot capture now supports shared viewport presets (`desktop`, `laptop`,
+- Screenshot capture supports shared viewport presets (`desktop`, `laptop`,
   `tablet`, `mobile`, `iphone-12`) and emits viewport/DPR metadata in JSON.
-- Page cleanup dry-runs now expose close intent (`would_close_count`,
-  `close_required`, and follow-up commands), so agents can tell when a cron-safe
-  cleanup is observing versus actually closing candidates.
+- Page cleanup dry-runs expose close intent (`would_close_count`,
+  `close_required`, and follow-up commands), so agents can tell when cleanup is
+  observing versus actually closing candidates.
 - Cross-agent layout is normalized: `AGENTS.md` is canonical, compatibility
   instruction/skill paths are relative symlinks, and Copilot instructions point
   back to `AGENTS.md`.
 
-## Planning Snapshot
+## Planned Lanes
 
-Status checked 2026-05-21. External PRP plans exist for the next implementation
-lanes; keep those plans outside this public repo and update this queue only with
-public-safe plan identifiers and outcomes.
-
-| Lane | Queue items | Status | External PRP | Gate |
+| Lane | Previous items | Status | External PRP | Next gate |
 | --- | --- | --- | --- | --- |
-| Artifact safety | 2 | implemented | `2026-05-20T215839-public-safe-artifact-redaction-guard.md` | Reuse `internal/artifacts` for future HAR, trace, body, heap, and transcript artifacts. |
-| Screenshot ergonomics | 3-4 | partial | `2026-05-21T002011-screenshot-presets-and-tall-page-tiling.md` | Presets landed; tall-page tiling still planned. |
-| Network evidence artifacts | 5-7 | planned | `2026-05-21T002011-network-evidence-artifacts.md` | Can proceed using `internal/artifacts` for artifact safety metadata and scans. |
-| Network controls | 8-9 | planned | `2026-05-21T002011-network-control-workflows.md` | Blocked on Fetch pause/cleanup contracts. |
-| Performance evidence | 10-12 | planned | `2026-05-21T002011-performance-trace-and-insights.md` | Can proceed using `internal/artifacts` for trace/report safety metadata and scans. |
-| Isolation and handoff | 13-18 | queued | none yet | Plan after the first four lanes settle. |
+| CLI command composition | 1 | planned | `2026-05-21T050405-cli-command-composition-refactor.md` | Split command composition files without behavior changes. |
+| Artifact safety | 2 | implemented | `2026-05-20T215839-public-safe-artifact-redaction-guard.md` | Reuse `internal/artifacts` for future HAR, trace, body, heap, bundle, and transcript artifacts. |
+| Screenshot ergonomics | 3-4 | partial | `2026-05-21T002011-screenshot-presets-and-tall-page-tiling.md` | Implement explicit tall-page tiling and manifest metadata. |
+| Network evidence artifacts | 5-7 | ready | `2026-05-21T002011-network-evidence-artifacts.md` | Add HAR export first, then body and WebSocket artifact modes. |
+| Network controls | 8-9 | ready | `2026-05-21T002011-network-control-workflows.md` | Implement request blocking before Fetch-based response mocking. |
+| Performance evidence | 10-12 | ready | `2026-05-21T002011-performance-trace-and-insights.md` | Add bounded trace streaming before insight and Lighthouse report wrappers. |
+| Isolated browser contexts | 13 | planned | `2026-05-21T050405-isolated-browser-contexts.md` | Design daemon-backed context lifecycle and cleanup guarantees. |
+| Workflow transcripts | 14 | planned | `2026-05-21T050405-replayable-workflow-transcripts.md` | Define transcript schema and safe artifact policy. |
+| Debug bundle diff | 15 | planned | `2026-05-21T050405-debug-bundle-diff.md` | Define offline bundle JSON diff contract. |
+| Extension support | 16 | planned | `2026-05-21T050405-extension-support.md` | Start with capability discovery and unsupported-state classification. |
+| Frame-scoped execution | 17 | planned | `2026-05-21T050405-frame-scoped-execution.md` | Define explicit frame selector semantics before adding scoped execution. |
+| Protocol workflow compatibility | 18 | planned | `2026-05-21T050405-protocol-workflow-compatibility.md` | Extract workflow requirement sets into a testable registry. |
 
-## Near-Term Queue
+## Empty Queue Policy
 
-1. Split `internal/cli/commands.go` into focused files without changing
-   behavior.
-2. Extend the shared public-safe artifact guard from network/storage into
-   bundles, traces, heap snapshots, logs, HAR, and request/response body
-   artifacts.
-3. Extend screenshot device presets into any remaining screenshot subcommands
-   that need reproducible viewport metadata.
-4. Add full-page screenshot tiling for very tall pages.
-5. Add HAR export.
-6. Add request/response body artifact saving.
-7. Add WebSocket frame observation.
-8. Add request blocking.
-9. Add response mocking.
-10. Add performance trace start/stop.
-11. Add performance insight summaries for LCP, CLS, long tasks, and blocking
-    requests.
-12. Add Lighthouse wrapper with report artifacts.
-13. Add isolated browser context support for safe test flows.
-14. Add replayable workflow transcripts that reference artifact paths.
-15. Add comparison/diff support for two debug bundles.
-16. Add extension list/reload/action support where Chrome permits it.
-17. Add frame-scoped command execution beyond frame listing.
-18. Add richer protocol compatibility hints for workflows before execution.
+- Do not keep numbered backlog items in this file after they have an external
+  PRP owner.
+- Do not add implementation plans, local paths, screenshots, traces, logs,
+  cookies, tokens, request headers, or private browser content to this public
+  repo.
+- For a new idea, create or update `~/feature-requests/cdp-cli/` and
+  `~/plan-prps/cdp-cli/`, then add one row to `Planned Lanes`.
+- A row can move to `implemented` only after `make verify`, `make install`, and
+  `make e2e-installed` pass for the shipped change.
 
 ## Dependency Notes
 
-- The artifact guard is now the required shared path for HAR, response bodies,
-  WebSocket payloads, traces, heap snapshots, and debug bundles because those
-  artifacts can contain private page state.
-- Screenshot presets and tall-page tiling are a lower privacy risk because they
-  already write image artifacts by path, but they still need artifact metadata
-  that tells agents exactly which viewport, DPR, clip, tile count, and stitch
-  mode were used.
+- The artifact guard is the shared path for HAR, response bodies, WebSocket
+  payloads, traces, heap snapshots, debug bundles, and workflow transcripts
+  because those artifacts can contain private page state.
+- Screenshot tiling should emit metadata for viewport, DPR, clip, tile count,
+  stitch mode, manifest path, and output paths without embedding image bytes in
+  JSON.
 - `Network.getResponseBody` returns direct body text or base64 data, so HAR/body
   export must default to bounded capture, explicit redaction metadata, and local
   warnings for unsafe opt-ins.
 - `Fetch.enable` pauses matching requests until continued, fulfilled, or failed.
-  Request mocking therefore needs a cleanup/fail-open contract and tests for
-  timeout paths so it cannot hang a target.
+  Request mocking needs cleanup/fail-open tests so it cannot hang a target.
 - `Tracing.start` supports `ReturnAsStream`, and `IO.read` reads arbitrary
-  stream chunks. Trace work should write files via bounded streaming and close
-  handles rather than returning trace data in JSON.
+  stream chunks. Trace work should write files through bounded streaming and
+  close handles rather than returning trace data in JSON.
+- `Target.createBrowserContext` and `Target.disposeBrowserContext` make isolated
+  context workflows possible, but lifecycle cleanup must be explicit and
+  daemon-backed.
+- Extension support varies by Chrome protocol version and must be capability
+  checked before any mutating command is exposed.
+- Frame-scoped execution must use explicit frame selection; ambiguous frame
+  matches must fail before user code is evaluated.
 
 ## Research Signals
 
