@@ -99,8 +99,8 @@ func commandExamples(path string) []string {
 			"cdp daemon restart --browser-url <browser-url> --json",
 		},
 		"cdp daemon keepalive": {
-			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json",
-			"cdp --browser-mode headless daemon keepalive --repair --json",
+			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --reconnect 30s --display :0 --json",
+			"cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json",
 			"flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp bash scripts/cdp-headless-healthcheck.sh",
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp daemon keepalive --connection default --probe auto --json",

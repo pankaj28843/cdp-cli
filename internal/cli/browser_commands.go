@@ -136,6 +136,28 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 				return err
 			}
 			now := time.Now().UTC()
+			if ifOlderThan > 0 {
+				if launch, ok, err := browser.ReuseManagedChrome(ctx, store.Dir); err != nil {
+					return err
+				} else if ok {
+					status, err := browserProfileStatusForStore(ctx, store.Dir)
+					if err != nil {
+						return err
+					}
+					status.Seeded = true
+					status.ManagedBrowser = browser.ManagedMetadataStatus(launch.Metadata)
+					status.SeedAction = "skipped_running"
+					status.SeedIntervalSeconds = int64(ifOlderThan.Seconds())
+					status.Warnings = append(status.Warnings, "managed headless Chrome is running; skipped profile replacement")
+					if lastSeededAt, err := time.Parse(time.RFC3339, launch.Metadata.LastSeededAt); err == nil {
+						age := now.Sub(lastSeededAt)
+						if age >= 0 {
+							status.SeedAgeSeconds = int64(age.Seconds())
+						}
+					}
+					return a.render(ctx, "browser profile skipped_running", status)
+				}
+			}
 			metadata, skipped, seedAgeSeconds, err := prepareManagedProfileWithAgeGate(store.Dir, strategy, now, ifOlderThan)
 			if err != nil {
 				return err

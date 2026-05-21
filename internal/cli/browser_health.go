@@ -83,6 +83,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		"recent_crashes":         []map[string]any{},
 		"crash_capture":          "not_enabled",
 	}
+	health["daemon_processes_by_mode"] = a.daemonProcessesByMode(ctx)
 	if status.Runtime != nil {
 		health["runtime"] = map[string]any{
 			"pid":          status.Runtime.PID,
@@ -121,6 +122,64 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		health["state"] = "degraded"
 	}
 	return health
+}
+
+func (a *app) daemonProcessesByMode(ctx context.Context) map[string]any {
+	store, err := a.stateStore()
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	out := map[string]any{}
+	for _, mode := range []string{"headed", "headless"} {
+		summary := map[string]any{
+			"browser_mode":           mode,
+			"daemon_process_running": false,
+			"daemon_rpc_ready":       false,
+			"chrome_process_count":   0,
+			"process_type_counts":    map[string]int{},
+			"connected":              false,
+		}
+		runtime, ok, err := daemon.LoadRuntimeForMode(ctx, store.Dir, mode)
+		if err != nil {
+			summary["runtime_error"] = err.Error()
+			out[mode] = summary
+			continue
+		}
+		if !ok {
+			summary["state"] = "not_running"
+			out[mode] = summary
+			continue
+		}
+		summary["state"] = "runtime_present"
+		summary["daemon_pid"] = runtime.PID
+		summary["socket_path"] = runtime.SocketPath
+		if runtime.ChromePID > 0 {
+			summary["managed_chrome_pid"] = runtime.ChromePID
+		}
+		if runtime.ChromePort != "" {
+			summary["managed_chrome_port"] = runtime.ChromePort
+		}
+		running := daemon.RuntimeRunning(runtime)
+		ready := running && daemon.RuntimeSocketReady(ctx, runtime)
+		summary["daemon_process_running"] = running
+		summary["daemon_rpc_ready"] = ready
+		if !ready {
+			out[mode] = summary
+			continue
+		}
+		processInfo, err := collectProcessInfo(ctx, daemon.RuntimeClient{Runtime: runtime})
+		if err != nil {
+			summary["process_info_error"] = err.Error()
+			out[mode] = summary
+			continue
+		}
+		summary["state"] = "connected"
+		summary["connected"] = true
+		summary["chrome_process_count"] = processInfo.ProcessCount
+		summary["process_type_counts"] = processInfo.TypeCounts
+		out[mode] = summary
+	}
+	return out
 }
 
 func daemonHealthState(status daemon.Status) string {

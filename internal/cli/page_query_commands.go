@@ -2,11 +2,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"encoding/json"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
@@ -665,6 +666,15 @@ func waitForPageCondition(ctx context.Context, session *cdp.PageSession, poll ti
 func evaluateJSONValue(ctx context.Context, session *cdp.PageSession, expression, label string, out any) error {
 	result, err := session.Evaluate(ctx, expression, true)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return commandError(
+				"timeout",
+				"timeout",
+				fmt.Sprintf("%s target %s: %v", label, session.TargetID, context.DeadlineExceeded),
+				ExitTimeout,
+				[]string{"cdp wait eval 'window.__rendered === true' --timeout 15s --json"},
+			)
+		}
 		return commandError(
 			"connection_failed",
 			"connection",

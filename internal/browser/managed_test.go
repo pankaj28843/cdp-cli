@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -297,6 +298,84 @@ func TestWaitManagedActivePortRejectsInvalidFile(t *testing.T) {
 	defer cancel()
 	if _, _, err := browser.WaitManagedActivePort(ctx, userDataDir); err == nil {
 		t.Fatalf("WaitManagedActivePort returned nil error, want invalid active port failure")
+	}
+}
+
+func TestStartManagedChromeOutlivesCallerContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell chrome test is unix-only")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := `#!/usr/bin/env sh
+set -eu
+user_data_dir=
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) user_data_dir="${arg#--user-data-dir=}" ;;
+  esac
+done
+mkdir -p "$user_data_dir"
+printf '12345\n/devtools/browser/test\n' > "$user_data_dir/DevToolsActivePort"
+sleep 30
+`
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake chrome: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromePath})
+	if err != nil {
+		t.Fatalf("StartManagedChrome returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		process, findErr := os.FindProcess(launch.Metadata.ChromePID)
+		if findErr == nil {
+			_ = process.Kill()
+		}
+	})
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	process, err := os.FindProcess(launch.Metadata.ChromePID)
+	if err != nil {
+		t.Fatalf("FindProcess returned error: %v", err)
+	}
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("managed chrome died when caller context was canceled: %v", err)
+	}
+}
+
+func TestReuseManagedChromeUsesExistingActivePort(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	userDataDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(userDataDir, 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte("34567\n/devtools/browser/reused\n"), 0o600); err != nil {
+		t.Fatalf("write active port: %v", err)
+	}
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           os.Getpid(),
+		UserDataDir:         userDataDir,
+		DebuggingPort:       "12345",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyCopyDefault,
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+
+	launch, ok, err := browser.ReuseManagedChrome(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("ReuseManagedChrome returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ReuseManagedChrome ok = false, want true")
+	}
+	wantEndpoint := "ws://" + net.JoinHostPort("127.0.0.1", "34567") + "/devtools/browser/reused"
+	if launch.Endpoint != wantEndpoint || launch.Metadata.DebuggingPort != "34567" {
+		t.Fatalf("ReuseManagedChrome = %+v, want endpoint from active port", launch)
 	}
 }
 

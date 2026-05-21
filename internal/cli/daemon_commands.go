@@ -683,6 +683,16 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 			status := a.daemonStatus(ctx, probe)
 			probeResult := map[string]any{"mode": probeMode, "result": probe.State, "repair_requested": repair}
 			runtimeHealthy, runtimeCheck := keepaliveRuntimeCheck(ctx, status)
+			if runtimeHealthy && reconnect > 0 && status.Runtime != nil && status.Runtime.ReconnectInterval != reconnect.String() {
+				runtimeHealthy = false
+				runtimeCheck = map[string]any{
+					"ok":                false,
+					"result":            "reconnect_interval_mismatch",
+					"runtime_state":     status.State,
+					"current_reconnect": status.Runtime.ReconnectInterval,
+					"wanted_reconnect":  reconnect.String(),
+				}
+			}
 			if status.State == "running" && runtimeHealthy {
 				return a.render(ctx, fmt.Sprintf("keepalive\t%s\thealthy", connectionName), map[string]any{
 					"ok":         true,
@@ -857,6 +867,14 @@ func (a *app) connectionStateName(ctx context.Context) string {
 
 func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chromeCommand string) (*managedKeepAlive, keepaliveChromeStatus, error) {
 	status := keepaliveChromeStatus{Checked: true, Command: chromeCommand}
+	if launch, ok, err := browser.ReuseManagedChrome(ctx, stateDir); err != nil {
+		return nil, status, err
+	} else if ok {
+		managedStatus := browser.ManagedMetadataStatus(launch.Metadata)
+		status.Running = true
+		status.ManagedBrowser = &managedStatus
+		return &managedKeepAlive{Endpoint: launch.Endpoint, Metadata: launch.Metadata, ManagedBrowser: &managedStatus}, status, nil
+	}
 	seedStrategy := ""
 	if cfg, cfgErr := config.Load(a.opts.config); cfgErr == nil {
 		seedStrategy = cfg.Browser.Headless.ProfileSeedStrategy
