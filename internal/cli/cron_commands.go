@@ -357,14 +357,19 @@ func managedCronBlock(opts cronRenderOptions) string {
 	}
 	lines := []string{
 		cronManagedBlockStart,
-		fmt.Sprintf("* * * * * /usr/bin/flock -n %s/locks/cron-headed-heal.lock env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed cron heal headed --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", logDir, display, xdgRuntimeDir, cdpBin, reconnect, display, logDir),
-		fmt.Sprintf("* * * * * /usr/bin/flock -n %s/locks/keepalive-headless.lock %s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", logDir, cdpBin, reconnect, logDir),
-		fmt.Sprintf("* * * * * /usr/bin/flock -n %s/locks/headless-health.lock %s --browser-mode headless daemon health --json >> %s/headless-health.log 2>&1", logDir, cdpBin, logDir),
-		fmt.Sprintf("0 */6 * * * /usr/bin/flock -n %s/locks/headless-profile-seed.lock %s --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json >> %s/profile-seed-headless.log 2>&1", logDir, cdpBin, logDir),
-		fmt.Sprintf("* * * * * /usr/bin/flock -n %s/locks/page-cleanup-headless.lock %s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> %s/page-cleanup-headless.log 2>&1", logDir, cdpBin, logDir),
+		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/cron-headed-heal.lock", logDir), fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed cron heal headed --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir))),
+		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
+		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
+		fmt.Sprintf("0 */6 * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy managed --if-older-than 6h --json >> %s/profile-seed-headless.log 2>&1", cdpBin, logDir))),
+		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
 		cronManagedBlockEnd,
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func cronLockedCommand(lockPath, command string) string {
+	quotedCommand := cronValue(command)
+	return fmt.Sprintf("cdp_lock=%s; mkdir -p \"$(dirname \"$cdp_lock\")\"; cdp_flock=$(command -v flock 2>/dev/null || true); if [ -n \"$cdp_flock\" ]; then \"$cdp_flock\" -n \"$cdp_lock\" sh -c %s; elif mkdir \"$cdp_lock.dir\" 2>/dev/null; then trap 'rmdir \"$cdp_lock.dir\"' EXIT; %s; fi", lockPath, quotedCommand, command)
 }
 
 func cronValue(value string) string {

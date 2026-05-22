@@ -831,7 +831,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&staleLockAfter, "stale-lock-after", 10*time.Minute, "remove a keepalive lock older than this duration; 0 disables stale cleanup")
 	cmd.Flags().StringVar(&probeMode, "probe", "auto", "probe mode: passive, active, or auto")
 	cmd.Flags().StringVar(&display, "display", os.Getenv("DISPLAY"), "DISPLAY value to use when launching Chrome for auto-connect")
-	cmd.Flags().StringVar(&chromeCommand, "chrome-command", "google-chrome-stable", "Chrome command to launch for auto-connect repair; empty disables launch")
+	cmd.Flags().StringVar(&chromeCommand, "chrome-command", defaultChromeCommand(), "Chrome command to launch for auto-connect repair; empty disables launch")
 	cmd.Flags().StringArrayVar(&chromeArgs, "chrome-args", nil, "extra Chrome argument; repeat for multiple arguments")
 	cmd.Flags().BoolVar(&repair, "repair", false, "human-managed repair mode: remove stale runtime state and restart the daemon when safe")
 	return cmd
@@ -929,6 +929,14 @@ func keepaliveRuntimeCheck(ctx context.Context, status daemon.Status) (bool, map
 	check["result"] = "target_list_ok"
 	check["target_count"] = len(result.TargetInfos)
 	return true, check
+}
+
+func defaultChromeCommand() string {
+	chrome, err := browser.DiscoverChrome("")
+	if err != nil {
+		return "google-chrome-stable"
+	}
+	return chrome
 }
 
 func ensureChromeForKeepalive(ctx context.Context, display, chromeCommand string, chromeArgs []string) (keepaliveChromeStatus, error) {

@@ -133,7 +133,9 @@ CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$bin
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == false and .action == "unchanged"' >/dev/null
 rg -q '^SHELL=/bin/sh$' "$fake_crontab_store"
 rg -q 'cron heal headed' "$fake_crontab_store"
-rg -q '/usr/bin/flock -n' "$fake_crontab_store"
+rg -q 'command -v flock' "$fake_crontab_store"
+rg -q -- '--strategy managed' "$fake_crontab_store"
+! rg -q -e '/usr/bin/flock -n' -e '--strategy copy-default' "$fake_crontab_store"
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron remove --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and .removed == true' >/dev/null
 ! rg -q 'cdp-cli managed browser runtime tasks' "$fake_crontab_store"
 rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
@@ -288,9 +290,13 @@ CDP_BROWSER_MODE=headless "$binary" browser mode get --state-dir "$state_dir" --
 "$binary" --state-dir "$state_dir" browser profile seed --strategy managed --json | jq -e '.ok == true and .seeded == true and .exists == true and .seed_strategy == "managed" and .managed_browser.browser_mode == "headless" and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' >/dev/null
 profile_copy_home="$state_dir/profile-copy-home"
 profile_copy_config_dir="$profile_copy_home/xdg-config"
-mkdir -p "$profile_copy_config_dir/google-chrome/Default"
-printf 'local-state' > "$profile_copy_config_dir/google-chrome/Local State"
-printf 'cookie-db' > "$profile_copy_config_dir/google-chrome/Default/Cookies"
+profile_copy_source="$profile_copy_config_dir/google-chrome"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  profile_copy_source="$profile_copy_home/Library/Application Support/Google/Chrome"
+fi
+mkdir -p "$profile_copy_source/Default"
+printf 'local-state' > "$profile_copy_source/Local State"
+printf 'cookie-db' > "$profile_copy_source/Default/Cookies"
 HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --json | jq -e '.ok == true and .seeded == true and .exists == true and .seed_action == "seeded" and .seed_strategy == "copy-default" and .managed_browser.browser_mode == "headless" and .managed_browser.profile_seed_strategy == "copy-default" and .managed_browser.default_profile_copied == true and .managed_browser.copied_file_count >= 2 and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' >/dev/null
 test -s "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
 printf 'managed-cookie-db' > "$state_dir-copy-default/browser/headless-profile/Default/Cookies"

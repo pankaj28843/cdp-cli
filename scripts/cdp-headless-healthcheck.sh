@@ -13,11 +13,29 @@ if [[ -n "${CDP_STATE_DIR:-}" ]]; then
 fi
 
 mkdir -p "$(dirname "$lock_path")" "$artifact_dir"
-exec 9>"$lock_path"
-if ! flock -n 9; then
-  jq -n --arg lock "$lock_path" '{ok: true, state: "locked", action: "skipped", lock: $lock}'
-  exit 0
+lock_dir="$lock_path.dir"
+cleanup_lock=()
+flock_bin="$(command -v flock 2>/dev/null || true)"
+if [[ -n "$flock_bin" ]]; then
+  exec 9>"$lock_path"
+  if ! "$flock_bin" -n 9; then
+    jq -n --arg lock "$lock_path" '{ok: true, state: "locked", action: "skipped", lock: $lock}'
+    exit 0
+  fi
+else
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    jq -n --arg lock "$lock_dir" '{ok: true, state: "locked", action: "skipped", lock: $lock}'
+    exit 0
+  fi
+  cleanup_lock=("$lock_dir")
 fi
+
+cleanup() {
+  if [[ "${#cleanup_lock[@]}" -gt 0 ]]; then
+    rmdir "${cleanup_lock[0]}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="$artifact_dir/$run_id"

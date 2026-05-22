@@ -374,6 +374,11 @@ func TestBrowserProfileSeedCopyDefaultUsesSyntheticProfile(t *testing.T) {
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	sourceRoot := filepath.Join(homeDir, ".config", "google-chrome")
+	if runtime.GOOS == "darwin" {
+		sourceRoot = filepath.Join(homeDir, "Library", "Application Support", "Google", "Chrome")
+	} else if runtime.GOOS == "windows" {
+		sourceRoot = filepath.Join(homeDir, "Google", "Chrome", "User Data")
+	}
 	if err := os.MkdirAll(filepath.Join(sourceRoot, "Default"), 0o700); err != nil {
 		t.Fatalf("create source profile: %v", err)
 	}
@@ -424,6 +429,11 @@ func TestBrowserProfileSeedIfOlderThanSkipsRecentCopyDefault(t *testing.T) {
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	sourceRoot := filepath.Join(homeDir, ".config", "google-chrome")
+	if runtime.GOOS == "darwin" {
+		sourceRoot = filepath.Join(homeDir, "Library", "Application Support", "Google", "Chrome")
+	} else if runtime.GOOS == "windows" {
+		sourceRoot = filepath.Join(homeDir, "Google", "Chrome", "User Data")
+	}
 	if err := os.MkdirAll(filepath.Join(sourceRoot, "Default"), 0o700); err != nil {
 		t.Fatalf("create source profile: %v", err)
 	}

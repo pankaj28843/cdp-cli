@@ -528,6 +528,9 @@ func ValidateLoopbackEndpoint(rawURL string) error {
 }
 
 func chromeCandidates(goos string) []string {
+	if value := strings.TrimSpace(os.Getenv("CDP_CHROME_CANDIDATES")); value != "" {
+		return strings.Split(value, string(os.PathListSeparator))
+	}
 	switch goos {
 	case "darwin":
 		return []string{

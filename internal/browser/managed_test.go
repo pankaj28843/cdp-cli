@@ -417,6 +417,9 @@ func TestDiscoverChromeMissing(t *testing.T) {
 	oldPath := os.Getenv("PATH")
 	t.Setenv("PATH", "")
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+	if runtime.GOOS == "darwin" {
+		t.Setenv("CDP_CHROME_CANDIDATES", filepath.Join(t.TempDir(), "missing-chrome"))
+	}
 	if _, err := browser.DiscoverChrome(""); err == nil {
 		t.Fatalf("DiscoverChrome returned nil error, want missing chrome")
 	}

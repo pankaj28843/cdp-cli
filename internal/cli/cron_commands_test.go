@@ -29,8 +29,13 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	if !strings.Contains(afterFirst, "cron heal headed") || !strings.Contains(afterFirst, "/usr/bin/flock -n") {
-		t.Fatalf("crontab after install missing headed heal or flock entries:\n%s", afterFirst)
+	for _, want := range []string{"cron heal headed", "command -v flock", "--strategy managed"} {
+		if !strings.Contains(afterFirst, want) {
+			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
+		}
+	}
+	if strings.Contains(afterFirst, "--strategy copy-default") || strings.Contains(afterFirst, "/usr/bin/flock") {
+		t.Fatalf("crontab after install used non-portable or unsafe defaults:\n%s", afterFirst)
 	}
 
 	var second cronInstallResult
