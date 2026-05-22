@@ -317,6 +317,7 @@ func browserProfileNextCommands(seeded bool) []string {
 
 type selectedConnectionSummary struct {
 	Name           string `json:"name"`
+	BrowserMode    string `json:"browser_mode,omitempty"`
 	ConnectionMode string `json:"connection_mode"`
 	Source         string `json:"source"`
 	AutoConnect    bool   `json:"auto_connect"`
@@ -334,6 +335,7 @@ func (a *app) selectedConnectionSummary(ctx context.Context) (*selectedConnectio
 	}
 	return &selectedConnectionSummary{
 		Name:           conn.Name,
+		BrowserMode:    conn.BrowserMode,
 		ConnectionMode: connectionModeForSummary(conn),
 		Source:         source,
 		AutoConnect:    conn.AutoConnect,

@@ -12,9 +12,11 @@ architecture is intentionally small: keep browser protocol mechanics in
 - Browser access is explicit. Default-profile auto-connect requires user
   approval and the CLI must not persist cookies, headers, screenshots, traces,
   page text, or private profile data.
-- Browser runtime mode is separate from connection mode. `browser_mode` chooses
-  the runtime (`headed` or `headless`); `connection_mode` chooses how the daemon
-  reaches Chrome (`browser_url` or `auto_connect`).
+- Browser runtime mode is the primary user-facing selector. `browser_mode`
+  chooses the runtime (`headed` or `headless`) for daemon, keepalive, and browser
+  commands; `connection_mode` only describes how that daemon reaches Chrome
+  (`browser_url` or `auto_connect`). Named connections are advanced endpoint or
+  project overrides, not the normal headed/headless selector.
 - Browser commands use the daemon as their only CDP entry point. The daemon owns
   the approved browser WebSocket and local RPC socket; short CLI invocations
   route through that socket instead of dialing Chrome directly.
@@ -58,8 +60,9 @@ strategy, and debugging port, but not ownership internals.
 
 Runtime artifacts are mode-specific so headed and headless can coexist: headed
 keeps the historical singleton paths, while headless uses its own runtime file,
-socket, log, keepalive lock, selected page, and cleanup scope. Cleanup and page
-selection must always resolve against the selected browser mode.
+socket, log, keepalive lock, selected page, and cleanup scope. Daemon lookup,
+cleanup, and page selection must always resolve against the selected browser
+mode before considering named connection overrides.
 
 ## Validation Contract
 

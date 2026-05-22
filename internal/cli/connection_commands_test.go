@@ -169,15 +169,72 @@ func TestConnectionResolveJSON(t *testing.T) {
 		BrowserMode       string `json:"browser_mode"`
 		BrowserModeSource string `json:"browser_mode_source"`
 		Connection        struct {
-			Name string `json:"name"`
-			Mode string `json:"mode"`
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			BrowserMode string `json:"browser_mode"`
 		} `json:"connection"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("connection resolve output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Source != "selected" || got.BrowserMode != "headed" || got.BrowserModeSource != "default" || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" {
-		t.Fatalf("connection resolve = %+v, want selected default with headed/default browser mode", got)
+	if !got.OK || got.Source != "browser_mode" || got.BrowserMode != "headed" || got.BrowserModeSource != "default" || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" || got.Connection.BrowserMode != "headed" {
+		t.Fatalf("connection resolve = %+v, want browser-mode default with headed/default browser mode", got)
+	}
+}
+
+func TestConnectionResolveFollowsBrowserModeBeforeSelectedConnection(t *testing.T) {
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "headless", "--browser-url", "http://headless.test/devtools", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add headless exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "connection", "add", "headed", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add headed exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "select", "headless", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection select exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "connection", "resolve", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection resolve headed exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK         bool   `json:"ok"`
+		Source     string `json:"source"`
+		Connection struct {
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			BrowserMode string `json:"browser_mode"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection resolve output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Source != "browser_mode" || got.Connection.Name != "headed" || got.Connection.Mode != "auto_connect" || got.Connection.BrowserMode != "headed" {
+		t.Fatalf("connection resolve = %+v, want headed browser-mode connection despite selected headless", got)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "--connection", "headless", "connection", "resolve", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("explicit connection resolve exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("explicit connection resolve output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Source != "named" || got.Connection.Name != "headless" {
+		t.Fatalf("explicit connection resolve = %+v, want named override", got)
 	}
 }
 

@@ -57,13 +57,13 @@ e2e-demo-installed:
 	bash scripts/e2e_demo.sh "$$cdp_bin"
 
 cron-install:
-	bash scripts/cdp-cron-install.sh install
+	cdp cron install --profile agent --json
 
 cron-show:
-	bash scripts/cdp-cron-install.sh show
+	cdp cron status --json
 
 cron-remove:
-	bash scripts/cdp-cron-install.sh remove
+	cdp cron remove --json
 
 verify: fmt-check test vet build e2e leak-check
 

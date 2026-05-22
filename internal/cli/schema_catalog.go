@@ -134,10 +134,10 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"connection-add": {
 			Name:        "connection-add",
-			Description: "Saved browser connection metadata after adding or updating a named connection.",
+			Description: "Saved browser connection metadata after adding or updating a named advanced endpoint override.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the connection was saved."},
-				{Name: "connection", Type: "connection", Required: true, Description: "Saved connection name, mode, browser URL metadata, project scope, and auto-connect settings."},
+				{Name: "connection", Type: "connection", Required: true, Description: "Saved connection name, browser mode, mode, browser URL metadata, project scope, and auto-connect settings."},
 				{Name: "state_path", Type: "string", Required: true, Description: "Local state file path where connection metadata was saved."},
 			},
 		},
@@ -146,7 +146,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Saved browser connections visible to the current profile and state directory.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when connection metadata was listed."},
-				{Name: "connections", Type: "array<connection>", Required: true, Description: "Saved connections with name, mode, project, and selection metadata."},
+				{Name: "connections", Type: "array<connection>", Required: true, Description: "Saved connections with name, browser mode, connection mode, project, and selection metadata."},
 				{Name: "current", Type: "string", Required: false, Description: "Currently selected connection name when one is selected."},
 			},
 		},
@@ -187,10 +187,10 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"connection-resolve": {
 			Name:        "connection-resolve",
-			Description: "Effective browser connection after applying explicit, project, current, and environment selection rules.",
+			Description: "Effective browser connection after applying browser-mode-first explicit, project, current, and environment selection rules.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when an effective connection was resolved."},
-				{Name: "source", Type: "string", Required: true, Description: "Selection source such as explicit, project, selected, environment, or none."},
+				{Name: "source", Type: "string", Required: true, Description: "Selection source such as flags, named, project, selected, browser_mode, single, or none."},
 				{Name: "browser_mode", Type: "string", Required: true, Description: "Resolved browser runtime mode: headed or headless."},
 				{Name: "browser_mode_source", Type: "string", Required: true, Description: "Source of the resolved browser runtime mode."},
 				{Name: "connection", Type: "connection", Required: false, Description: "Resolved connection metadata when available; connection.mode remains browser_url or auto_connect."},

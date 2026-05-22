@@ -261,6 +261,7 @@ func (a *app) rememberDaemonConnection(ctx context.Context, name string) (*state
 	conn := state.Connection{
 		Name:        name,
 		Mode:        a.connectionMode(),
+		BrowserMode: a.browserModeName(),
 		BrowserURL:  a.opts.browserURL,
 		AutoConnect: a.opts.autoConnect,
 		UserDataDir: a.opts.userDataDir,

@@ -19,6 +19,7 @@ type Store struct {
 type Connection struct {
 	Name        string `json:"name"`
 	Mode        string `json:"mode"`
+	BrowserMode string `json:"browser_mode,omitempty"`
 	BrowserURL  string `json:"browser_url,omitempty"`
 	AutoConnect bool   `json:"auto_connect"`
 	Channel     string `json:"channel,omitempty"`

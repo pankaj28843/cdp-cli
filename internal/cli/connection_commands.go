@@ -72,9 +72,14 @@ func (a *app) newConnectionAddCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			browserMode, err := a.resolveBrowserMode(cmd)
+			if err != nil {
+				return err
+			}
 			conn := state.Connection{
 				Name:        args[0],
 				Mode:        mode,
+				BrowserMode: string(browserMode.Mode),
 				BrowserURL:  browserURL,
 				AutoConnect: autoConnect,
 				UserDataDir: a.opts.userDataDir,
@@ -391,10 +396,12 @@ func (a *app) newConnectionResolveCommand() *cobra.Command {
 }
 
 func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, bool, error) {
+	browserMode := a.browserModeName()
 	if a.opts.browserURL != "" || a.opts.autoConnect {
 		conn := state.Connection{
 			Name:        "flags",
 			Mode:        a.connectionMode(),
+			BrowserMode: browserMode,
 			BrowserURL:  a.opts.browserURL,
 			AutoConnect: a.opts.autoConnect,
 			UserDataDir: a.opts.userDataDir,
@@ -423,21 +430,46 @@ func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, 
 				[]string{"cdp connection list --json", "cdp connection add <name> --browser-url <browser-url> --json"},
 			)
 		}
-		return conn, "named", true, nil
+		return withConnectionBrowserMode(conn, browserMode), "named", true, nil
+	}
+	if conn, ok := connectionForBrowserMode(file.Connections, browserMode); ok {
+		return conn, "browser_mode", true, nil
 	}
 	cwd, cwdErr := filepath.Abs(".")
 	if cwdErr == nil {
-		if conn, ok := state.ProjectConnection(file, cwd); ok {
-			return conn, "project", true, nil
+		if conn, ok := state.ProjectConnection(file, cwd); ok && connectionMatchesBrowserMode(conn, browserMode) {
+			return withConnectionBrowserMode(conn, browserMode), "project", true, nil
 		}
 	}
 	if file.Selected != "" {
-		conn, ok := state.ConnectionByName(file, file.Selected)
-		return conn, "selected", ok, nil
+		if conn, ok := state.ConnectionByName(file, file.Selected); ok && connectionMatchesBrowserMode(conn, browserMode) {
+			return withConnectionBrowserMode(conn, browserMode), "selected", true, nil
+		}
 	}
 	conn, ok := state.CurrentConnection(file)
-	if ok {
-		return conn, "single", true, nil
+	if ok && connectionMatchesBrowserMode(conn, browserMode) {
+		return withConnectionBrowserMode(conn, browserMode), "single", true, nil
 	}
 	return state.Connection{}, "", false, nil
+}
+
+func connectionForBrowserMode(connections []state.Connection, browserMode string) (state.Connection, bool) {
+	for _, conn := range connections {
+		if strings.TrimSpace(conn.BrowserMode) == browserMode {
+			return conn, true
+		}
+	}
+	return state.Connection{}, false
+}
+
+func connectionMatchesBrowserMode(conn state.Connection, browserMode string) bool {
+	mode := strings.TrimSpace(conn.BrowserMode)
+	return mode == "" || mode == browserMode
+}
+
+func withConnectionBrowserMode(conn state.Connection, browserMode string) state.Connection {
+	if conn.BrowserMode == "" {
+		conn.BrowserMode = browserMode
+	}
+	return conn
 }

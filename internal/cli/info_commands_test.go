@@ -22,8 +22,8 @@ func TestScheduledTasksDoctorCheckReportsCleanupTask(t *testing.T) {
 		t.Fatalf("scheduled task check = %+v, want pass message for flocked mode-explicit keepalive and cleanup", check)
 	}
 	next, ok := check["next_commands"].([]string)
-	if !ok || !testContainsString(next, "make cron-install") || !testContainsString(next, `(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1') | crontab -`) {
-		t.Fatalf("scheduled task next_commands = %+v, want make and flocked mode-explicit cleanup install commands", check["next_commands"])
+	if !ok || !testContainsString(next, "cdp cron status --json") || !testContainsString(next, "cdp cron install --profile agent --json") {
+		t.Fatalf("scheduled task next_commands = %+v, want built-in cdp cron management commands", check["next_commands"])
 	}
 }
 
@@ -72,6 +72,7 @@ func TestScheduledTaskBrowserModeParsesFlagAndEnvForms(t *testing.T) {
 		"* * * * * cdp --browser-mode=headless daemon keepalive --repair --json": "headless",
 		"* * * * * CDP_BROWSER_MODE=headed cdp daemon keepalive --repair --json": "headed",
 		"* * * * * cdp daemon keepalive --repair --json":                         "",
+		"* * * * * cdp --browser-mode headed cron heal headed --json":            "headed",
 	}
 	for line, want := range tests {
 		if got := scheduledTaskBrowserMode(line); got != want {

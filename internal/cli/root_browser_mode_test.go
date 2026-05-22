@@ -77,6 +77,7 @@ func TestBrowserModeGetJSON(t *testing.T) {
 	var addOut, addErr bytes.Buffer
 	addCode := Execute(context.Background(), []string{
 		"--state-dir", stateDir,
+		"--config", configPath,
 		"connection", "add", "local",
 		"--browser-url", "http://localhost/devtools",
 		"--json",
@@ -104,6 +105,7 @@ func TestBrowserModeGetJSON(t *testing.T) {
 		NextCommands      []string                 `json:"next_commands"`
 		Selected          struct {
 			Name           string `json:"name"`
+			BrowserMode    string `json:"browser_mode"`
 			ConnectionMode string `json:"connection_mode"`
 			Source         string `json:"source"`
 		} `json:"selected_connection"`
@@ -117,8 +119,8 @@ func TestBrowserModeGetJSON(t *testing.T) {
 	if len(got.NextCommands) == 0 {
 		t.Fatalf("NextCommands is empty")
 	}
-	if got.Selected.Name != "local" || got.Selected.ConnectionMode != "browser_url" || got.Selected.Source != "selected" {
-		t.Fatalf("Selected = %+v, want selected local browser_url", got.Selected)
+	if got.Selected.Name != "local" || got.Selected.BrowserMode != "headless" || got.Selected.ConnectionMode != "browser_url" || got.Selected.Source != "browser_mode" {
+		t.Fatalf("Selected = %+v, want browser-mode local headless browser_url", got.Selected)
 	}
 }
 

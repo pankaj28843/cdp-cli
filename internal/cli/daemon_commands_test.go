@@ -142,6 +142,56 @@ func TestDaemonStatusUsesSelectedBrowserModeRuntime(t *testing.T) {
 	}
 }
 
+func TestHeadedBrowserModeIgnoresSelectedHeadlessConnection(t *testing.T) {
+	stateDir := filepath.Join(os.TempDir(), "cdp-cli-headed-mode-selected-headless-test")
+	if err := os.RemoveAll(stateDir); err != nil {
+		t.Fatalf("RemoveAll state dir returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll state dir returned error: %v", err)
+	}
+	socketPath := filepath.Join(stateDir, "daemon.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen headed returned error: %v", err)
+	}
+	defer listener.Close()
+	if err := daemon.SaveRuntime(context.Background(), stateDir, daemon.Runtime{PID: os.Getpid(), BrowserMode: "headed", ConnectionMode: "browser_url", SocketPath: socketPath}); err != nil {
+		t.Fatalf("SaveRuntime headed returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "headless", "--browser-url", "http://headless.test/devtools", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "daemon", "status", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon status exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Daemon struct {
+			State          string `json:"state"`
+			BrowserMode    string `json:"browser_mode"`
+			ConnectionMode string `json:"connection_mode"`
+			Runtime        struct {
+				BrowserMode    string `json:"browser_mode"`
+				ConnectionMode string `json:"connection_mode"`
+			} `json:"runtime"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon status output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if got.Daemon.State != "running" || got.Daemon.BrowserMode != "headed" || got.Daemon.ConnectionMode != "browser_url" || got.Daemon.Runtime.BrowserMode != "headed" || got.Daemon.Runtime.ConnectionMode != "browser_url" {
+		t.Fatalf("daemon status = %+v, want headed runtime despite selected headless connection", got.Daemon)
+	}
+}
+
 func TestManagedHeadlessRuntimeOverridesSelectedAutoConnect(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

@@ -305,7 +305,7 @@ func agentBootstrapPath() map[string]any {
 			"cdp doctor --check headless-security --json",
 			"cdp doctor --check browser-health --json",
 			"cdp daemon health --json",
-			"bash scripts/cdp-headless-healthcheck.sh",
+			"cdp cron status --json",
 			"cdp pages --json",
 		},
 		"recover_commands": []string{
@@ -315,7 +315,7 @@ func agentBootstrapPath() map[string]any {
 			"cdp doctor --check browser-health --json",
 			"cdp daemon health --json",
 			"cdp daemon logs --tail 50 --json",
-			"bash scripts/cdp-headless-healthcheck.sh",
+			"cdp cron diff --json",
 		},
 		"stop_signals": []string{
 			"human_required",
@@ -391,14 +391,10 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 			"has_unflocked_cdp_task":         summary.HasUnflockedCDPTask,
 		},
 		"next_commands": []string{
-			"make cron-install",
-			"make cron-show",
-			"crontab -l | grep cdp",
-			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) $HOME/.local/bin/cdp --browser-mode headed daemon keepalive --auto-connect --repair --reconnect 30s --display :0 --json >> $HOME/.cdp-cli/keepalive-headed.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/keepalive-headless.lock $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json >> $HOME/.cdp-cli/keepalive-headless.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null; echo '* * * * * flock -n $HOME/.cdp-cli/locks/headless-health.lock CDP_BIN=$HOME/.local/bin/cdp CDP_LOG_DIR=$HOME/.cdp-cli bash /path/to/cdp-cli/scripts/cdp-headless-healthcheck.sh >> $HOME/.cdp-cli/headless-health.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null; echo '0 */6 * * * flock -n $HOME/.cdp-cli/locks/headless-profile-seed.lock $HOME/.local/bin/cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json >> $HOME/.cdp-cli/profile-seed-headless.log 2>&1') | crontab -`,
-			`(crontab -l 2>/dev/null | grep -v 'cdp page cleanup'; echo '* * * * * flock -n $HOME/.cdp-cli/locks/page-cleanup-headless.lock $HOME/.local/bin/cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> $HOME/.cdp-cli/page-cleanup-headless.log 2>&1') | crontab -`,
+			"cdp cron status --json",
+			"cdp cron diff --json",
+			"cdp cron install --profile agent --json",
+			"cdp cron remove --json",
 			"cdp doctor --check scheduled-tasks --json",
 		},
 	}
@@ -416,6 +412,13 @@ func summarizeCrontab(text string) crontabSummary {
 		}
 		summary.EntryCount++
 		mode := scheduledTaskBrowserMode(line)
+		if scheduledTaskContainsCDPCommand(line, "cron", "heal", "headed") {
+			summary.HasDaemonKeepalive = true
+			if !scheduledTaskUsesFlock(line) {
+				summary.HasUnflockedCDPTask = true
+			}
+			summary.HasHeadedDaemonKeepalive = true
+		}
 		if scheduledTaskContainsCDPCommand(line, "daemon", "keepalive") {
 			summary.HasDaemonKeepalive = true
 			if !scheduledTaskUsesFlock(line) {

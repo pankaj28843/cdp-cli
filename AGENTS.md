@@ -41,7 +41,8 @@ When validating a CLI behavior that users or agents will exercise through the in
 - Return wrapped errors; log or return, never both.
 - Large browser artifacts should be written to files and referenced by path, not embedded in JSON.
 - Browser-facing commands must run through the local cdp daemon runtime. The daemon is the product boundary that holds the user-approved Chrome/default-profile session after one "Allow" click; do not add direct per-command browser WebSocket dialing as a fallback.
-- Disk-backed connection memory may select or start a daemon-backed connection, but it must not make browser commands bypass the daemon.
+- Treat `browser_mode` as the primary user-facing runtime selector. Do not require `--connection` when `--browser-mode` or user config already selects headed or headless.
+- Disk-backed connection memory may select or start a daemon-backed connection, but it must not make browser commands bypass the daemon. Use named `--connection` only as an advanced endpoint or project override.
 - Keep tab discovery lazy and scoped. Listing pages must not attach to every page or wake discarded/background tabs.
 - Prefer raw CDP escape hatches plus focused high-level workflows over broad shallow wrappers.
 - New command JSON needs a schema entry, help examples, and E2E coverage in `scripts/e2e.sh`.

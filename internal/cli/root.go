@@ -106,10 +106,10 @@ func (a *app) newRoot() *cobra.Command {
 	root.PersistentFlags().StringVar(&a.opts.channel, "channel", envDefault("CDP_CHANNEL", "stable"), "Chrome channel for --auto-connect: stable, beta, canary, or dev")
 	root.PersistentFlags().StringVar(&a.opts.userDataDir, "user-data-dir", os.Getenv("CDP_USER_DATA_DIR"), "Chrome user data directory for --auto-connect")
 	root.PersistentFlags().StringVar(&a.opts.stateDir, "state-dir", os.Getenv("CDP_STATE_DIR"), "directory for local cdp-cli state; defaults to $HOME/.cdp-cli")
-	root.PersistentFlags().StringVar(&a.opts.browserMode, "browser-mode", "", "browser runtime mode: headed or headless; can also be set with CDP_BROWSER_MODE")
+	root.PersistentFlags().StringVar(&a.opts.browserMode, "browser-mode", "", "primary browser runtime selector: headed or headless; can also be set with CDP_BROWSER_MODE")
 	root.PersistentFlags().StringVar(&a.opts.browserMode, "browserMode", "", "alias for --browser-mode")
 	root.PersistentFlags().BoolVar(&a.opts.activeProbe, "active-browser-probe", os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "1" || os.Getenv("CDP_ACTIVE_BROWSER_PROBE") == "true", "actively connect to Chrome during daemon status/start checks; may trigger a Chrome remote-debugging prompt")
-	root.PersistentFlags().StringVar(&a.opts.connection, "connection", os.Getenv("CDP_CONNECTION"), "named browser connection from local state to use for this command")
+	root.PersistentFlags().StringVar(&a.opts.connection, "connection", os.Getenv("CDP_CONNECTION"), "advanced named browser endpoint override from local state")
 	root.PersistentFlags().BoolVar(&a.opts.allowOverBudget, "allow-over-budget", envBool("CDP_ALLOW_OVER_BUDGET"), "human override: allow creating browser tabs even when the selected profile is over the cdp resource budget")
 
 	root.AddCommand(a.newVersionCommand())
@@ -341,39 +341,18 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 	if a.opts.browserURL != "" || a.opts.autoConnect {
 		return nil
 	}
-	store, err := a.stateStore()
+	conn, _, ok, err := a.resolveConnection(ctx)
 	if err != nil {
 		return err
-	}
-	file, err := store.Load(ctx)
-	if err != nil {
-		return err
-	}
-	var conn state.Connection
-	var ok bool
-	if a.opts.connection != "" {
-		conn, ok = state.ConnectionByName(file, a.opts.connection)
-		if !ok {
-			return commandError(
-				"unknown_connection",
-				"usage",
-				fmt.Sprintf("unknown connection %q", a.opts.connection),
-				ExitUsage,
-				[]string{"cdp connection list --json", "cdp connection add <name> --browser-url <browser-url> --json"},
-			)
-		}
-	} else {
-		cwd, cwdErr := os.Getwd()
-		if cwdErr == nil {
-			conn, ok = state.ProjectConnection(file, cwd)
-		}
-		if !ok {
-			conn, ok = state.CurrentConnection(file)
-		}
 	}
 	if !ok {
 		return nil
 	}
+	a.applyConnection(conn)
+	return nil
+}
+
+func (a *app) applyConnection(conn state.Connection) {
 	a.opts.browserURL = conn.BrowserURL
 	a.opts.autoConnect = conn.AutoConnect || conn.Mode == "auto_connect"
 	if conn.Channel != "" {
@@ -382,7 +361,6 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 	if conn.UserDataDir != "" {
 		a.opts.userDataDir = conn.UserDataDir
 	}
-	return nil
 }
 
 func envDefault(key, fallback string) string {

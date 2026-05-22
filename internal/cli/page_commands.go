@@ -594,7 +594,7 @@ run; pass --close to close candidates after they have remained inactive for
 					"next_commands": []string{
 						"cdp page cleanup --json",
 						"cdp page cleanup --close --max 10 --json",
-						"crontab -l | grep cdp",
+						"cdp cron status --json",
 					},
 				},
 				"candidates": candidates,
