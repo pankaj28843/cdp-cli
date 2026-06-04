@@ -305,7 +305,7 @@ func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir
 	if runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode); err != nil {
 		return Runtime{}, false, err
 	} else if ok && RuntimeRunning(runtime) {
-		if RuntimeSocketReady(ctx, runtime) {
+		if RuntimeSocketReady(ctx, runtime) && runtimeMatchesKeepAliveRequest(runtime, browserMode, endpoint, connectionMode, metadata, reconnect) {
 			return runtime, true, nil
 		}
 		_, _, _ = StopRuntimeForMode(ctx, stateDir, browserMode)
@@ -358,6 +358,48 @@ func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir
 		return Runtime{}, false, err
 	}
 	return runtime, false, nil
+}
+
+func runtimeMatchesKeepAliveRequest(runtime Runtime, browserMode, endpoint, connectionMode string, metadata KeepAliveMetadata, reconnect time.Duration) bool {
+	if runtimeModeName(runtime.BrowserMode) != runtimeModeName(browserMode) {
+		return false
+	}
+	if strings.TrimSpace(runtime.ConnectionMode) != strings.TrimSpace(connectionMode) {
+		return false
+	}
+	if strings.TrimSpace(endpoint) != "" && strings.TrimSpace(runtime.Endpoint) != strings.TrimSpace(endpoint) {
+		return false
+	}
+	if reconnect > 0 && runtime.ReconnectInterval != durationString(reconnect) {
+		return false
+	}
+	if strings.TrimSpace(metadata.UserDataDir) != "" && runtime.UserDataDir != metadata.UserDataDir {
+		return false
+	}
+	if strings.TrimSpace(metadata.ManagedProfilePath) != "" && runtime.ManagedProfilePath != metadata.ManagedProfilePath {
+		return false
+	}
+	if strings.TrimSpace(metadata.ProfileSeedStrategy) != "" && runtime.ProfileSeedStrategy != metadata.ProfileSeedStrategy {
+		return false
+	}
+	if metadata.ChromePID > 0 && runtime.ChromePID != metadata.ChromePID {
+		return false
+	}
+	if strings.TrimSpace(metadata.ChromePort) != "" && runtime.ChromePort != metadata.ChromePort {
+		return false
+	}
+	if metadata.ManagedBrowser != nil {
+		if runtime.ManagedBrowser == nil {
+			return false
+		}
+		if strings.TrimSpace(metadata.ManagedBrowser.DebuggingPort) != "" && runtime.ManagedBrowser.DebuggingPort != metadata.ManagedBrowser.DebuggingPort {
+			return false
+		}
+		if strings.TrimSpace(metadata.ManagedBrowser.ProfileSeedStrategy) != "" && runtime.ManagedBrowser.ProfileSeedStrategy != metadata.ManagedBrowser.ProfileSeedStrategy {
+			return false
+		}
+	}
+	return true
 }
 
 func StopRuntime(ctx context.Context, stateDir string) (Runtime, bool, error) {

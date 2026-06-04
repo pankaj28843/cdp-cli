@@ -41,6 +41,12 @@ commands, and end-to-end checks against the installed binary.
   self-managed, disposable agent infrastructure: it is acceptable to stop,
   reseed, restart, and force-close stale cdp-created headless tabs when that is
   the clean fix.
+- Assume unattended execution by default. Do not ask the user to click Chrome
+  "Allow", approve a headed remote-debugging prompt, or run a headed repair flow
+  unless the user or developer has explicitly said a human is present and can
+  approve it now. In unattended loops, use passive headed diagnostics and
+  automatable headless repair; if headed approval is missing, record the
+  classified state or a public-safe gap instead of waiting for a click.
 - Planned commands may return `not_implemented`, but that behavior must be
   stable, documented, and covered by E2E checks until implemented.
 
@@ -78,6 +84,9 @@ cdp daemon status --json || test "$?" -eq 8
      blocked-SERP probe.
    - Try the same navigation, page discovery, extraction, console/network, and
      workflow commands in `--browser-mode headed` and `--browser-mode headless`.
+     If headed approval is not already available, do not ask for an Allow click
+     unless the user or developer explicitly offered live approval; capture the
+     passive headed status and continue with headless validation or file the gap.
    - Reseed headless with explicit `copy-default` when authenticated/default
      profile state is relevant. `copy-default` may stop and heal the headless
      daemon. Retry before calling the gap real.

@@ -273,7 +273,7 @@ func (a *app) healHeadlessAfterProfileSeed(ctx context.Context, stateDir string,
 		ProfileSeedStrategy: launch.Metadata.ProfileSeedStrategy,
 		ChromePID:           launch.Metadata.ChromePID,
 		ChromePort:          launch.Metadata.DebuggingPort,
-	}, 0)
+	}, 30*time.Second)
 	if err != nil {
 		return err
 	}

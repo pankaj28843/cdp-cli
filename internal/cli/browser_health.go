@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 )
 
@@ -37,11 +38,31 @@ func permissionPendingData(extra map[string]any) map[string]any {
 	return data
 }
 
-func (a *app) connectionRemediationCommands() []string {
-	if a.opts.autoConnect {
-		return safeDiagnosticCommands()
+func modeScopedCommand(browserMode, command string) string {
+	browserMode = strings.TrimSpace(browserMode)
+	if browserMode == "" {
+		browserMode = string(config.BrowserModeHeaded)
 	}
-	return []string{"cdp daemon status --json", "cdp doctor --json", "cdp connection current --json"}
+	return fmt.Sprintf("cdp --browser-mode %s %s", browserMode, command)
+}
+
+func (a *app) modeDiagnosticCommands() []string {
+	browserMode := a.browserModeName()
+	return []string{
+		modeScopedCommand(browserMode, "daemon status --json"),
+		modeScopedCommand(browserMode, "doctor --check daemon --json"),
+		modeScopedCommand(browserMode, "doctor --check browser-health --json"),
+		modeScopedCommand(browserMode, "connection resolve --json"),
+		modeScopedCommand(browserMode, "connection current --json"),
+	}
+}
+
+func (a *app) connectionRemediationCommands() []string {
+	commands := a.modeDiagnosticCommands()
+	if a.browserModeName() == string(config.BrowserModeHeadless) {
+		return append([]string{modeScopedCommand(a.browserModeName(), "daemon keepalive --repair --json")}, commands...)
+	}
+	return commands
 }
 
 func (a *app) browserBudget(ctx context.Context, client cdp.CommandClient) (cdp.BrowserResourceBudget, error) {

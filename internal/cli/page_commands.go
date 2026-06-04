@@ -491,7 +491,7 @@ attached.`,
 					"connection",
 					err.Error(),
 					ExitConnection,
-					[]string{"cdp daemon keepalive --auto-connect", "cdp connection current --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			defer closeClient(ctx)
@@ -503,7 +503,7 @@ attached.`,
 					"connection",
 					fmt.Sprintf("list targets: %v", err),
 					ExitConnection,
-					[]string{"cdp doctor --json", "cdp daemon status --json"},
+					a.connectionRemediationCommands(),
 				)
 			}
 			store, err := a.stateStore()
@@ -958,21 +958,27 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 	if err != nil {
 		return daemon.Runtime{}, err
 	}
-	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, store.Dir, a.browserModeName())
+	browserMode := a.browserModeName()
+	statusCommand := modeScopedCommand(browserMode, "daemon status --json")
+	doctorCommand := modeScopedCommand(browserMode, "doctor --check daemon --json")
+	resolveCommand := modeScopedCommand(browserMode, "connection resolve --json")
+	currentCommand := modeScopedCommand(browserMode, "connection current --json")
+	repairCommand := modeScopedCommand(browserMode, "daemon keepalive --repair --json")
+	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, store.Dir, browserMode)
 	if err != nil {
 		return daemon.Runtime{}, err
 	}
 	if !ok {
-		return daemon.Runtime{}, fmt.Errorf("browser commands require a running cdp daemon; inspect `cdp daemon status --json` and `cdp doctor --check daemon --json` before retrying")
+		return daemon.Runtime{}, fmt.Errorf("browser commands require a running %s cdp daemon; inspect `%s` and `%s` before retrying", browserMode, statusCommand, doctorCommand)
 	}
 	if !a.runtimeMatchesConnection(runtime) {
-		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the effective browser-mode connection; inspect `cdp daemon status --json`, `cdp connection current --json`, and `cdp connection resolve --json`, then run `cdp daemon keepalive --repair --json` if the effective connection is correct")
+		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the effective %s browser-mode connection; inspect `%s`, `%s`, and `%s`, then run `%s` if the effective connection is correct and repair is appropriate for the current unattended context", browserMode, statusCommand, currentCommand, resolveCommand, repairCommand)
 	}
 	if !daemon.RuntimeRunning(runtime) {
-		return daemon.Runtime{}, fmt.Errorf("daemon runtime state exists but the process is not running; inspect `cdp daemon status --json` or run a human-managed `cdp daemon keepalive --repair --json`")
+		return daemon.Runtime{}, fmt.Errorf("%s daemon runtime state exists but the process is not running; inspect `%s` or run `%s` when repair is appropriate for the current unattended context", browserMode, statusCommand, repairCommand)
 	}
 	if !daemon.RuntimeSocketReady(ctx, runtime) {
-		return daemon.Runtime{}, fmt.Errorf("daemon runtime socket is not ready; inspect `cdp daemon status --json` or run a human-managed `cdp daemon keepalive --repair --json`")
+		return daemon.Runtime{}, fmt.Errorf("%s daemon runtime socket is not ready; inspect `%s` or run `%s` when repair is appropriate for the current unattended context", browserMode, statusCommand, repairCommand)
 	}
 	return runtime, nil
 }

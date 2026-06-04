@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
@@ -94,6 +95,63 @@ func TestRuntimeStructuredDaemonKnownErrors(t *testing.T) {
 	_, err = RuntimeClient{Runtime: runtime}.FetchProtocol(ctx)
 	if !errors.As(err, &rpcErr) || rpcErr.Code != "protocol_fetch_failed" || rpcErr.Class != "connection" {
 		t.Fatalf("fetch protocol error = %#v, want structured protocol_fetch_failed connection", err)
+	}
+}
+
+func TestRuntimeMatchesKeepAliveRequestRejectsMismatchedRuntime(t *testing.T) {
+	managed := &browser.ManagedStatus{
+		BrowserMode:         "headless",
+		ChromePID:           456,
+		UserDataDir:         "/tmp/cdp-managed-profile",
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: "managed",
+	}
+	metadata := KeepAliveMetadata{
+		UserDataDir:         managed.UserDataDir,
+		ManagedBrowser:      managed,
+		ManagedProfilePath:  managed.UserDataDir,
+		ProfileSeedStrategy: managed.ProfileSeedStrategy,
+		ChromePID:           managed.ChromePID,
+		ChromePort:          managed.DebuggingPort,
+	}
+	runtime := Runtime{
+		BrowserMode:         "headless",
+		ConnectionMode:      "browser_url",
+		ReconnectInterval:   "30s",
+		Endpoint:            "ws://cdp.example.test/devtools/browser/test",
+		UserDataDir:         managed.UserDataDir,
+		ManagedBrowser:      managed,
+		ManagedProfilePath:  managed.UserDataDir,
+		ProfileSeedStrategy: managed.ProfileSeedStrategy,
+		ChromePID:           managed.ChromePID,
+		ChromePort:          managed.DebuggingPort,
+	}
+	if !runtimeMatchesKeepAliveRequest(runtime, "headless", runtime.Endpoint, "browser_url", metadata, 30*time.Second) {
+		t.Fatalf("runtimeMatchesKeepAliveRequest rejected matching runtime")
+	}
+
+	tests := []struct {
+		name    string
+		runtime Runtime
+	}{
+		{"browser mode", func() Runtime { r := runtime; r.BrowserMode = "headed"; return r }()},
+		{"connection mode", func() Runtime { r := runtime; r.ConnectionMode = "auto_connect"; return r }()},
+		{"endpoint", func() Runtime {
+			r := runtime
+			r.Endpoint = "ws://other-cdp.example.test/devtools/browser/other"
+			return r
+		}()},
+		{"reconnect", func() Runtime { r := runtime; r.ReconnectInterval = ""; return r }()},
+		{"user data dir", func() Runtime { r := runtime; r.UserDataDir = "/tmp/other-profile"; return r }()},
+		{"managed metadata", func() Runtime { r := runtime; r.ManagedBrowser = nil; return r }()},
+		{"chrome port", func() Runtime { r := runtime; r.ChromePort = "9333"; return r }()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if runtimeMatchesKeepAliveRequest(tt.runtime, "headless", runtime.Endpoint, "browser_url", metadata, 30*time.Second) {
+				t.Fatalf("runtimeMatchesKeepAliveRequest accepted mismatched %s runtime", tt.name)
+			}
+		})
 	}
 }
 

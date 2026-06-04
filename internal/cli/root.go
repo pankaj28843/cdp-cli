@@ -476,7 +476,7 @@ func (a *app) renderError(ctx context.Context, err error) error {
 		RemediationCommands: cmdErr.RemediationCommands,
 	}
 	liftErrorEnvelopeData(&env, cmdErr.Data)
-	if a.opts.autoConnect && (cmdErr.Code == "permission_pending" || cmdErr.Code == "connection_not_configured") {
+	if a.opts.autoConnect && cmdErr.Code == "permission_pending" {
 		env.RemediationCommands = permissionRemediationCommands()
 		env.HumanRequired = true
 		env.AgentShouldStop = true

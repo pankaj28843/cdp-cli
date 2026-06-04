@@ -782,15 +782,24 @@ func TestAutoConnectPagesRequiresRunningDaemon(t *testing.T) {
 	}
 
 	var got struct {
-		OK      bool   `json:"ok"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		Message             string   `json:"message"`
+		RemediationCommands []string `json:"remediation_commands"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("pages error output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running cdp daemon") {
+	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running headed cdp daemon") {
 		t.Fatalf("pages error = %+v, want daemon-required remediation", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp --browser-mode headed daemon status --json") {
+		t.Fatalf("pages remediation commands = %+v, want headed daemon status diagnostic", got.RemediationCommands)
+	}
+	for _, command := range got.RemediationCommands {
+		if strings.Contains(command, "daemon keepalive --auto-connect") {
+			t.Fatalf("pages remediation commands = %+v, must not suggest headed approval repair by default", got.RemediationCommands)
+		}
 	}
 }
 
@@ -816,14 +825,23 @@ func TestHeadlessPagesRequireDaemonEvenWithManagedMetadata(t *testing.T) {
 		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitConnection, errOut.String())
 	}
 	var got struct {
-		OK      bool   `json:"ok"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		Message             string   `json:"message"`
+		RemediationCommands []string `json:"remediation_commands"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("pages error output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running cdp daemon") {
+	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running headless cdp daemon") {
 		t.Fatalf("pages error = %+v, want daemon-required failure without direct managed endpoint fallback", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
+		t.Fatalf("pages remediation commands = %+v, want headless repair command", got.RemediationCommands)
+	}
+	for _, command := range got.RemediationCommands {
+		if strings.Contains(command, "daemon keepalive --auto-connect") {
+			t.Fatalf("pages remediation commands = %+v, must not suggest headed auto-connect repair for headless", got.RemediationCommands)
+		}
 	}
 }

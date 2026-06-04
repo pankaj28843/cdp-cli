@@ -301,6 +301,33 @@ func TestPageCleanupStateIsScopedByBrowserModeJSON(t *testing.T) {
 	}
 }
 
+func TestPageCleanupHeadlessConnectionErrorUsesModeScopedRemediation(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "page", "cleanup", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitConnection {
+		t.Fatalf("page cleanup exit code = %d, want %d; stderr=%s", code, cli.ExitConnection, errOut.String())
+	}
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("page cleanup error output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "connection_not_configured" {
+		t.Fatalf("page cleanup error = %+v, want connection_not_configured", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
+		t.Fatalf("page cleanup remediation commands = %+v, want headless repair command", got.RemediationCommands)
+	}
+	for _, command := range got.RemediationCommands {
+		if strings.Contains(command, "daemon keepalive --auto-connect") {
+			t.Fatalf("page cleanup remediation commands = %+v, must not suggest headed auto-connect repair for headless", got.RemediationCommands)
+		}
+	}
+}
+
 func TestPageSelectJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "First Page", "url": "https://example.test/first", "attached": false},

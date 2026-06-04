@@ -41,6 +41,7 @@ When validating a CLI behavior that users or agents will exercise through the in
 - Return wrapped errors; log or return, never both.
 - Large browser artifacts should be written to files and referenced by path, not embedded in JSON.
 - Browser-facing commands must run through the local cdp daemon runtime. The daemon is the product boundary that holds the user-approved Chrome/default-profile session after one "Allow" click; do not add direct per-command browser WebSocket dialing as a fallback.
+- Assume unattended execution by default. Do not ask the user to click Chrome "Allow", approve a headed remote-debugging prompt, or run a headed repair flow unless the user or developer has explicitly said a human is present and can approve it now. In unattended runs, prefer passive headed diagnostics such as `cdp --browser-mode headed daemon status --json` and automatable headless repair such as `cdp --browser-mode headless daemon keepalive --repair --json`.
 - Treat `browser_mode` as the primary user-facing runtime selector. Do not require `--connection` when `--browser-mode` or user config already selects headed or headless.
 - Disk-backed connection memory may select or start a daemon-backed connection, but it must not make browser commands bypass the daemon. Use named `--connection` only as an advanced endpoint or project override.
 - Keep tab discovery lazy and scoped. Listing pages must not attach to every page or wake discarded/background tabs.
