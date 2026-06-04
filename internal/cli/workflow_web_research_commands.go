@@ -378,7 +378,14 @@ func detectSERPBlocked(result renderedExtractResult) (bool, []string) {
 		if strings.Contains(lower, "consent") || strings.Contains(lower, "captcha") || strings.Contains(lower, "bot-check") || strings.Contains(lower, "auth") {
 			signals = append(signals, "bot_check_warning")
 		}
-		if strings.Contains(lower, "unusual traffic") || strings.Contains(lower, "not a robot") || strings.Contains(lower, "enable javascript") || strings.Contains(lower, "sign in") || strings.Contains(lower, "login") {
+		if strings.Contains(lower, "unusual traffic") ||
+			strings.Contains(lower, "not a robot") ||
+			strings.Contains(lower, "enable javascript") ||
+			strings.Contains(lower, "unfortunately, bots use") ||
+			strings.Contains(lower, "select all squares") ||
+			strings.Contains(lower, "page text suggests") ||
+			strings.Contains(lower, "sign in") ||
+			strings.Contains(lower, "login") {
 			signals = append(signals, "block_page_text")
 		}
 		if strings.Contains(lower, "serp extraction found no") && strings.Contains(lower, "external result links") {

@@ -469,7 +469,9 @@ command uses conservative signals: it only considers page targets, skips the
 currently selected page when known, skips attached pages unless --include-attached
 is set, and checks document.visibilityState before closing. The default is a dry
 run; pass --close to close candidates after they have remained inactive for
---idle-for across cleanup runs.`,
+--idle-for across cleanup runs. Use --force with narrow filters for disposable
+headless agent tabs that should be closed even when visible, selected, or
+attached.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if max < 0 || since < 0 {
@@ -515,6 +517,7 @@ run; pass --close to close candidates after they have remained inactive for
 			if err != nil {
 				return commandError("internal", "internal", fmt.Sprintf("read page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
 			}
+			pruneLegacyHeadlessCleanupRecords(records, browserMode, connectionName)
 			now := time.Now().UTC()
 			candidates := cleanupCandidates(ctx, client, targets, cleanupOptions{
 				BrowserMode:     browserMode,
@@ -608,7 +611,7 @@ run; pass --close to close candidates after they have remained inactive for
 	cmd.Flags().StringVar(&excludeURL, "exclude-url", "", "exclude pages whose URL contains this text")
 	cmd.Flags().StringVar(&createdBy, "created-by", "", "only consider pages tagged with this creator, such as cdp")
 	cmd.Flags().BoolVar(&workflowCreated, "workflow-created", false, "close pages tagged as created by cdp workflows without waiting for --idle-for")
-	cmd.Flags().BoolVar(&force, "force", false, "allow explicit target cleanup to bypass selected, attached, visible, and idle protections")
+	cmd.Flags().BoolVar(&force, "force", false, "allow cleanup to bypass selected, attached, and visible protections; with --target it also bypasses idle checks")
 	cmd.Flags().StringVar(&forceTarget, "target", "", "force-close a specific page target id or unique prefix when used with --force")
 	cmd.Flags().DurationVar(&since, "since", 0, "only consider cleanup records first seen within this duration; 0 disables the filter")
 	cmd.Flags().DurationVar(&idleFor, "idle-for", 30*time.Minute, "minimum duration a page must remain inactive before --close can close it")
@@ -674,6 +677,7 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 		switch {
 		case opts.Force && forceTarget != "":
 			candidate.Ready = true
+		case opts.Force:
 		case target.TargetID == strings.TrimSpace(opts.SelectedID):
 			candidate.KeepReason = "selected_page"
 		case target.Attached && !opts.IncludeAttached:
@@ -781,6 +785,17 @@ func cleanupBrowserMode(browserMode string) string {
 		return "headed"
 	}
 	return browserMode
+}
+
+func pruneLegacyHeadlessCleanupRecords(records map[string]pageCleanupRecord, browserMode, connection string) {
+	if cleanupBrowserMode(browserMode) != "headless" || connection != "headless" {
+		return
+	}
+	for key, record := range records {
+		if cleanupBrowserMode(record.BrowserMode) == "headless" && record.Connection == "default" {
+			delete(records, key)
+		}
+	}
 }
 
 func loadPageCleanupRecords(ctx context.Context, stateDir string) (map[string]pageCleanupRecord, error) {
@@ -951,7 +966,7 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 		return daemon.Runtime{}, fmt.Errorf("browser commands require a running cdp daemon; inspect `cdp daemon status --json` and `cdp doctor --check daemon --json` before retrying")
 	}
 	if !a.runtimeMatchesConnection(runtime) {
-		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the selected browser connection; inspect `cdp daemon status --json` and `cdp connection current --json` before a human-managed repair")
+		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the effective browser-mode connection; inspect `cdp daemon status --json`, `cdp connection current --json`, and `cdp connection resolve --json`, then run `cdp daemon keepalive --repair --json` if the effective connection is correct")
 	}
 	if !daemon.RuntimeRunning(runtime) {
 		return daemon.Runtime{}, fmt.Errorf("daemon runtime state exists but the process is not running; inspect `cdp daemon status --json` or run a human-managed `cdp daemon keepalive --repair --json`")

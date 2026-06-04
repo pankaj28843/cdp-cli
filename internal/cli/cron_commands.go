@@ -361,7 +361,7 @@ func managedCronBlock(opts cronRenderOptions) string {
 		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
 		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
 		fmt.Sprintf("0 */6 * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy managed --if-older-than 6h --json >> %s/profile-seed-headless.log 2>&1", cdpBin, logDir))),
-		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --max 10 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
+		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 10 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
 		cronManagedBlockEnd,
 	}
 	return strings.Join(lines, "\n") + "\n"

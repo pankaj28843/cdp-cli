@@ -180,6 +180,39 @@ func TestPageCleanupJSON(t *testing.T) {
 	}
 }
 
+func TestPageCleanupForceClosesMatchingPagesJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-visible", "type": "page", "title": "Visible Page", "url": "https://example.test/visible", "attached": false},
+		{"targetId": "page-hidden", "type": "page", "title": "Hidden Page", "url": "https://example.test/hidden", "attached": false},
+		{"targetId": "page-attached", "type": "page", "title": "Attached Page", "url": "https://example.test/attached", "attached": true},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "cleanup", "--include-url", "example.test", "--idle-for", "0s", "--close", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("page cleanup force close exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Cleanup struct {
+			ClosedCount int  `json:"closed_count"`
+			Force       bool `json:"force"`
+		} `json:"cleanup"`
+		Closed []struct {
+			Target struct {
+				ID string `json:"targetId"`
+			} `json:"target"`
+		} `json:"closed"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("page cleanup force output is invalid JSON: %v", err)
+	}
+	if !got.Cleanup.Force || got.Cleanup.ClosedCount != 3 || len(got.Closed) != 3 {
+		t.Fatalf("page cleanup force = %+v, want all matching pages closed", got)
+	}
+}
+
 func TestPageCleanupStateIsScopedByBrowserModeJSON(t *testing.T) {
 	headlessServer := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "headless-page", "type": "page", "title": "Headless Page", "url": "https://example.test/headless", "attached": false},

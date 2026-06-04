@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cli"
+	"github.com/pankaj28843/cdp-cli/internal/daemon"
 )
 
 func TestConnectionMemoryJSON(t *testing.T) {
@@ -33,17 +35,26 @@ func TestConnectionMemoryJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK         bool `json:"ok"`
-		Connection struct {
+		OK                bool   `json:"ok"`
+		BrowserMode       string `json:"browser_mode"`
+		BrowserModeSource string `json:"browser_mode_source"`
+		Connection        struct {
 			Name        string `json:"name"`
 			Mode        string `json:"mode"`
 			AutoConnect bool   `json:"auto_connect"`
 		} `json:"connection"`
+		EffectiveConnection struct {
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			AutoConnect bool   `json:"auto_connect"`
+		} `json:"effective_connection"`
+		EffectiveSource            string `json:"effective_source"`
+		ConnectionMatchesEffective bool   `json:"connection_matches_effective"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("connection current output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" || !got.Connection.AutoConnect {
+	if !got.OK || got.BrowserMode != "headed" || got.BrowserModeSource != "default" || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" || !got.Connection.AutoConnect || got.EffectiveConnection.Name != "default" || got.EffectiveSource != "browser_mode" || !got.ConnectionMatchesEffective {
 		t.Fatalf("connection current = %+v, want default auto_connect", got)
 	}
 }
@@ -235,6 +246,168 @@ func TestConnectionResolveFollowsBrowserModeBeforeSelectedConnection(t *testing.
 	}
 	if !got.OK || got.Source != "named" || got.Connection.Name != "headless" {
 		t.Fatalf("explicit connection resolve = %+v, want named override", got)
+	}
+}
+
+func TestConnectionResolveFallsBackToHeadedDefaultWhenStateOnlyHasHeadless(t *testing.T) {
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "default", "--browser-url", "http://headless-stale.test/devtools", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add poisoned headless default exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "connection", "resolve", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection resolve headed exit code = %d, want %d; stderr=%s output=%s", code, cli.ExitOK, errOut.String(), out.String())
+	}
+	var got struct {
+		OK         bool   `json:"ok"`
+		Source     string `json:"source"`
+		Connection struct {
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			BrowserMode string `json:"browser_mode"`
+			AutoConnect bool   `json:"auto_connect"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection resolve output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Source != "browser_mode_default" || got.Connection.Name != "default" || got.Connection.Mode != "auto_connect" || got.Connection.BrowserMode != "headed" || !got.Connection.AutoConnect {
+		t.Fatalf("connection resolve = %+v, want implicit headed auto_connect default despite selected headless default", got)
+	}
+}
+
+func TestConnectionResolvePrefersModeScopedHeadlessOverStaleDefault(t *testing.T) {
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "default", "--browser-url", "http://headless-stale.test/devtools", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add stale default exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "headless", "--browser-url", "http://headless-current.test/devtools", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add headless exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "resolve", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection resolve headless exit code = %d, want %d; stderr=%s output=%s", code, cli.ExitOK, errOut.String(), out.String())
+	}
+	var got struct {
+		OK         bool `json:"ok"`
+		Connection struct {
+			Name       string `json:"name"`
+			BrowserURL string `json:"browser_url"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection resolve output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Connection.Name != "headless" || got.Connection.BrowserURL != "http://headless-current.test/devtools" {
+		t.Fatalf("connection resolve = %+v, want mode-scoped headless connection over stale default", got)
+	}
+}
+
+func TestConnectionResolveUsesManagedHeadlessRuntimeWhenNoStateConnection(t *testing.T) {
+	stateDir := t.TempDir()
+	profileDir := filepath.Join(stateDir, "browser", "headless-profile")
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", daemon.Runtime{
+		PID:                os.Getpid(),
+		StartedAt:          time.Now().UTC().Format(time.RFC3339),
+		BrowserMode:        "headless",
+		ConnectionMode:     "browser_url",
+		Endpoint:           "ws://headless-runtime.test/devtools/browser/runtime",
+		UserDataDir:        profileDir,
+		ManagedProfilePath: profileDir,
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "resolve", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection resolve headless runtime exit code = %d, want %d; stderr=%s output=%s", code, cli.ExitOK, errOut.String(), out.String())
+	}
+	var got struct {
+		OK         bool   `json:"ok"`
+		Source     string `json:"source"`
+		Connection struct {
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			BrowserMode string `json:"browser_mode"`
+			BrowserURL  string `json:"browser_url"`
+			UserDataDir string `json:"user_data_dir"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection resolve output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Source != "runtime" || got.Connection.Name != "headless" || got.Connection.Mode != "browser_url" || got.Connection.BrowserMode != "headless" || got.Connection.BrowserURL != "http://headless-runtime.test" || got.Connection.UserDataDir != profileDir {
+		t.Fatalf("connection resolve = %+v, want managed runtime-backed headless connection", got)
+	}
+}
+
+func TestConnectionCurrentShowsEffectiveBrowserModeMismatchJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "headless", "--browser-url", "http://headless.test/devtools", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add headless exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "connection", "add", "headed", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add headed exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"connection", "select", "headless", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection select exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "connection", "current", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection current headed exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK                bool   `json:"ok"`
+		BrowserMode       string `json:"browser_mode"`
+		BrowserModeSource string `json:"browser_mode_source"`
+		Connection        struct {
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			BrowserMode string `json:"browser_mode"`
+		} `json:"connection"`
+		EffectiveConnection struct {
+			Name        string `json:"name"`
+			Mode        string `json:"mode"`
+			BrowserMode string `json:"browser_mode"`
+		} `json:"effective_connection"`
+		EffectiveSource            string   `json:"effective_source"`
+		ConnectionMatchesEffective bool     `json:"connection_matches_effective"`
+		Warnings                   []string `json:"warnings"`
+		NextCommands               []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection current output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.BrowserMode != "headed" || got.BrowserModeSource != "flag" || got.Connection.Name != "headless" || got.EffectiveConnection.Name != "headed" || got.EffectiveSource != "browser_mode" || got.ConnectionMatchesEffective {
+		t.Fatalf("connection current mismatch output = %+v, want selected headless but effective headed", got)
+	}
+	if len(got.Warnings) == 0 || !containsString(got.NextCommands, "cdp --browser-mode headed connection resolve --json") {
+		t.Fatalf("connection current mismatch recovery = warnings=%v next=%v, want warning and headed resolve command", got.Warnings, got.NextCommands)
 	}
 }
 

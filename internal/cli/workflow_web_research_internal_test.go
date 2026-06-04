@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDetectSERPBlocked(t *testing.T) {
 	blocked, signals := detectSERPBlocked(renderedExtractResult{
@@ -26,10 +29,29 @@ func TestDetectSERPBlocked(t *testing.T) {
 	}
 
 	blocked, signals = detectSERPBlocked(renderedExtractResult{
+		Report: map[string]any{"workflow": map[string]any{"final_url": "https://duckduckgo.com/?q=agentic"}},
+		Warnings: []string{
+			"page text suggests consent, CAPTCHA, auth, or bot-check handling",
+		},
+	})
+	if !blocked || !stringListContains(signals, "block_page_text") {
+		t.Fatalf("detectSERPBlocked() = %v, %+v; want blocked from rendered bot-check page text", blocked, signals)
+	}
+
+	blocked, signals = detectSERPBlocked(renderedExtractResult{
 		Report:   map[string]any{"workflow": map[string]any{"final_url": "https://www.google.com/search?q=agentic"}},
 		Warnings: []string{"google SERP extraction found no decoded external result links"},
 	})
 	if blocked || !stringListContains(signals, "no_external_result_links") {
 		t.Fatalf("detectSERPBlocked() = %v, %+v; want empty SERP warning without blocked classification", blocked, signals)
+	}
+}
+
+func TestRenderedExtractLinksExpressionDecodesDuckDuckGoRedirects(t *testing.T) {
+	expr := renderedExtractLinksExpression("duckduckgo")
+	for _, want := range []string{"decodeDuckDuckGoURL", "uddg", "serp === \"duckduckgo\""} {
+		if !strings.Contains(expr, want) {
+			t.Fatalf("renderedExtractLinksExpression(duckduckgo) missing %q in expression", want)
+		}
 	}
 }

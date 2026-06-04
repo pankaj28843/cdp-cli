@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
-	"path/filepath"
 )
 
 func (a *app) newConnectionCommand() *cobra.Command {
@@ -322,7 +323,7 @@ func pathExists(path string) bool {
 func (a *app) newConnectionCurrentCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "current",
-		Short: "Show the selected browser connection",
+		Short: "Show the selected and effective browser connection",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
@@ -335,8 +336,12 @@ func (a *app) newConnectionCurrentCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, ok := state.CurrentConnection(file)
-			if !ok {
+			selected, selectedOK := state.CurrentConnection(file)
+			effective, source, effectiveOK, err := a.resolveConnection(ctx)
+			if err != nil {
+				return err
+			}
+			if !selectedOK && !effectiveOK {
 				return commandError(
 					"connection_not_configured",
 					"connection",
@@ -345,11 +350,40 @@ func (a *app) newConnectionCurrentCommand() *cobra.Command {
 					[]string{"cdp connection add default --auto-connect --json", "cdp connection list --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("%s %s", conn.Name, conn.Mode), map[string]any{
-				"ok":         true,
-				"connection": conn,
-				"state_path": store.Path(),
-			})
+			browserMode, err := a.resolveBrowserMode(cmd)
+			if err != nil {
+				return err
+			}
+			data := map[string]any{
+				"ok":                  true,
+				"browser_mode":        browserMode.Mode,
+				"browser_mode_source": browserMode.Source,
+				"state_path":          store.Path(),
+			}
+			label := "no selected connection"
+			if selectedOK {
+				label = fmt.Sprintf("%s %s", selected.Name, selected.Mode)
+				data["connection"] = selected
+				data["selected_connection"] = selected
+				data["selected"] = selected.Name
+			}
+			if effectiveOK {
+				data["effective_connection"] = effective
+				data["effective_source"] = source
+			}
+			if selectedOK && effectiveOK {
+				matchesEffective := connectionsEquivalentForMode(selected, effective, string(browserMode.Mode))
+				data["connection_matches_effective"] = matchesEffective
+				if !matchesEffective {
+					data["warnings"] = []string{"selected connection differs from effective browser-mode connection; browser commands use effective_connection unless --connection overrides it"}
+					data["next_commands"] = []string{
+						"cdp connection resolve --json",
+						fmt.Sprintf("cdp --browser-mode %s connection resolve --json", browserMode.Mode),
+						fmt.Sprintf("cdp --browser-mode %s daemon status --json", browserMode.Mode),
+					}
+				}
+			}
+			return a.render(ctx, label, data)
 		},
 	}
 }
@@ -450,16 +484,77 @@ func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, 
 	if ok && connectionMatchesBrowserMode(conn, browserMode) {
 		return withConnectionBrowserMode(conn, browserMode), "single", true, nil
 	}
+	if conn, ok, err := a.connectionFromManagedRuntime(ctx, store.Dir, browserMode); err != nil {
+		return state.Connection{}, "", false, err
+	} else if ok {
+		return conn, "runtime", true, nil
+	}
+	if conn, ok := implicitConnectionForBrowserMode(browserMode, a.opts.channel); ok {
+		return conn, "browser_mode_default", true, nil
+	}
 	return state.Connection{}, "", false, nil
 }
 
+func (a *app) connectionFromManagedRuntime(ctx context.Context, stateDir, browserMode string) (state.Connection, bool, error) {
+	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
+	if err != nil || !ok {
+		return state.Connection{}, false, err
+	}
+	if !daemon.RuntimeRunning(runtime) || !a.runtimeOverridesSelectedConnection(runtime) {
+		return state.Connection{}, false, nil
+	}
+	browserURL := ""
+	if strings.TrimSpace(runtime.Endpoint) != "" {
+		browserURL = managedHTTPURL(runtime.Endpoint)
+	} else if strings.TrimSpace(runtime.ChromePort) != "" {
+		browserURL = "http://127.0.0.1:" + runtime.ChromePort
+	}
+	return state.Connection{
+		Name:        defaultConnectionNameForBrowserMode(browserMode),
+		Mode:        runtime.ConnectionMode,
+		BrowserMode: browserMode,
+		BrowserURL:  browserURL,
+		AutoConnect: runtime.ConnectionMode == "auto_connect",
+		UserDataDir: runtime.UserDataDir,
+	}, true, nil
+}
+
 func connectionForBrowserMode(connections []state.Connection, browserMode string) (state.Connection, bool) {
+	preferredName := defaultConnectionNameForBrowserMode(browserMode)
+	for _, conn := range connections {
+		if strings.TrimSpace(conn.BrowserMode) == browserMode && conn.Name == preferredName {
+			return conn, true
+		}
+	}
 	for _, conn := range connections {
 		if strings.TrimSpace(conn.BrowserMode) == browserMode {
 			return conn, true
 		}
 	}
 	return state.Connection{}, false
+}
+
+func implicitConnectionForBrowserMode(browserMode, channel string) (state.Connection, bool) {
+	if strings.TrimSpace(browserMode) != "headed" {
+		return state.Connection{}, false
+	}
+	if strings.TrimSpace(channel) == "" {
+		channel = "stable"
+	}
+	return state.Connection{
+		Name:        defaultConnectionNameForBrowserMode(browserMode),
+		Mode:        "auto_connect",
+		BrowserMode: "headed",
+		AutoConnect: true,
+		Channel:     channel,
+	}, true
+}
+
+func defaultConnectionNameForBrowserMode(browserMode string) string {
+	if strings.TrimSpace(browserMode) == "headless" {
+		return "headless"
+	}
+	return "default"
 }
 
 func connectionMatchesBrowserMode(conn state.Connection, browserMode string) bool {
@@ -472,4 +567,15 @@ func withConnectionBrowserMode(conn state.Connection, browserMode string) state.
 		conn.BrowserMode = browserMode
 	}
 	return conn
+}
+
+func connectionsEquivalentForMode(selected, effective state.Connection, browserMode string) bool {
+	return selected.Name == effective.Name &&
+		selected.Mode == effective.Mode &&
+		selected.BrowserURL == effective.BrowserURL &&
+		selected.AutoConnect == effective.AutoConnect &&
+		selected.Channel == effective.Channel &&
+		selected.UserDataDir == effective.UserDataDir &&
+		connectionMatchesBrowserMode(selected, browserMode) &&
+		connectionMatchesBrowserMode(effective, browserMode)
 }

@@ -77,20 +77,32 @@ func TestPrepareManagedProfileWritesOwnerOnlyMetadata(t *testing.T) {
 func TestPrepareManagedProfileCopyDefaultFullyReplacesProfile(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	srcRoot := filepath.Join(t.TempDir(), "chrome")
-	if err := os.MkdirAll(filepath.Join(srcRoot, "Default", "Local Storage", "leveldb"), 0o700); err != nil {
-		t.Fatalf("create source profile: %v", err)
+
+	stateFiles := map[string]string{
+		"Local State":                       "local-state",
+		filepath.Join("Default", "Cookies"): "cookie-db",
+		filepath.Join("Default", "Local Storage", "leveldb", "token.log"):                        "local-storage-token",
+		filepath.Join("Default", "Local Storage", "leveldb", "DevToolsActivePort"):               "nested-devtools-state",
+		filepath.Join("Default", "IndexedDB", "https_example_0.indexeddb.leveldb", "000003.log"): "indexeddb-state",
+		filepath.Join("Default", "Extensions", "abcdefghijklmnop", "1.0.0", "manifest.json"):     `{"name":"synthetic-extension"}`,
+		filepath.Join("Default", "Preferences"):                                                  `{"profile":{"name":"Synthetic"}}`,
+		filepath.Join("Default", "History"):                                                      "history-db",
+		filepath.Join("Default", "Cache", "Cache_Data", "f_000001"):                              "cache-bytes",
+		filepath.Join("Default", "Service Worker", "Database", "000003.log"):                     "service-worker-db",
 	}
-	if err := os.WriteFile(filepath.Join(srcRoot, "Local State"), []byte("local-state"), 0o600); err != nil {
-		t.Fatalf("write local state: %v", err)
+	for rel, contents := range stateFiles {
+		path := filepath.Join(srcRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("create source parent for %s: %v", rel, err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write source profile file %s: %v", rel, err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(srcRoot, "Default", "Cookies"), []byte("cookie-db"), 0o600); err != nil {
-		t.Fatalf("write cookies: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(srcRoot, "Default", "Local Storage", "leveldb", "token.log"), []byte("token"), 0o600); err != nil {
-		t.Fatalf("write local storage: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(srcRoot, "SingletonLock"), []byte("runtime-lock"), 0o600); err != nil {
-		t.Fatalf("write singleton lock: %v", err)
+	for _, rel := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"} {
+		if err := os.WriteFile(filepath.Join(srcRoot, rel), []byte("runtime-artifact"), 0o600); err != nil {
+			t.Fatalf("write runtime artifact %s: %v", rel, err)
+		}
 	}
 
 	profileDir := browser.ManagedProfileDir(stateDir)
@@ -105,19 +117,25 @@ func TestPrepareManagedProfileCopyDefaultFullyReplacesProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReplaceManagedProfileFromDefault returned error: %v", err)
 	}
-	if copied < 3 {
-		t.Fatalf("copied file count = %d, want source files copied", copied)
+	if copied < len(stateFiles) {
+		t.Fatalf("copied file count = %d, want at least %d state files copied", copied, len(stateFiles))
 	}
-	for _, rel := range []string{"Local State", filepath.Join("Default", "Cookies"), filepath.Join("Default", "Local Storage", "leveldb", "token.log")} {
-		if _, err := os.Stat(filepath.Join(profileDir, rel)); err != nil {
+	for rel, want := range stateFiles {
+		got, err := os.ReadFile(filepath.Join(profileDir, rel))
+		if err != nil {
 			t.Fatalf("copied profile missing %s: %v", rel, err)
+		}
+		if string(got) != want {
+			t.Fatalf("copied profile %s = %q, want %q", rel, got, want)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(profileDir, "Default", "stale")); !os.IsNotExist(err) {
 		t.Fatalf("stale destination file still exists: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(profileDir, "SingletonLock")); !os.IsNotExist(err) {
-		t.Fatalf("runtime artifact copied into managed profile: %v", err)
+	for _, rel := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"} {
+		if _, err := os.Stat(filepath.Join(profileDir, rel)); !os.IsNotExist(err) {
+			t.Fatalf("root runtime artifact %s copied into managed profile: %v", rel, err)
+		}
 	}
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(filepath.Join(profileDir, "Default", "Cookies"))
@@ -130,7 +148,7 @@ func TestPrepareManagedProfileCopyDefaultFullyReplacesProfile(t *testing.T) {
 	}
 }
 
-func TestManagedMetadataStatusIncludesSafeCopyDefaultFields(t *testing.T) {
+func TestManagedMetadataStatusIncludesMetadataOnlyCopyDefaultFields(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	metadata := browser.ManagedMetadata{
 		BrowserMode:          "headless",
@@ -144,7 +162,7 @@ func TestManagedMetadataStatusIncludesSafeCopyDefaultFields(t *testing.T) {
 	}
 	status := browser.ManagedMetadataStatus(metadata)
 	if status.ProfileSeedStrategy != browser.ProfileSeedStrategyCopyDefault || !status.DefaultProfileCopied || status.CopiedFileCount != 3 {
-		t.Fatalf("ManagedMetadataStatus() = %+v, want safe copy-default fields", status)
+		t.Fatalf("ManagedMetadataStatus() = %+v, want metadata-only copy-default fields", status)
 	}
 	encoded, err := json.Marshal(status)
 	if err != nil {
@@ -343,6 +361,81 @@ sleep 30
 	}
 	if err := process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("managed chrome died when caller context was canceled: %v", err)
+	}
+}
+
+func TestStartManagedChromeReusesExistingCopyDefaultProfile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell chrome test is unix-only")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	homeDir := t.TempDir()
+	sourceRoot := filepath.Join(homeDir, ".config", "google-chrome")
+	if runtime.GOOS == "darwin" {
+		sourceRoot = filepath.Join(homeDir, "Library", "Application Support", "Google", "Chrome")
+	}
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "Default"), 0o700); err != nil {
+		t.Fatalf("create source profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "Default", "Cookies"), []byte("source-cookie-db"), 0o600); err != nil {
+		t.Fatalf("write source cookies: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(filepath.Join(profileDir, "Default"), 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	cookiePath := filepath.Join(profileDir, "Default", "Cookies")
+	if err := os.WriteFile(cookiePath, []byte("active-managed-cookie-db"), 0o600); err != nil {
+		t.Fatalf("write managed cookies: %v", err)
+	}
+	metadata := browser.ManagedMetadata{
+		BrowserMode:          "headless",
+		UserDataDir:          profileDir,
+		ProfileSeedStrategy:  browser.ProfileSeedStrategyCopyDefault,
+		LastSeededAt:         time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+		DefaultProfileCopied: true,
+		CopiedFileCount:      1,
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("save managed metadata: %v", err)
+	}
+
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := `#!/usr/bin/env sh
+set -eu
+user_data_dir=
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) user_data_dir="${arg#--user-data-dir=}" ;;
+  esac
+done
+printf '12345\n/devtools/browser/test\n' > "$user_data_dir/DevToolsActivePort"
+sleep 30
+`
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake chrome: %v", err)
+	}
+
+	launch, err := browser.StartManagedChrome(context.Background(), browser.ManagedOptions{StateDir: stateDir, Chrome: chromePath})
+	if err != nil {
+		t.Fatalf("StartManagedChrome returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		process, findErr := os.FindProcess(launch.Metadata.ChromePID)
+		if findErr == nil {
+			_ = process.Kill()
+		}
+	})
+
+	content, err := os.ReadFile(cookiePath)
+	if err != nil {
+		t.Fatalf("read managed cookies: %v", err)
+	}
+	if string(content) != "active-managed-cookie-db" {
+		t.Fatalf("StartManagedChrome recopied default profile; cookie fixture = %q", content)
 	}
 }
 

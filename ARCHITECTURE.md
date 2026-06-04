@@ -20,9 +20,14 @@ architecture is intentionally small: keep browser protocol mechanics in
 - Browser commands use the daemon as their only CDP entry point. The daemon owns
   the approved browser WebSocket and local RPC socket; short CLI invocations
   route through that socket instead of dialing Chrome directly.
-- Headless mode uses a cdp-owned managed profile only. It launches Chrome with a
-  non-default owner-only user data dir, loopback remote debugging, and no copy of
-  the user's default Chrome profile.
+- Headless mode launches Chrome with a cdp-owned managed profile under a
+  non-default owner-only user data dir and loopback remote debugging. The
+  default `managed` seed creates an empty profile. The explicit `copy-default`
+  maintenance strategy replaces that managed profile with a local full-state
+  snapshot of Chrome's default profile for developer-controlled harness work;
+  if headless is live, the CLI may stop the headless daemon and owned managed
+  Chrome, reseed, then heal headless. Copied browser-state files stay in local
+  cdp-owned state and are not committed or embedded in default JSON summaries.
 - Page listing stays lazy. Use browser target metadata for discovery; attach to
   a page only when a page-scoped command actually needs it.
 - Heavy outputs are artifacts. Screenshots, traces, heap snapshots, HAR files,
@@ -52,11 +57,15 @@ flow: a human-approved default-profile browser session is held by the daemon, an
 short commands talk to the daemon RPC socket.
 
 `headless` is a daemon-held managed runtime for unattended agents. The CLI creates
-only cdp-owned local state, launches Chrome with `--headless`,
+cdp-owned local runtime state, launches Chrome with `--headless`,
 `--remote-debugging-port=0`, and `--user-data-dir` pointing at the managed
-profile, then validates the resulting endpoint is loopback-only. Managed status
-and doctor output expose safe metadata such as pid, mode, profile path, seed
-strategy, and debugging port, but not ownership internals.
+profile, then validates the resulting endpoint is loopback-only. The managed
+profile can be empty (`managed`) or intentionally replaced with an operator-run
+full-state default-profile snapshot (`copy-default`). Managed status and doctor
+output expose metadata such as pid, mode, profile path, seed strategy, copied
+file count, and debugging port, but not ownership internals or copied file
+values. Headless tabs created by cdp workflows are self-managed and disposable;
+cron cleanup may force-close stale cdp-created headless pages.
 
 Runtime artifacts are mode-specific so headed and headless can coexist: headed
 keeps the historical singleton paths, while headless uses its own runtime file,

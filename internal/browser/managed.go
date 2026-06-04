@@ -212,7 +212,7 @@ func ReplaceManagedProfileFromDefault(dstRoot, srcRoot string) (int, error) {
 	if err := os.Chmod(tmpRoot, 0o700); err != nil {
 		return 0, fmt.Errorf("secure managed profile copy: %w", err)
 	}
-	if err := os.RemoveAll(dstRoot); err != nil {
+	if err := removeAllWithRetry(dstRoot); err != nil {
 		return 0, fmt.Errorf("replace old managed profile: %w", err)
 	}
 	if err := os.Rename(tmpRoot, dstRoot); err != nil {
@@ -235,7 +235,7 @@ func copyProfileTree(srcRoot, dstRoot string) (int, error) {
 		if rel == "." {
 			return nil
 		}
-		if chromeRuntimeArtifact(entry.Name()) {
+		if chromeRuntimeArtifact(rel) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -302,6 +302,18 @@ func copyProfileFile(src, dst string, mode os.FileMode) error {
 	return os.Chmod(dst, mode)
 }
 
+func removeAllWithRetry(path string) error {
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		err = os.RemoveAll(path)
+		if err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
+}
+
 func removeChromeRuntimeArtifacts(root string) error {
 	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"} {
 		if err := os.Remove(filepath.Join(root, name)); err != nil && !os.IsNotExist(err) {
@@ -311,8 +323,8 @@ func removeChromeRuntimeArtifacts(root string) error {
 	return nil
 }
 
-func chromeRuntimeArtifact(name string) bool {
-	switch name {
+func chromeRuntimeArtifact(rel string) bool {
+	switch filepath.Clean(rel) {
 	case "SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort":
 		return true
 	default:
@@ -390,10 +402,23 @@ func signalProcess(pid int) error {
 	if err != nil {
 		return fmt.Errorf("find managed chrome process: %w", err)
 	}
-	if err := process.Signal(os.Interrupt); err != nil {
-		if killErr := process.Kill(); killErr != nil {
-			return fmt.Errorf("stop managed chrome: interrupt: %v; kill: %w", err, killErr)
+	interruptErr := process.Signal(os.Interrupt)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			return nil
 		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if killErr := process.Kill(); killErr != nil {
+		return fmt.Errorf("stop managed chrome: interrupt: %v; kill: %w", interruptErr, killErr)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	return nil
 }
@@ -407,13 +432,7 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
-	strategy := NormalizeProfileSeedStrategy(opts.ProfileSeedStrategy)
-	if strategy == ProfileSeedStrategyManaged {
-		if existing, ok, loadErr := LoadManagedMetadata(opts.StateDir); loadErr == nil && ok {
-			strategy = NormalizeProfileSeedStrategy(existing.ProfileSeedStrategy)
-		}
-	}
-	metadata, err := PrepareManagedProfileWithStrategy(opts.StateDir, strategy, now)
+	metadata, err := prepareManagedProfileForLaunch(opts.StateDir, NormalizeProfileSeedStrategy(opts.ProfileSeedStrategy), now)
 	if err != nil {
 		return ManagedLaunch{}, err
 	}
@@ -455,6 +474,25 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 		return ManagedLaunch{}, fmt.Errorf("release managed chrome process: %w", err)
 	}
 	return ManagedLaunch{Endpoint: endpoint, Command: cmd, Metadata: metadata}, nil
+}
+
+func prepareManagedProfileForLaunch(stateDir, strategy string, now time.Time) (ManagedMetadata, error) {
+	if !SupportedProfileSeedStrategy(strategy) {
+		return ManagedMetadata{}, fmt.Errorf("unsupported managed profile seed strategy %q", strategy)
+	}
+	existing, ok, err := LoadManagedMetadata(stateDir)
+	if err != nil {
+		return ManagedMetadata{}, err
+	}
+	if ok && strings.TrimSpace(existing.UserDataDir) == ManagedProfileDir(stateDir) {
+		if info, statErr := os.Stat(existing.UserDataDir); statErr == nil && info.IsDir() {
+			existing.ProfileSeedStrategy = NormalizeProfileSeedStrategy(existing.ProfileSeedStrategy)
+			if strategy == ProfileSeedStrategyManaged || existing.ProfileSeedStrategy == strategy {
+				return existing, nil
+			}
+		}
+	}
+	return PrepareManagedProfileWithStrategy(stateDir, strategy, now)
 }
 
 func ReuseManagedChrome(ctx context.Context, stateDir string) (ManagedLaunch, bool, error) {

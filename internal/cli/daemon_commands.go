@@ -841,29 +841,39 @@ func (a *app) connectionStateName(ctx context.Context) string {
 	if strings.TrimSpace(a.opts.connection) != "" {
 		return strings.TrimSpace(a.opts.connection)
 	}
+	browserMode := a.browserModeName()
+	preferredName := defaultConnectionNameForBrowserMode(browserMode)
 	store, err := a.stateStore()
 	if err == nil {
 		if file, loadErr := store.Load(ctx); loadErr == nil {
 			if conn, ok := state.CurrentConnection(file); ok && strings.TrimSpace(conn.Name) != "" {
-				if strings.TrimSpace(a.opts.browserURL) == "" && !a.opts.autoConnect {
-					return conn.Name
-				}
-				if a.opts.autoConnect && (conn.AutoConnect || conn.Mode == "auto_connect") {
-					return conn.Name
-				}
-				if strings.TrimSpace(a.opts.browserURL) != "" && conn.BrowserURL == a.opts.browserURL {
-					return conn.Name
+				if connectionMatchesBrowserMode(conn, browserMode) {
+					if browserMode == "headless" && conn.Name == "default" {
+						return preferredName
+					}
+					if strings.TrimSpace(a.opts.browserURL) == "" && !a.opts.autoConnect {
+						return conn.Name
+					}
+					if a.opts.autoConnect && (conn.AutoConnect || conn.Mode == "auto_connect") {
+						return conn.Name
+					}
+					if strings.TrimSpace(a.opts.browserURL) != "" && conn.BrowserURL == a.opts.browserURL {
+						return conn.Name
+					}
 				}
 			}
 		}
 	}
 	if a.opts.autoConnect {
-		return "default"
+		return preferredName
 	}
 	if strings.TrimSpace(a.opts.browserURL) != "" {
+		if browserMode == "headless" {
+			return preferredName
+		}
 		return "browser-url"
 	}
-	return "default"
+	return preferredName
 }
 
 func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chromeCommand string) (*managedKeepAlive, keepaliveChromeStatus, error) {

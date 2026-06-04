@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -311,8 +312,9 @@ func waitForClickVerification(ctx context.Context, session *cdp.PageSession, pol
 
 		var result waitResult
 		if err := evaluateJSONValue(ctx, session, expression(), label, &result); err != nil {
-			if ctx.Err() != nil {
+			if clickVerificationTimedOut(ctx, err) {
 				last.ElapsedMS = time.Since(start).Milliseconds()
+				last.PollInterval = poll.String()
 				return last, nil
 			}
 			return waitResult{}, err
@@ -333,6 +335,20 @@ func waitForClickVerification(ctx context.Context, session *cdp.PageSession, pol
 		case <-timer.C:
 		}
 	}
+}
+
+func clickVerificationTimedOut(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) {
+		return false
+	}
+	if commandErr.ExitCode == ExitTimeout {
+		return true
+	}
+	return commandErr.Code == "connection_failed" && strings.Contains(strings.ToLower(commandErr.Message), "timeout")
 }
 
 func (a *app) clickTimeout() time.Duration {

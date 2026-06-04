@@ -61,14 +61,22 @@ approved Chrome remote debugging.
 
 `headless` is for unattended agent work. It launches managed Chrome with a
 cdp-owned profile, loopback-only remote debugging, and mode-specific daemon
-runtime files. The managed seed strategy creates an empty profile; it does not
-copy cookies, saved passwords, payment data, autofill, browsing history, request
-headers, tokens, or arbitrary files from a default Chrome profile.
+runtime files. The `managed` seed strategy creates an empty owner-only profile.
+The explicit `copy-default` strategy replaces that managed profile with a local
+full-state snapshot of Chrome's default profile for developer-controlled harness
+work, preserving browser-state files such as cookies, Local Storage, IndexedDB,
+extensions, history, and cache in the local cdp-owned profile. Normal JSON
+summaries report metadata and counts rather than copied file values, and cron
+uses `managed` by default so profile snapshots are operator initiated. When
+headless is already running, explicit `copy-default` can stop the headless
+daemon, reseed, and start headless again; headless is disposable managed agent
+infrastructure.
 
 ```bash
 cdp browser mode get --json
 CDP_BROWSER_MODE=headless cdp browser mode get --json
 cdp --browser-mode headless browser profile seed --strategy managed --json
+cdp --browser-mode headless browser profile seed --strategy copy-default --json
 cdp --browser-mode headless browser profile status --json
 cdp --browser-mode headless daemon keepalive --repair --json
 cdp doctor --check headless-security --json
@@ -131,7 +139,7 @@ cdp doctor --check scheduled-tasks --json
 - Managed headless isolation: headless mode uses a cdp-owned empty profile and loopback-only debugging; default-profile copying is deferred unless a separate security review promotes it.
 - Human-in-loop auto-connect: when Chrome approval is pending, agents should inspect `cdp daemon status --json`, `cdp doctor --check daemon --json`, and logs, then stop and report the required human Allow action instead of retrying start/stop loops.
 - Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
-- Browser resource budget: page creation is guarded by a default budget of 15 page tabs and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; cleanup should prefer mode-explicit `cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --json`.
+- Browser resource budget: page creation is guarded by a default budget of 15 page tabs and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; cleanup should prefer the direct headless fix: `cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --json`.
 - Formal browser invariants: daemon boundary, explicit profile access, lazy discovery, bounded page creation, unambiguous target selection, conservative cleanup, and JSON error envelopes are tracked in `docs/FORMAL_INVARIANTS.md`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.

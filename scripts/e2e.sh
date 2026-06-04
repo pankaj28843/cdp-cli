@@ -74,7 +74,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema connection-add --json | jq -e '.ok == true and .schema.name == "connection-add" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
 "$binary" schema connection-list --json | jq -e '.ok == true and .schema.name == "connection-list" and (.schema.fields | map(.name) | index("connections"))' >/dev/null
 "$binary" schema connection-select --json | jq -e '.ok == true and .schema.name == "connection-select" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
-"$binary" schema connection-current --json | jq -e '.ok == true and .schema.name == "connection-current" and (.schema.fields | map(.name) | index("connection"))' >/dev/null
+"$binary" schema connection-current --json | jq -e '.ok == true and .schema.name == "connection-current" and (.schema.fields | map(.name) | index("connection")) and (.schema.fields | map(.name) | index("effective_connection")) and (.schema.fields | map(.name) | index("connection_matches_effective"))' >/dev/null
 "$binary" schema connection-remove --json | jq -e '.ok == true and .schema.name == "connection-remove" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
 "$binary" schema connection-prune --json | jq -e '.ok == true and .schema.name == "connection-prune" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
 "$binary" schema browser-mode --json | jq -e '.ok == true and .schema.name == "browser-mode" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("browser_mode_source"))' >/dev/null
@@ -167,7 +167,7 @@ rg -q "cleanup routine|page cleanup|clean" <<<"$help_output"
 page_cleanup_describe="$("$binary" describe --command "page cleanup" --json)"
 page_cleanup_examples="$(jq -r '.commands.examples[]' <<<"$page_cleanup_describe")"
 rg -q -- '--browser-mode headed page cleanup' <<<"$page_cleanup_examples"
-rg -q -- '--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close' <<<"$page_cleanup_examples"
+rg -q -- '--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force' <<<"$page_cleanup_examples"
 page_cleanup_short="$(jq -r '.commands.short' <<<"$page_cleanup_describe")"
 rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null
@@ -272,7 +272,7 @@ if [[ "$daemon_start_code" -ne 4 ]]; then
   exit 1
 fi
 printf '%s\n' "$daemon_start_output" | jq -e '.ok == false and .code == "permission_pending" and .human_required == true and .agent_should_stop == true and (.remediation_commands | index("open chrome://inspect/#remote-debugging")) and (.safe_diagnostics | index("cdp daemon status --json"))' >/dev/null
-"$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default" and .connection.mode == "auto_connect"' >/dev/null
+"$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .browser_mode == "headed" and .connection.name == "default" and .connection.mode == "auto_connect" and .effective_connection.name == "default" and .connection_matches_effective == true' >/dev/null
 
 set +e
 daemon_restart_output="$("$binary" daemon restart --debug --autoConnect --active-browser-probe --user-data-dir "$state_dir/user-data" --state-dir "$state_dir" --json 2>/tmp/cdp-cli-daemon-restart.err)"
@@ -294,11 +294,24 @@ profile_copy_source="$profile_copy_config_dir/google-chrome"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   profile_copy_source="$profile_copy_home/Library/Application Support/Google/Chrome"
 fi
-mkdir -p "$profile_copy_source/Default"
+mkdir -p "$profile_copy_source/Default/Local Storage/leveldb"
+mkdir -p "$profile_copy_source/Default/IndexedDB/https_example_0.indexeddb.leveldb"
+mkdir -p "$profile_copy_source/Default/Extensions/abcdefghijklmnop/1.0.0"
+mkdir -p "$profile_copy_source/Default/Cache/Cache_Data"
 printf 'local-state' > "$profile_copy_source/Local State"
 printf 'cookie-db' > "$profile_copy_source/Default/Cookies"
-HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --json | jq -e '.ok == true and .seeded == true and .exists == true and .seed_action == "seeded" and .seed_strategy == "copy-default" and .managed_browser.browser_mode == "headless" and .managed_browser.profile_seed_strategy == "copy-default" and .managed_browser.default_profile_copied == true and .managed_browser.copied_file_count >= 2 and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' >/dev/null
-test -s "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
+printf 'local-storage-token' > "$profile_copy_source/Default/Local Storage/leveldb/token.log"
+printf 'indexeddb-state' > "$profile_copy_source/Default/IndexedDB/https_example_0.indexeddb.leveldb/000003.log"
+printf '{"name":"synthetic-extension"}' > "$profile_copy_source/Default/Extensions/abcdefghijklmnop/1.0.0/manifest.json"
+printf 'cache-bytes' > "$profile_copy_source/Default/Cache/Cache_Data/f_000001"
+printf 'runtime-artifact' > "$profile_copy_source/SingletonLock"
+HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --json | jq -e '.ok == true and .seeded == true and .exists == true and .seed_action == "seeded" and .seed_strategy == "copy-default" and .managed_browser.browser_mode == "headless" and .managed_browser.profile_seed_strategy == "copy-default" and .managed_browser.default_profile_copied == true and .managed_browser.copied_file_count >= 6 and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' >/dev/null
+grep -q 'cookie-db' "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
+grep -q 'local-storage-token' "$state_dir-copy-default/browser/headless-profile/Default/Local Storage/leveldb/token.log"
+grep -q 'indexeddb-state' "$state_dir-copy-default/browser/headless-profile/Default/IndexedDB/https_example_0.indexeddb.leveldb/000003.log"
+grep -q 'synthetic-extension' "$state_dir-copy-default/browser/headless-profile/Default/Extensions/abcdefghijklmnop/1.0.0/manifest.json"
+grep -q 'cache-bytes' "$state_dir-copy-default/browser/headless-profile/Default/Cache/Cache_Data/f_000001"
+test ! -e "$state_dir-copy-default/browser/headless-profile/SingletonLock"
 printf 'managed-cookie-db' > "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
 HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --if-older-than 6h --json | jq -e '.ok == true and .seed_action == "skipped" and .seed_strategy == "copy-default" and .seed_interval_seconds == 21600 and .managed_browser.profile_seed_strategy == "copy-default"' >/dev/null
 grep -q 'managed-cookie-db' "$state_dir-copy-default/browser/headless-profile/Default/Cookies"
@@ -315,7 +328,7 @@ fi
 printf '%s
 ' "$invalid_mode_output" | jq -e '.ok == false and .code == "invalid_browser_mode" and .err_class == "usage"' >/dev/null
 "$binary" connection add default --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.mode == "auto_connect"' >/dev/null
-"$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default"' >/dev/null
+"$binary" connection current --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "default" and .effective_connection.name == "default" and .connection_matches_effective == true' >/dev/null
 "$binary" connection resolve --state-dir "$state_dir" --json | jq -e '.ok == true and .source == "browser_mode" and .browser_mode == "headed" and .browser_mode_source == "default" and .connection.name == "default" and .connection.mode == "auto_connect" and .connection.browser_mode == "headed"' >/dev/null
 "$binary" connection list --state-dir "$state_dir" --json | jq -e '.ok == true and (.connections | length == 1)' >/dev/null
 "$binary" connection add extra --auto-connect --state-dir "$state_dir" --json | jq -e '.ok == true and .connection.name == "extra"' >/dev/null

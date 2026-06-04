@@ -284,6 +284,8 @@ func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemo
 	}
 	if a.runtimeOverridesSelectedConnection(runtime) {
 		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
+	} else if !a.hasExplicitConnectionOptions() && runtime.ConnectionMode != status.ConnectionMode {
+		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
 	}
 	status = daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime))
 	status.Health = a.browserHealthSnapshot(ctx, status, false)
@@ -313,6 +315,9 @@ func (a *app) runtimeMatchesConnection(runtime daemon.Runtime) bool {
 		return false
 	}
 	if runtime.ConnectionMode != a.connectionMode() {
+		if !a.hasExplicitConnectionOptions() {
+			return true
+		}
 		return false
 	}
 	return true
@@ -341,15 +346,22 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 	if a.opts.browserURL != "" || a.opts.autoConnect {
 		return nil
 	}
-	conn, _, ok, err := a.resolveConnection(ctx)
+	conn, source, ok, err := a.resolveConnection(ctx)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return nil
 	}
+	if source == "browser_mode_default" {
+		return nil
+	}
 	a.applyConnection(conn)
 	return nil
+}
+
+func (a *app) hasExplicitConnectionOptions() bool {
+	return a.opts.browserURL != "" || a.opts.autoConnect
 }
 
 func (a *app) applyConnection(conn state.Connection) {

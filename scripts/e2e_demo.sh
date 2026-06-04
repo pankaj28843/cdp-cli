@@ -37,6 +37,9 @@ require_artifact() {
 extract_demo_url() {
   local source_file=$1
   local line
+  if [[ ! -e "$source_file" ]]; then
+    return 1
+  fi
   while IFS= read -r line; do
     line="${line//$'\r'/}"
     if [[ "$line" =~ ^[[:space:]]*(https?://[^[:space:]]+)[[:space:]]*$ ]]; then

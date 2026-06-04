@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
+	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -72,7 +73,7 @@ func (a *app) newBrowserProfileCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
 		Short: "Inspect and seed managed headless browser profiles",
-		Long:  "Inspect and seed the cdp-owned managed profile used by --browser-mode headless. The managed strategy creates an empty owner-only profile; copy-default fully replaces it from Chrome's default profile for local authenticated automation.",
+		Long:  "Inspect and seed the cdp-owned managed profile used by --browser-mode headless. The managed strategy creates an empty owner-only profile; copy-default is an explicit local full-state snapshot of Chrome's default profile for developer-controlled authenticated automation.",
 	}
 	cmd.AddCommand(a.newBrowserProfileStatusCommand())
 	cmd.AddCommand(a.newBrowserProfileSeedCommand())
@@ -83,7 +84,7 @@ func (a *app) newBrowserProfileStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show managed headless browser profile status",
-		Long:  "Show privacy-safe status for the cdp-owned managed headless profile, including owner-only permission checks and safe next commands.",
+		Long:  "Show metadata-only status for the cdp-owned managed headless profile, including owner-only permission checks and next commands without dumping copied profile file values.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
@@ -104,7 +105,7 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "seed",
 		Short: "Create managed headless browser profile metadata",
-		Long:  "Create the cdp-owned managed profile metadata for --browser-mode headless. Use --strategy managed for an empty owner-only profile, or --strategy copy-default to fully replace the managed profile with a local copy of Chrome's default profile.",
+		Long:  "Create the cdp-owned managed profile metadata for --browser-mode headless. Use --strategy managed for an empty owner-only profile, or --strategy copy-default to fully replace the managed profile with a local full-state snapshot of Chrome's default profile. copy-default preserves developer browser-state files such as cookies, Local Storage, IndexedDB, extensions, history, and cache in the local managed profile. If headless is running, copy-default stops the headless daemon and owned managed Chrome, seeds the profile, then starts headless again. Normal JSON output reports metadata and counts rather than file values. Preserving files does not guarantee every platform-encrypted cookie or credential is usable from the copied headless profile; use headed mode for the live default-profile session.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
@@ -136,31 +137,38 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 				return err
 			}
 			now := time.Now().UTC()
-			if ifOlderThan > 0 {
-				if launch, ok, err := browser.ReuseManagedChrome(ctx, store.Dir); err != nil {
+			if strategy == browser.ProfileSeedStrategyCopyDefault && ifOlderThan > 0 {
+				if existing, skipped, seedAgeSeconds, err := recentManagedProfileSeed(store.Dir, strategy, now, ifOlderThan); err != nil {
 					return err
-				} else if ok {
+				} else if skipped {
 					status, err := browserProfileStatusForStore(ctx, store.Dir)
 					if err != nil {
 						return err
 					}
 					status.Seeded = true
-					status.ManagedBrowser = browser.ManagedMetadataStatus(launch.Metadata)
-					status.SeedAction = "skipped_running"
+					status.ManagedBrowser = browser.ManagedMetadataStatus(existing)
+					status.SeedAction = "skipped"
 					status.SeedIntervalSeconds = int64(ifOlderThan.Seconds())
-					status.Warnings = append(status.Warnings, "managed headless Chrome is running; skipped profile replacement")
-					if lastSeededAt, err := time.Parse(time.RFC3339, launch.Metadata.LastSeededAt); err == nil {
-						age := now.Sub(lastSeededAt)
-						if age >= 0 {
-							status.SeedAgeSeconds = int64(age.Seconds())
-						}
-					}
-					return a.render(ctx, "browser profile skipped_running", status)
+					status.SeedAgeSeconds = seedAgeSeconds
+					return a.render(ctx, "browser profile skipped", status)
 				}
+			}
+			var maintenance *profileSeedMaintenance
+			if strategy == browser.ProfileSeedStrategyCopyDefault {
+				seedMaintenance, err := a.stopHeadlessForProfileSeed(ctx, store.Dir)
+				if err != nil {
+					return err
+				}
+				maintenance = &seedMaintenance
 			}
 			metadata, skipped, seedAgeSeconds, err := prepareManagedProfileWithAgeGate(store.Dir, strategy, now, ifOlderThan)
 			if err != nil {
 				return err
+			}
+			if maintenance != nil && maintenance.WasRunning && !skipped {
+				if err := a.healHeadlessAfterProfileSeed(ctx, store.Dir, maintenance); err != nil {
+					return err
+				}
 			}
 			status, err := browserProfileStatusForStore(ctx, store.Dir)
 			if err != nil {
@@ -168,6 +176,9 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 			}
 			status.Seeded = true
 			status.ManagedBrowser = browser.ManagedMetadataStatus(metadata)
+			if maintenance != nil {
+				status.Maintenance = maintenance
+			}
 			if skipped {
 				status.SeedAction = "skipped"
 			} else {
@@ -190,6 +201,14 @@ func prepareManagedProfileWithAgeGate(stateDir, strategy string, now time.Time, 
 		metadata, err := browser.PrepareManagedProfileWithStrategy(stateDir, strategy, now)
 		return metadata, false, 0, err
 	}
+	if metadata, skipped, age, err := recentManagedProfileSeed(stateDir, strategy, now, ifOlderThan); err != nil || skipped {
+		return metadata, skipped, age, err
+	}
+	metadata, err := browser.PrepareManagedProfileWithStrategy(stateDir, strategy, now)
+	return metadata, false, 0, err
+}
+
+func recentManagedProfileSeed(stateDir, strategy string, now time.Time, ifOlderThan time.Duration) (browser.ManagedMetadata, bool, int64, error) {
 	metadata, ok, err := browser.LoadManagedMetadata(stateDir)
 	if err != nil {
 		return browser.ManagedMetadata{}, false, 0, err
@@ -202,30 +221,101 @@ func prepareManagedProfileWithAgeGate(stateDir, strategy string, now time.Time, 
 			}
 		}
 	}
-	metadata, err = browser.PrepareManagedProfileWithStrategy(stateDir, strategy, now)
-	return metadata, false, 0, err
+	return browser.ManagedMetadata{}, false, 0, nil
+}
+
+func (a *app) stopHeadlessForProfileSeed(ctx context.Context, stateDir string) (profileSeedMaintenance, error) {
+	maintenance := profileSeedMaintenance{}
+	if runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, "headless"); err != nil {
+		return maintenance, err
+	} else if ok && daemon.RuntimeRunning(runtime) {
+		maintenance.WasRunning = true
+	}
+	if launch, ok, err := browser.ReuseManagedChrome(ctx, stateDir); err != nil {
+		return maintenance, err
+	} else if ok {
+		maintenance.WasRunning = true
+		managed := browser.ManagedMetadataStatus(launch.Metadata)
+		maintenance.ManagedBrowser = &managed
+	}
+	if !maintenance.WasRunning {
+		return maintenance, nil
+	}
+	if _, stopped, err := daemon.StopRuntimeForMode(ctx, stateDir, "headless"); err != nil {
+		return maintenance, err
+	} else {
+		maintenance.DaemonStopped = stopped
+	}
+	managedStop, err := browser.StopOwnedManagedChrome(ctx, stateDir, nil)
+	if err != nil {
+		return maintenance, err
+	}
+	maintenance.ManagedBrowserStopped = managedStop.Stopped
+	return maintenance, nil
+}
+
+func (a *app) healHeadlessAfterProfileSeed(ctx context.Context, stateDir string, maintenance *profileSeedMaintenance) error {
+	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir})
+	if err != nil {
+		return err
+	}
+	managed := browser.ManagedMetadataStatus(launch.Metadata)
+	maintenance.ManagedBrowser = &managed
+
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve current executable: %w", err)
+	}
+	_, reused, err := daemon.StartKeepAliveForModeWithMetadata(ctx, executable, stateDir, "headless", launch.Endpoint, "browser_url", daemon.KeepAliveMetadata{
+		UserDataDir:         launch.Metadata.UserDataDir,
+		ManagedBrowser:      &managed,
+		ManagedProfilePath:  launch.Metadata.UserDataDir,
+		ProfileSeedStrategy: launch.Metadata.ProfileSeedStrategy,
+		ChromePID:           launch.Metadata.ChromePID,
+		ChromePort:          launch.Metadata.DebuggingPort,
+	}, 0)
+	if err != nil {
+		return err
+	}
+	maintenance.Healed = true
+	if reused {
+		maintenance.HealAction = "reused"
+	} else {
+		maintenance.HealAction = "started"
+	}
+	return nil
 }
 
 type browserProfileStatus struct {
-	OK                  bool                  `json:"ok"`
-	BrowserMode         string                `json:"browser_mode"`
-	StateDir            string                `json:"state_dir"`
-	ProfileDir          string                `json:"profile_dir"`
-	MetadataPath        string                `json:"metadata_path"`
-	State               string                `json:"state"`
-	Exists              bool                  `json:"exists"`
-	Seeded              bool                  `json:"seeded"`
-	ProfilePerm         string                `json:"profile_perm,omitempty"`
-	MetadataPerm        string                `json:"metadata_perm,omitempty"`
-	SeedStrategy        string                `json:"seed_strategy,omitempty"`
-	LastSeededAt        string                `json:"last_seeded_at,omitempty"`
-	LastLaunchAt        string                `json:"last_launch_at,omitempty"`
-	ManagedBrowser      browser.ManagedStatus `json:"managed_browser,omitempty"`
-	Warnings            []string              `json:"warnings,omitempty"`
-	SeedAction          string                `json:"seed_action,omitempty"`
-	SeedAgeSeconds      int64                 `json:"seed_age_seconds,omitempty"`
-	SeedIntervalSeconds int64                 `json:"seed_interval_seconds,omitempty"`
-	NextCommands        []string              `json:"next_commands"`
+	OK                  bool                    `json:"ok"`
+	BrowserMode         string                  `json:"browser_mode"`
+	StateDir            string                  `json:"state_dir"`
+	ProfileDir          string                  `json:"profile_dir"`
+	MetadataPath        string                  `json:"metadata_path"`
+	State               string                  `json:"state"`
+	Exists              bool                    `json:"exists"`
+	Seeded              bool                    `json:"seeded"`
+	ProfilePerm         string                  `json:"profile_perm,omitempty"`
+	MetadataPerm        string                  `json:"metadata_perm,omitempty"`
+	SeedStrategy        string                  `json:"seed_strategy,omitempty"`
+	LastSeededAt        string                  `json:"last_seeded_at,omitempty"`
+	LastLaunchAt        string                  `json:"last_launch_at,omitempty"`
+	ManagedBrowser      browser.ManagedStatus   `json:"managed_browser,omitempty"`
+	Warnings            []string                `json:"warnings,omitempty"`
+	Maintenance         *profileSeedMaintenance `json:"maintenance,omitempty"`
+	SeedAction          string                  `json:"seed_action,omitempty"`
+	SeedAgeSeconds      int64                   `json:"seed_age_seconds,omitempty"`
+	SeedIntervalSeconds int64                   `json:"seed_interval_seconds,omitempty"`
+	NextCommands        []string                `json:"next_commands"`
+}
+
+type profileSeedMaintenance struct {
+	WasRunning            bool                   `json:"was_running"`
+	DaemonStopped         bool                   `json:"daemon_stopped,omitempty"`
+	ManagedBrowserStopped bool                   `json:"managed_browser_stopped,omitempty"`
+	Healed                bool                   `json:"healed,omitempty"`
+	HealAction            string                 `json:"heal_action,omitempty"`
+	ManagedBrowser        *browser.ManagedStatus `json:"managed_browser,omitempty"`
 }
 
 func (a *app) browserProfileStatus(ctx context.Context) (browserProfileStatus, error) {
@@ -330,7 +420,7 @@ func (a *app) selectedConnectionSummary(ctx context.Context) (*selectedConnectio
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
+	if !ok || source == "browser_mode_default" {
 		return nil, nil
 	}
 	return &selectedConnectionSummary{

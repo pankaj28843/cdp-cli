@@ -242,7 +242,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 
 	visibleWordCount := wordCount(visibleText)
 	markdownWordCount := wordCount(markdown)
-	warnings := renderedExtractWarnings(readiness, snapshot.Count, visibleWordCount, htmlLength, markdownWordCount, len(links.Results), options.MinVisibleWords, options.MinHTMLChars, options.MinMarkdownWords, serpMode)
+	warnings := renderedExtractWarnings(readiness, visibleText, snapshot.Count, visibleWordCount, htmlLength, markdownWordCount, len(links.Results), options.MinVisibleWords, options.MinHTMLChars, options.MinMarkdownWords, serpMode)
 	artifactPaths := map[string]string{}
 	artifactList := []map[string]any{}
 	writeArtifact := func(key, artifactType, path string, payload []byte) error {
@@ -585,6 +585,18 @@ func renderedExtractLinksExpression(serpMode string) string {
       return href;
     }
   };
+  const decodeDuckDuckGoURL = (href) => {
+    try {
+      const parsed = new URL(href, document.baseURI);
+      const host = parsed.hostname.replace(/^www\./, "");
+      if ((host === "duckduckgo.com" || host.endsWith(".duckduckgo.com") || host === "duck.com" || host.endsWith(".duck.com")) && parsed.searchParams.has("uddg")) {
+        return parsed.searchParams.get("uddg") || href;
+      }
+      return parsed.href;
+    } catch (error) {
+      return href;
+    }
+  };
   const internalHosts = {
     google: ["google."],
     bing: ["bing.com"],
@@ -608,7 +620,7 @@ func renderedExtractLinksExpression(serpMode string) string {
     if (!raw || raw.startsWith("#") || raw.startsWith("javascript:") || raw.startsWith("mailto:")) continue;
     let decoded = "";
     try {
-      decoded = serp === "google" ? decodeGoogleURL(raw) : new URL(raw, document.baseURI).href;
+      decoded = serp === "google" ? decodeGoogleURL(raw) : (serp === "duckduckgo" ? decodeDuckDuckGoURL(raw) : new URL(raw, document.baseURI).href);
     } catch (error) {
       continue;
     }
@@ -690,7 +702,7 @@ func wordCount(text string) int {
 	return len(strings.Fields(text))
 }
 
-func renderedExtractWarnings(readiness renderedExtractReadiness, snapshotCount, visibleWords, htmlLength, markdownWords, externalLinks, minVisibleWords, minHTMLChars, minMarkdownWords int, serpMode string) []string {
+func renderedExtractWarnings(readiness renderedExtractReadiness, visibleText string, snapshotCount, visibleWords, htmlLength, markdownWords, externalLinks, minVisibleWords, minHTMLChars, minMarkdownWords int, serpMode string) []string {
 	var warnings []string
 	if !readiness.NavigatedFromAboutBlank {
 		warnings = append(warnings, "target remained about:blank or did not report a final URL")
@@ -716,6 +728,15 @@ func renderedExtractWarnings(readiness renderedExtractReadiness, snapshotCount, 
 	lowerSignal := strings.ToLower(readiness.URL)
 	if strings.Contains(lowerSignal, "sorry") || strings.Contains(lowerSignal, "captcha") || strings.Contains(lowerSignal, "consent") || strings.Contains(lowerSignal, "challenge") || strings.Contains(lowerSignal, "signin") || strings.Contains(lowerSignal, "login") {
 		warnings = append(warnings, "final URL suggests consent, CAPTCHA, auth, or bot-check handling")
+	}
+	lowerText := strings.ToLower(visibleText)
+	if strings.Contains(lowerText, "unusual traffic") ||
+		strings.Contains(lowerText, "not a robot") ||
+		strings.Contains(lowerText, "enable javascript") ||
+		strings.Contains(lowerText, "unfortunately, bots use") ||
+		strings.Contains(lowerText, "select all squares") ||
+		strings.Contains(lowerText, "captcha") {
+		warnings = append(warnings, "page text suggests consent, CAPTCHA, auth, or bot-check handling")
 	}
 	return warnings
 }
