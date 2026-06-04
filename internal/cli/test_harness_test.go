@@ -595,6 +595,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		if query == "" {
 			query = "Search"
 		}
+		includeHidden := strings.Contains(req.Expression, "const includeHidden = true")
 		selector := "input#q"
 		tag := "input"
 		elementType := "search"
@@ -618,7 +619,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"query":          query,
 					"role":           roleQuery,
 					"exact":          false,
-					"include_hidden": false,
+					"include_hidden": includeHidden,
 					"test_id_attr":   "data-testid",
 					"count":          1,
 					"returned":       1,
@@ -789,6 +790,79 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"count":    1,
 					"controls": []map[string]any{},
 					"control":  control,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_visible__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "main"
+		}
+		tag := "main"
+		role := ""
+		name := "Synthetic main text"
+		visible := true
+		hidden := false
+		display := "block"
+		visibility := "visible"
+		rect := map[string]any{"x": 0, "y": 0, "width": 600, "height": 200}
+		if selector == "button#submit" {
+			tag = "button"
+			role = "button"
+			name = "Search"
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+		}
+		if selector == "#hidden-button" {
+			tag = "button"
+			role = "button"
+			name = "Hidden button"
+			visible = false
+			hidden = true
+			display = "none"
+			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+		}
+		count := 1
+		visibleCount := 1
+		hiddenCount := 0
+		if !visible {
+			visibleCount = 0
+			hiddenCount = 1
+		}
+		if selector == "#missing" {
+			count = 0
+			visibleCount = 0
+			hiddenCount = 0
+		}
+		items := []map[string]any{}
+		if count > 0 {
+			items = append(items, map[string]any{
+				"index":      0,
+				"tag":        tag,
+				"id":         strings.TrimPrefix(selector, "#"),
+				"role":       role,
+				"name":       name,
+				"visible":    visible,
+				"display":    display,
+				"visibility": visibility,
+				"hidden":     hidden,
+				"rect":       rect,
+			})
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":           "https://example.test/app",
+					"title":         "Example App",
+					"selector":      selector,
+					"expected":      "visible",
+					"visible":       visibleCount > 0,
+					"passed":        visibleCount > 0,
+					"count":         count,
+					"visible_count": visibleCount,
+					"hidden_count":  hiddenCount,
+					"items":         items,
 				},
 			},
 		}

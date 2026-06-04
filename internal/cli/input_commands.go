@@ -327,12 +327,12 @@ func dispatchRawMouseClick(ctx context.Context, session *cdp.PageSession, x, y f
 }
 
 func addLocatorActionFlags(cmd *cobra.Command, opts *locatorActionOptions) {
-	cmd.Flags().StringVar(&opts.By, "by", "css", "locator strategy before action: css, role, text, label, placeholder, alt, title, or test-id")
+	cmd.Flags().StringVar(&opts.By, "by", "css", "locator strategy before action/assertion: css, role, text, label, placeholder, alt, title, or test-id")
 	cmd.Flags().StringVar(&opts.Role, "role", "", "ARIA role to match when --by role is used")
 	cmd.Flags().StringVar(&opts.TestIDAttr, "test-id-attr", "data-testid", "attribute name for --by test-id")
-	cmd.Flags().BoolVar(&opts.Exact, "exact", false, "require exact normalized text/name/attribute match for locator actions")
-	cmd.Flags().BoolVar(&opts.IncludeHidden, "include-hidden", false, "include hidden locator matches before action")
-	cmd.Flags().IntVar(&opts.Limit, "locator-limit", 20, "maximum locator matches to inspect before action")
+	cmd.Flags().BoolVar(&opts.Exact, "exact", false, "require exact normalized text/name/attribute match for locator actions/assertions")
+	cmd.Flags().BoolVar(&opts.IncludeHidden, "include-hidden", false, "include hidden locator matches before action/assertion")
+	cmd.Flags().IntVar(&opts.Limit, "locator-limit", 20, "maximum locator matches to inspect before action/assertion")
 }
 
 func normalizeLocatorActionOptions(opts *locatorActionOptions) error {

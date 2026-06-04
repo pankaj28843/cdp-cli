@@ -63,6 +63,31 @@ type assertTextResult struct {
 	Error    *evalError `json:"error,omitempty"`
 }
 
+type assertVisibilityResult struct {
+	Selector     string                 `json:"selector"`
+	Expected     string                 `json:"expected"`
+	Visible      bool                   `json:"visible"`
+	Passed       bool                   `json:"passed"`
+	Count        int                    `json:"count"`
+	VisibleCount int                    `json:"visible_count"`
+	HiddenCount  int                    `json:"hidden_count"`
+	Items        []assertVisibilityItem `json:"items,omitempty"`
+	Error        *evalError             `json:"error,omitempty"`
+}
+
+type assertVisibilityItem struct {
+	Index      int          `json:"index"`
+	Tag        string       `json:"tag"`
+	ID         string       `json:"id,omitempty"`
+	Role       string       `json:"role,omitempty"`
+	Name       string       `json:"name,omitempty"`
+	Visible    bool         `json:"visible"`
+	Display    string       `json:"display,omitempty"`
+	Visibility string       `json:"visibility,omitempty"`
+	Hidden     bool         `json:"hidden"`
+	Rect       snapshotRect `json:"rect"`
+}
+
 func (a *app) newFormCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "form", Short: "Inspect live form control state"}
 	cmd.AddCommand(a.newFormValuesCommand())
@@ -129,6 +154,7 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "assert", Short: "Assert browser state with JSON diagnostics"}
 	cmd.AddCommand(a.newAssertValueCommand())
 	cmd.AddCommand(a.newAssertTextCommand())
+	cmd.AddCommand(a.newAssertVisibleCommand())
 	return cmd
 }
 
@@ -247,6 +273,55 @@ func locatorOptionsNeedQuery(opts locatorActionOptions) bool {
 	return opts.By != "css" || opts.Role != "" || opts.Exact || opts.IncludeHidden || opts.TestIDAttr != "data-testid" || opts.Limit != 20
 }
 
+func (a *app) newAssertVisibleCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "visible <selector-or-locator>", Short: "Assert an element is visible by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+			return err
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+
+		resolveOpts := locatorOpts
+		if resolveOpts.By != "css" {
+			resolveOpts.IncludeHidden = true
+		}
+		selector, locator, err := resolveActionSelector(ctx, session, args[0], resolveOpts, "assert visible")
+		if err != nil {
+			return err
+		}
+		var got assertVisibilityResult
+		if err := evaluateJSONValue(ctx, session, assertVisibilityExpression(selector, 20), "assert visible", &got); err != nil {
+			return err
+		}
+		if got.Error != nil {
+			return invalidSelectorError(selector, got.Error, "cdp assert visible 'button[type=submit]' --json")
+		}
+		got.Expected = "visible"
+		got.Passed = got.Visible
+		report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+		if locator != nil {
+			report["locator"] = locator
+			report["resolved_selector"] = selector
+		}
+		if !got.Passed {
+			return commandErrorWithData("assertion_failed", "check_failed", fmt.Sprintf("visible assertion failed for %q: %d visible of %d matched", selector, got.VisibleCount, got.Count), ExitCheckFailed, []string{locatorActionFindCommand(args[0], resolveOpts) + " --json", "cdp dom query " + shellQuote(selector) + " --json"}, report)
+		}
+		return a.render(ctx, "assertion passed", report)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
 func assertionMatch(actual, expected, mode string) (bool, error) {
 	switch normalizeAssertMode(mode) {
 	case "exact":
@@ -278,6 +353,64 @@ func formValuesExpression(includeHidden bool) string {
 
 func formGetExpression(selector string) string {
 	return `(() => { const __cdp_cli_form_get__ = true; return (` + formCollectorJS(jsStringLiteral(selector), "true") + `); })()`
+}
+
+func assertVisibilityExpression(selector string, limit int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_assert_visible__";
+  const selector = %s;
+  const limit = %d;
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const roleOf = (el) => {
+    const explicit = norm(el.getAttribute("role")).split(" ")[0];
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    if (tag === "button") return "button";
+    if (tag === "a" && el.hasAttribute("href")) return "link";
+    if (/^h[1-6]$/.test(tag)) return "heading";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return el.multiple ? "listbox" : "combobox";
+    if (tag === "input") {
+      if (["button", "submit", "reset"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "range") return "slider";
+      if (type === "search") return "searchbox";
+      return "textbox";
+    }
+    return "";
+  };
+  const nameOf = (el) => norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || el.getAttribute("value") || el.innerText || el.textContent || "");
+  const itemFor = (el, index) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
+    const visible = !hidden && rect.width > 0 && rect.height > 0;
+    return {
+      index,
+      tag: el.tagName.toLowerCase(),
+      id: el.id || "",
+      role: roleOf(el),
+      name: nameOf(el).slice(0, 240),
+      visible,
+      display: style.display || "",
+      visibility: style.visibility || "",
+      hidden,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    };
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, expected: "visible", visible: false, passed: false, count: 0, visible_count: 0, hidden_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+  }
+  const allItems = elements.map(itemFor);
+  const visibleCount = allItems.filter((item) => item.visible).length;
+  const hiddenCount = allItems.length - visibleCount;
+  return { url: location.href, title: document.title, selector, expected: "visible", visible: visibleCount > 0, passed: visibleCount > 0, count: allItems.length, visible_count: visibleCount, hidden_count: hiddenCount, items: allItems.slice(0, limit), marker };
+})()`, jsStringLiteral(selector), limit)
 }
 
 func formCollectorJS(selectorExpr, includeHiddenExpr string) string {
