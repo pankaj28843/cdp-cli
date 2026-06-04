@@ -760,7 +760,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "warnings", Type: "array<string>", Required: true, Description: "Workflow-level warnings, including zero-candidate blocked SERP runs."},
 				{Name: "failures", Type: "array<object>", Required: true, Description: "Per-query failures surfaced for agent judgment, including engine-specific serp_blocked and auth-required pages."},
 				{Name: "artifacts", Type: "object", Required: true, Description: "queries.json, candidates.json, and candidates.tsv paths."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "SERP, query count, candidate count, scheduled result pages, progress mode, fast-fail settings, parallelism, output directory, and next commands."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "SERP, fallback SERP metadata, primary/fallback counts, scheduled result pages, progress mode, fast-fail settings, parallelism, output directory, and next commands."},
 			},
 		},
 		"workflow-web-research-extract": {

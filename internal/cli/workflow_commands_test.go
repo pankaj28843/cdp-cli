@@ -758,6 +758,80 @@ func TestWorkflowWebResearchSERPFastFailsBlockedPages(t *testing.T) {
 	}
 }
 
+func TestWorkflowWebResearchSERPFallsBackAfterBlockedPrimary(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("duck only block fixture\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	outDir := filepath.Join(tmpDir, "research")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", "duckduckgo", "--result-pages", "1", "--parallel", "1", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		SERPs []struct {
+			Serp string `json:"serp"`
+		} `json:"serps"`
+		Candidates []struct {
+			Serp string `json:"serp"`
+			URL  string `json:"url"`
+		} `json:"candidates"`
+		Failures []struct {
+			Serp     string `json:"serp"`
+			ErrClass string `json:"err_class"`
+		} `json:"failures"`
+		Warnings []string `json:"warnings"`
+		Workflow struct {
+			Serp                   string `json:"serp"`
+			FallbackSerp           string `json:"fallback_serp"`
+			ResolvedFallbackSerp   string `json:"resolved_fallback_serp"`
+			FallbackTriggered      bool   `json:"fallback_triggered"`
+			PrimaryCandidateCount  int    `json:"primary_candidate_count"`
+			PrimaryFailureCount    int    `json:"primary_failure_count"`
+			PrimaryBlockedFailures int    `json:"primary_blocked_failures"`
+			CandidateCount         int    `json:"candidate_count"`
+			FailureCount           int    `json:"failure_count"`
+			ScheduledResultPages   int    `json:"scheduled_result_pages"`
+			CompletedResultPages   int    `json:"completed_result_pages"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research serp output is invalid JSON: %v", err)
+	}
+	if got.OK {
+		t.Fatalf("workflow ok = true, want false because primary duckduckgo block is retained")
+	}
+	if got.Workflow.Serp != "duckduckgo" || got.Workflow.FallbackSerp != "auto" || got.Workflow.ResolvedFallbackSerp != "google" || !got.Workflow.FallbackTriggered {
+		t.Fatalf("workflow fallback metadata = %+v", got.Workflow)
+	}
+	if got.Workflow.PrimaryCandidateCount != 0 || got.Workflow.PrimaryFailureCount != 1 || got.Workflow.PrimaryBlockedFailures != 1 || got.Workflow.CandidateCount != 1 || got.Workflow.FailureCount != 1 {
+		t.Fatalf("workflow counts = %+v", got.Workflow)
+	}
+	if got.Workflow.ScheduledResultPages != 2 || got.Workflow.CompletedResultPages != 2 {
+		t.Fatalf("workflow scheduled/completed pages = %+v, want primary and fallback pages", got.Workflow)
+	}
+	if len(got.SERPs) != 2 || got.SERPs[0].Serp != "duckduckgo" || got.SERPs[1].Serp != "google" {
+		t.Fatalf("serp reports = %+v, want duckduckgo primary plus google fallback", got.SERPs)
+	}
+	if len(got.Failures) != 1 || got.Failures[0].Serp != "duckduckgo" || got.Failures[0].ErrClass != "serp_blocked" {
+		t.Fatalf("failures = %+v, want retained duckduckgo serp_blocked failure", got.Failures)
+	}
+	if len(got.Candidates) != 1 || got.Candidates[0].Serp != "google" || got.Candidates[0].URL == "" {
+		t.Fatalf("candidates = %+v, want google fallback candidate", got.Candidates)
+	}
+	if !testContainsSubstring(got.Warnings, "running fallback SERP google") {
+		t.Fatalf("warnings = %+v, want fallback warning", got.Warnings)
+	}
+}
+
 func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

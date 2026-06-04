@@ -238,7 +238,9 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 				_ = json.Unmarshal(req.Params, &params)
 				lowerURL := strings.ToLower(params.URL)
-				blockedSessions[req.SessionID] = strings.Contains(lowerURL, "serp+block+fixture") || strings.Contains(lowerURL, "serp%20block%20fixture") || strings.Contains(lowerURL, "serp-block-fixture") || strings.Contains(lowerURL, "serp block fixture")
+				blocksAllSERPs := strings.Contains(lowerURL, "serp+block+fixture") || strings.Contains(lowerURL, "serp%20block%20fixture") || strings.Contains(lowerURL, "serp-block-fixture") || strings.Contains(lowerURL, "serp block fixture")
+				blocksDuckDuckGo := (strings.Contains(lowerURL, "duck-only-block") || strings.Contains(lowerURL, "duck+only+block") || strings.Contains(lowerURL, "duck%20only%20block")) && strings.Contains(lowerURL, "duckduckgo.com")
+				blockedSessions[req.SessionID] = blocksAllSERPs || blocksDuckDuckGo
 				resp["result"] = map[string]any{"frameId": "frame-1"}
 			} else if req.Method == "Page.enable" || req.Method == "Page.disable" {
 				resp["result"] = map[string]any{}

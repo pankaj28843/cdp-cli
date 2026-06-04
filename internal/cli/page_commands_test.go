@@ -542,6 +542,71 @@ func TestPagesUsesRunningDaemonByDefaultJSON(t *testing.T) {
 	}
 }
 
+func TestDoctorBrowserCheckUsesHealthyDaemonWhenSavedEndpointIsStale(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	stateDir := shortCLIStateDir(t)
+	var addOut, addErr bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "default", "--browser-url", "http://stale-endpoint.invalid", "--state-dir", stateDir, "--json"}, &addOut, &addErr, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit code = %d, want %d; stderr=%s", code, cli.ExitOK, addErr.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntime(t, ctx, stateDir)
+	defer func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	}()
+
+	var out, errOut bytes.Buffer
+	code = cli.Execute(context.Background(), []string{"doctor", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var doctor struct {
+		OK     bool `json:"ok"`
+		Checks []struct {
+			Name    string `json:"name"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Details struct {
+				State string `json:"state"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doctor); err != nil {
+		t.Fatalf("doctor output is invalid JSON: %v", err)
+	}
+	if !doctor.OK {
+		t.Fatalf("doctor ok = false; checks = %+v", doctor.Checks)
+	}
+	for _, check := range doctor.Checks {
+		if check.Name == "browser_debug_endpoint" {
+			if check.Status != "pass" || check.Details.State != "running" || !strings.Contains(check.Message, "daemon") {
+				t.Fatalf("browser check = %+v, want pass from healthy daemon despite stale saved endpoint", check)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor checks = %+v, want browser_debug_endpoint", doctor.Checks)
+}
+
 func TestPagesURLFilterJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

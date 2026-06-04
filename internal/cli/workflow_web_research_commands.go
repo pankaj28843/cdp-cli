@@ -28,6 +28,7 @@ func (a *app) newWorkflowWebResearchCommand() *cobra.Command {
 func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	var queryFile string
 	var serp string
+	var fallbackSerp string
 	var maxCandidates int
 	var candidateOut string
 	var outDir string
@@ -82,10 +83,30 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			if !isWebResearchSupportedSERP(serp) {
 				return commandError("usage", "usage", "--serp must be one of: "+webResearchSERPList(), ExitUsage, []string{"cdp workflow web-research serp --serp google --json", "cdp workflow web-research serp --serp duckduckgo --json"})
 			}
+			fallbackSerp = strings.TrimSpace(strings.ToLower(fallbackSerp))
+			if fallbackSerp == "" {
+				fallbackSerp = "auto"
+			}
+			resolvedFallbackSerp := fallbackSerp
+			if fallbackSerp == "auto" {
+				if serp == "google" {
+					resolvedFallbackSerp = "none"
+				} else {
+					resolvedFallbackSerp = "google"
+				}
+			}
+			if resolvedFallbackSerp != "none" {
+				if !isWebResearchSupportedSERP(resolvedFallbackSerp) {
+					return commandError("usage", "usage", "--fallback-serp must be auto, none, or one of: "+webResearchSERPList(), ExitUsage, []string{"cdp workflow web-research serp --serp duckduckgo --fallback-serp google --json"})
+				}
+				if resolvedFallbackSerp == serp {
+					return commandError("usage", "usage", "--fallback-serp must differ from --serp", ExitUsage, []string{"cdp workflow web-research serp --serp duckduckgo --fallback-serp google --json"})
+				}
+			}
 
 			ctx := cmd.Context()
 			queriesPath := filepath.Join(outDir, "queries.json")
-			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "result_pages": resultPages}, "", "  ")
+			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "fallback_serp": fallbackSerp, "resolved_fallback_serp": resolvedFallbackSerp, "result_pages": resultPages}, "", "  ")
 			if err != nil {
 				return commandError("internal", "internal", fmt.Sprintf("marshal web research queries: %v", err), ExitInternal, []string{"cdp workflow web-research serp --json"})
 			}
@@ -99,19 +120,22 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				SerpPage   int
 			}
 			type serpResult struct {
+				Serp       string
 				QueryIndex int
 				SerpPage   int
 				Query      webResearchQuery
 				Result     renderedExtractResult
 				Err        error
 			}
-			jobs := make(chan serpJob)
-			resultCount := len(queries) * resultPages
-			results := make(chan serpResult, resultCount)
-			var wg sync.WaitGroup
-			runJob := func(job serpJob) serpResult {
+			type serpRunStats struct {
+				Scheduled int
+				Completed int
+				Blocked   int
+				FastFail  bool
+			}
+			runJob := func(activeSerp, artifactRoot string, job serpJob) serpResult {
 				query := queries[job.QueryIndex]
-				queryURL := webResearchSearchURL(serp, query.Text, query.TimeFilter, job.SerpPage)
+				queryURL := webResearchSearchURL(activeSerp, query.Text, query.TimeFilter, job.SerpPage)
 				result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
 					WorkflowName:       "web-research-serp",
 					ArtifactTypePrefix: "web-research-serp",
@@ -121,164 +145,195 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					Wait:               wait,
 					WaitUntil:          waitUntil,
 					Formats:            "snapshot,text,html,markdown,links",
-					OutDir:             filepath.Join(outDir, "serps", webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
-					Serp:               serp,
+					OutDir:             filepath.Join(artifactRoot, webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
+					Serp:               activeSerp,
 					Limit:              80,
 					MinVisibleWords:    minVisibleWords,
 					MinMarkdownWords:   minMarkdownWords,
 					MinHTMLChars:       minHTMLChars,
 				})
-				return serpResult{QueryIndex: job.QueryIndex, SerpPage: job.SerpPage, Query: query, Result: result, Err: err}
-			}
-			for i := 0; i < parallel; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					for job := range jobs {
-						results <- runJob(job)
-					}
-				}()
+				return serpResult{Serp: activeSerp, QueryIndex: job.QueryIndex, SerpPage: job.SerpPage, Query: query, Result: result, Err: err}
 			}
 			blockedFailureLimit := blockedFailureThreshold
 			if blockedFailureLimit == 0 {
 				blockedFailureLimit = 3
 			}
-			scheduledJobs := 0
-			completedJobs := 0
-			activeJobs := 0
-			blockedFailures := 0
-			fastFailTriggered := false
-			serpResults := make([]serpResult, 0, resultCount)
-			nextQueryIndex := 0
-			nextSerpPage := 1
-			nextJob := func() (serpJob, bool) {
-				if nextQueryIndex >= len(queries) {
-					return serpJob{}, false
+			runBatch := func(activeSerp, artifactRoot string) ([]serpResult, serpRunStats) {
+				jobs := make(chan serpJob)
+				resultCount := len(queries) * resultPages
+				results := make(chan serpResult, resultCount)
+				var wg sync.WaitGroup
+				for i := 0; i < parallel; i++ {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						for job := range jobs {
+							results <- runJob(activeSerp, artifactRoot, job)
+						}
+					}()
 				}
-				job := serpJob{QueryIndex: nextQueryIndex, SerpPage: nextSerpPage}
-				nextSerpPage++
-				if nextSerpPage > resultPages {
-					nextSerpPage = 1
-					nextQueryIndex++
+				scheduledJobs := 0
+				completedJobs := 0
+				activeJobs := 0
+				blockedFailures := 0
+				fastFailTriggered := false
+				serpResults := make([]serpResult, 0, resultCount)
+				nextQueryIndex := 0
+				nextSerpPage := 1
+				nextJob := func() (serpJob, bool) {
+					if nextQueryIndex >= len(queries) {
+						return serpJob{}, false
+					}
+					job := serpJob{QueryIndex: nextQueryIndex, SerpPage: nextSerpPage}
+					nextSerpPage++
+					if nextSerpPage > resultPages {
+						nextSerpPage = 1
+						nextQueryIndex++
+					}
+					return job, true
 				}
-				return job, true
-			}
-			recordFastFailSignal := func(result serpResult) {
-				if blocked, _ := detectSERPBlocked(result.Result); blocked {
-					blockedFailures++
-				} else {
-					blockedFailures = 0
+				recordFastFailSignal := func(result serpResult) {
+					if blocked, _ := detectSERPBlocked(result.Result); blocked {
+						blockedFailures++
+					} else {
+						blockedFailures = 0
+					}
+					if blockedFailures >= blockedFailureLimit {
+						fastFailTriggered = true
+					}
 				}
-				if blockedFailures >= blockedFailureLimit {
-					fastFailTriggered = true
+				emitProgress := func(result serpResult) {
+					if progress != "stderr" {
+						return
+					}
+					blocked, signals := detectSERPBlocked(result.Result)
+					event := map[string]any{"event": "serp_page_complete", "serp": activeSerp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "completed_result_pages": completedJobs, "scheduled_result_pages": scheduledJobs, "blocked": blocked, "signals": signals}
+					if result.Err != nil {
+						event["err_class"] = classifyWorkflowSERPFailure(result.Err, result.Result)
+						event["error"] = result.Err.Error()
+					} else if blocked {
+						event["err_class"] = "serp_blocked"
+					}
+					if payload, err := json.Marshal(event); err == nil {
+						fmt.Fprintln(a.err, string(payload))
+					}
 				}
-			}
-			emitProgress := func(result serpResult) {
-				if progress != "stderr" {
-					return
-				}
-				blocked, signals := detectSERPBlocked(result.Result)
-				event := map[string]any{"event": "serp_page_complete", "serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "completed_result_pages": completedJobs, "scheduled_result_pages": scheduledJobs, "blocked": blocked, "signals": signals}
-				if result.Err != nil {
-					event["err_class"] = classifyWorkflowSERPFailure(result.Err, result.Result)
-					event["error"] = result.Err.Error()
-				} else if blocked {
-					event["err_class"] = "serp_blocked"
-				}
-				if payload, err := json.Marshal(event); err == nil {
-					fmt.Fprintln(a.err, string(payload))
-				}
-			}
-			scheduleNext := func() bool {
-				if fastFailTriggered {
-					return false
-				}
-				job, ok := nextJob()
-				if !ok {
-					return false
-				}
-				jobs <- job
-				scheduledJobs++
-				activeJobs++
-				return true
-			}
-			if fastFailBlocked && parallel == 1 {
-				for {
+				scheduleNext := func() bool {
+					if fastFailTriggered {
+						return false
+					}
 					job, ok := nextJob()
 					if !ok {
-						break
+						return false
 					}
-					result := runJob(job)
-					serpResults = append(serpResults, result)
+					jobs <- job
 					scheduledJobs++
-					completedJobs++
-					recordFastFailSignal(result)
-					emitProgress(result)
-					if fastFailTriggered {
-						break
-					}
+					activeJobs++
+					return true
 				}
-			} else {
-				for activeJobs < parallel && scheduleNext() {
-				}
-				for activeJobs > 0 {
-					result := <-results
-					serpResults = append(serpResults, result)
-					completedJobs++
-					activeJobs--
-					if fastFailBlocked {
+				if fastFailBlocked && parallel == 1 {
+					for {
+						job, ok := nextJob()
+						if !ok {
+							break
+						}
+						result := runJob(activeSerp, artifactRoot, job)
+						serpResults = append(serpResults, result)
+						scheduledJobs++
+						completedJobs++
 						recordFastFailSignal(result)
+						emitProgress(result)
+						if fastFailTriggered {
+							break
+						}
 					}
-					emitProgress(result)
+				} else {
 					for activeJobs < parallel && scheduleNext() {
 					}
+					for activeJobs > 0 {
+						result := <-results
+						serpResults = append(serpResults, result)
+						completedJobs++
+						activeJobs--
+						if fastFailBlocked {
+							recordFastFailSignal(result)
+						}
+						emitProgress(result)
+						for activeJobs < parallel && scheduleNext() {
+						}
+					}
 				}
+				close(jobs)
+				wg.Wait()
+				close(results)
+				sort.SliceStable(serpResults, func(i, j int) bool {
+					if serpResults[i].QueryIndex == serpResults[j].QueryIndex {
+						return serpResults[i].SerpPage < serpResults[j].SerpPage
+					}
+					return serpResults[i].QueryIndex < serpResults[j].QueryIndex
+				})
+				return serpResults, serpRunStats{Scheduled: scheduledJobs, Completed: completedJobs, Blocked: blockedFailures, FastFail: fastFailTriggered}
 			}
-			close(jobs)
-			wg.Wait()
-			close(results)
 
-			sort.SliceStable(serpResults, func(i, j int) bool {
-				if serpResults[i].QueryIndex == serpResults[j].QueryIndex {
-					return serpResults[i].SerpPage < serpResults[j].SerpPage
+			primaryResults, primaryStats := runBatch(serp, filepath.Join(outDir, "serps"))
+			stats := []serpRunStats{primaryStats}
+			fallbackTriggered := false
+			fallbackReason := ""
+
+			processResults := func(results []serpResult, serpReports []map[string]any, failures []map[string]any, warnings []string, candidates []webResearchCandidate, seen map[string]bool) ([]map[string]any, []map[string]any, []string, []webResearchCandidate) {
+				for _, result := range results {
+					if result.Err != nil {
+						failures = append(failures, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": classifyWorkflowSERPFailure(result.Err, result.Result), "error": result.Err.Error()})
+						continue
+					}
+					serpReports = append(serpReports, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
+					if blocked, signals := detectSERPBlocked(result.Result); blocked {
+						failures = append(failures, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": "serp_blocked", "message": result.Serp + " served a consent, CAPTCHA, auth, or bot-check page", "signals": signals})
+						warnings = append(warnings, fmt.Sprintf("%s SERP page %d for query %q was blocked by a consent, CAPTCHA, auth, or bot-check page", result.Serp, result.SerpPage, result.Query.Text))
+						continue
+					}
+					for _, link := range result.Result.Links.Results {
+						key := normalizeResearchURL(link.URL)
+						if key == "" || seen[key] {
+							continue
+						}
+						seen[key] = true
+						globalRank := (result.SerpPage-1)*10 + link.Rank
+						candidates = append(candidates, webResearchCandidate{Serp: result.Serp, Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, SerpPage: result.SerpPage, RankOnPage: link.Rank, GlobalRank: globalRank, Rank: globalRank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
+						if maxCandidates > 0 && len(candidates) >= maxCandidates {
+							break
+						}
+					}
+					if maxCandidates > 0 && len(candidates) >= maxCandidates {
+						break
+					}
 				}
-				return serpResults[i].QueryIndex < serpResults[j].QueryIndex
-			})
+				return serpReports, failures, warnings, candidates
+			}
 
+			resultCount := len(queries) * resultPages
 			serpReports := make([]map[string]any, 0, resultCount)
 			failures := make([]map[string]any, 0)
 			warnings := make([]string, 0)
 			candidates := make([]webResearchCandidate, 0)
 			seen := map[string]bool{}
-			for _, result := range serpResults {
-				if result.Err != nil {
-					failures = append(failures, map[string]any{"serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": classifyWorkflowSERPFailure(result.Err, result.Result), "error": result.Err.Error()})
-					continue
-				}
-				serpReports = append(serpReports, map[string]any{"serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
-				if blocked, signals := detectSERPBlocked(result.Result); blocked {
-					failures = append(failures, map[string]any{"serp": serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": "serp_blocked", "message": serp + " served a consent, CAPTCHA, auth, or bot-check page", "signals": signals})
-					warnings = append(warnings, fmt.Sprintf("%s SERP page %d for query %q was blocked by a consent, CAPTCHA, auth, or bot-check page", serp, result.SerpPage, result.Query.Text))
-					continue
-				}
-				for _, link := range result.Result.Links.Results {
-					key := normalizeResearchURL(link.URL)
-					if key == "" || seen[key] {
-						continue
-					}
-					seen[key] = true
-					globalRank := (result.SerpPage-1)*10 + link.Rank
-					candidates = append(candidates, webResearchCandidate{Serp: serp, Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, SerpPage: result.SerpPage, RankOnPage: link.Rank, GlobalRank: globalRank, Rank: globalRank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
-					if maxCandidates > 0 && len(candidates) >= maxCandidates {
-						break
-					}
-				}
-				if maxCandidates > 0 && len(candidates) >= maxCandidates {
-					break
-				}
+			serpReports, failures, warnings, candidates = processResults(primaryResults, serpReports, failures, warnings, candidates, seen)
+			primaryFailureCount := len(failures)
+			primaryBlockedFailures := countSERPFailures(failures, "serp_blocked")
+			primaryCandidateCount := len(candidates)
+			if primaryStats.FastFail {
+				warnings = append(warnings, fmt.Sprintf("%s SERP sampling stopped early after %d consecutive blocked pages", serp, primaryStats.Blocked))
 			}
-			if fastFailTriggered {
-				warnings = append(warnings, fmt.Sprintf("SERP sampling stopped early after %d consecutive blocked pages", blockedFailures))
+			if resolvedFallbackSerp != "none" && primaryCandidateCount == 0 && primaryFailureCount > 0 && primaryBlockedFailures == primaryFailureCount {
+				fallbackTriggered = true
+				fallbackReason = fmt.Sprintf("%s produced zero candidates after %d blocked SERP pages", serp, primaryBlockedFailures)
+				warnings = append(warnings, fmt.Sprintf("%s; running fallback SERP %s", fallbackReason, resolvedFallbackSerp))
+				fallbackResults, fallbackStats := runBatch(resolvedFallbackSerp, filepath.Join(outDir, "fallback-serps", resolvedFallbackSerp))
+				stats = append(stats, fallbackStats)
+				serpReports, failures, warnings, candidates = processResults(fallbackResults, serpReports, failures, warnings, candidates, seen)
+				if fallbackStats.FastFail {
+					warnings = append(warnings, fmt.Sprintf("%s fallback SERP sampling stopped early after %d consecutive blocked pages", resolvedFallbackSerp, fallbackStats.Blocked))
+				}
 			}
 			if len(candidates) == 0 && len(failures) > 0 {
 				warnings = append(warnings, "SERP sampling produced zero candidates because one or more pages were blocked or failed")
@@ -304,6 +359,16 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				return err
 			}
 
+			scheduledResultPages := 0
+			completedResultPages := 0
+			fastFailTriggered := false
+			for _, stat := range stats {
+				scheduledResultPages += stat.Scheduled
+				completedResultPages += stat.Completed
+				if stat.FastFail {
+					fastFailTriggered = true
+				}
+			}
 			report := map[string]any{
 				"ok":         len(failures) == 0,
 				"queries":    queries,
@@ -319,13 +384,21 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				"workflow": map[string]any{
 					"name":                      "web-research-serp",
 					"serp":                      serp,
+					"fallback_serp":             fallbackSerp,
+					"resolved_fallback_serp":    resolvedFallbackSerp,
+					"fallback_triggered":        fallbackTriggered,
+					"fallback_reason":           fallbackReason,
 					"query_count":               len(queries),
 					"candidate_count":           len(candidates),
 					"failure_count":             len(failures),
+					"primary_candidate_count":   primaryCandidateCount,
+					"primary_failure_count":     primaryFailureCount,
+					"primary_blocked_failures":  primaryBlockedFailures,
 					"warning_count":             len(warnings),
 					"max_candidates":            maxCandidates,
 					"result_pages":              resultPages,
-					"scheduled_result_pages":    scheduledJobs,
+					"scheduled_result_pages":    scheduledResultPages,
+					"completed_result_pages":    completedResultPages,
 					"fast_fail_blocked":         fastFailBlocked,
 					"blocked_failure_threshold": blockedFailureLimit,
 					"fast_fail_triggered":       fastFailTriggered,
@@ -340,6 +413,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&queryFile, "query-file", "", "newline-delimited search queries to sample")
 	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google, bing, brave, duckduckgo, or kagi")
+	cmd.Flags().StringVar(&fallbackSerp, "fallback-serp", "auto", "fallback SERP after blocked zero-candidate primary runs: auto, none, google, bing, brave, duckduckgo, or kagi")
 	cmd.Flags().IntVar(&maxCandidates, "max-candidates", 100, "maximum deduped candidates to emit; use 0 for no limit")
 	cmd.Flags().StringVar(&candidateOut, "candidate-out", "", "path for deduped candidates JSON")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for SERP artifacts and candidate files")
@@ -402,6 +476,16 @@ func stringListContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func countSERPFailures(failures []map[string]any, errClass string) int {
+	count := 0
+	for _, failure := range failures {
+		if fmt.Sprint(failure["err_class"]) == errClass {
+			count++
+		}
+	}
+	return count
 }
 
 func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {

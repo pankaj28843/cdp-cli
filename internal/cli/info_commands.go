@@ -140,10 +140,18 @@ func (a *app) newDoctorCommand() *cobra.Command {
 			daemonCheckStatus := daemonDoctorStatus(daemonStatus.State)
 			browserMessage := probe.Message
 			browserRemediation := probe.RemediationCommands
-			if a.opts.autoConnect && daemonStatus.State == "running" {
+			browserDetails := any(probe)
+			daemonHealth := healthMap(daemonStatus.Health)
+			if daemonStatus.State == "running" && doctorStatusFromHealth(daemonHealth) == "pass" {
+				browserStatus = "pass"
+				browserMessage = "selected-mode daemon is healthy; browser commands use the daemon runtime"
+				browserRemediation = daemonStatus.NextCommands
+				browserDetails = daemonStatus
+			} else if a.opts.autoConnect && daemonStatus.State == "running" {
 				browserStatus = "pass"
 				browserMessage = "daemon keepalive process is running; active browser probing was skipped"
 				browserRemediation = daemonStatus.NextCommands
+				browserDetails = daemonStatus
 			}
 			checks := []map[string]any{
 				{"name": "cli", "status": "pass", "message": "command scaffold is installed"},
@@ -164,7 +172,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				"connection_mode":      a.connectionMode(),
 				"requires_user_allow":  a.opts.autoConnect,
 				"default_profile_flow": a.opts.autoConnect,
-				"details":              probe,
+				"details":              browserDetails,
 				"remediation_commands": browserRemediation,
 			})
 			if checkName == "" || checkName == "browser-health" || checkName == "browser-budget" {

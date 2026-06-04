@@ -500,7 +500,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow web-research serp": {
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
-			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp duckduckgo --result-pages 2 --out-dir tmp/research-ddg --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp duckduckgo --fallback-serp google --result-pages 2 --out-dir tmp/research-ddg --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp bing --result-pages 3 --fast-fail-blocked --blocked-failure-threshold 3 --progress stderr --json",
 		},
 		"cdp workflow web-research extract": {
