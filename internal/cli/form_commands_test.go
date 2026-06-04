@@ -34,6 +34,52 @@ func TestFormValuesAndSelectorAssertionsJSON(t *testing.T) {
 	}
 }
 
+func TestAssertValueByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "value", "Search", "hello", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert value by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Tag          string `json:"tag"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector string `json:"selector"`
+			Expected string `json:"expected"`
+			Actual   string `json:"actual"`
+			Passed   bool   `json:"passed"`
+			Control  struct {
+				SelectorHint string `json:"selector_hint"`
+				Name         string `json:"name"`
+				Value        string `json:"value"`
+			} `json:"control"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert value by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#q" || got.Locator.By != "label" || got.Locator.Query != "Search" || !got.Locator.Strict || len(got.Locator.Matches) != 1 {
+		t.Fatalf("assert value locator = %+v, want strict label locator", got)
+	}
+	if got.Assertion.Selector != "input#q" || got.Assertion.Expected != "hello" || got.Assertion.Actual != "hello" || !got.Assertion.Passed || got.Assertion.Control.SelectorHint != "input#q" || got.Assertion.Control.Name != "Search" || got.Assertion.Control.Value != "hello" {
+		t.Fatalf("assert value assertion = %+v, want assertion on resolved input", got.Assertion)
+	}
+}
+
 func TestFormValuesListsVisibleControls(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()

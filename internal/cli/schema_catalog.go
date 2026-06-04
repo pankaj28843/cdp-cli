@@ -498,6 +498,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "matches", Type: "array<locator_match>", Required: false, Description: "Locator matches duplicated for jq convenience when waiting by locator."},
 			},
 		},
+		"assert-value": {
+			Name:        "assert-value",
+			Description: "Form-control value assertion result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_value_result", Required: true, Description: "Selector, expected value, actual value, match mode, pass/fail status, count, and control metadata."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
 		"snapshot": {
 			Name:        "snapshot",
 			Description: "Visible text extracted from selected page elements.",

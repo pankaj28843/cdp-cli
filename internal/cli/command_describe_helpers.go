@@ -554,7 +554,7 @@ func commandExamples(path string) []string {
 	examples["cdp workflow lighthouse"] = []string{"cdp workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --json"}
 	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json"}
 	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json"}
-	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --json"}
+	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --json", "cdp assert value 'Search' expected --by label --json"}
 	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --json"}
 
 	return examples[path]

@@ -754,24 +754,41 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_form_get__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "textarea"
+		}
+		control := map[string]any{
+			"selector_hint": "textarea[aria-label=\"Base64 output\"]",
+			"tag":           "textarea",
+			"role":          "textbox",
+			"name":          "Base64 output",
+			"value":         "SGVsbG8gVVg=",
+			"read_only":     true,
+			"disabled":      false,
+		}
+		if selector == "input#q" {
+			control = map[string]any{
+				"selector_hint": "input#q",
+				"tag":           "input",
+				"type":          "search",
+				"role":          "searchbox",
+				"name":          "Search",
+				"value":         "hello",
+				"read_only":     false,
+				"disabled":      false,
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"url":      "https://example.test/app",
 					"title":    "Example App",
-					"selector": "textarea",
+					"selector": selector,
 					"count":    1,
 					"controls": []map[string]any{},
-					"control": map[string]any{
-						"selector_hint": "textarea[aria-label=\"Base64 output\"]",
-						"tag":           "textarea",
-						"role":          "textbox",
-						"name":          "Base64 output",
-						"value":         "SGVsbG8gVVg=",
-						"read_only":     true,
-						"disabled":      false,
-					},
+					"control":  control,
 				},
 			},
 		}

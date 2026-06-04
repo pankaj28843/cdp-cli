@@ -133,7 +133,11 @@ func (a *app) newAssertCommand() *cobra.Command {
 
 func (a *app) newAssertValueCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, mode string
-	cmd := &cobra.Command{Use: "value <selector> <expected>", Short: "Assert a form control value", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "value <selector-or-locator> <expected>", Short: "Assert a form control value by CSS selector or strict locator", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -141,12 +145,16 @@ func (a *app) newAssertValueCommand() *cobra.Command {
 			return err
 		}
 		defer session.Close(ctx)
+		selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "assert value")
+		if err != nil {
+			return err
+		}
 		var got formGetResult
-		if err := evaluateJSONValue(ctx, session, formGetExpression(args[0]), "assert value", &got); err != nil {
+		if err := evaluateJSONValue(ctx, session, formGetExpression(selector), "assert value", &got); err != nil {
 			return err
 		}
 		if got.Error != nil {
-			return invalidSelectorError(args[0], got.Error, "cdp assert value 'input[name=q]' expected --json")
+			return invalidSelectorError(selector, got.Error, "cdp assert value 'input[name=q]' expected --json")
 		}
 		actual := ""
 		if got.Control != nil {
@@ -156,10 +164,14 @@ func (a *app) newAssertValueCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		result := assertValueResult{Selector: args[0], Expected: args[1], Actual: actual, Mode: normalizeAssertMode(mode), Passed: passed, Count: got.Count, Control: got.Control, Error: got.Error}
+		result := assertValueResult{Selector: selector, Expected: args[1], Actual: actual, Mode: normalizeAssertMode(mode), Passed: passed, Count: got.Count, Control: got.Control, Error: got.Error}
 		report := map[string]any{"ok": passed, "target": pageRow(target), "assertion": result}
+		if locator != nil {
+			report["locator"] = locator
+			report["resolved_selector"] = selector
+		}
 		if !passed {
-			return commandErrorWithData("assertion_failed", "check_failed", fmt.Sprintf("value assertion failed for %q: got %q", args[0], actual), ExitCheckFailed, []string{"cdp form get " + args[0] + " --json"}, report)
+			return commandErrorWithData("assertion_failed", "check_failed", fmt.Sprintf("value assertion failed for %q: got %q", selector, actual), ExitCheckFailed, []string{"cdp form get " + shellQuote(selector) + " --json"}, report)
 		}
 		return a.render(ctx, "assertion passed", report)
 	}}
@@ -167,6 +179,7 @@ func (a *app) newAssertValueCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
+	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
 
