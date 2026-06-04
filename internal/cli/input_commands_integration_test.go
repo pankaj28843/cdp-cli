@@ -46,6 +46,49 @@ func TestClickJSON(t *testing.T) {
 	}
 }
 
+func TestClickByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "Search", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Role    string `json:"role"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Click struct {
+			Selector string `json:"selector"`
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+		} `json:"click"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#submit" || got.Locator.By != "role" || got.Locator.Query != "Search" || got.Locator.Role != "button" || !got.Locator.Strict || len(got.Locator.Matches) != 1 {
+		t.Fatalf("click by role locator = %+v, want strict button locator", got)
+	}
+	if got.Locator.Matches[0].SelectorHint != "button#submit" || got.Locator.Matches[0].Role != "button" || got.Click.Selector != "button#submit" || !got.Click.Clicked || got.Click.Strategy != "dom" {
+		t.Fatalf("click by role action = %+v, want DOM click on resolved selector", got)
+	}
+}
+
 func TestClickRawInputVerifiedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterTitle": "Ready Page", "afterURL": "https://example.test/ready"},
@@ -196,6 +239,61 @@ func TestClickDiagnosticsArtifactJSON(t *testing.T) {
 	}
 	if _, err := os.Stat(outPath); err != nil {
 		t.Fatalf("click diagnostics artifact was not written: %v", err)
+	}
+}
+
+func TestFillByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"fill", "Search", "typed value", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("fill by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Tag          string `json:"tag"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Fill struct {
+			Selector string `json:"selector"`
+			Filled   bool   `json:"filled"`
+			Value    string `json:"value"`
+			Previous string `json:"previous"`
+		} `json:"fill"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("fill by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "filled" || got.ResolvedSelector != "input#q" || got.Locator.By != "label" || got.Locator.Query != "Search" || !got.Locator.Strict || len(got.Locator.Matches) != 1 {
+		t.Fatalf("fill by label locator = %+v, want strict label locator", got)
+	}
+	if got.Locator.Matches[0].SelectorHint != "input#q" || got.Locator.Matches[0].Tag != "input" || got.Fill.Selector != "input#q" || !got.Fill.Filled || got.Fill.Value != "typed value" || got.Fill.Previous != "before" {
+		t.Fatalf("fill by label action = %+v, want fill on resolved selector", got)
+	}
+}
+
+func TestActionLocatorRoleRequiresRoleFlag(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "Submit", "--by", "role", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("click role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "--role is required") {
+		t.Fatalf("click role error = %s, want --role guidance", out.String())
 	}
 }
 

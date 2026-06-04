@@ -41,6 +41,15 @@ type fillResult struct {
 	Error    *evalError `json:"error,omitempty"`
 }
 
+type locatorActionOptions struct {
+	By            string
+	Role          string
+	TestIDAttr    string
+	Exact         bool
+	IncludeHidden bool
+	Limit         int
+}
+
 type typeResult struct {
 	URL      string     `json:"url"`
 	Title    string     `json:"title"`
@@ -123,14 +132,15 @@ func (a *app) newClickCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
 	var strategy string
+	var locatorOpts locatorActionOptions
 	var activate bool
 	var waitText string
 	var waitSelector string
 	var diagnosticsOut string
 	var poll time.Duration
 	cmd := &cobra.Command{
-		Use:   "click <selector>",
-		Short: "Click the first matching element for a CSS selector",
+		Use:   "click <selector-or-locator>",
+		Short: "Click the first matching element by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			strategy = strings.ToLower(strings.TrimSpace(strategy))
@@ -145,6 +155,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
+			}
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
 			}
 
 			ctx, cancel := a.browserCommandContext(cmd)
@@ -162,18 +175,23 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 			}
 
-			result, err := performClick(ctx, session, args[0], strategy)
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "click")
+			if err != nil {
+				return err
+			}
+
+			result, err := performClick(ctx, session, selector, strategy)
 			if err != nil {
 				return err
 			}
 			if result.Error != nil {
-				return invalidSelectorError(args[0], result.Error, "cdp click main --json")
+				return invalidSelectorError(selector, result.Error, "cdp click main --json")
 			}
 			if !result.Clicked {
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("no matching element found for selector %q", args[0]),
+					fmt.Sprintf("no matching element found for selector %q", selector),
 					ExitUsage,
 					[]string{"cdp click main --json"},
 				)
@@ -189,12 +207,12 @@ func (a *app) newClickCommand() *cobra.Command {
 				verification = &wait
 				verified = wait.Matched
 				if !verified && strategy == "auto" {
-					fallback, err := performClick(ctx, session, args[0], "raw-input")
+					fallback, err := performClick(ctx, session, selector, "raw-input")
 					if err != nil {
 						return err
 					}
 					if fallback.Error != nil {
-						return invalidSelectorError(args[0], fallback.Error, "cdp click main --strategy raw-input --json")
+						return invalidSelectorError(selector, fallback.Error, "cdp click main --strategy raw-input --json")
 					}
 					result = fallback
 					wait, err = waitForClickVerification(ctx, session, poll, waitText, waitSelector)
@@ -222,6 +240,10 @@ func (a *app) newClickCommand() *cobra.Command {
 				"page_state":    clickPageState(target, finalTarget),
 				"click":         result,
 			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
 			if refreshErr != nil {
 				report["target_refresh"] = map[string]any{
 					"ok":        false,
@@ -233,7 +255,7 @@ func (a *app) newClickCommand() *cobra.Command {
 				report["verification"] = verification
 			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
-				diagnostics := clickDiagnostics(target, finalTarget, args[0], strategy, activate, waitText, waitSelector, a.clickTimeout(), result, verification)
+				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, waitText, waitSelector, a.clickTimeout(), result, verification)
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
 				if err != nil {
@@ -257,6 +279,7 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&strategy, "strategy", "auto", "click strategy: auto, dom, or raw-input")
+	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&activate, "activate", false, "bring the target page to the foreground before clicking")
 	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
 	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
@@ -301,6 +324,111 @@ func dispatchRawMouseClick(ctx context.Context, session *cdp.PageSession, x, y f
 		}
 	}
 	return nil
+}
+
+func addLocatorActionFlags(cmd *cobra.Command, opts *locatorActionOptions) {
+	cmd.Flags().StringVar(&opts.By, "by", "css", "locator strategy before action: css, role, text, label, placeholder, alt, title, or test-id")
+	cmd.Flags().StringVar(&opts.Role, "role", "", "ARIA role to match when --by role is used")
+	cmd.Flags().StringVar(&opts.TestIDAttr, "test-id-attr", "data-testid", "attribute name for --by test-id")
+	cmd.Flags().BoolVar(&opts.Exact, "exact", false, "require exact normalized text/name/attribute match for locator actions")
+	cmd.Flags().BoolVar(&opts.IncludeHidden, "include-hidden", false, "include hidden locator matches before action")
+	cmd.Flags().IntVar(&opts.Limit, "locator-limit", 20, "maximum locator matches to inspect before action")
+}
+
+func normalizeLocatorActionOptions(opts *locatorActionOptions) error {
+	opts.By = normalizeLocatorStrategy(opts.By)
+	opts.Role = strings.TrimSpace(opts.Role)
+	opts.TestIDAttr = strings.TrimSpace(opts.TestIDAttr)
+	return validateLocatorFindOptions(opts.By, opts.Role, opts.TestIDAttr, opts.Limit)
+}
+
+func resolveActionSelector(ctx context.Context, session *cdp.PageSession, query string, opts locatorActionOptions, action string) (string, *locatorFindResult, error) {
+	if opts.By == "css" {
+		return query, nil, nil
+	}
+
+	var result locatorFindResult
+	if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "locator action", &result); err != nil {
+		return "", nil, err
+	}
+	if result.Error != nil {
+		return "", &result, commandError(
+			"invalid_locator",
+			"usage",
+			fmt.Sprintf("%s locator %s %q: %s", action, opts.By, query, result.Error.Message),
+			ExitUsage,
+			locatorActionRemediations(action, query, opts),
+		)
+	}
+	if result.Count == 0 {
+		return "", &result, commandError(
+			"locator_not_found",
+			"usage",
+			fmt.Sprintf("%s locator %s %q matched no elements", action, opts.By, query),
+			ExitUsage,
+			locatorActionRemediations(action, query, opts),
+		)
+	}
+	if result.Count != 1 || len(result.Matches) != 1 {
+		return "", &result, commandError(
+			"ambiguous_locator",
+			"usage",
+			fmt.Sprintf("%s locator %s %q matched %d elements; refine the locator before acting", action, opts.By, query, result.Count),
+			ExitUsage,
+			locatorActionRemediations(action, query, opts),
+		)
+	}
+
+	match := result.Matches[0]
+	selector := strings.TrimSpace(match.SelectorHint)
+	if selector == "" || match.SelectorAmbiguous {
+		return "", &result, commandError(
+			"ambiguous_locator",
+			"usage",
+			fmt.Sprintf("%s locator %s %q matched one element but did not produce a unique CSS selector hint", action, opts.By, query),
+			ExitUsage,
+			[]string{locatorActionFindCommand(query, opts), "cdp snapshot --selector body --json"},
+		)
+	}
+	return selector, &result, nil
+}
+
+func locatorActionRemediations(action, query string, opts locatorActionOptions) []string {
+	example := "cdp " + action + " " + shellQuote(query)
+	if action == "fill" {
+		example += " <value>"
+	}
+	example += " --by " + opts.By
+	if opts.By == "role" {
+		example += " --role " + shellQuote(opts.Role)
+	}
+	if opts.Exact {
+		example += " --exact"
+	}
+	if opts.IncludeHidden {
+		example += " --include-hidden"
+	}
+	if opts.By == "test-id" && opts.TestIDAttr != "data-testid" {
+		example += " --test-id-attr " + shellQuote(opts.TestIDAttr)
+	}
+	return []string{locatorActionFindCommand(query, opts), example + " --json"}
+}
+
+func locatorActionFindCommand(query string, opts locatorActionOptions) string {
+	command := "cdp locator find " + shellQuote(query) + " --by " + opts.By
+	if opts.By == "role" {
+		command += " --role " + shellQuote(opts.Role)
+	}
+	if opts.Exact {
+		command += " --exact"
+	}
+	if opts.IncludeHidden {
+		command += " --include-hidden"
+	}
+	if opts.By == "test-id" && opts.TestIDAttr != "data-testid" {
+		command += " --test-id-attr " + shellQuote(opts.TestIDAttr)
+	}
+	return command + " --json"
 }
 
 func waitForClickVerification(ctx context.Context, session *cdp.PageSession, poll time.Duration, waitText, waitSelector string) (waitResult, error) {
@@ -435,11 +563,15 @@ func (a *app) newFillCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{
-		Use:   "fill <selector> <value>",
-		Short: "Set the value of the first matching form control",
+		Use:   "fill <selector-or-locator> <value>",
+		Short: "Set the value of the first matching form control by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -449,15 +581,20 @@ func (a *app) newFillCommand() *cobra.Command {
 			}
 			defer session.Close(ctx)
 
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "fill")
+			if err != nil {
+				return err
+			}
+
 			var result fillResult
-			if err := evaluateJSONValue(ctx, session, fillExpression(args[0], args[1]), "fill", &result); err != nil {
+			if err := evaluateJSONValue(ctx, session, fillExpression(selector, args[1]), "fill", &result); err != nil {
 				return err
 			}
 			if result.Error != nil {
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("fill %q: %s", args[0], result.Error.Message),
+					fmt.Sprintf("fill %q: %s", selector, result.Error.Message),
 					ExitUsage,
 					[]string{"cdp fill input.email example@example.com --json"},
 				)
@@ -466,22 +603,28 @@ func (a *app) newFillCommand() *cobra.Command {
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("no editable element found for selector %q", args[0]),
+					fmt.Sprintf("no editable element found for selector %q", selector),
 					ExitUsage,
 					[]string{"cdp fill #name Alice --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("filled\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+			report := map[string]any{
 				"ok":     true,
 				"action": "filled",
 				"target": pageRow(target),
 				"fill":   result,
-			})
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			return a.render(ctx, fmt.Sprintf("filled\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
 

@@ -358,6 +358,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "final_target", Type: "page", Required: true, Description: "Alias of after_target for jq-friendly final URL/title extraction."},
 				{Name: "page_state", Type: "action_page_state", Required: true, Description: "Before/after/final page metadata and URL/title change booleans."},
 				{Name: "click", Type: "click_result", Required: true, Description: "Selector, matched count, strategy, coordinates for raw-input clicks, verification status, and final URL/title."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before clicking."},
 				{Name: "verification", Type: "wait_result", Required: false, Description: "Post-click wait condition result when --wait-text or --wait-selector is used."},
 				{Name: "target_refresh", Type: "object", Required: false, Description: "Target metadata refresh failure details when final target evidence could not be refreshed."},
 				{Name: "diagnostics", Type: "object", Required: false, Description: "Privacy-preserving click diagnostics when --diagnostics-out is used."},
@@ -372,6 +374,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "action", Type: "string", Required: true, Description: "Action name, typically filled when an element is successfully updated."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
 				{Name: "fill", Type: "fill_result", Required: true, Description: "Selector, matched count, filled boolean, and previous/current values."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before filling."},
 			},
 		},
 		"type": {

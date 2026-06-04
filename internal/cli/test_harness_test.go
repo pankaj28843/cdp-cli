@@ -586,14 +586,37 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 	}
 	_ = json.Unmarshal(params, &req)
 	if strings.Contains(req.Expression, "__cdp_cli_locator_find__") {
+		by := expressionStringArg(req.Expression, "const by = ")
+		query := expressionStringArg(req.Expression, "const query = ")
+		roleQuery := expressionStringArg(req.Expression, "const roleQuery = ")
+		if by == "" {
+			by = "label"
+		}
+		if query == "" {
+			query = "Search"
+		}
+		selector := "input#q"
+		tag := "input"
+		elementType := "search"
+		role := "searchbox"
+		name := query
+		placeholder := "Search"
+		if by == "role" && roleQuery == "button" {
+			selector = "button#submit"
+			tag = "button"
+			elementType = "submit"
+			role = "button"
+			placeholder = ""
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"url":            "https://example.test/app",
 					"title":          "Example App",
-					"by":             "label",
-					"query":          "Search",
+					"by":             by,
+					"query":          query,
+					"role":           roleQuery,
 					"exact":          false,
 					"include_hidden": false,
 					"test_id_attr":   "data-testid",
@@ -602,14 +625,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"strict":         true,
 					"matches": []map[string]any{{
 						"index":              0,
-						"selector_hint":      "input#q",
+						"selector_hint":      selector,
 						"selector_ambiguous": false,
-						"tag":                "input",
-						"type":               "search",
-						"role":               "searchbox",
-						"name":               "Search",
+						"tag":                tag,
+						"type":               elementType,
+						"role":               role,
+						"name":               name,
 						"text":               "",
-						"placeholder":        "Search",
+						"placeholder":        placeholder,
 						"visible":            true,
 						"disabled":           false,
 						"read_only":          false,
@@ -775,14 +798,18 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_click_point__") {
-		if strings.Contains(req.Expression, `"zero"`) {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "main"
+		}
+		if selector == "zero" {
 			return map[string]any{
 				"result": map[string]any{
 					"type": "object",
 					"value": map[string]any{
 						"url":      "https://example.test/app",
 						"title":    "Example App",
-						"selector": "zero",
+						"selector": selector,
 						"count":    1,
 						"clicked":  false,
 						"strategy": "raw-input",
@@ -800,7 +827,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 				"value": map[string]any{
 					"url":      "https://example.test/app",
 					"title":    "Example App",
-					"selector": "main",
+					"selector": selector,
 					"count":    1,
 					"clicked":  true,
 					"strategy": "raw-input",
@@ -812,15 +839,40 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_click__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "main"
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"url":      "https://example.test/app",
 					"title":    "Example App",
-					"selector": "main",
+					"selector": selector,
 					"count":    1,
 					"clicked":  true,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_fill__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		value := expressionStringArg(req.Expression, "const value = String(")
+		if selector == "" {
+			selector = "input"
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": selector,
+					"count":    1,
+					"filled":   true,
+					"previous": "before",
+					"value":    value,
 				},
 			},
 		}
