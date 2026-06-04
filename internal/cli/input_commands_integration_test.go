@@ -643,6 +643,200 @@ func TestFillForceReadonlyStillFailsJSON(t *testing.T) {
 	}
 }
 
+func TestSelectByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"select", "Plan", "pro", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("select by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Tag          string `json:"tag"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Select struct {
+			Selector string `json:"selector"`
+			Selected bool   `json:"selected"`
+			Value    string `json:"value"`
+			Previous string `json:"previous"`
+		} `json:"select"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Stable struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"stable"`
+				ReceivesEvents struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"receives_events"`
+				Enabled struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("select by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "selected" || got.ResolvedSelector != "select#plan" || got.Locator.By != "label" || got.Locator.Query != "Plan" || !got.Locator.Strict || len(got.Locator.Matches) != 1 {
+		t.Fatalf("select by label locator = %+v, want strict label locator", got)
+	}
+	if got.Locator.Matches[0].SelectorHint != "select#plan" || got.Locator.Matches[0].Tag != "select" || got.Select.Selector != "select#plan" || !got.Select.Selected || got.Select.Value != "pro" || got.Select.Previous != "free" || !got.Actionability.Actionable || len(got.Actionability.Required) != 3 || containsString(got.Actionability.Required, "stable") || containsString(got.Actionability.Required, "receives_events") || got.Actionability.Checks.Stable.Required || !got.Actionability.Checks.Stable.Skipped || got.Actionability.Checks.ReceivesEvents.Required || !got.Actionability.Checks.ReceivesEvents.Skipped || !got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("select by label action = %+v, want select with visible/enabled actionability", got)
+	}
+}
+
+func TestSelectTrialByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"select", "Plan", "pro", "--by", "label", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("select trial by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Select struct {
+			Selector string `json:"selector"`
+			Selected bool   `json:"selected"`
+			Trial    bool   `json:"trial"`
+			Value    string `json:"value"`
+		} `json:"select"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Trial      bool `json:"trial"`
+			Checks     struct {
+				Visible struct {
+					Passed bool `json:"passed"`
+				} `json:"visible"`
+				Enabled struct {
+					Passed bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("select trial by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.Select.Selector != "select#plan" || got.Select.Selected || !got.Select.Trial || got.Select.Value != "pro" || !got.Actionability.Actionable || !got.Actionability.Trial || !got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("select trial = %+v, want non-mutating select trial", got)
+	}
+}
+
+func TestSelectActionabilityFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"select", "select#disabled-plan", "pro", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("disabled select exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Select struct {
+				Selected bool `json:"selected"`
+				Force    bool `json:"force"`
+			} `json:"select"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Force      bool `json:"force"`
+				Checks     struct {
+					Enabled struct {
+						Required bool   `json:"required"`
+						Passed   bool   `json:"passed"`
+						Message  string `json:"message"`
+					} `json:"enabled"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("disabled select output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Select.Selected || got.Data.Select.Force || got.Data.Actionability.Actionable || got.Data.Actionability.Force || !got.Data.Actionability.Checks.Enabled.Required || got.Data.Actionability.Checks.Enabled.Passed || got.Data.Actionability.Checks.Enabled.Message == "" {
+		t.Fatalf("disabled select = %+v, want blocked enabled actionability", got)
+	}
+}
+
+func TestSelectForceSkipsVisibleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"select", "select#hidden-plan", "pro", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("force hidden select exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Select struct {
+			Selected bool `json:"selected"`
+			Force    bool `json:"force"`
+		} `json:"select"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Force      bool     `json:"force"`
+			Skipped    []string `json:"skipped_checks"`
+			Checks     struct {
+				Visible struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Skipped  bool   `json:"skipped"`
+					Message  string `json:"message"`
+				} `json:"visible"`
+				Enabled struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force hidden select output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "selected" || !got.Select.Selected || !got.Select.Force || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "visible") || got.Actionability.Checks.Visible.Required || got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Visible.Skipped || !strings.Contains(got.Actionability.Checks.Visible.Message, "--force") || !got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("force hidden select = %+v, want visible skipped and enabled enforced", got)
+	}
+}
+
 func TestHoverByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

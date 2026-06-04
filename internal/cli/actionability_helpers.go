@@ -115,7 +115,7 @@ func actionabilityForceSkippedChecks(action string) []string {
 	switch action {
 	case "click", "hover", "drag":
 		return []string{"receives_events"}
-	case "fill":
+	case "fill", "select":
 		return []string{"visible"}
 	default:
 		return nil
@@ -238,6 +238,7 @@ func actionabilityExpression(selector, action string) string {
   };
   const requiredChecksFor = () => {
     if (action === "fill") return ["attached", "visible", "enabled", "editable"];
+    if (action === "select") return ["attached", "visible", "enabled"];
     if (action === "hover" || action === "drag") return ["attached", "visible", "stable", "receives_events"];
     return ["attached", "visible", "stable", "receives_events", "enabled"];
   };

@@ -492,6 +492,8 @@ func locatorActionRemediations(action, query string, opts locatorActionOptions) 
 	switch action {
 	case "fill":
 		example += " <value>"
+	case "select":
+		example += " <value>"
 	case "drag":
 		example += " 10 20"
 	case "assert value", "assert text":

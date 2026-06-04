@@ -618,6 +618,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Drag target"
 			placeholder = ""
 		}
+		if query == "Plan" {
+			selector = "select#plan"
+			tag = "select"
+			elementType = ""
+			role = "combobox"
+			name = "Plan"
+			placeholder = ""
+		}
 		disabled := false
 		readOnly := false
 		contentEditable := false
@@ -1171,6 +1179,22 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			rect = map[string]any{"x": 20, "y": 40, "width": 140, "height": 60}
 			point = map[string]any{"x": 90, "y": 70, "hit_tag": "div", "hit_id": "drag-target", "hit_role": "", "target_matches": true}
 		}
+		if selector == "select#plan" || selector == "select#disabled-plan" || selector == "select#hidden-plan" {
+			tag = "select"
+			role = "combobox"
+			name = "Plan"
+			rect = map[string]any{"x": 10, "y": 120, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 140, "hit_tag": "select", "hit_id": strings.TrimPrefix(selector, "select#"), "hit_role": "combobox", "target_matches": true}
+		}
+		if selector == "select#disabled-plan" {
+			enabled = false
+		}
+		if selector == "select#hidden-plan" {
+			visible = false
+			receivesEvents = false
+			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
+		}
 		if selector == "input#q" {
 			tag = "input"
 			elementType = "search"
@@ -1233,6 +1257,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		switch action {
 		case "fill":
 			required = []string{"attached", "visible", "enabled", "editable"}
+		case "select":
+			required = []string{"attached", "visible", "enabled"}
 		case "hover", "drag":
 			required = []string{"attached", "visible", "stable", "receives_events"}
 		}
@@ -1375,6 +1401,40 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			value["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_select__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		value := expressionStringArg(req.Expression, "const requestedValue = String(")
+		if selector == "" {
+			selector = "select#plan"
+		}
+		if value == "" {
+			value = "pro"
+		}
+		count := 1
+		selected := true
+		resultValue := value
+		if selector == "#missing" {
+			count = 0
+			selected = false
+			resultValue = ""
+		}
+		out := map[string]any{
+			"url":             "https://example.test/app",
+			"title":           "Example App",
+			"selector":        selector,
+			"count":           count,
+			"selected":        selected,
+			"previous":        "free",
+			"requested_value": value,
+			"value":           resultValue,
+			"selected_values": []string{resultValue},
+			"matched_by":      "value",
+		}
+		if count == 0 {
+			out["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": out}}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_click_point__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")

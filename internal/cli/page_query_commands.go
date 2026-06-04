@@ -937,7 +937,40 @@ func clearExpression(selector string) string {
 }
 
 func selectExpression(selector, value string) string {
-	return fmt.Sprintf(`(() => { const selector = %s; const value = String(%s); const el = document.querySelector(selector); if (!el) return {selector, selected:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; if (el.tagName !== "SELECT") return {selector, selected:false, error:{name:"InvalidTargetError", message:"target element is not a select"}}; const previous = String(el.value ?? ""); el.value = value; el.dispatchEvent(new Event("input", {bubbles:true})); el.dispatchEvent(new Event("change", {bubbles:true})); return {selector, selected: el.value === value, previous, value: String(el.value ?? "")}; })()`, jsStringLiteral(selector), jsStringLiteral(value))
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_select__";
+  const selector = %s;
+  const requestedValue = String(%s);
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, selected: false, requested_value: requestedValue, value: "", error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, selected: false, requested_value: requestedValue, value: "", error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const el = elements[0];
+  if (el.tagName !== "SELECT") {
+    return { url: location.href, title: document.title, selector, count: elements.length, selected: false, requested_value: requestedValue, value: "", error: { name: "InvalidTargetError", message: "target element is not a select" }, marker };
+  }
+  const previous = String(el.value ?? "");
+  const options = Array.from(el.options || []);
+  let matchedBy = "value";
+  let option = options.find((candidate) => String(candidate.value) === requestedValue);
+  if (!option) {
+    matchedBy = "label";
+    option = options.find((candidate) => String(candidate.label || candidate.textContent || "").trim() === requestedValue);
+  }
+  if (!option) {
+    return { url: location.href, title: document.title, selector, count: elements.length, selected: false, previous, requested_value: requestedValue, value: String(el.value ?? ""), selected_values: Array.from(el.selectedOptions || []).map((selected) => String(selected.value)), error: { name: "OptionNotFoundError", message: "option value or label matched no options" }, marker };
+  }
+  el.value = String(option.value);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  const selectedValues = Array.from(el.selectedOptions || []).map((selected) => String(selected.value));
+  return { url: location.href, title: document.title, selector, count: elements.length, selected: el.value === String(option.value), previous, requested_value: requestedValue, value: String(el.value ?? ""), selected_values: selectedValues, matched_by: matchedBy, option: { value: String(option.value), label: String(option.label || option.textContent || "").trim(), index: option.index }, marker };
+})()`, jsStringLiteral(selector), jsStringLiteral(value))
 }
 
 func fileInputExpression(selector, basename string) string {

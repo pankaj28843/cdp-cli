@@ -9,6 +9,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type selectResult struct {
+	URL            string     `json:"url,omitempty"`
+	Title          string     `json:"title,omitempty"`
+	Selector       string     `json:"selector"`
+	Count          int        `json:"count"`
+	Selected       bool       `json:"selected"`
+	Trial          bool       `json:"trial,omitempty"`
+	Force          bool       `json:"force,omitempty"`
+	Value          string     `json:"value"`
+	Previous       string     `json:"previous,omitempty"`
+	RequestedValue string     `json:"requested_value,omitempty"`
+	MatchedBy      string     `json:"matched_by,omitempty"`
+	SelectedValues []string   `json:"selected_values,omitempty"`
+	Error          *evalError `json:"error,omitempty"`
+}
+
 func (a *app) newFocusCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	cmd := &cobra.Command{
@@ -65,11 +81,17 @@ func (a *app) newClearCommand() *cobra.Command {
 
 func (a *app) newSelectCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	var trial bool
+	var force bool
 	cmd := &cobra.Command{
-		Use:   "select <selector> <value>",
-		Short: "Select an option value in the first matching select control",
+		Use:   "select <selector-or-locator> <value>",
+		Short: "Select an option value in the first matching select control by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -77,16 +99,87 @@ func (a *app) newSelectCommand() *cobra.Command {
 				return err
 			}
 			defer session.Close(ctx)
-			var result map[string]any
-			if err := evaluateJSONValue(ctx, session, selectExpression(args[0], args[1]), "select", &result); err != nil {
+
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "select")
+			if err != nil {
 				return err
 			}
-			return a.render(ctx, fmt.Sprintf("select\t%s", args[0]), map[string]any{"ok": true, "target": pageRow(target), "select": result})
+			actionability, err := evaluateActionability(ctx, session, selector, "select")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp select 'select[name=plan]' pro --trial --json")
+			}
+			prepareActionability(&actionability, "select", trial, force)
+			if trial {
+				result := selectResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Selected: false, Trial: true, Force: force, Value: args[1], RequestedValue: args[1]}
+				report := map[string]any{
+					"ok":            actionability.Actionable,
+					"action":        "trial",
+					"target":        pageRow(target),
+					"select":        result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				if !actionability.Actionable {
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("select", selector, actionability), ExitCheckFailed, actionabilityRemediations("select", args[0], selector, locatorOpts), report)
+				}
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
+			}
+			if !actionability.Actionable {
+				result := selectResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Selected: false, Force: force, Value: args[1], RequestedValue: args[1]}
+				report := map[string]any{
+					"ok":            false,
+					"action":        "blocked",
+					"target":        pageRow(target),
+					"select":        result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("select", selector, actionability), ExitCheckFailed, actionabilityRemediations("select", args[0], selector, locatorOpts), report)
+			}
+
+			var result selectResult
+			if err := evaluateJSONValue(ctx, session, selectExpression(selector, args[1]), "select", &result); err != nil {
+				return err
+			}
+			result.Force = force
+			if result.Error != nil {
+				if result.Error.Name == "OptionNotFoundError" {
+					return commandError("option_not_found", "check_failed", fmt.Sprintf("select %q: %s", selector, result.Error.Message), ExitCheckFailed, []string{"cdp form get " + shellQuote(selector) + " --json"})
+				}
+				return commandError("invalid_selector", "usage", fmt.Sprintf("select %q: %s", selector, result.Error.Message), ExitUsage, []string{"cdp select 'select[name=plan]' pro --json"})
+			}
+			if !result.Selected {
+				return commandError("option_not_selected", "check_failed", fmt.Sprintf("select %q did not select value %q", selector, args[1]), ExitCheckFailed, []string{"cdp form get " + shellQuote(selector) + " --json"})
+			}
+			report := map[string]any{
+				"ok":            true,
+				"action":        "selected",
+				"target":        pageRow(target),
+				"select":        result,
+				"actionability": actionability,
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			return a.render(ctx, fmt.Sprintf("selected\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing the selected option")
+	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential select actionability checks and record skipped checks in JSON")
 	return cmd
 }
 

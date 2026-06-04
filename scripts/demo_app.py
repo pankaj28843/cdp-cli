@@ -45,6 +45,7 @@ DEMO_HTML = """<!doctype html>
     .card { border: 1px solid #ccd; border-radius: 12px; padding: 16px; }
     .agent-form { display: grid; gap: 8px; margin-top: 12px; }
     #agent-input { max-width: 320px; padding: 8px; }
+    #plan { max-width: 320px; padding: 8px; }
     #drag-target { display: inline-block; margin-top: 12px; padding: 8px 12px; background: #f0f4ff; border: 1px solid #99a; cursor: grab; }
     .covered-wrap { position: relative; display: inline-block; margin-left: 8px; }
     .cover-overlay { position: absolute; inset: 0; z-index: 2; background: rgba(255, 255, 255, 0); }
@@ -74,6 +75,17 @@ DEMO_HTML = """<!doctype html>
         Read-only notes
         <textarea id="readonly-notes" readonly>locked</textarea>
       </label>
+      <label class="agent-form">
+        Plan
+        <select id="plan" name="plan">
+          <option value="free">Free</option>
+          <option value="pro">Pro</option>
+        </select>
+      </label>
+      <select id="hidden-plan" class="hidden-fixture">
+        <option value="free">Free</option>
+        <option value="pro">Pro</option>
+      </select>
       <div id="drag-target" data-testid="drag-target" draggable="true">Drag target</div>
     </article>
     <p class="overflow">This sentence intentionally overflows its box for layout diagnostics.</p>
