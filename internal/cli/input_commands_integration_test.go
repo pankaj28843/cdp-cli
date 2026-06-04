@@ -142,6 +142,92 @@ func TestClickTrialByRoleLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestClickActionabilityFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#covered", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("covered click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Click  struct {
+				Clicked bool `json:"clicked"`
+				Force   bool `json:"force"`
+			} `json:"click"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Force      bool `json:"force"`
+				Checks     struct {
+					ReceivesEvents struct {
+						Required bool   `json:"required"`
+						Passed   bool   `json:"passed"`
+						Skipped  bool   `json:"skipped"`
+						Message  string `json:"message"`
+					} `json:"receives_events"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("covered click output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Click.Clicked || got.Data.Click.Force || got.Data.Actionability.Actionable || got.Data.Actionability.Force || !got.Data.Actionability.Checks.ReceivesEvents.Required || got.Data.Actionability.Checks.ReceivesEvents.Passed || got.Data.Actionability.Checks.ReceivesEvents.Skipped || got.Data.Actionability.Checks.ReceivesEvents.Message == "" {
+		t.Fatalf("covered click = %+v, want failed receives-events actionability", got)
+	}
+}
+
+func TestClickForceSkipsReceivesEventsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#covered", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("force covered click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Click  struct {
+			Clicked bool `json:"clicked"`
+			Force   bool `json:"force"`
+		} `json:"click"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Force      bool     `json:"force"`
+			Skipped    []string `json:"skipped_checks"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Skipped  bool   `json:"skipped"`
+					Message  string `json:"message"`
+				} `json:"receives_events"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force covered click output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "clicked" || !got.Click.Clicked || !got.Click.Force || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "receives_events") || got.Actionability.Checks.ReceivesEvents.Required || got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.ReceivesEvents.Skipped || !strings.Contains(got.Actionability.Checks.ReceivesEvents.Message, "--force") {
+		t.Fatalf("force covered click = %+v, want receives-events skipped by force", got)
+	}
+}
+
 func TestClickRawInputVerifiedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterTitle": "Ready Page", "afterURL": "https://example.test/ready"},
@@ -427,6 +513,133 @@ func TestFillTrialReadonlyFailureJSON(t *testing.T) {
 	}
 	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "trial" || got.Data.Fill.Filled || !got.Data.Fill.Trial || got.Data.Actionability.Actionable || !got.Data.Actionability.Trial || got.Data.Actionability.Checks.Editable.Passed || got.Data.Actionability.Checks.Editable.Message == "" {
 		t.Fatalf("fill trial readonly = %+v, want failed editable actionability", got)
+	}
+}
+
+func TestFillActionabilityFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"fill", "Read-only notes", "typed value", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("fill readonly exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Fill   struct {
+				Filled bool `json:"filled"`
+				Force  bool `json:"force"`
+			} `json:"fill"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Force      bool `json:"force"`
+				Checks     struct {
+					Editable struct {
+						Required bool   `json:"required"`
+						Passed   bool   `json:"passed"`
+						Message  string `json:"message"`
+					} `json:"editable"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("fill readonly output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Fill.Filled || got.Data.Fill.Force || got.Data.Actionability.Actionable || got.Data.Actionability.Force || !got.Data.Actionability.Checks.Editable.Required || got.Data.Actionability.Checks.Editable.Passed || got.Data.Actionability.Checks.Editable.Message == "" {
+		t.Fatalf("fill readonly = %+v, want blocked editable actionability", got)
+	}
+}
+
+func TestFillForceSkipsVisibleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"fill", "input#hidden-field", "forced value", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("force hidden fill exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Fill   struct {
+			Filled bool `json:"filled"`
+			Force  bool `json:"force"`
+		} `json:"fill"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Force      bool     `json:"force"`
+			Skipped    []string `json:"skipped_checks"`
+			Checks     struct {
+				Visible struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Skipped  bool   `json:"skipped"`
+					Message  string `json:"message"`
+				} `json:"visible"`
+				Editable struct {
+					Passed bool `json:"passed"`
+				} `json:"editable"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force hidden fill output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "filled" || !got.Fill.Filled || !got.Fill.Force || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "visible") || got.Actionability.Checks.Visible.Required || got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Visible.Skipped || !strings.Contains(got.Actionability.Checks.Visible.Message, "--force") || !got.Actionability.Checks.Editable.Passed {
+		t.Fatalf("force hidden fill = %+v, want visible skipped and editable enforced", got)
+	}
+}
+
+func TestFillForceReadonlyStillFailsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"fill", "Read-only notes", "typed value", "--by", "label", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("force readonly fill exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Actionability struct {
+				Actionable bool     `json:"actionable"`
+				Force      bool     `json:"force"`
+				Skipped    []string `json:"skipped_checks"`
+				Checks     struct {
+					Editable struct {
+						Required bool `json:"required"`
+						Passed   bool `json:"passed"`
+						Skipped  bool `json:"skipped"`
+					} `json:"editable"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force readonly fill output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Actionability.Actionable || !got.Data.Actionability.Force || !containsString(got.Data.Actionability.Skipped, "visible") || !got.Data.Actionability.Checks.Editable.Required || got.Data.Actionability.Checks.Editable.Passed || got.Data.Actionability.Checks.Editable.Skipped {
+		t.Fatalf("force readonly fill = %+v, want editable still enforced", got)
 	}
 }
 

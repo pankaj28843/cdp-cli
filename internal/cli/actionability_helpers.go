@@ -14,9 +14,11 @@ type actionabilityResult struct {
 	Selector       string                        `json:"selector"`
 	Action         string                        `json:"action"`
 	Trial          bool                          `json:"trial"`
+	Force          bool                          `json:"force"`
 	Count          int                           `json:"count"`
 	Actionable     bool                          `json:"actionable"`
 	RequiredChecks []string                      `json:"required_checks"`
+	SkippedChecks  []string                      `json:"skipped_checks,omitempty"`
 	Checks         map[string]actionabilityCheck `json:"checks"`
 	Target         actionabilityTarget           `json:"target"`
 	Rect           snapshotRect                  `json:"rect"`
@@ -61,6 +63,81 @@ func evaluateActionability(ctx context.Context, session *cdp.PageSession, select
 	}
 	result.Action = action
 	return result, nil
+}
+
+func prepareActionability(result *actionabilityResult, action string, trial, force bool) {
+	result.Action = action
+	result.Trial = trial
+	result.Force = force
+	if force {
+		applyForceActionabilitySkips(result, action)
+		return
+	}
+	result.Actionable = actionabilityRequiredChecksPass(*result)
+}
+
+func applyForceActionabilitySkips(result *actionabilityResult, action string) {
+	if result.Checks == nil {
+		result.Actionable = false
+		return
+	}
+	skipSet := map[string]bool{}
+	for _, name := range actionabilityForceSkippedChecks(action) {
+		skipSet[name] = true
+	}
+	if len(skipSet) == 0 {
+		result.Actionable = actionabilityRequiredChecksPass(*result)
+		return
+	}
+
+	required := result.RequiredChecks[:0]
+	result.SkippedChecks = result.SkippedChecks[:0]
+	for _, name := range result.RequiredChecks {
+		if !skipSet[name] {
+			required = append(required, name)
+			continue
+		}
+		check, ok := result.Checks[name]
+		if !ok {
+			continue
+		}
+		check.Required = false
+		check.Skipped = true
+		check.Message = forceSkippedMessage(check.Message)
+		result.Checks[name] = check
+		result.SkippedChecks = append(result.SkippedChecks, name)
+	}
+	result.RequiredChecks = required
+	result.Actionable = actionabilityRequiredChecksPass(*result)
+}
+
+func actionabilityForceSkippedChecks(action string) []string {
+	switch action {
+	case "click":
+		return []string{"receives_events"}
+	case "fill":
+		return []string{"visible"}
+	default:
+		return nil
+	}
+}
+
+func forceSkippedMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "skipped by --force"
+	}
+	return message + "; skipped by --force"
+}
+
+func actionabilityRequiredChecksPass(result actionabilityResult) bool {
+	for _, name := range result.RequiredChecks {
+		check, ok := result.Checks[name]
+		if !ok || !check.Passed {
+			return false
+		}
+	}
+	return len(result.RequiredChecks) > 0
 }
 
 func actionabilityFailureMessage(action, selector string, result actionabilityResult) string {

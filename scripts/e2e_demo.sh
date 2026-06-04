@@ -153,6 +153,10 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .action == "trial" and .fill.trial == true and .fill.filled == false and .locator.strict == true and .resolved_selector == "input#agent-input" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.enabled.passed == true and .actionability.checks.editable.passed == true' >/dev/null
 "$binary" assert value "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .assertion.actual == "locator filled value"' >/dev/null
+"$binary" fill "#hidden-agent-input" "forced hidden value" --force --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "filled" and .fill.force == true and .fill.filled == true and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("visible")) and .actionability.checks.visible.required == false and .actionability.checks.visible.skipped == true and .actionability.checks.visible.passed == false and .actionability.checks.editable.passed == true' >/dev/null
+"$binary" assert value "#hidden-agent-input" "forced hidden value" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.actual == "forced hidden value"' >/dev/null
 "$binary" assert text "Click target" "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.actual == "Click target"' >/dev/null
 "$binary" assert visible "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
@@ -171,6 +175,8 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .action == "clicked" and .locator.strict == true and .resolved_selector == "button#action" and .click.selector == "button#action" and .page_state.same_target == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true' >/dev/null
 "$binary" click "Click target" --by role --role button --trial --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "trial" and .click.trial == true and .click.clicked == false and .locator.strict == true and .resolved_selector == "button#action" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.stable.passed == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
+"$binary" click "#covered-action" --force --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "clicked" and .click.force == true and .click.clicked == true and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.required == false and .actionability.checks.receives_events.skipped == true and .actionability.checks.receives_events.passed == false and .actionability.checks.enabled.passed == true' >/dev/null
 rendered_dir="$state_dir/rendered-extract"
 "$binary" workflow rendered-extract "$app_url" --state-dir "$state_dir/cdp-state" --out-dir "$rendered_dir" --wait 5s --json \
   | jq -e --arg dir "$rendered_dir" '.ok == true and .workflow.name == "rendered-extract" and .readiness.navigated_from_about_blank == true and .target.url != "about:blank" and .quality.visible_word_count > 5 and .quality.html_length > 64 and .artifacts.visible_txt == ($dir + "/visible.txt") and .artifacts.markdown == ($dir + "/page.md") and .artifacts.links_json == ($dir + "/links.json")' >/dev/null

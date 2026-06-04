@@ -1147,6 +1147,15 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
 			point = map[string]any{"x": 160, "y": 40, "hit_tag": "button", "hit_id": "submit", "hit_role": "button", "target_matches": true}
 		}
+		if selector == "button#covered" || selector == "#covered-button" {
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Covered target"
+			receivesEvents = false
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "overlay", "hit_role": "", "target_matches": false}
+		}
 		if selector == "input#q" {
 			tag = "input"
 			elementType = "search"
@@ -1156,6 +1165,18 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			supportsEditing = true
 			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
 			point = map[string]any{"x": 160, "y": 40, "hit_tag": "input", "hit_id": "q", "hit_role": "searchbox", "target_matches": true}
+		}
+		if selector == "input#hidden-field" || selector == "#hidden-input" {
+			tag = "input"
+			elementType = "text"
+			role = "textbox"
+			name = "Hidden field"
+			visible = false
+			receivesEvents = false
+			editable = true
+			supportsEditing = true
+			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
 		}
 		if selector == "textarea#readonly-notes" {
 			tag = "textarea"

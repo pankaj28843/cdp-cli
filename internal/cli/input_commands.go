@@ -20,6 +20,7 @@ type clickResult struct {
 	Count      int          `json:"count"`
 	Clicked    bool         `json:"clicked"`
 	Trial      bool         `json:"trial,omitempty"`
+	Force      bool         `json:"force,omitempty"`
 	Strategy   string       `json:"strategy,omitempty"`
 	X          float64      `json:"x,omitempty"`
 	Y          float64      `json:"y,omitempty"`
@@ -38,6 +39,7 @@ type fillResult struct {
 	Count    int        `json:"count"`
 	Filled   bool       `json:"filled"`
 	Trial    bool       `json:"trial,omitempty"`
+	Force    bool       `json:"force,omitempty"`
 	Value    string     `json:"value"`
 	Previous string     `json:"previous"`
 	Error    *evalError `json:"error,omitempty"`
@@ -141,6 +143,7 @@ func (a *app) newClickCommand() *cobra.Command {
 	var diagnosticsOut string
 	var poll time.Duration
 	var trial bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "click <selector-or-locator>",
 		Short: "Click the first matching element by CSS selector or strict locator",
@@ -196,7 +199,7 @@ func (a *app) newClickCommand() *cobra.Command {
 			if actionability.Error != nil {
 				return invalidSelectorError(selector, actionability.Error, "cdp click main --trial --json")
 			}
-			actionability.Trial = trial
+			prepareActionability(&actionability, "click", trial, force)
 			if trial {
 				result := clickResult{
 					URL:      actionability.URL,
@@ -205,6 +208,7 @@ func (a *app) newClickCommand() *cobra.Command {
 					Count:    actionability.Count,
 					Clicked:  false,
 					Trial:    true,
+					Force:    force,
 					Strategy: strategy,
 					X:        actionability.Point.X,
 					Y:        actionability.Point.Y,
@@ -230,11 +234,42 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
 			}
+			if !actionability.Actionable {
+				result := clickResult{
+					URL:      actionability.URL,
+					Title:    actionability.Title,
+					Selector: selector,
+					Count:    actionability.Count,
+					Clicked:  false,
+					Force:    force,
+					Strategy: strategy,
+					X:        actionability.Point.X,
+					Y:        actionability.Point.Y,
+					Rect:     actionability.Rect,
+				}
+				report := map[string]any{
+					"ok":            false,
+					"action":        "blocked",
+					"target":        pageRow(target),
+					"before_target": pageRow(target),
+					"after_target":  pageRow(target),
+					"final_target":  pageRow(target),
+					"page_state":    clickPageState(target, target),
+					"click":         result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("click", selector, actionability), ExitCheckFailed, actionabilityRemediations("click", args[0], selector, locatorOpts), report)
+			}
 
 			result, err := performClick(ctx, session, selector, strategy)
 			if err != nil {
 				return err
 			}
+			result.Force = force
 			if result.Error != nil {
 				return invalidSelectorError(selector, result.Error, "cdp click main --json")
 			}
@@ -307,7 +342,7 @@ func (a *app) newClickCommand() *cobra.Command {
 				report["verification"] = verification
 			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
-				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, waitText, waitSelector, a.clickTimeout(), result, verification)
+				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
@@ -339,6 +374,7 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().StringVar(&diagnosticsOut, "diagnostics-out", "", "optional path for privacy-preserving click diagnostics JSON")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching the click")
+	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential click actionability checks and record skipped checks in JSON")
 	return cmd
 }
 
@@ -587,12 +623,13 @@ func (a *app) clickTimeout() time.Duration {
 	return 10 * time.Second
 }
 
-func clickDiagnostics(beforeTarget, afterTarget cdp.TargetInfo, selector, requestedStrategy string, activate bool, waitText, waitSelector string, timeout time.Duration, click clickResult, verification *waitResult) map[string]any {
+func clickDiagnostics(beforeTarget, afterTarget cdp.TargetInfo, selector, requestedStrategy string, activate bool, force bool, waitText, waitSelector string, timeout time.Duration, click clickResult, verification *waitResult) map[string]any {
 	diagnostics := map[string]any{
 		"selector":           selector,
 		"requested_strategy": requestedStrategy,
 		"strategy":           click.Strategy,
 		"activated":          activate,
+		"force":              force,
 		"timeout":            timeout.String(),
 		"target":             pageRow(afterTarget),
 		"before_target":      pageRow(beforeTarget),
@@ -622,6 +659,7 @@ func (a *app) newFillCommand() *cobra.Command {
 	var titleContains string
 	var locatorOpts locatorActionOptions
 	var trial bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "fill <selector-or-locator> <value>",
 		Short: "Set the value of the first matching form control by CSS selector or strict locator",
@@ -651,9 +689,9 @@ func (a *app) newFillCommand() *cobra.Command {
 			if actionability.Error != nil {
 				return invalidSelectorError(selector, actionability.Error, "cdp fill input.email example@example.com --trial --json")
 			}
-			actionability.Trial = trial
+			prepareActionability(&actionability, "fill", trial, force)
 			if trial {
-				result := fillResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Filled: false, Trial: true, Value: args[1], Previous: ""}
+				result := fillResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Filled: false, Trial: true, Force: force, Value: args[1], Previous: ""}
 				report := map[string]any{
 					"ok":            actionability.Actionable,
 					"action":        "trial",
@@ -670,11 +708,27 @@ func (a *app) newFillCommand() *cobra.Command {
 				}
 				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
 			}
+			if !actionability.Actionable {
+				result := fillResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Filled: false, Force: force, Value: args[1], Previous: ""}
+				report := map[string]any{
+					"ok":            false,
+					"action":        "blocked",
+					"target":        pageRow(target),
+					"fill":          result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("fill", selector, actionability), ExitCheckFailed, actionabilityRemediations("fill", args[0], selector, locatorOpts), report)
+			}
 
 			var result fillResult
 			if err := evaluateJSONValue(ctx, session, fillExpression(selector, args[1]), "fill", &result); err != nil {
 				return err
 			}
+			result.Force = force
 			if result.Error != nil {
 				return commandError(
 					"invalid_selector",
@@ -712,6 +766,7 @@ func (a *app) newFillCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing the value")
+	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential fill actionability checks and record skipped checks in JSON")
 	return cmd
 }
 

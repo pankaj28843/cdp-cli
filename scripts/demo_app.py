@@ -46,6 +46,8 @@ DEMO_HTML = """<!doctype html>
     .agent-form { display: grid; gap: 8px; margin-top: 12px; }
     #agent-input { max-width: 320px; padding: 8px; }
     #drag-target { display: inline-block; margin-top: 12px; padding: 8px 12px; background: #f0f4ff; border: 1px solid #99a; cursor: grab; }
+    .covered-wrap { position: relative; display: inline-block; margin-left: 8px; }
+    .cover-overlay { position: absolute; inset: 0; z-index: 2; background: rgba(255, 255, 255, 0); }
     .overflow { width: 160px; white-space: nowrap; overflow: hidden; }
     .hidden-fixture { display: none; }
   </style>
@@ -57,8 +59,13 @@ DEMO_HTML = """<!doctype html>
       <h2>Agent-visible post</h2>
       <p>Stable text for snapshot, text extraction, and workflow checks.</p>
       <button id="action">Click target</button>
+      <span class="covered-wrap">
+        <button id="covered-action">Covered target</button>
+        <span id="covered-overlay" class="cover-overlay" aria-hidden="true"></span>
+      </span>
       <button id="disabled-action" disabled>Disabled target</button>
       <button id="dismiss" class="hidden-fixture">Dismiss</button>
+      <input id="hidden-agent-input" class="hidden-fixture" value="hidden initial">
       <label class="agent-form">
         Agent input
         <input id="agent-input" value="initial" autocomplete="off">
