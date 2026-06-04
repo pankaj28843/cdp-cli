@@ -1117,6 +1117,133 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_actionability__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		action := expressionStringArg(req.Expression, "const action = ")
+		if selector == "" {
+			selector = "main"
+		}
+		if action == "" {
+			action = "click"
+		}
+		tag := "main"
+		elementType := ""
+		role := ""
+		name := "Synthetic main text"
+		visible := true
+		stable := true
+		receivesEvents := true
+		enabled := true
+		editable := false
+		readOnly := false
+		supportsEditing := false
+		rect := map[string]any{"x": 10, "y": 20, "width": 600, "height": 200}
+		point := map[string]any{"x": 310, "y": 120, "hit_tag": tag, "hit_id": "", "hit_role": role, "target_matches": true}
+		if selector == "button#submit" {
+			tag = "button"
+			elementType = "submit"
+			role = "button"
+			name = "Search"
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 40, "hit_tag": "button", "hit_id": "submit", "hit_role": "button", "target_matches": true}
+		}
+		if selector == "input#q" {
+			tag = "input"
+			elementType = "search"
+			role = "searchbox"
+			name = "Search"
+			editable = true
+			supportsEditing = true
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 40, "hit_tag": "input", "hit_id": "q", "hit_role": "searchbox", "target_matches": true}
+		}
+		if selector == "textarea#readonly-notes" {
+			tag = "textarea"
+			role = "textbox"
+			name = "Read-only notes"
+			editable = false
+			readOnly = true
+			supportsEditing = true
+			rect = map[string]any{"x": 10, "y": 70, "width": 300, "height": 80}
+			point = map[string]any{"x": 160, "y": 110, "hit_tag": "textarea", "hit_id": "readonly-notes", "hit_role": "textbox", "target_matches": true}
+		}
+		if selector == "#hidden-button" {
+			tag = "button"
+			role = "button"
+			name = "Hidden button"
+			visible = false
+			receivesEvents = false
+			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
+		}
+		if selector == "button#disabled-action" || selector == "#disabled-button" {
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Disabled target"
+			enabled = false
+		}
+		count := 1
+		if selector == "#missing" {
+			count = 0
+			visible = false
+			stable = false
+			receivesEvents = false
+			enabled = false
+			editable = false
+			supportsEditing = false
+		}
+		required := []string{"attached", "visible", "stable", "receives_events", "enabled"}
+		if action == "fill" {
+			required = []string{"attached", "visible", "enabled", "editable"}
+		}
+		checks := map[string]any{
+			"attached":        map[string]any{"required": true, "passed": count > 0},
+			"visible":         map[string]any{"required": true, "passed": visible, "message": map[bool]string{true: "", false: "element has empty box or hidden state"}[visible]},
+			"stable":          map[string]any{"required": action == "click", "passed": stable, "skipped": action != "click", "message": map[bool]string{true: "", false: "bounding box changed across animation frames"}[stable]},
+			"receives_events": map[string]any{"required": action == "click", "passed": receivesEvents, "skipped": action != "click", "message": map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]},
+			"enabled":         map[string]any{"required": true, "passed": enabled, "message": map[bool]string{true: "", false: "element is disabled"}[enabled]},
+			"editable":        map[string]any{"required": action == "fill", "passed": editable, "skipped": action != "fill", "message": map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]},
+			"in_viewport":     map[string]any{"required": false, "passed": visible, "skipped": true},
+		}
+		actionable := count > 0 && visible && enabled
+		if action == "click" {
+			actionable = actionable && stable && receivesEvents
+		} else {
+			actionable = actionable && editable
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":             "https://example.test/app",
+					"title":           "Example App",
+					"selector":        selector,
+					"action":          action,
+					"trial":           false,
+					"count":           count,
+					"actionable":      actionable,
+					"required_checks": required,
+					"checks":          checks,
+					"target": map[string]any{
+						"tag":              tag,
+						"id":               strings.TrimPrefix(strings.TrimPrefix(selector, tag+"#"), "#"),
+						"type":             elementType,
+						"role":             role,
+						"name":             name,
+						"enabled":          enabled,
+						"disabled":         !enabled,
+						"editable":         editable,
+						"read_only":        readOnly,
+						"supports_editing": supportsEditing,
+						"content_editable": false,
+					},
+					"rect":  rect,
+					"point": point,
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_click_point__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")
 		if selector == "" {

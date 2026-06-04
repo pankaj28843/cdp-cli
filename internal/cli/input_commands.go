@@ -19,6 +19,7 @@ type clickResult struct {
 	Selector   string       `json:"selector"`
 	Count      int          `json:"count"`
 	Clicked    bool         `json:"clicked"`
+	Trial      bool         `json:"trial,omitempty"`
 	Strategy   string       `json:"strategy,omitempty"`
 	X          float64      `json:"x,omitempty"`
 	Y          float64      `json:"y,omitempty"`
@@ -36,6 +37,7 @@ type fillResult struct {
 	Selector string     `json:"selector"`
 	Count    int        `json:"count"`
 	Filled   bool       `json:"filled"`
+	Trial    bool       `json:"trial,omitempty"`
 	Value    string     `json:"value"`
 	Previous string     `json:"previous"`
 	Error    *evalError `json:"error,omitempty"`
@@ -138,6 +140,7 @@ func (a *app) newClickCommand() *cobra.Command {
 	var waitSelector string
 	var diagnosticsOut string
 	var poll time.Duration
+	var trial bool
 	cmd := &cobra.Command{
 		Use:   "click <selector-or-locator>",
 		Short: "Click the first matching element by CSS selector or strict locator",
@@ -155,6 +158,12 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
+			}
+			if trial && (strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "") {
+				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-text or --wait-selector", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
+			}
+			if trial && strings.TrimSpace(diagnosticsOut) != "" {
+				return commandError("usage", "usage", "--trial returns actionability diagnostics inline; omit --diagnostics-out", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
 			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
@@ -178,6 +187,48 @@ func (a *app) newClickCommand() *cobra.Command {
 			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "click")
 			if err != nil {
 				return err
+			}
+
+			actionability, err := evaluateActionability(ctx, session, selector, "click")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp click main --trial --json")
+			}
+			actionability.Trial = trial
+			if trial {
+				result := clickResult{
+					URL:      actionability.URL,
+					Title:    actionability.Title,
+					Selector: selector,
+					Count:    actionability.Count,
+					Clicked:  false,
+					Trial:    true,
+					Strategy: strategy,
+					X:        actionability.Point.X,
+					Y:        actionability.Point.Y,
+					Rect:     actionability.Rect,
+				}
+				report := map[string]any{
+					"ok":            actionability.Actionable,
+					"action":        "trial",
+					"target":        pageRow(target),
+					"before_target": pageRow(target),
+					"after_target":  pageRow(target),
+					"final_target":  pageRow(target),
+					"page_state":    clickPageState(target, target),
+					"click":         result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				if !actionability.Actionable {
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("click", selector, actionability), ExitCheckFailed, actionabilityRemediations("click", args[0], selector, locatorOpts), report)
+				}
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
 			}
 
 			result, err := performClick(ctx, session, selector, strategy)
@@ -239,6 +290,7 @@ func (a *app) newClickCommand() *cobra.Command {
 				"final_target":  pageRow(finalTarget),
 				"page_state":    clickPageState(target, finalTarget),
 				"click":         result,
+				"actionability": actionability,
 			}
 			if locator != nil {
 				report["locator"] = locator
@@ -256,6 +308,7 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
 				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, waitText, waitSelector, a.clickTimeout(), result, verification)
+				diagnostics["actionability"] = actionability
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
 				if err != nil {
@@ -285,6 +338,7 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
 	cmd.Flags().StringVar(&diagnosticsOut, "diagnostics-out", "", "optional path for privacy-preserving click diagnostics JSON")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
+	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching the click")
 	return cmd
 }
 
@@ -567,6 +621,7 @@ func (a *app) newFillCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
 	var locatorOpts locatorActionOptions
+	var trial bool
 	cmd := &cobra.Command{
 		Use:   "fill <selector-or-locator> <value>",
 		Short: "Set the value of the first matching form control by CSS selector or strict locator",
@@ -587,6 +642,33 @@ func (a *app) newFillCommand() *cobra.Command {
 			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "fill")
 			if err != nil {
 				return err
+			}
+
+			actionability, err := evaluateActionability(ctx, session, selector, "fill")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp fill input.email example@example.com --trial --json")
+			}
+			actionability.Trial = trial
+			if trial {
+				result := fillResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Filled: false, Trial: true, Value: args[1], Previous: ""}
+				report := map[string]any{
+					"ok":            actionability.Actionable,
+					"action":        "trial",
+					"target":        pageRow(target),
+					"fill":          result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				if !actionability.Actionable {
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("fill", selector, actionability), ExitCheckFailed, actionabilityRemediations("fill", args[0], selector, locatorOpts), report)
+				}
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
 			}
 
 			var result fillResult
@@ -612,10 +694,11 @@ func (a *app) newFillCommand() *cobra.Command {
 				)
 			}
 			report := map[string]any{
-				"ok":     true,
-				"action": "filled",
-				"target": pageRow(target),
-				"fill":   result,
+				"ok":            true,
+				"action":        "filled",
+				"target":        pageRow(target),
+				"fill":          result,
+				"actionability": actionability,
 			}
 			if locator != nil {
 				report["locator"] = locator
@@ -628,6 +711,7 @@ func (a *app) newFillCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing the value")
 	return cmd
 }
 

@@ -242,6 +242,7 @@ func commandExamples(path string) []string {
 		"cdp click": {
 			"cdp click 'button.submit' --json",
 			"cdp click 'Search' --by role --role button --json",
+			"cdp click 'Search' --by role --role button --trial --json",
 			"cdp click '[data-testid=row]' --strategy raw-input --activate --wait-text 'Opened' --timeout 10s --json",
 			"cdp click 'button[type=submit]' --wait-text 'Results' --json",
 			"cdp click 'button.submit' --wait-selector '.toast-success' --diagnostics-out tmp/click.local.json --json",
@@ -262,6 +263,7 @@ func commandExamples(path string) []string {
 		"cdp fill": {
 			"cdp fill input[name='email'] user@example.com --json",
 			"cdp fill 'Search Wikipedia' Aarhus --by label --json",
+			"cdp fill 'Search Wikipedia' Aarhus --by label --trial --json",
 			"cdp fill textarea#notes \"first line\\nsecond line\" --url-contains localhost --json",
 		},
 		"cdp type": {

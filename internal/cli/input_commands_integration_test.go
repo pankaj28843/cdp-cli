@@ -89,6 +89,59 @@ func TestClickByRoleLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestClickTrialByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "Search", "--by", "role", "--role", "button", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click trial by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Click  struct {
+			Selector string `json:"selector"`
+			Clicked  bool   `json:"clicked"`
+			Trial    bool   `json:"trial"`
+			Strategy string `json:"strategy"`
+		} `json:"click"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Trial      bool     `json:"trial"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Visible struct {
+					Passed bool `json:"passed"`
+				} `json:"visible"`
+				Stable struct {
+					Passed bool `json:"passed"`
+				} `json:"stable"`
+				ReceivesEvents struct {
+					Passed bool `json:"passed"`
+				} `json:"receives_events"`
+				Enabled struct {
+					Passed bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click trial by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.Click.Selector != "button#submit" || got.Click.Clicked || !got.Click.Trial || got.Click.Strategy != "auto" {
+		t.Fatalf("click trial action = %+v, want non-dispatching trial click", got)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Trial || len(got.Actionability.Required) != 5 || !got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Stable.Passed || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("click trial actionability = %+v, want passing click checks", got.Actionability)
+	}
+}
+
 func TestClickRawInputVerifiedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterTitle": "Ready Page", "afterURL": "https://example.test/ready"},
@@ -283,6 +336,97 @@ func TestFillByLabelLocatorJSON(t *testing.T) {
 	}
 	if got.Locator.Matches[0].SelectorHint != "input#q" || got.Locator.Matches[0].Tag != "input" || got.Fill.Selector != "input#q" || !got.Fill.Filled || got.Fill.Value != "typed value" || got.Fill.Previous != "before" {
 		t.Fatalf("fill by label action = %+v, want fill on resolved selector", got)
+	}
+}
+
+func TestFillTrialByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"fill", "Search", "trial value", "--by", "label", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("fill trial by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Fill   struct {
+			Selector string `json:"selector"`
+			Filled   bool   `json:"filled"`
+			Trial    bool   `json:"trial"`
+			Value    string `json:"value"`
+		} `json:"fill"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Trial      bool `json:"trial"`
+			Checks     struct {
+				Visible struct {
+					Passed bool `json:"passed"`
+				} `json:"visible"`
+				Enabled struct {
+					Passed bool `json:"passed"`
+				} `json:"enabled"`
+				Editable struct {
+					Passed bool `json:"passed"`
+				} `json:"editable"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("fill trial by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.Fill.Selector != "input#q" || got.Fill.Filled || !got.Fill.Trial || got.Fill.Value != "trial value" {
+		t.Fatalf("fill trial action = %+v, want non-mutating trial fill", got)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Trial || !got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Enabled.Passed || !got.Actionability.Checks.Editable.Passed {
+		t.Fatalf("fill trial actionability = %+v, want passing fill checks", got.Actionability)
+	}
+}
+
+func TestFillTrialReadonlyFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"fill", "Read-only notes", "trial value", "--by", "label", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("fill trial readonly exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Fill   struct {
+				Filled bool `json:"filled"`
+				Trial  bool `json:"trial"`
+			} `json:"fill"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Trial      bool `json:"trial"`
+				Checks     struct {
+					Editable struct {
+						Passed  bool   `json:"passed"`
+						Message string `json:"message"`
+					} `json:"editable"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("fill trial readonly output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "trial" || got.Data.Fill.Filled || !got.Data.Fill.Trial || got.Data.Actionability.Actionable || !got.Data.Actionability.Trial || got.Data.Actionability.Checks.Editable.Passed || got.Data.Actionability.Checks.Editable.Message == "" {
+		t.Fatalf("fill trial readonly = %+v, want failed editable actionability", got)
 	}
 }
 

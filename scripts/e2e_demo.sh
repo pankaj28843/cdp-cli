@@ -146,9 +146,13 @@ require_artifact "$state_dir/page-load.local.json"
 "$binary" wait locator "Agent input" --by label --strict --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.kind == "locator" and .wait.matched == true and .wait.strict == true and .locator.strict == true and .wait.resolved_selector == "input#agent-input"' >/dev/null
 "$binary" fill "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "filled" and .locator.strict == true and .resolved_selector == "input#agent-input" and .fill.selector == "input#agent-input" and .fill.value == "locator filled value"' >/dev/null
+  | jq -e '.ok == true and .action == "filled" and .locator.strict == true and .resolved_selector == "input#agent-input" and .fill.selector == "input#agent-input" and .fill.value == "locator filled value" and .actionability.actionable == true and .actionability.checks.editable.passed == true' >/dev/null
 "$binary" assert value "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "input#agent-input" and .assertion.selector == "input#agent-input"' >/dev/null
+"$binary" fill "Agent input" "trial should not write" --by label --trial --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "trial" and .fill.trial == true and .fill.filled == false and .locator.strict == true and .resolved_selector == "input#agent-input" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.enabled.passed == true and .actionability.checks.editable.passed == true' >/dev/null
+"$binary" assert value "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.actual == "locator filled value"' >/dev/null
 "$binary" assert text "Click target" "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.actual == "Click target"' >/dev/null
 "$binary" assert visible "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
@@ -164,7 +168,9 @@ require_artifact "$state_dir/page-load.local.json"
 "$binary" assert readonly "Read-only notes" --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "textarea#readonly-notes" and .assertion.selector == "textarea#readonly-notes" and .assertion.read_only == true and .assertion.editable_count == 0 and .assertion.read_only_count == 1 and (.assertion.items[0].read_only_reason | index("native_readonly"))' >/dev/null
 "$binary" click "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "clicked" and .locator.strict == true and .resolved_selector == "button#action" and .click.selector == "button#action" and .page_state.same_target == true' >/dev/null
+  | jq -e '.ok == true and .action == "clicked" and .locator.strict == true and .resolved_selector == "button#action" and .click.selector == "button#action" and .page_state.same_target == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true' >/dev/null
+"$binary" click "Click target" --by role --role button --trial --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "trial" and .click.trial == true and .click.clicked == false and .locator.strict == true and .resolved_selector == "button#action" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.stable.passed == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
 rendered_dir="$state_dir/rendered-extract"
 "$binary" workflow rendered-extract "$app_url" --state-dir "$state_dir/cdp-state" --out-dir "$rendered_dir" --wait 5s --json \
   | jq -e --arg dir "$rendered_dir" '.ok == true and .workflow.name == "rendered-extract" and .readiness.navigated_from_about_blank == true and .target.url != "about:blank" and .quality.visible_word_count > 5 and .quality.html_length > 64 and .artifacts.visible_txt == ($dir + "/visible.txt") and .artifacts.markdown == ($dir + "/page.md") and .artifacts.links_json == ($dir + "/links.json")' >/dev/null
@@ -179,9 +185,9 @@ require_artifact "$rendered_dir/links.json"
 "$binary" html "#missing-empty-fixture" --diagnose-empty --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .html.count == 0 and (.warnings | length >= 1) and .diagnostics.selector_match_count == 0 and (.diagnostics.possible_causes | index("selector_matched_zero"))' >/dev/null
 "$binary" click "#action" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action" and .target.url == .after_target.url and .final_target.url == .after_target.url and .page_state.same_target == true and .page_state.url_changed == false' >/dev/null
+  | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action" and .target.url == .after_target.url and .final_target.url == .after_target.url and .page_state.same_target == true and .page_state.url_changed == false and .actionability.actionable == true' >/dev/null
 "$binary" fill "#agent-input" "filled value" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.value == "filled value"' >/dev/null
+  | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.value == "filled value" and .actionability.actionable == true' >/dev/null
 "$binary" type "#agent-input" " plus typed" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "typed" and .type.typing == true and .type.typed == " plus typed"' >/dev/null
 "$binary" press Enter --selector "#agent-input" --state-dir "$state_dir/cdp-state" --json \
