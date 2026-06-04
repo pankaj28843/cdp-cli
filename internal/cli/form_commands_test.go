@@ -492,6 +492,140 @@ func TestAssertEnabledFailureJSON(t *testing.T) {
 	}
 }
 
+func TestAssertEditableByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "editable", "Search", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert editable by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By     string `json:"by"`
+			Query  string `json:"query"`
+			Strict bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector         string `json:"selector"`
+			Expected         string `json:"expected"`
+			Editable         bool   `json:"editable"`
+			ReadOnly         bool   `json:"read_only"`
+			Passed           bool   `json:"passed"`
+			Count            int    `json:"count"`
+			EditableCount    int    `json:"editable_count"`
+			ReadOnlyCount    int    `json:"read_only_count"`
+			DisabledCount    int    `json:"disabled_count"`
+			UnsupportedCount int    `json:"unsupported_count"`
+			Items            []struct {
+				Tag              string `json:"tag"`
+				Role             string `json:"role"`
+				Editable         bool   `json:"editable"`
+				ReadOnly         bool   `json:"read_only"`
+				SupportsEditable bool   `json:"supports_editable"`
+				Enabled          bool   `json:"enabled"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert editable by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#q" || got.Locator.By != "label" || got.Locator.Query != "Search" || !got.Locator.Strict {
+		t.Fatalf("assert editable locator = %+v, want strict label locator", got)
+	}
+	if got.Assertion.Selector != "input#q" || got.Assertion.Expected != "editable" || !got.Assertion.Editable || got.Assertion.ReadOnly || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.EditableCount != 1 || got.Assertion.ReadOnlyCount != 0 || got.Assertion.DisabledCount != 0 || got.Assertion.UnsupportedCount != 0 || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Tag != "input" || got.Assertion.Items[0].Role != "searchbox" || !got.Assertion.Items[0].Editable || got.Assertion.Items[0].ReadOnly || !got.Assertion.Items[0].SupportsEditable || !got.Assertion.Items[0].Enabled {
+		t.Fatalf("assert editable assertion = %+v, want editable resolved input", got.Assertion)
+	}
+}
+
+func TestAssertReadonlyByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "readonly", "Read-only notes", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert readonly by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				ReadOnly bool `json:"read_only"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector      string `json:"selector"`
+			Expected      string `json:"expected"`
+			Editable      bool   `json:"editable"`
+			ReadOnly      bool   `json:"read_only"`
+			Passed        bool   `json:"passed"`
+			EditableCount int    `json:"editable_count"`
+			ReadOnlyCount int    `json:"read_only_count"`
+			Items         []struct {
+				ReadOnly       bool     `json:"read_only"`
+				ReadOnlyReason []string `json:"read_only_reason"`
+				NativeReadOnly bool     `json:"native_read_only"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert readonly by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "textarea#readonly-notes" || got.Locator.By != "label" || got.Locator.Query != "Read-only notes" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || !got.Locator.Matches[0].ReadOnly {
+		t.Fatalf("assert readonly locator = %+v, want strict read-only label locator", got)
+	}
+	if got.Assertion.Selector != "textarea#readonly-notes" || got.Assertion.Expected != "readonly" || got.Assertion.Editable || !got.Assertion.ReadOnly || !got.Assertion.Passed || got.Assertion.EditableCount != 0 || got.Assertion.ReadOnlyCount != 1 || len(got.Assertion.Items) != 1 || !got.Assertion.Items[0].ReadOnly || !got.Assertion.Items[0].NativeReadOnly || !containsString(got.Assertion.Items[0].ReadOnlyReason, "native_readonly") {
+		t.Fatalf("assert readonly assertion = %+v, want read-only resolved textarea", got.Assertion)
+	}
+}
+
+func TestAssertEditableFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "editable", "Read-only notes", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("assert editable readonly locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Selector      string `json:"selector"`
+				Expected      string `json:"expected"`
+				Editable      bool   `json:"editable"`
+				ReadOnly      bool   `json:"read_only"`
+				Passed        bool   `json:"passed"`
+				EditableCount int    `json:"editable_count"`
+				ReadOnlyCount int    `json:"read_only_count"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert editable failure output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "textarea#readonly-notes" || got.Data.Assertion.Selector != "textarea#readonly-notes" || got.Data.Assertion.Expected != "editable" || got.Data.Assertion.Editable || !got.Data.Assertion.ReadOnly || got.Data.Assertion.Passed || got.Data.Assertion.EditableCount != 0 || got.Data.Assertion.ReadOnlyCount != 1 {
+		t.Fatalf("assert editable failure = %+v, want failed editable assertion with read-only diagnostics", got)
+	}
+}
+
 func TestFormValuesListsVisibleControls(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()

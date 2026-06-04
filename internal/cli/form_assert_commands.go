@@ -122,6 +122,43 @@ type assertEnabledItem struct {
 	Rect             snapshotRect `json:"rect"`
 }
 
+type assertEditableResult struct {
+	Selector         string               `json:"selector"`
+	Expected         string               `json:"expected"`
+	Editable         bool                 `json:"editable"`
+	ReadOnly         bool                 `json:"read_only"`
+	Passed           bool                 `json:"passed"`
+	Count            int                  `json:"count"`
+	EditableCount    int                  `json:"editable_count"`
+	ReadOnlyCount    int                  `json:"read_only_count"`
+	DisabledCount    int                  `json:"disabled_count"`
+	UnsupportedCount int                  `json:"unsupported_count"`
+	Items            []assertEditableItem `json:"items,omitempty"`
+	Error            *evalError           `json:"error,omitempty"`
+}
+
+type assertEditableItem struct {
+	Index                int          `json:"index"`
+	Tag                  string       `json:"tag"`
+	ID                   string       `json:"id,omitempty"`
+	Type                 string       `json:"type,omitempty"`
+	Role                 string       `json:"role,omitempty"`
+	Name                 string       `json:"name,omitempty"`
+	Editable             bool         `json:"editable"`
+	ReadOnly             bool         `json:"read_only"`
+	ReadOnlyReason       []string     `json:"read_only_reason,omitempty"`
+	SupportsEditable     bool         `json:"supports_editable"`
+	SupportsAriaReadonly bool         `json:"supports_aria_readonly"`
+	NativeReadOnly       bool         `json:"native_read_only"`
+	AriaReadOnly         bool         `json:"aria_read_only"`
+	Enabled              bool         `json:"enabled"`
+	Disabled             bool         `json:"disabled"`
+	DisabledReason       []string     `json:"disabled_reason,omitempty"`
+	ContentEditable      bool         `json:"content_editable"`
+	Visible              bool         `json:"visible"`
+	Rect                 snapshotRect `json:"rect"`
+}
+
 func (a *app) newFormCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "form", Short: "Inspect live form control state"}
 	cmd.AddCommand(a.newFormValuesCommand())
@@ -192,6 +229,8 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertHiddenCommand())
 	cmd.AddCommand(a.newAssertEnabledCommand())
 	cmd.AddCommand(a.newAssertDisabledCommand())
+	cmd.AddCommand(a.newAssertEditableCommand())
+	cmd.AddCommand(a.newAssertReadonlyCommand())
 	return cmd
 }
 
@@ -362,6 +401,71 @@ func (a *app) newAssertDisabledCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newAssertEditableCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "editable <selector-or-locator>", Short: "Assert an element is editable by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertEditableCommand(cmd, args[0], "editable", locatorOpts, targetID, urlContains, titleContains)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) newAssertReadonlyCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "readonly <selector-or-locator>", Aliases: []string{"read-only"}, Short: "Assert an element is read-only by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertEditableCommand(cmd, args[0], "readonly", locatorOpts, targetID, urlContains, titleContains)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel := a.browserCommandContext(cmd)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	selector, locator, err := resolveActionSelector(ctx, session, query, locatorOpts, "assert "+expected)
+	if err != nil {
+		return err
+	}
+	var got assertEditableResult
+	if err := evaluateJSONValue(ctx, session, assertEditableExpression(selector, 20), "assert "+expected, &got); err != nil {
+		return err
+	}
+	if got.Error != nil {
+		return invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'input[name=q]' --json")
+	}
+	got.Expected = expected
+	got.Passed = got.Editable
+	if expected == "readonly" {
+		got.Passed = got.ReadOnly
+	}
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		report["resolved_selector"] = selector
+	}
+	if !got.Passed {
+		return commandErrorWithData("assertion_failed", "check_failed", editableAssertionFailureMessage(expected, selector, got), ExitCheckFailed, []string{locatorActionFindCommand(query, locatorOpts), "cdp dom query " + shellQuote(selector) + " --json"}, report)
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
 func (a *app) runAssertEnabledCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
 	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 		return err
@@ -499,6 +603,10 @@ func visibilityAssertionRemediations(query, selector string, opts locatorActionO
 
 func enabledAssertionFailureMessage(expected, selector string, got assertEnabledResult) string {
 	return fmt.Sprintf("%s assertion failed for %q: %d enabled and %d disabled of %d matched", expected, selector, got.EnabledCount, got.DisabledCount, got.Count)
+}
+
+func editableAssertionFailureMessage(expected, selector string, got assertEditableResult) string {
+	return fmt.Sprintf("%s assertion failed for %q: %d editable, %d read-only, %d disabled, and %d unsupported of %d matched", expected, selector, got.EditableCount, got.ReadOnlyCount, got.DisabledCount, got.UnsupportedCount, got.Count)
 }
 
 func assertionMatch(actual, expected, mode string) (bool, error) {
@@ -675,6 +783,117 @@ func assertEnabledExpression(selector string, limit int) string {
   const enabledCount = allItems.filter((item) => item.enabled).length;
   const disabledCount = allItems.filter((item) => item.disabled).length;
   return { url: location.href, title: document.title, selector, expected: "enabled", enabled: enabledCount > 0, disabled: allItems.length > 0 && enabledCount === 0, passed: enabledCount > 0, count: allItems.length, enabled_count: enabledCount, disabled_count: disabledCount, items: allItems.slice(0, limit), marker };
+})()`, jsStringLiteral(selector), limit)
+}
+
+func assertEditableExpression(selector string, limit int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_assert_editable__";
+  const selector = %s;
+  const limit = %d;
+  const nativeDisabledTags = new Set(["button", "select", "input", "textarea", "option", "optgroup"]);
+  const nativeEditableTags = new Set(["input", "textarea", "select"]);
+  const ariaReadonlyRoles = new Set(["checkbox", "combobox", "grid", "gridcell", "listbox", "radiogroup", "searchbox", "slider", "spinbutton", "switch", "textbox", "treegrid"]);
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const roleOf = (el) => {
+    const explicit = norm(el.getAttribute("role")).split(" ")[0];
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    if (tag === "button") return "button";
+    if (tag === "a" && el.hasAttribute("href")) return "link";
+    if (/^h[1-6]$/.test(tag)) return "heading";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return el.multiple ? "listbox" : "combobox";
+    if (tag === "input") {
+      if (["button", "submit", "reset"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "range") return "slider";
+      if (type === "search") return "searchbox";
+      return "textbox";
+    }
+    return "";
+  };
+  const nameOf = (el) => norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || el.getAttribute("value") || el.innerText || el.textContent || "");
+  const visibilityOf = (el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
+    return { visible: !hidden && rect.width > 0 && rect.height > 0, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  };
+  const disabledInfo = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const nativeDisableable = nativeDisabledTags.has(tag);
+    const nativeDisabled = nativeDisableable && el.hasAttribute("disabled");
+    const fieldsetDisabled = nativeDisableable && Boolean(el.closest("fieldset[disabled]"));
+    let ariaDisabled = false;
+    for (let node = el; node && node.nodeType === Node.ELEMENT_NODE; node = node.parentElement) {
+      if (String(node.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+        ariaDisabled = true;
+        break;
+      }
+    }
+    const reason = [];
+    if (nativeDisabled) reason.push("native_disabled");
+    if (fieldsetDisabled) reason.push("fieldset_disabled");
+    if (ariaDisabled) reason.push("aria_disabled");
+    return { disabled: nativeDisabled || fieldsetDisabled || ariaDisabled, reason };
+  };
+  const readOnlyInfo = (el, role) => {
+    const tag = el.tagName.toLowerCase();
+    const nativeEditable = nativeEditableTags.has(tag);
+    const contentEditable = Boolean(el.isContentEditable);
+    const supportsAriaReadonly = ariaReadonlyRoles.has(role);
+    const supportsEditable = nativeEditable || contentEditable || supportsAriaReadonly;
+    const nativeReadOnly = nativeEditable && el.hasAttribute("readonly");
+    const ariaReadOnly = supportsAriaReadonly && String(el.getAttribute("aria-readonly") || "").toLowerCase() === "true";
+    const reason = [];
+    if (nativeReadOnly) reason.push("native_readonly");
+    if (ariaReadOnly) reason.push("aria_readonly");
+    return { readOnly: nativeReadOnly || ariaReadOnly, nativeReadOnly, ariaReadOnly, supportsEditable, supportsAriaReadonly, contentEditable, reason };
+  };
+  const itemFor = (el, index) => {
+    const role = roleOf(el);
+    const disabled = disabledInfo(el);
+    const readonly = readOnlyInfo(el, role);
+    const visibility = visibilityOf(el);
+    const editable = readonly.supportsEditable && !disabled.disabled && !readonly.readOnly;
+    return {
+      index,
+      tag: el.tagName.toLowerCase(),
+      id: el.id || "",
+      type: el.getAttribute("type") || "",
+      role,
+      name: nameOf(el).slice(0, 240),
+      editable,
+      read_only: readonly.readOnly,
+      read_only_reason: readonly.reason,
+      supports_editable: readonly.supportsEditable,
+      supports_aria_readonly: readonly.supportsAriaReadonly,
+      native_read_only: readonly.nativeReadOnly,
+      aria_read_only: readonly.ariaReadOnly,
+      enabled: !disabled.disabled,
+      disabled: disabled.disabled,
+      disabled_reason: disabled.reason,
+      content_editable: readonly.contentEditable,
+      visible: visibility.visible,
+      rect: visibility.rect
+    };
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, expected: "editable", editable: false, read_only: false, passed: false, count: 0, editable_count: 0, read_only_count: 0, disabled_count: 0, unsupported_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+  }
+  const allItems = elements.map(itemFor);
+  const editableCount = allItems.filter((item) => item.editable).length;
+  const readOnlyCount = allItems.filter((item) => item.read_only).length;
+  const disabledCount = allItems.filter((item) => item.disabled).length;
+  const unsupportedCount = allItems.filter((item) => !item.supports_editable).length;
+  const readOnly = allItems.length > 0 && editableCount === 0 && readOnlyCount > 0;
+  return { url: location.href, title: document.title, selector, expected: "editable", editable: editableCount > 0, read_only: readOnly, passed: editableCount > 0, count: allItems.length, editable_count: editableCount, read_only_count: readOnlyCount, disabled_count: disabledCount, unsupported_count: unsupportedCount, items: allItems.slice(0, limit), marker };
 })()`, jsStringLiteral(selector), limit)
 }
 

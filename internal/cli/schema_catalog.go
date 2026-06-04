@@ -564,6 +564,28 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
+		"assert-editable": {
+			Name:        "assert-editable",
+			Description: "Element editable assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element is editable."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, and bounded item diagnostics."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
+		"assert-readonly": {
+			Name:        "assert-readonly",
+			Description: "Element read-only assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected elements are present, none are editable, and at least one is read-only."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, and bounded item diagnostics with read-only reasons."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
 		"snapshot": {
 			Name:        "snapshot",
 			Description: "Visible text extracted from selected page elements.",

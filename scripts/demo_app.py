@@ -63,6 +63,10 @@ DEMO_HTML = """<!doctype html>
         Agent input
         <input id="agent-input" value="initial" autocomplete="off">
       </label>
+      <label class="agent-form">
+        Read-only notes
+        <textarea id="readonly-notes" readonly>locked</textarea>
+      </label>
       <div id="drag-target" draggable="true">Drag target</div>
     </article>
     <p class="overflow">This sentence intentionally overflows its box for layout diagnostics.</p>

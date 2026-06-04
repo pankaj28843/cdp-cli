@@ -610,6 +610,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			placeholder = ""
 		}
 		disabled := false
+		readOnly := false
+		contentEditable := false
 		if query == "Disabled target" {
 			selector = "button#disabled-action"
 			tag = "button"
@@ -618,6 +620,15 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Disabled target"
 			placeholder = ""
 			disabled = true
+		}
+		if query == "Read-only notes" {
+			selector = "textarea#readonly-notes"
+			tag = "textarea"
+			elementType = ""
+			role = "textbox"
+			name = "Read-only notes"
+			placeholder = ""
+			readOnly = true
 		}
 		if query == "Gone" {
 			return map[string]any{
@@ -667,8 +678,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 						"placeholder":        placeholder,
 						"visible":            true,
 						"disabled":           disabled,
-						"read_only":          false,
-						"content_editable":   false,
+						"read_only":          readOnly,
+						"content_editable":   contentEditable,
 						"rect":               map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
 					}},
 				},
@@ -963,6 +974,108 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"enabled_count":  enabledCount,
 					"disabled_count": disabledCount,
 					"items":          items,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_editable__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "input#q"
+		}
+		tag := "input"
+		elementType := "search"
+		role := "searchbox"
+		name := "Search"
+		editable := true
+		readOnly := false
+		readOnlyReason := []string{}
+		disabled := false
+		supportsEditable := true
+		nativeReadOnly := false
+		if selector == "textarea#readonly-notes" || selector == "#readonly-notes" {
+			tag = "textarea"
+			elementType = ""
+			role = "textbox"
+			name = "Read-only notes"
+			editable = false
+			readOnly = true
+			readOnlyReason = []string{"native_readonly"}
+			nativeReadOnly = true
+		}
+		if selector == "button#submit" {
+			tag = "button"
+			elementType = "submit"
+			role = "button"
+			name = "Search"
+			editable = false
+			supportsEditable = false
+		}
+		count := 1
+		editableCount := 1
+		readOnlyCount := 0
+		disabledCount := 0
+		unsupportedCount := 0
+		if !editable {
+			editableCount = 0
+		}
+		if readOnly {
+			readOnlyCount = 1
+		}
+		if disabled {
+			disabledCount = 1
+		}
+		if !supportsEditable {
+			unsupportedCount = 1
+		}
+		if selector == "#missing" {
+			count = 0
+			editableCount = 0
+			readOnlyCount = 0
+			disabledCount = 0
+			unsupportedCount = 0
+		}
+		items := []map[string]any{}
+		if count > 0 {
+			items = append(items, map[string]any{
+				"index":                  0,
+				"tag":                    tag,
+				"id":                     strings.TrimPrefix(selector, "#"),
+				"type":                   elementType,
+				"role":                   role,
+				"name":                   name,
+				"editable":               editable,
+				"read_only":              readOnly,
+				"read_only_reason":       readOnlyReason,
+				"supports_editable":      supportsEditable,
+				"supports_aria_readonly": role == "textbox" || role == "searchbox",
+				"native_read_only":       nativeReadOnly,
+				"aria_read_only":         false,
+				"enabled":                !disabled,
+				"disabled":               disabled,
+				"disabled_reason":        []string{},
+				"content_editable":       false,
+				"visible":                true,
+				"rect":                   map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
+			})
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":               "https://example.test/app",
+					"title":             "Example App",
+					"selector":          selector,
+					"expected":          "editable",
+					"editable":          editableCount > 0,
+					"read_only":         count > 0 && editableCount == 0 && readOnlyCount > 0,
+					"passed":            editableCount > 0,
+					"count":             count,
+					"editable_count":    editableCount,
+					"read_only_count":   readOnlyCount,
+					"disabled_count":    disabledCount,
+					"unsupported_count": unsupportedCount,
+					"items":             items,
 				},
 			},
 		}

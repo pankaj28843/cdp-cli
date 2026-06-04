@@ -226,6 +226,15 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
     }
     return nativeDisabled || fieldsetDisabled || ariaDisabled;
   };
+  const ariaReadonlyRoles = new Set(["checkbox", "combobox", "grid", "gridcell", "listbox", "radiogroup", "searchbox", "slider", "spinbutton", "switch", "textbox", "treegrid"]);
+  const readOnlyInfo = (el, role) => {
+    const tag = el.tagName.toLowerCase();
+    const nativeEditable = ["input", "textarea", "select"].includes(tag);
+    const nativeReadOnly = nativeEditable && el.hasAttribute("readonly");
+    const supportsAriaReadonly = ariaReadonlyRoles.has(role);
+    const ariaReadOnly = supportsAriaReadonly && String(el.getAttribute("aria-readonly") || "").toLowerCase() === "true";
+    return nativeReadOnly || ariaReadOnly;
+  };
   const ownText = (el) => norm(Array.from(el.childNodes || []).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent || "").join(" "));
   const textOf = (el) => norm(ownText(el) || el.innerText || el.textContent || "");
   const labelledBy = (el) => {
@@ -323,6 +332,7 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
   const matches = visibleFiltered.slice(0, limit).map((el, index) => {
     const tag = el.tagName.toLowerCase();
     const visibility = visibleInfo(el);
+    const role = implicitRole(el);
     const hint = selectorHint(el);
     return {
       index,
@@ -330,7 +340,7 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
       selector_ambiguous: document.querySelectorAll(hint).length !== 1,
       tag,
       type: el.getAttribute("type") || "",
-      role: implicitRole(el),
+      role,
       name: accessibleName(el),
       text: textOf(el).slice(0, 240),
       placeholder: el.getAttribute("placeholder") || "",
@@ -339,7 +349,7 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
       test_id: el.getAttribute(testIDAttr) || el.getAttribute("data-testid") || el.getAttribute("data-test-id") || el.getAttribute("data-test") || "",
       visible: visibility.visible,
       disabled: disabledInfo(el),
-      read_only: Boolean(el.readOnly) || el.getAttribute("aria-readonly") === "true",
+      read_only: readOnlyInfo(el, role),
       content_editable: Boolean(el.isContentEditable),
       rect: visibility.rect
     };
