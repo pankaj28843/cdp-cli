@@ -135,6 +135,8 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newAssertCommand())
 	root.AddCommand(a.newClickCommand())
 	root.AddCommand(a.newFillCommand())
+	root.AddCommand(a.newCheckCommand())
+	root.AddCommand(a.newUncheckCommand())
 	root.AddCommand(a.newTypeCommand())
 	root.AddCommand(a.newInsertTextCommand())
 	root.AddCommand(a.newPressCommand())

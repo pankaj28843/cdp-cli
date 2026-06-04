@@ -837,6 +837,235 @@ func TestSelectForceSkipsVisibleJSON(t *testing.T) {
 	}
 }
 
+func TestCheckByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"check", "Subscribe to newsletter", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("check by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Check struct {
+			Selector       string `json:"selector"`
+			Checked        bool   `json:"checked"`
+			DesiredChecked bool   `json:"desired_checked"`
+			Previous       bool   `json:"previous_checked"`
+			Changed        bool   `json:"changed"`
+			Type           string `json:"type"`
+			Role           string `json:"role"`
+		} `json:"check"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Stable struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"stable"`
+				ReceivesEvents struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"receives_events"`
+				Enabled struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("check by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "checked" || got.ResolvedSelector != "input#subscribe" || got.Locator.By != "label" || got.Locator.Query != "Subscribe to newsletter" || !got.Locator.Strict || len(got.Locator.Matches) != 1 {
+		t.Fatalf("check by label locator = %+v, want strict label locator", got)
+	}
+	if got.Locator.Matches[0].SelectorHint != "input#subscribe" || got.Locator.Matches[0].Role != "checkbox" || got.Check.Selector != "input#subscribe" || !got.Check.Checked || !got.Check.DesiredChecked || got.Check.Previous || !got.Check.Changed || got.Check.Type != "checkbox" || got.Check.Role != "checkbox" {
+		t.Fatalf("check by label action = %+v, want checked checkbox", got.Check)
+	}
+	if !got.Actionability.Actionable || len(got.Actionability.Required) != 5 || !containsString(got.Actionability.Required, "stable") || !containsString(got.Actionability.Required, "receives_events") || !got.Actionability.Checks.Stable.Required || !got.Actionability.Checks.Stable.Passed || !got.Actionability.Checks.ReceivesEvents.Required || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("check actionability = %+v, want click-like actionability", got.Actionability)
+	}
+}
+
+func TestUncheckByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"uncheck", "Subscribe to newsletter", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("uncheck by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Uncheck          struct {
+			Selector       string `json:"selector"`
+			Checked        bool   `json:"checked"`
+			DesiredChecked bool   `json:"desired_checked"`
+			Previous       bool   `json:"previous_checked"`
+			Changed        bool   `json:"changed"`
+		} `json:"uncheck"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("uncheck by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "unchecked" || got.ResolvedSelector != "input#subscribe" || got.Uncheck.Selector != "input#subscribe" || got.Uncheck.Checked || got.Uncheck.DesiredChecked || !got.Uncheck.Previous || !got.Uncheck.Changed || !got.Actionability.Actionable {
+		t.Fatalf("uncheck by label = %+v, want unchecked checkbox", got)
+	}
+}
+
+func TestCheckTrialByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"check", "Subscribe", "--by", "role", "--role", "checkbox", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("check trial by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Check  struct {
+			Selector       string `json:"selector"`
+			Checked        bool   `json:"checked"`
+			DesiredChecked bool   `json:"desired_checked"`
+			Trial          bool   `json:"trial"`
+			Changed        bool   `json:"changed"`
+		} `json:"check"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Trial      bool `json:"trial"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("check trial by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.Check.Selector != "input#subscribe" || got.Check.Checked || !got.Check.DesiredChecked || !got.Check.Trial || got.Check.Changed || !got.Actionability.Actionable || !got.Actionability.Trial {
+		t.Fatalf("check trial = %+v, want non-mutating checkbox trial", got)
+	}
+}
+
+func TestCheckActionabilityFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"check", "input#disabled-checkbox", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("disabled check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Check  struct {
+				Checked bool `json:"checked"`
+				Force   bool `json:"force"`
+			} `json:"check"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Force      bool `json:"force"`
+				Checks     struct {
+					Enabled struct {
+						Required bool   `json:"required"`
+						Passed   bool   `json:"passed"`
+						Message  string `json:"message"`
+					} `json:"enabled"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("disabled check output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Check.Checked || got.Data.Check.Force || got.Data.Actionability.Actionable || got.Data.Actionability.Force || !got.Data.Actionability.Checks.Enabled.Required || got.Data.Actionability.Checks.Enabled.Passed || got.Data.Actionability.Checks.Enabled.Message == "" {
+		t.Fatalf("disabled check = %+v, want blocked enabled actionability", got)
+	}
+}
+
+func TestCheckForceSkipsReceivesEventsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"check", "input#covered-checkbox", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("force covered check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Check  struct {
+			Checked bool `json:"checked"`
+			Force   bool `json:"force"`
+		} `json:"check"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Force      bool     `json:"force"`
+			Skipped    []string `json:"skipped_checks"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Skipped  bool   `json:"skipped"`
+					Message  string `json:"message"`
+				} `json:"receives_events"`
+				Enabled struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force covered check output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "checked" || !got.Check.Checked || !got.Check.Force || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "receives_events") || got.Actionability.Checks.ReceivesEvents.Required || got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.ReceivesEvents.Skipped || !strings.Contains(got.Actionability.Checks.ReceivesEvents.Message, "--force") || !got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("force covered check = %+v, want receives-events skipped and enabled enforced", got)
+	}
+}
+
 func TestHoverByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

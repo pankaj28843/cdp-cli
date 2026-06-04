@@ -973,6 +973,94 @@ func selectExpression(selector, value string) string {
 })()`, jsStringLiteral(selector), jsStringLiteral(value))
 }
 
+func checkExpression(selector string, desired bool, mutate bool) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_check__";
+  const selector = %s;
+  const desiredChecked = %t;
+  const mutate = %t;
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const roleOf = (el) => {
+    const explicit = norm(el.getAttribute("role")).split(" ")[0];
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    if (tag === "input" && type === "checkbox") return "checkbox";
+    if (tag === "input" && type === "radio") return "radio";
+    return "";
+  };
+  const nameOf = (el) => {
+    const labelled = el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || "";
+    if (labelled) return norm(labelled);
+    if (el.id && window.CSS && CSS.escape) {
+      const label = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      if (label) return norm(label.innerText || label.textContent);
+    }
+    const parent = el.closest("label");
+    return parent ? norm(parent.innerText || parent.textContent) : norm(el.innerText || el.textContent || el.value || "");
+  };
+  const stateOf = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    const role = roleOf(el);
+    const native = tag === "input" && (type === "checkbox" || type === "radio");
+    const aria = !native && (role === "checkbox" || role === "switch" || role === "radio");
+    if (!native && !aria) {
+      return { valid: false, tag, type, role, checked: false };
+    }
+    const checked = native ? Boolean(el.checked) : String(el.getAttribute("aria-checked") || "").toLowerCase() === "true";
+    return { valid: true, native, aria, tag, type, role, checked };
+  };
+  const setNativeChecked = (el, checked) => {
+    const proto = Object.getPrototypeOf(el);
+    const descriptor = proto && Object.getOwnPropertyDescriptor(proto, "checked");
+    if (descriptor && typeof descriptor.set === "function") descriptor.set.call(el, checked);
+    else el.checked = checked;
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, checked: false, desired_checked: desiredChecked, previous_checked: false, changed: false, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, checked: false, desired_checked: desiredChecked, previous_checked: false, changed: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const el = elements[0];
+  const before = stateOf(el);
+  if (!before.valid) {
+    return { url: location.href, title: document.title, selector, count: elements.length, checked: false, desired_checked: desiredChecked, previous_checked: false, changed: false, tag: before.tag, type: before.type, role: before.role, error: { name: "InvalidTargetError", message: "target element is not a checkbox or radio control" }, marker };
+  }
+  const previous = before.checked;
+  try {
+    if (mutate && previous !== desiredChecked) {
+      if (typeof el.focus === "function") el.focus();
+      if (typeof el.click === "function") el.click();
+      const afterClick = stateOf(el);
+      if (afterClick.checked !== desiredChecked) {
+        if (before.native) {
+          setNativeChecked(el, desiredChecked);
+        } else if (before.aria) {
+          el.setAttribute("aria-checked", desiredChecked ? "true" : "false");
+        }
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+  } catch (error) {
+    const current = stateOf(el);
+    return { url: location.href, title: document.title, selector, count: elements.length, checked: current.checked, desired_checked: desiredChecked, previous_checked: previous, changed: current.checked !== previous, tag: before.tag, type: before.type, role: before.role, name: nameOf(el), error: { name: error.name, message: error.message }, marker };
+  }
+  const after = stateOf(el);
+  const changed = after.checked !== previous;
+  const out = { url: location.href, title: document.title, selector, count: elements.length, checked: after.checked, desired_checked: desiredChecked, previous_checked: previous, changed, already: previous === desiredChecked, tag: before.tag, type: before.type, role: before.role, name: nameOf(el), marker };
+  if (mutate && after.checked !== desiredChecked) {
+    out.error = { name: "StateMismatchError", message: "checked state did not change to requested value" };
+  }
+  return out;
+})()`, jsStringLiteral(selector), desired, mutate)
+}
+
 func fileInputExpression(selector, basename string) string {
 	return fmt.Sprintf(`(() => { const selector = %s; const el = document.querySelector(selector); if (!el) return {selector, accepted:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; return {selector, accepted: el.tagName === "INPUT" && el.type === "file", tag: el.tagName.toLowerCase(), type: el.type || "", file_name: %s}; })()`, jsStringLiteral(selector), jsStringLiteral(basename))
 }

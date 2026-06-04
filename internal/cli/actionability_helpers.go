@@ -113,7 +113,7 @@ func applyForceActionabilitySkips(result *actionabilityResult, action string) {
 
 func actionabilityForceSkippedChecks(action string) []string {
 	switch action {
-	case "click", "hover", "drag":
+	case "click", "hover", "drag", "check", "uncheck":
 		return []string{"receives_events"}
 	case "fill", "select":
 		return []string{"visible"}

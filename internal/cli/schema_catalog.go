@@ -393,6 +393,32 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before selecting."},
 			},
 		},
+		"check": {
+			Name:        "check",
+			Description: "Set a checkbox or radio-like control to checked after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when check completed, or when --trial actionability checks passed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name: checked for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "check", Type: "check_result", Required: true, Description: "Selector, matched count, checked state, desired state, previous state, changed/already flags, trial/force flags, and element identity."},
+				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective check actionability evidence for attached, visible, stable, receives-events, enabled, supporting checks, force, and skipped-check state. Editable is reported but not required."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before checking."},
+			},
+		},
+		"uncheck": {
+			Name:        "uncheck",
+			Description: "Set a checkbox-like control to unchecked after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when uncheck completed, or when --trial actionability checks passed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name: unchecked for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "uncheck", Type: "check_result", Required: true, Description: "Selector, matched count, checked state, desired state, previous state, changed/already flags, trial/force flags, and element identity."},
+				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective uncheck actionability evidence for attached, visible, stable, receives-events, enabled, supporting checks, force, and skipped-check state. Editable is reported but not required."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before unchecking."},
+			},
+		},
 		"type": {
 			Name:        "type",
 			Description: "Emit key events against the first matching control to simulate typing.",

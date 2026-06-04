@@ -244,7 +244,7 @@ func capabilityCatalog() []map[string]any {
 		capabilityRow("network", "implemented", "network, workflow network-failures", []string{"cdp network --wait 1s --json"}, []string{"cdp workflow network-failures --wait 1s --json"}),
 		capabilityRow("storage", "implemented", "storage list/get/set/delete/clear/snapshot/diff, storage cookies", []string{"cdp storage list --json", "cdp storage snapshot --json"}, []string{"cdp storage cookies list --json"}),
 		capabilityRow("raw_protocol", "implemented", "protocol metadata/domains/search/describe/exec", []string{"cdp protocol metadata --json", "cdp protocol search screenshot --json"}, []string{"cdp protocol exec Browser.getVersion --json"}),
-		capabilityRow("input_automation", "implemented", "click, fill, type, press, hover, drag", []string{"cdp form values --json"}, []string{"cdp click <selector> --json"}),
+		capabilityRow("input_automation", "implemented", "click, fill, select, check, uncheck, type, press, hover, drag", []string{"cdp form values --json"}, []string{"cdp click <selector> --json"}),
 		capabilityRow("accessibility", "implemented", "a11y tree/find/node, workflow a11y", []string{"cdp a11y tree --json", "cdp a11y find --role button --json"}, []string{"cdp workflow a11y 'https://example.com' --json"}),
 		capabilityRow("performance", "implemented", "perf summary, workflow perf, workflow page-load metrics", []string{"cdp perf summary --duration 1s --json"}, []string{"cdp workflow perf 'https://example.com' --wait 1s --trace tmp/perf.local.json --json"}),
 		capabilityRow("memory", "implemented", "memory counters, heap snapshot artifact", []string{"cdp memory counters --json"}, []string{"cdp memory heap-snapshot --out tmp/heap.heapsnapshot --json"}),

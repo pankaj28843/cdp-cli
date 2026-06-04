@@ -626,6 +626,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Plan"
 			placeholder = ""
 		}
+		if query == "Subscribe to newsletter" || query == "Subscribe" || (by == "role" && roleQuery == "checkbox") {
+			selector = "input#subscribe"
+			tag = "input"
+			elementType = "checkbox"
+			role = "checkbox"
+			name = "Subscribe to newsletter"
+			placeholder = ""
+		}
 		disabled := false
 		readOnly := false
 		contentEditable := false
@@ -1195,6 +1203,21 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
 			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
 		}
+		if selector == "input#subscribe" || selector == "input#disabled-checkbox" || selector == "input#covered-checkbox" {
+			tag = "input"
+			elementType = "checkbox"
+			role = "checkbox"
+			name = "Subscribe to newsletter"
+			rect = map[string]any{"x": 10, "y": 170, "width": 20, "height": 20}
+			point = map[string]any{"x": 20, "y": 180, "hit_tag": "input", "hit_id": strings.TrimPrefix(selector, "input#"), "hit_role": "checkbox", "target_matches": true}
+		}
+		if selector == "input#disabled-checkbox" {
+			enabled = false
+		}
+		if selector == "input#covered-checkbox" {
+			receivesEvents = false
+			point = map[string]any{"x": 20, "y": 180, "hit_tag": "label", "hit_id": "checkbox-cover", "hit_role": "", "target_matches": false}
+		}
 		if selector == "input#q" {
 			tag = "input"
 			elementType = "search"
@@ -1432,6 +1455,47 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			"matched_by":      "value",
 		}
 		if count == 0 {
+			out["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": out}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_check__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		desired := expressionBoolArg(req.Expression, "const desiredChecked = ")
+		mutate := expressionBoolArg(req.Expression, "const mutate = ")
+		if selector == "" {
+			selector = "input#subscribe"
+		}
+		count := 1
+		previous := !desired
+		checked := previous
+		if mutate {
+			checked = desired
+		}
+		out := map[string]any{
+			"url":              "https://example.test/app",
+			"title":            "Example App",
+			"selector":         selector,
+			"count":            count,
+			"checked":          checked,
+			"desired_checked":  desired,
+			"previous_checked": previous,
+			"changed":          checked != previous,
+			"already":          previous == desired,
+			"tag":              "input",
+			"type":             "checkbox",
+			"role":             "checkbox",
+			"name":             "Subscribe to newsletter",
+		}
+		if !mutate {
+			out["checked"] = previous
+			out["changed"] = false
+		}
+		if selector == "#missing" {
+			out["count"] = 0
+			out["checked"] = false
+			out["previous_checked"] = false
+			out["changed"] = false
 			out["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "value": out}}
@@ -2002,4 +2066,17 @@ func expressionIntArg(expression, prefix string) int {
 	}
 	value, _ := strconv.Atoi(strings.TrimSpace(expression[start : start+end]))
 	return value
+}
+
+func expressionBoolArg(expression, prefix string) bool {
+	idx := strings.Index(expression, prefix)
+	if idx < 0 {
+		return false
+	}
+	start := idx + len(prefix)
+	end := strings.Index(expression[start:], ";")
+	if end < 0 {
+		return false
+	}
+	return strings.TrimSpace(expression[start:start+end]) == "true"
 }

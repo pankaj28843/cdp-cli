@@ -25,6 +25,25 @@ type selectResult struct {
 	Error          *evalError `json:"error,omitempty"`
 }
 
+type checkResult struct {
+	URL             string     `json:"url,omitempty"`
+	Title           string     `json:"title,omitempty"`
+	Selector        string     `json:"selector"`
+	Count           int        `json:"count"`
+	Checked         bool       `json:"checked"`
+	DesiredChecked  bool       `json:"desired_checked"`
+	PreviousChecked bool       `json:"previous_checked"`
+	Changed         bool       `json:"changed"`
+	Already         bool       `json:"already,omitempty"`
+	Trial           bool       `json:"trial,omitempty"`
+	Force           bool       `json:"force,omitempty"`
+	Tag             string     `json:"tag,omitempty"`
+	Type            string     `json:"type,omitempty"`
+	Role            string     `json:"role,omitempty"`
+	Name            string     `json:"name,omitempty"`
+	Error           *evalError `json:"error,omitempty"`
+}
+
 func (a *app) newFocusCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	cmd := &cobra.Command{
@@ -77,6 +96,152 @@ func (a *app) newClearCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	return cmd
+}
+
+func (a *app) newCheckCommand() *cobra.Command {
+	return a.newCheckedCommand("check", true)
+}
+
+func (a *app) newUncheckCommand() *cobra.Command {
+	return a.newCheckedCommand("uncheck", false)
+}
+
+func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	var trial bool
+	var force bool
+	actionName := "checked"
+	short := "Check a checkbox or radio control by CSS selector or strict locator"
+	if !desired {
+		actionName = "unchecked"
+		short = "Uncheck a checkbox or radio control by CSS selector or strict locator"
+	}
+	cmd := &cobra.Command{
+		Use:   name + " <selector-or-locator>",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, name)
+			if err != nil {
+				return err
+			}
+			actionability, err := evaluateActionability(ctx, session, selector, name)
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp "+name+" 'Subscribe to newsletter' --by label --trial --json")
+			}
+			prepareActionability(&actionability, name, trial, force)
+
+			result := checkResult{
+				URL:            actionability.URL,
+				Title:          actionability.Title,
+				Selector:       selector,
+				Count:          actionability.Count,
+				DesiredChecked: desired,
+				Trial:          trial,
+				Force:          force,
+			}
+			if trial && actionability.Actionable {
+				if err := evaluateJSONValue(ctx, session, checkExpression(selector, desired, false), name+" trial", &result); err != nil {
+					return err
+				}
+				result.Trial = true
+				result.Force = force
+				if result.Error != nil {
+					return checkCommandResultError(name, selector, result.Error)
+				}
+			}
+			if trial {
+				report := map[string]any{
+					"ok":            actionability.Actionable,
+					"action":        "trial",
+					"target":        pageRow(target),
+					name:            result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				if !actionability.Actionable {
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage(name, selector, actionability), ExitCheckFailed, actionabilityRemediations(name, args[0], selector, locatorOpts), report)
+				}
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
+			}
+			if !actionability.Actionable {
+				report := map[string]any{
+					"ok":            false,
+					"action":        "blocked",
+					"target":        pageRow(target),
+					name:            result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage(name, selector, actionability), ExitCheckFailed, actionabilityRemediations(name, args[0], selector, locatorOpts), report)
+			}
+
+			if err := evaluateJSONValue(ctx, session, checkExpression(selector, desired, true), name, &result); err != nil {
+				return err
+			}
+			result.Force = force
+			if result.Error != nil {
+				return checkCommandResultError(name, selector, result.Error)
+			}
+			if result.Checked != desired {
+				return commandError(name+"_failed", "check_failed", fmt.Sprintf("%s %q did not reach checked state %t", name, selector, desired), ExitCheckFailed, []string{"cdp form get " + shellQuote(selector) + " --json"})
+			}
+			report := map[string]any{
+				"ok":            true,
+				"action":        actionName,
+				"target":        pageRow(target),
+				name:            result,
+				"actionability": actionability,
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			return a.render(ctx, fmt.Sprintf("%s\t%s\t%s", actionName, target.TargetID, result.Selector), report)
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing checked state")
+	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential checked-state actionability checks and record skipped checks in JSON")
+	return cmd
+}
+
+func checkCommandResultError(action, selector string, err *evalError) error {
+	if err == nil {
+		return nil
+	}
+	switch err.Name {
+	case "InvalidTargetError":
+		return commandError("invalid_target", "usage", fmt.Sprintf("%s %q: %s", action, selector, err.Message), ExitUsage, []string{"cdp form get " + shellQuote(selector) + " --json"})
+	case "StateMismatchError":
+		return commandError(action+"_failed", "check_failed", fmt.Sprintf("%s %q: %s", action, selector, err.Message), ExitCheckFailed, []string{"cdp form get " + shellQuote(selector) + " --json"})
+	default:
+		return commandError("invalid_selector", "usage", fmt.Sprintf("%s %q: %s", action, selector, err.Message), ExitUsage, []string{"cdp " + action + " input[type=checkbox] --json"})
+	}
 }
 
 func (a *app) newSelectCommand() *cobra.Command {

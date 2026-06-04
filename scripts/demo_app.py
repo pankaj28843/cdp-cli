@@ -44,6 +44,7 @@ DEMO_HTML = """<!doctype html>
     main { max-width: 720px; }
     .card { border: 1px solid #ccd; border-radius: 12px; padding: 16px; }
     .agent-form { display: grid; gap: 8px; margin-top: 12px; }
+    .checkbox-row { align-items: center; display: flex; gap: 8px; }
     #agent-input { max-width: 320px; padding: 8px; }
     #plan { max-width: 320px; padding: 8px; }
     #drag-target { display: inline-block; margin-top: 12px; padding: 8px 12px; background: #f0f4ff; border: 1px solid #99a; cursor: grab; }
@@ -86,6 +87,15 @@ DEMO_HTML = """<!doctype html>
         <option value="free">Free</option>
         <option value="pro">Pro</option>
       </select>
+      <label class="agent-form checkbox-row" for="subscribe">
+        <input id="subscribe" name="subscribe" type="checkbox">
+        Subscribe to newsletter
+      </label>
+      <span class="covered-wrap">
+        <input id="covered-checkbox" type="checkbox" aria-label="Covered checkbox">
+        <span id="checkbox-cover" class="cover-overlay" aria-hidden="true"></span>
+      </span>
+      <input id="disabled-checkbox" type="checkbox" disabled aria-label="Disabled checkbox">
       <div id="drag-target" data-testid="drag-target" draggable="true">Drag target</div>
     </article>
     <p class="overflow">This sentence intentionally overflows its box for layout diagnostics.</p>
