@@ -236,7 +236,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema workflow-verify --json | jq -e '.ok == true and .schema.name == "workflow-verify" and (.schema.fields | map(.name) | index("requests"))' >/dev/null
 "$binary" schema workflow-perf --json | jq -e '.ok == true and .schema.name == "workflow-perf" and (.schema.fields | map(.name) | index("performance"))' >/dev/null
 "$binary" schema workflow-debug-bundle --json | jq -e '.ok == true and .schema.name == "workflow-debug-bundle" and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
-"$binary" schema click --json | jq -e '.ok == true and .schema.name == "click" and (.schema.fields | map(.name) | index("click"))' >/dev/null
+"$binary" schema click --json | jq -e '.ok == true and .schema.name == "click" and (.schema.fields | map(.name) | index("click")) and (.schema.fields | map(.name) | index("before_target")) and (.schema.fields | map(.name) | index("after_target")) and (.schema.fields | map(.name) | index("final_target")) and (.schema.fields | map(.name) | index("page_state"))' >/dev/null
 "$binary" schema fill --json | jq -e '.ok == true and .schema.name == "fill" and (.schema.fields | map(.name) | index("fill"))' >/dev/null
 "$binary" schema type --json | jq -e '.ok == true and .schema.name == "type" and (.schema.fields | map(.name) | index("type"))' >/dev/null
 "$binary" schema press --json | jq -e '.ok == true and .schema.name == "press" and (.schema.fields | map(.name) | index("press"))' >/dev/null

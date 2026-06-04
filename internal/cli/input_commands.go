@@ -14,17 +14,20 @@ import (
 )
 
 type clickResult struct {
-	URL      string       `json:"url"`
-	Title    string       `json:"title"`
-	Selector string       `json:"selector"`
-	Count    int          `json:"count"`
-	Clicked  bool         `json:"clicked"`
-	Strategy string       `json:"strategy,omitempty"`
-	X        float64      `json:"x,omitempty"`
-	Y        float64      `json:"y,omitempty"`
-	Rect     snapshotRect `json:"rect,omitempty"`
-	Verified *bool        `json:"verified,omitempty"`
-	Error    *evalError   `json:"error,omitempty"`
+	URL        string       `json:"url"`
+	Title      string       `json:"title"`
+	Selector   string       `json:"selector"`
+	Count      int          `json:"count"`
+	Clicked    bool         `json:"clicked"`
+	Strategy   string       `json:"strategy,omitempty"`
+	X          float64      `json:"x,omitempty"`
+	Y          float64      `json:"y,omitempty"`
+	Rect       snapshotRect `json:"rect,omitempty"`
+	Verified   *bool        `json:"verified,omitempty"`
+	TargetID   string       `json:"target_id,omitempty"`
+	FinalURL   string       `json:"final_url,omitempty"`
+	FinalTitle string       `json:"final_title,omitempty"`
+	Error      *evalError   `json:"error,omitempty"`
 }
 
 type fillResult struct {
@@ -204,17 +207,33 @@ func (a *app) newClickCommand() *cobra.Command {
 				result.Verified = &verified
 			}
 
+			finalTarget, refreshErr := refreshedClickTarget(ctx, client, target)
+			result.TargetID = finalTarget.TargetID
+			result.FinalURL = finalTarget.URL
+			result.FinalTitle = finalTarget.Title
+
 			report := map[string]any{
-				"ok":     verified,
-				"action": "clicked",
-				"target": pageRow(target),
-				"click":  result,
+				"ok":            verified,
+				"action":        "clicked",
+				"target":        pageRow(finalTarget),
+				"before_target": pageRow(target),
+				"after_target":  pageRow(finalTarget),
+				"final_target":  pageRow(finalTarget),
+				"page_state":    clickPageState(target, finalTarget),
+				"click":         result,
+			}
+			if refreshErr != nil {
+				report["target_refresh"] = map[string]any{
+					"ok":        false,
+					"target_id": target.TargetID,
+					"error":     refreshErr.Error(),
+				}
 			}
 			if verification != nil {
 				report["verification"] = verification
 			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
-				diagnostics := clickDiagnostics(target, args[0], strategy, activate, waitText, waitSelector, a.clickTimeout(), result, verification)
+				diagnostics := clickDiagnostics(target, finalTarget, args[0], strategy, activate, waitText, waitSelector, a.clickTimeout(), result, verification)
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
 				if err != nil {
@@ -351,6 +370,31 @@ func clickVerificationTimedOut(ctx context.Context, err error) bool {
 	return commandErr.Code == "connection_failed" && strings.Contains(strings.ToLower(commandErr.Message), "timeout")
 }
 
+func refreshedClickTarget(ctx context.Context, client cdp.CommandClient, before cdp.TargetInfo) (cdp.TargetInfo, error) {
+	if strings.TrimSpace(before.TargetID) == "" {
+		return before, nil
+	}
+	after, err := cdp.TargetInfoWithClient(ctx, client, before.TargetID)
+	if err != nil {
+		return before, err
+	}
+	if strings.TrimSpace(after.TargetID) == "" {
+		return before, nil
+	}
+	return after, nil
+}
+
+func clickPageState(before, after cdp.TargetInfo) map[string]any {
+	return map[string]any{
+		"before":        pageRow(before),
+		"after":         pageRow(after),
+		"final":         pageRow(after),
+		"same_target":   before.TargetID == after.TargetID,
+		"url_changed":   before.URL != after.URL,
+		"title_changed": before.Title != after.Title,
+	}
+}
+
 func (a *app) clickTimeout() time.Duration {
 	if a.opts.timeout > 0 {
 		return a.opts.timeout
@@ -358,18 +402,17 @@ func (a *app) clickTimeout() time.Duration {
 	return 10 * time.Second
 }
 
-func clickDiagnostics(target cdp.TargetInfo, selector, requestedStrategy string, activate bool, waitText, waitSelector string, timeout time.Duration, click clickResult, verification *waitResult) map[string]any {
+func clickDiagnostics(beforeTarget, afterTarget cdp.TargetInfo, selector, requestedStrategy string, activate bool, waitText, waitSelector string, timeout time.Duration, click clickResult, verification *waitResult) map[string]any {
 	diagnostics := map[string]any{
 		"selector":           selector,
 		"requested_strategy": requestedStrategy,
 		"strategy":           click.Strategy,
 		"activated":          activate,
 		"timeout":            timeout.String(),
-		"target": map[string]any{
-			"id":    target.TargetID,
-			"title": target.Title,
-			"url":   target.URL,
-		},
+		"target":             pageRow(afterTarget),
+		"before_target":      pageRow(beforeTarget),
+		"after_target":       pageRow(afterTarget),
+		"page_state":         clickPageState(beforeTarget, afterTarget),
 		"click": map[string]any{
 			"clicked": click.Clicked,
 			"count":   click.Count,

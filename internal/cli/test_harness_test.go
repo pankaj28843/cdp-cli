@@ -530,6 +530,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
 				} else {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, blockedSessions[req.SessionID])
+					applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 				}
 			} else if req.Method == "Page.captureScreenshot" {
 				resp["result"] = map[string]any{
@@ -554,6 +555,29 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	})
 	server = httptest.NewServer(mux)
 	return server
+}
+
+func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, params json.RawMessage) {
+	expression := string(params)
+	if !strings.Contains(expression, "__cdp_cli_wait_text__") && !strings.Contains(expression, "__cdp_cli_wait_selector__") {
+		return
+	}
+	targetID := strings.TrimPrefix(sessionID, "session-")
+	if targetID == sessionID {
+		return
+	}
+	for _, target := range targets {
+		if target["targetId"] != targetID {
+			continue
+		}
+		if title, ok := target["afterTitle"].(string); ok {
+			target["title"] = title
+		}
+		if rawURL, ok := target["afterURL"].(string); ok {
+			target["url"] = rawURL
+		}
+		return
+	}
 }
 
 func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[string]any {

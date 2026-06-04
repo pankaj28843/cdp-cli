@@ -153,7 +153,7 @@ require_artifact "$rendered_dir/links.json"
 "$binary" html "#missing-empty-fixture" --diagnose-empty --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .html.count == 0 and (.warnings | length >= 1) and .diagnostics.selector_match_count == 0 and (.diagnostics.possible_causes | index("selector_matched_zero"))' >/dev/null
 "$binary" click "#action" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action"' >/dev/null
+  | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action" and .target.url == .after_target.url and .final_target.url == .after_target.url and .page_state.same_target == true and .page_state.url_changed == false' >/dev/null
 "$binary" fill "#agent-input" "filled value" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.value == "filled value"' >/dev/null
 "$binary" type "#agent-input" " plus typed" --state-dir "$state_dir/cdp-state" --json \

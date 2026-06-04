@@ -48,7 +48,7 @@ func TestClickJSON(t *testing.T) {
 
 func TestClickRawInputVerifiedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
-		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterTitle": "Ready Page", "afterURL": "https://example.test/ready"},
 	})
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
@@ -60,13 +60,37 @@ func TestClickRawInputVerifiedJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK    bool `json:"ok"`
+		OK     bool `json:"ok"`
+		Target struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"target"`
+		BeforeTarget struct {
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"before_target"`
+		AfterTarget struct {
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"after_target"`
+		FinalTarget struct {
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"final_target"`
+		PageState struct {
+			SameTarget   bool `json:"same_target"`
+			URLChanged   bool `json:"url_changed"`
+			TitleChanged bool `json:"title_changed"`
+		} `json:"page_state"`
 		Click struct {
-			Clicked  bool    `json:"clicked"`
-			Strategy string  `json:"strategy"`
-			X        float64 `json:"x"`
-			Y        float64 `json:"y"`
-			Verified *bool   `json:"verified"`
+			Clicked    bool    `json:"clicked"`
+			Strategy   string  `json:"strategy"`
+			X          float64 `json:"x"`
+			Y          float64 `json:"y"`
+			Verified   *bool   `json:"verified"`
+			FinalTitle string  `json:"final_title"`
+			FinalURL   string  `json:"final_url"`
 		} `json:"click"`
 		Verification struct {
 			Matched bool `json:"matched"`
@@ -77,6 +101,12 @@ func TestClickRawInputVerifiedJSON(t *testing.T) {
 	}
 	if !got.OK || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.X != 310 || got.Click.Y != 120 || got.Click.Verified == nil || !*got.Click.Verified || !got.Verification.Matched {
 		t.Fatalf("raw click = %+v, want verified raw-input click", got)
+	}
+	if got.Target.Title != "Ready Page" || got.Target.URL != "https://example.test/ready" || got.BeforeTarget.URL != "https://example.test/app" || got.AfterTarget.URL != got.Target.URL || got.FinalTarget.URL != got.Target.URL || got.Click.FinalURL != got.Target.URL || got.Click.FinalTitle != got.Target.Title {
+		t.Fatalf("raw click final target = %+v, want refreshed final metadata", got)
+	}
+	if !got.PageState.SameTarget || !got.PageState.URLChanged || !got.PageState.TitleChanged {
+		t.Fatalf("raw click page state = %+v, want same target with changed url/title", got.PageState)
 	}
 }
 
@@ -148,14 +178,20 @@ func TestClickDiagnosticsArtifactJSON(t *testing.T) {
 			Path string `json:"path"`
 		} `json:"artifact"`
 		Diagnostics struct {
-			Selector string `json:"selector"`
-			Strategy string `json:"strategy"`
+			Selector    string `json:"selector"`
+			Strategy    string `json:"strategy"`
+			AfterTarget struct {
+				URL string `json:"url"`
+			} `json:"after_target"`
+			PageState struct {
+				SameTarget bool `json:"same_target"`
+			} `json:"page_state"`
 		} `json:"diagnostics"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("diagnostic click output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Artifact.Path != outPath || got.Diagnostics.Selector != "main" || got.Diagnostics.Strategy != "raw-input" {
+	if !got.OK || got.Artifact.Path != outPath || got.Diagnostics.Selector != "main" || got.Diagnostics.Strategy != "raw-input" || got.Diagnostics.AfterTarget.URL != "https://example.test/app" || !got.Diagnostics.PageState.SameTarget {
 		t.Fatalf("diagnostic click = %+v, want artifact metadata", got)
 	}
 	if _, err := os.Stat(outPath); err != nil {

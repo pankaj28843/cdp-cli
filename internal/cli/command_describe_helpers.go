@@ -242,6 +242,7 @@ func commandExamples(path string) []string {
 		"cdp click": {
 			"cdp click 'button.submit' --json",
 			"cdp click '[data-testid=row]' --strategy raw-input --activate --wait-text 'Opened' --timeout 10s --json",
+			"cdp click 'button[type=submit]' --wait-text 'Results' --json",
 			"cdp click 'button.submit' --wait-selector '.toast-success' --diagnostics-out tmp/click.local.json --json",
 		},
 		"cdp text": {
