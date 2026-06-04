@@ -74,7 +74,7 @@ DEMO_HTML = """<!doctype html>
         Read-only notes
         <textarea id="readonly-notes" readonly>locked</textarea>
       </label>
-      <div id="drag-target" draggable="true">Drag target</div>
+      <div id="drag-target" data-testid="drag-target" draggable="true">Drag target</div>
     </article>
     <p class="overflow">This sentence intentionally overflows its box for layout diagnostics.</p>
     <output id="status">booting</output>

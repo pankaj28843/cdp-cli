@@ -278,11 +278,13 @@ func commandExamples(path string) []string {
 		},
 		"cdp hover": {
 			"cdp hover button.primary --json",
-			"cdp hover '.card' --url-contains localhost --json",
+			"cdp hover 'Save changes' --by role --role button --trial --json",
+			"cdp hover '#covered-action' --force --url-contains localhost --json",
 		},
 		"cdp drag": {
 			"cdp drag '.draggable' 10 20 --json",
-			"cdp drag '#drag-handle' -8 12 --url-contains localhost --json",
+			"cdp drag drag-target 8 12 --by test-id --trial --json",
+			"cdp drag '#drag-handle' -8 12 --force --url-contains localhost --json",
 		},
 		"cdp frames": {
 			"cdp frames --json",

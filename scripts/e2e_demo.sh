@@ -198,10 +198,18 @@ require_artifact "$rendered_dir/links.json"
   | jq -e '.ok == true and .action == "typed" and .type.typing == true and .type.typed == " plus typed"' >/dev/null
 "$binary" press Enter --selector "#agent-input" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "pressed" and .press.dispatched == true and .press.key == "Enter"' >/dev/null
-"$binary" hover "#action" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "hovered" and .hover.hovered == true and .hover.count >= 1' >/dev/null
-"$binary" drag "#drag-target" 8 12 --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "dragged" and .drag.dragged == true and .drag.delta_x == 8 and .drag.delta_y == 12' >/dev/null
+"$binary" hover "Click target" --by role --role button --trial --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "trial" and .resolved_selector == "button#action" and .hover.trial == true and .hover.hovered == false and .actionability.actionable == true and ((.actionability.required_checks | index("enabled")) == null)' >/dev/null
+"$binary" hover "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "hovered" and .resolved_selector == "button#action" and .hover.hovered == true and .hover.count >= 1 and .actionability.actionable == true' >/dev/null
+"$binary" hover "#covered-action" --force --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "hovered" and .hover.hovered == true and .hover.force == true and .actionability.force == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.skipped == true' >/dev/null
+"$binary" drag "drag-target" 8 12 --by test-id --trial --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "trial" and .resolved_selector == "div#drag-target" and .drag.trial == true and .drag.dragged == false and .drag.delta_x == 8 and .drag.delta_y == 12 and .actionability.actionable == true and ((.actionability.required_checks | index("enabled")) == null)' >/dev/null
+"$binary" drag "drag-target" 8 12 --by test-id --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "dragged" and .resolved_selector == "div#drag-target" and .drag.dragged == true and .drag.delta_x == 8 and .drag.delta_y == 12 and .actionability.actionable == true' >/dev/null
+"$binary" drag "#covered-action" 8 12 --force --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "dragged" and .drag.dragged == true and .drag.force == true and .actionability.force == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.skipped == true' >/dev/null
 "$binary" frames --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.frames | length >= 1)' >/dev/null
 "$binary" dom query button --state-dir "$state_dir/cdp-state" --json \

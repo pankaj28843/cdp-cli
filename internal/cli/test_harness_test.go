@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -609,6 +610,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			role = "button"
 			placeholder = ""
 		}
+		if query == "Drag target" || query == "drag-target" {
+			selector = "div#drag-target"
+			tag = "div"
+			elementType = ""
+			role = ""
+			name = "Drag target"
+			placeholder = ""
+		}
 		disabled := false
 		readOnly := false
 		contentEditable := false
@@ -1156,6 +1165,12 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
 			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "overlay", "hit_role": "", "target_matches": false}
 		}
+		if selector == "div#drag-target" || selector == "#drag-target" {
+			tag = "div"
+			name = "Drag target"
+			rect = map[string]any{"x": 20, "y": 40, "width": 140, "height": 60}
+			point = map[string]any{"x": 90, "y": 70, "hit_tag": "div", "hit_id": "drag-target", "hit_role": "", "target_matches": true}
+		}
 		if selector == "input#q" {
 			tag = "input"
 			elementType = "search"
@@ -1215,23 +1230,47 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			supportsEditing = false
 		}
 		required := []string{"attached", "visible", "stable", "receives_events", "enabled"}
-		if action == "fill" {
+		switch action {
+		case "fill":
 			required = []string{"attached", "visible", "enabled", "editable"}
+		case "hover", "drag":
+			required = []string{"attached", "visible", "stable", "receives_events"}
+		}
+		requiredSet := map[string]bool{}
+		for _, checkName := range required {
+			requiredSet[checkName] = true
+		}
+		check := func(name string, passed bool, message string) map[string]any {
+			required := requiredSet[name]
+			out := map[string]any{"required": required, "passed": passed}
+			if !required {
+				out["skipped"] = true
+			}
+			if message != "" {
+				out["message"] = message
+			}
+			return out
 		}
 		checks := map[string]any{
-			"attached":        map[string]any{"required": true, "passed": count > 0},
-			"visible":         map[string]any{"required": true, "passed": visible, "message": map[bool]string{true: "", false: "element has empty box or hidden state"}[visible]},
-			"stable":          map[string]any{"required": action == "click", "passed": stable, "skipped": action != "click", "message": map[bool]string{true: "", false: "bounding box changed across animation frames"}[stable]},
-			"receives_events": map[string]any{"required": action == "click", "passed": receivesEvents, "skipped": action != "click", "message": map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]},
-			"enabled":         map[string]any{"required": true, "passed": enabled, "message": map[bool]string{true: "", false: "element is disabled"}[enabled]},
-			"editable":        map[string]any{"required": action == "fill", "passed": editable, "skipped": action != "fill", "message": map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]},
+			"attached":        check("attached", count > 0, map[bool]string{true: "", false: "selector matched no elements"}[count > 0]),
+			"visible":         check("visible", visible, map[bool]string{true: "", false: "element has empty box or hidden state"}[visible]),
+			"stable":          check("stable", stable, map[bool]string{true: "", false: "bounding box changed across animation frames"}[stable]),
+			"receives_events": check("receives_events", receivesEvents, map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]),
+			"enabled":         check("enabled", enabled, map[bool]string{true: "", false: "element is disabled"}[enabled]),
+			"editable":        check("editable", editable, map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]),
 			"in_viewport":     map[string]any{"required": false, "passed": visible, "skipped": true},
 		}
-		actionable := count > 0 && visible && enabled
-		if action == "click" {
-			actionable = actionable && stable && receivesEvents
-		} else {
-			actionable = actionable && editable
+		passedByName := map[string]bool{
+			"attached":        count > 0,
+			"visible":         visible,
+			"stable":          stable,
+			"receives_events": receivesEvents,
+			"enabled":         enabled,
+			"editable":        editable,
+		}
+		actionable := true
+		for _, checkName := range required {
+			actionable = actionable && passedByName[checkName]
 		}
 		return map[string]any{
 			"result": map[string]any{
@@ -1264,6 +1303,78 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 				},
 			},
 		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_hover__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "main"
+		}
+		count := 1
+		x := 310.0
+		y := 120.0
+		if selector == "button#submit" || selector == "button#covered" {
+			x = 160
+			y = 40
+		}
+		if selector == "div#drag-target" || selector == "#drag-target" {
+			x = 90
+			y = 70
+		}
+		if selector == "#missing" {
+			count = 0
+		}
+		value := map[string]any{
+			"url":      "https://example.test/app",
+			"title":    "Example App",
+			"selector": selector,
+			"count":    count,
+			"hovered":  count > 0,
+			"x":        x,
+			"y":        y,
+		}
+		if count == 0 {
+			value["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_drag__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "main"
+		}
+		dx := expressionIntArg(req.Expression, "const deltaX = ")
+		dy := expressionIntArg(req.Expression, "const deltaY = ")
+		count := 1
+		startX := 310.0
+		startY := 120.0
+		if selector == "button#submit" || selector == "button#covered" {
+			startX = 160
+			startY = 40
+		}
+		if selector == "div#drag-target" || selector == "#drag-target" {
+			startX = 90
+			startY = 70
+		}
+		if selector == "#missing" {
+			count = 0
+		}
+		value := map[string]any{
+			"url":      "https://example.test/app",
+			"title":    "Example App",
+			"selector": selector,
+			"count":    count,
+			"dragged":  count > 0,
+			"delta_x":  dx,
+			"delta_y":  dy,
+			"start_x":  startX,
+			"start_y":  startY,
+			"end_x":    startX + float64(dx),
+			"end_y":    startY + float64(dy),
+		}
+		if count == 0 {
+			value["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_click_point__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")
@@ -1817,4 +1928,18 @@ func expressionStringArg(expression, prefix string) string {
 		start += end + 1
 	}
 	return ""
+}
+
+func expressionIntArg(expression, prefix string) int {
+	idx := strings.Index(expression, prefix)
+	if idx < 0 {
+		return 0
+	}
+	start := idx + len(prefix)
+	end := strings.Index(expression[start:], ";")
+	if end < 0 {
+		return 0
+	}
+	value, _ := strconv.Atoi(strings.TrimSpace(expression[start : start+end]))
+	return value
 }

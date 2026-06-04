@@ -113,7 +113,7 @@ func applyForceActionabilitySkips(result *actionabilityResult, action string) {
 
 func actionabilityForceSkippedChecks(action string) []string {
 	switch action {
-	case "click":
+	case "click", "hover", "drag":
 		return []string{"receives_events"}
 	case "fill":
 		return []string{"visible"}
@@ -163,6 +163,8 @@ func actionabilityRemediations(action, query, selector string, opts locatorActio
 	commands := []string{locatorActionFindCommand(query, opts), "cdp dom query " + shellQuote(selector) + " --json"}
 	if action == "fill" {
 		commands = append(commands, "cdp assert editable "+shellQuote(selector)+" --json")
+	} else if action == "hover" || action == "drag" {
+		commands = append(commands, "cdp assert visible "+shellQuote(selector)+" --json", "cdp layout overflow --json")
 	} else {
 		commands = append(commands, "cdp assert visible "+shellQuote(selector)+" --json", "cdp assert enabled "+shellQuote(selector)+" --json")
 	}
@@ -234,8 +236,13 @@ func actionabilityExpression(selector, action string) string {
     if (message) out.message = message;
     return out;
   };
+  const requiredChecksFor = () => {
+    if (action === "fill") return ["attached", "visible", "enabled", "editable"];
+    if (action === "hover" || action === "drag") return ["attached", "visible", "stable", "receives_events"];
+    return ["attached", "visible", "stable", "receives_events", "enabled"];
+  };
   const emptyChecks = () => {
-    const requiredChecks = action === "fill" ? ["attached", "visible", "enabled", "editable"] : ["attached", "visible", "stable", "receives_events", "enabled"];
+    const requiredChecks = requiredChecksFor();
     const checks = {
       attached: check(true, false, "selector matched no elements"),
       visible: check(requiredChecks.includes("visible"), false, "no element to inspect"),
@@ -279,7 +286,7 @@ func actionabilityExpression(selector, action string) string {
         const hit = inViewport ? document.elementFromPoint(Math.min(Math.max(x, 0), Math.max(window.innerWidth - 1, 0)), Math.min(Math.max(y, 0), Math.max(window.innerHeight - 1, 0))) : null;
         const targetMatches = Boolean(hit && (hit === el || el.contains(hit)));
         const editable = readonly.supportsEditing && !disabled && !readonly.readOnly;
-        const requiredChecks = action === "fill" ? ["attached", "visible", "enabled", "editable"] : ["attached", "visible", "stable", "receives_events", "enabled"];
+        const requiredChecks = requiredChecksFor();
         const checks = {
           attached: check(true, elements.length > 0, ""),
           visible: check(requiredChecks.includes("visible"), visible, visible ? "" : "element has empty box or hidden/display-none/visibility-hidden state"),

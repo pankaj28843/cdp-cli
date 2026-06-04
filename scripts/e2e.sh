@@ -146,8 +146,8 @@ rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
 "$binary" describe --command "fill" --json | jq -e '.ok == true and .commands.name == "fill" and (.commands.examples | any(contains("--by label"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("--force"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "trial")) and (.commands.flags[] | select(.name == "force"))' >/dev/null
 "$binary" describe --command "type" --json | jq -e '.ok == true and .commands.name == "type" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "press" --json | jq -e '.ok == true and .commands.name == "press" and (.commands.examples | length > 0)' >/dev/null
-"$binary" describe --command "hover" --json | jq -e '.ok == true and .commands.name == "hover" and (.commands.examples | length > 0)' >/dev/null
-"$binary" describe --command "drag" --json | jq -e '.ok == true and .commands.name == "drag" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "hover" --json | jq -e '.ok == true and .commands.name == "hover" and (.commands.examples | any(contains("--by role"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("--force"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "trial")) and (.commands.flags[] | select(.name == "force"))' >/dev/null
+"$binary" describe --command "drag" --json | jq -e '.ok == true and .commands.name == "drag" and (.commands.examples | any(contains("--by test-id"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("--force"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "trial")) and (.commands.flags[] | select(.name == "force"))' >/dev/null
 "$binary" describe --command "frames" --json | jq -e '.ok == true and .commands.name == "frames" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "pages" --json | jq -e '.ok == true and .commands.name == "pages" and (.commands.examples | any(contains("--title-contains")))' >/dev/null
 "$binary" describe --command "eval" --json | jq -e '.ok == true and .commands.name == "eval" and (.commands.examples | any(contains("--title-contains")))' >/dev/null
@@ -259,8 +259,8 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema fill --json | jq -e '.ok == true and .schema.name == "fill" and (.schema.fields | map(.name) | index("fill")) and (.schema.fields | map(.name) | index("actionability")) and (.schema.fields | map(.name) | index("locator")) and (.schema.fields | map(.name) | index("resolved_selector"))' >/dev/null
 "$binary" schema type --json | jq -e '.ok == true and .schema.name == "type" and (.schema.fields | map(.name) | index("type"))' >/dev/null
 "$binary" schema press --json | jq -e '.ok == true and .schema.name == "press" and (.schema.fields | map(.name) | index("press"))' >/dev/null
-"$binary" schema hover --json | jq -e '.ok == true and .schema.name == "hover" and (.schema.fields | map(.name) | index("hover"))' >/dev/null
-"$binary" schema drag --json | jq -e '.ok == true and .schema.name == "drag" and (.schema.fields | map(.name) | index("drag"))' >/dev/null
+"$binary" schema hover --json | jq -e '.ok == true and .schema.name == "hover" and (.schema.fields | map(.name) | index("hover")) and (.schema.fields | map(.name) | index("actionability")) and (.schema.fields | map(.name) | index("locator")) and (.schema.fields | map(.name) | index("resolved_selector"))' >/dev/null
+"$binary" schema drag --json | jq -e '.ok == true and .schema.name == "drag" and (.schema.fields | map(.name) | index("drag")) and (.schema.fields | map(.name) | index("actionability")) and (.schema.fields | map(.name) | index("locator")) and (.schema.fields | map(.name) | index("resolved_selector"))' >/dev/null
 "$binary" schema frames --json | jq -e '.ok == true and .schema.name == "frames" and (.schema.fields | map(.name) | index("frames"))' >/dev/null
 
 "$binary" describe --command "a11y tree" --json | jq -e '.ok == true and .commands.name == "tree" and (.commands.flags[] | select(.name == "depth"))' >/dev/null

@@ -84,6 +84,8 @@ type hoverResult struct {
 	Selector string     `json:"selector"`
 	Count    int        `json:"count"`
 	Hovered  bool       `json:"hovered"`
+	Trial    bool       `json:"trial,omitempty"`
+	Force    bool       `json:"force,omitempty"`
 	X        float64    `json:"x"`
 	Y        float64    `json:"y"`
 	Error    *evalError `json:"error,omitempty"`
@@ -95,6 +97,8 @@ type dragResult struct {
 	Selector string     `json:"selector"`
 	Count    int        `json:"count"`
 	Dragged  bool       `json:"dragged"`
+	Trial    bool       `json:"trial,omitempty"`
+	Force    bool       `json:"force,omitempty"`
 	DeltaX   int        `json:"delta_x"`
 	DeltaY   int        `json:"delta_y"`
 	StartX   float64    `json:"start_x"`
@@ -488,6 +492,8 @@ func locatorActionRemediations(action, query string, opts locatorActionOptions) 
 	switch action {
 	case "fill":
 		example += " <value>"
+	case "drag":
+		example += " 10 20"
 	case "assert value", "assert text":
 		example += " <expected>"
 	}
@@ -953,11 +959,17 @@ func (a *app) newHoverCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var locatorOpts locatorActionOptions
+	var trial bool
+	var force bool
 	cmd := &cobra.Command{
-		Use:   "hover <selector>",
-		Short: "Dispatch pointer hover events over the first matching element",
+		Use:   "hover <selector-or-locator>",
+		Short: "Dispatch pointer hover events over the first matching element by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -967,15 +979,62 @@ func (a *app) newHoverCommand() *cobra.Command {
 			}
 			defer session.Close(ctx)
 
-			var result hoverResult
-			if err := evaluateJSONValue(ctx, session, hoverExpression(args[0]), "hover", &result); err != nil {
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "hover")
+			if err != nil {
 				return err
 			}
+			actionability, err := evaluateActionability(ctx, session, selector, "hover")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp hover 'button.primary' --trial --json")
+			}
+			prepareActionability(&actionability, "hover", trial, force)
+			if trial {
+				result := hoverResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Hovered: false, Trial: true, Force: force, X: actionability.Point.X, Y: actionability.Point.Y}
+				report := map[string]any{
+					"ok":            actionability.Actionable,
+					"action":        "trial",
+					"target":        pageRow(target),
+					"hover":         result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				if !actionability.Actionable {
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("hover", selector, actionability), ExitCheckFailed, actionabilityRemediations("hover", args[0], selector, locatorOpts), report)
+				}
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
+			}
+			if !actionability.Actionable {
+				result := hoverResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Hovered: false, Force: force, X: actionability.Point.X, Y: actionability.Point.Y}
+				report := map[string]any{
+					"ok":            false,
+					"action":        "blocked",
+					"target":        pageRow(target),
+					"hover":         result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("hover", selector, actionability), ExitCheckFailed, actionabilityRemediations("hover", args[0], selector, locatorOpts), report)
+			}
+
+			var result hoverResult
+			if err := evaluateJSONValue(ctx, session, hoverExpression(selector), "hover", &result); err != nil {
+				return err
+			}
+			result.Force = force
 			if result.Error != nil {
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("hover %q: %s", args[0], result.Error.Message),
+					fmt.Sprintf("hover %q: %s", selector, result.Error.Message),
 					ExitUsage,
 					[]string{"cdp hover 'button.primary' --json"},
 				)
@@ -989,17 +1048,26 @@ func (a *app) newHoverCommand() *cobra.Command {
 					[]string{"cdp hover 'button.primary' --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("hovered\t%s\t%s", target.TargetID, result.Selector), map[string]any{
-				"ok":     true,
-				"action": "hovered",
-				"target": pageRow(target),
-				"hover":  result,
-			})
+			report := map[string]any{
+				"ok":            true,
+				"action":        "hovered",
+				"target":        pageRow(target),
+				"hover":         result,
+				"actionability": actionability,
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			return a.render(ctx, fmt.Sprintf("hovered\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching hover events")
+	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential hover actionability checks and record skipped checks in JSON")
 	return cmd
 }
 
@@ -1007,11 +1075,17 @@ func (a *app) newDragCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var locatorOpts locatorActionOptions
+	var trial bool
+	var force bool
 	cmd := &cobra.Command{
-		Use:   "drag <selector> <dx> <dy>",
-		Short: "Drag the first matching element by a delta",
+		Use:   "drag <selector-or-locator> <dx> <dy>",
+		Short: "Drag the first matching element by a delta using CSS selector or strict locator",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -1030,15 +1104,62 @@ func (a *app) newDragCommand() *cobra.Command {
 			}
 			defer session.Close(ctx)
 
-			var result dragResult
-			if err := evaluateJSONValue(ctx, session, dragExpression(args[0], dx, dy), "drag", &result); err != nil {
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "drag")
+			if err != nil {
 				return err
 			}
+			actionability, err := evaluateActionability(ctx, session, selector, "drag")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp drag '#drag-me' 10 20 --trial --json")
+			}
+			prepareActionability(&actionability, "drag", trial, force)
+			if trial {
+				result := dragResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Dragged: false, Trial: true, Force: force, DeltaX: dx, DeltaY: dy, StartX: actionability.Point.X, StartY: actionability.Point.Y, EndX: actionability.Point.X + float64(dx), EndY: actionability.Point.Y + float64(dy)}
+				report := map[string]any{
+					"ok":            actionability.Actionable,
+					"action":        "trial",
+					"target":        pageRow(target),
+					"drag":          result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				if !actionability.Actionable {
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("drag", selector, actionability), ExitCheckFailed, actionabilityRemediations("drag", args[0], selector, locatorOpts), report)
+				}
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
+			}
+			if !actionability.Actionable {
+				result := dragResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Dragged: false, Force: force, DeltaX: dx, DeltaY: dy, StartX: actionability.Point.X, StartY: actionability.Point.Y, EndX: actionability.Point.X + float64(dx), EndY: actionability.Point.Y + float64(dy)}
+				report := map[string]any{
+					"ok":            false,
+					"action":        "blocked",
+					"target":        pageRow(target),
+					"drag":          result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("drag", selector, actionability), ExitCheckFailed, actionabilityRemediations("drag", args[0], selector, locatorOpts), report)
+			}
+
+			var result dragResult
+			if err := evaluateJSONValue(ctx, session, dragExpression(selector, dx, dy), "drag", &result); err != nil {
+				return err
+			}
+			result.Force = force
 			if result.Error != nil {
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("drag %q: %s", args[0], result.Error.Message),
+					fmt.Sprintf("drag %q: %s", selector, result.Error.Message),
 					ExitUsage,
 					[]string{"cdp drag '#drag-me' 10 20 --json"},
 				)
@@ -1052,16 +1173,25 @@ func (a *app) newDragCommand() *cobra.Command {
 					[]string{"cdp drag '#drag-me' 10 20 --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("dragged\t%s\t%s", target.TargetID, result.Selector), map[string]any{
-				"ok":     true,
-				"action": "dragged",
-				"target": pageRow(target),
-				"drag":   result,
-			})
+			report := map[string]any{
+				"ok":            true,
+				"action":        "dragged",
+				"target":        pageRow(target),
+				"drag":          result,
+				"actionability": actionability,
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			return a.render(ctx, fmt.Sprintf("dragged\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching drag events")
+	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential drag actionability checks and record skipped checks in JSON")
 	return cmd
 }

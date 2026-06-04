@@ -643,6 +643,292 @@ func TestFillForceReadonlyStillFailsJSON(t *testing.T) {
 	}
 }
 
+func TestHoverByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"hover", "Search", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("hover by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Role    string `json:"role"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Hover struct {
+			Selector string `json:"selector"`
+			Hovered  bool   `json:"hovered"`
+			Force    bool   `json:"force"`
+		} `json:"hover"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Enabled struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("hover by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "hovered" || got.ResolvedSelector != "button#submit" || got.Locator.By != "role" || got.Locator.Query != "Search" || got.Locator.Role != "button" || !got.Locator.Strict || len(got.Locator.Matches) != 1 {
+		t.Fatalf("hover by role locator = %+v, want strict button locator", got)
+	}
+	if got.Locator.Matches[0].SelectorHint != "button#submit" || got.Locator.Matches[0].Role != "button" || got.Hover.Selector != "button#submit" || !got.Hover.Hovered || got.Hover.Force || !got.Actionability.Actionable || len(got.Actionability.Required) != 4 || containsString(got.Actionability.Required, "enabled") || got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Skipped {
+		t.Fatalf("hover by role action = %+v, want hover with pointer-only actionability checks", got)
+	}
+}
+
+func TestHoverActionabilityFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"hover", "button#covered", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("covered hover exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Hover  struct {
+				Hovered bool `json:"hovered"`
+				Force   bool `json:"force"`
+			} `json:"hover"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Force      bool `json:"force"`
+				Checks     struct {
+					ReceivesEvents struct {
+						Required bool   `json:"required"`
+						Passed   bool   `json:"passed"`
+						Skipped  bool   `json:"skipped"`
+						Message  string `json:"message"`
+					} `json:"receives_events"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("covered hover output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Hover.Hovered || got.Data.Hover.Force || got.Data.Actionability.Actionable || got.Data.Actionability.Force || !got.Data.Actionability.Checks.ReceivesEvents.Required || got.Data.Actionability.Checks.ReceivesEvents.Passed || got.Data.Actionability.Checks.ReceivesEvents.Skipped || got.Data.Actionability.Checks.ReceivesEvents.Message == "" {
+		t.Fatalf("covered hover = %+v, want failed receives-events actionability", got)
+	}
+}
+
+func TestHoverForceSkipsReceivesEventsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"hover", "button#covered", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("force covered hover exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Hover  struct {
+			Hovered bool `json:"hovered"`
+			Force   bool `json:"force"`
+		} `json:"hover"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Force      bool     `json:"force"`
+			Skipped    []string `json:"skipped_checks"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Skipped  bool   `json:"skipped"`
+					Message  string `json:"message"`
+				} `json:"receives_events"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force covered hover output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "hovered" || !got.Hover.Hovered || !got.Hover.Force || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "receives_events") || got.Actionability.Checks.ReceivesEvents.Required || got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.ReceivesEvents.Skipped || !strings.Contains(got.Actionability.Checks.ReceivesEvents.Message, "--force") {
+		t.Fatalf("force covered hover = %+v, want receives-events skipped by force", got)
+	}
+}
+
+func TestDragTrialByTestIDLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"drag", "drag-target", "8", "12", "--by", "test-id", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("drag trial by test-id exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Drag struct {
+			Selector string  `json:"selector"`
+			Dragged  bool    `json:"dragged"`
+			Trial    bool    `json:"trial"`
+			DeltaX   int     `json:"delta_x"`
+			DeltaY   int     `json:"delta_y"`
+			StartX   float64 `json:"start_x"`
+			StartY   float64 `json:"start_y"`
+			EndX     float64 `json:"end_x"`
+			EndY     float64 `json:"end_y"`
+		} `json:"drag"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Trial      bool     `json:"trial"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Enabled struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("drag trial by test-id output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.ResolvedSelector != "div#drag-target" || got.Locator.By != "test-id" || got.Locator.Query != "drag-target" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].SelectorHint != "div#drag-target" {
+		t.Fatalf("drag trial locator = %+v, want strict test-id locator", got)
+	}
+	if got.Drag.Selector != "div#drag-target" || got.Drag.Dragged || !got.Drag.Trial || got.Drag.DeltaX != 8 || got.Drag.DeltaY != 12 || got.Drag.StartX != 90 || got.Drag.StartY != 70 || got.Drag.EndX != 98 || got.Drag.EndY != 82 || !got.Actionability.Actionable || !got.Actionability.Trial || len(got.Actionability.Required) != 4 || containsString(got.Actionability.Required, "enabled") || got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Skipped {
+		t.Fatalf("drag trial action = %+v, want non-dispatching pointer-only actionability checks", got)
+	}
+}
+
+func TestDragActionabilityFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"drag", "button#covered", "8", "12", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("covered drag exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Drag   struct {
+				Dragged bool `json:"dragged"`
+				Force   bool `json:"force"`
+			} `json:"drag"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Checks     struct {
+					ReceivesEvents struct {
+						Required bool   `json:"required"`
+						Passed   bool   `json:"passed"`
+						Skipped  bool   `json:"skipped"`
+						Message  string `json:"message"`
+					} `json:"receives_events"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("covered drag output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Drag.Dragged || got.Data.Drag.Force || got.Data.Actionability.Actionable || !got.Data.Actionability.Checks.ReceivesEvents.Required || got.Data.Actionability.Checks.ReceivesEvents.Passed || got.Data.Actionability.Checks.ReceivesEvents.Skipped || got.Data.Actionability.Checks.ReceivesEvents.Message == "" {
+		t.Fatalf("covered drag = %+v, want failed receives-events actionability", got)
+	}
+}
+
+func TestDragForceSkipsReceivesEventsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"drag", "button#covered", "8", "12", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("force covered drag exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Drag   struct {
+			Dragged bool `json:"dragged"`
+			Force   bool `json:"force"`
+			DeltaX  int  `json:"delta_x"`
+			DeltaY  int  `json:"delta_y"`
+		} `json:"drag"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Force      bool     `json:"force"`
+			Skipped    []string `json:"skipped_checks"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Skipped  bool   `json:"skipped"`
+					Message  string `json:"message"`
+				} `json:"receives_events"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force covered drag output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "dragged" || !got.Drag.Dragged || !got.Drag.Force || got.Drag.DeltaX != 8 || got.Drag.DeltaY != 12 || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "receives_events") || got.Actionability.Checks.ReceivesEvents.Required || got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.ReceivesEvents.Skipped || !strings.Contains(got.Actionability.Checks.ReceivesEvents.Message, "--force") {
+		t.Fatalf("force covered drag = %+v, want receives-events skipped by force", got)
+	}
+}
+
 func TestActionLocatorRoleRequiresRoleFlag(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"click", "Submit", "--by", "role", "--json"}, &out, &errOut, cli.BuildInfo{})
