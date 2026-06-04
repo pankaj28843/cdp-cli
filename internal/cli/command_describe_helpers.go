@@ -249,6 +249,15 @@ func commandExamples(path string) []string {
 			"cdp text main --json",
 			"cdp text article --limit 10 --url-contains localhost --json",
 		},
+		"cdp locator": {
+			"cdp locator find Search --by label --json",
+			"cdp locator find Submit --by role --role button --json",
+		},
+		"cdp locator find": {
+			"cdp locator find Search --by label --json",
+			"cdp locator find Submit --by role --role button --json",
+			"cdp locator find cdp_demo --by test-id --test-id-attr data-testid --json",
+		},
 		"cdp fill": {
 			"cdp fill input[name='email'] user@example.com --json",
 			"cdp fill textarea#notes \"first line\\nsecond line\" --url-contains localhost --json",

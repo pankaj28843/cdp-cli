@@ -585,6 +585,41 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		Expression string `json:"expression"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if strings.Contains(req.Expression, "__cdp_cli_locator_find__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":            "https://example.test/app",
+					"title":          "Example App",
+					"by":             "label",
+					"query":          "Search",
+					"exact":          false,
+					"include_hidden": false,
+					"test_id_attr":   "data-testid",
+					"count":          1,
+					"returned":       1,
+					"strict":         true,
+					"matches": []map[string]any{{
+						"index":              0,
+						"selector_hint":      "input#q",
+						"selector_ambiguous": false,
+						"tag":                "input",
+						"type":               "search",
+						"role":               "searchbox",
+						"name":               "Search",
+						"text":               "",
+						"placeholder":        "Search",
+						"visible":            true,
+						"disabled":           false,
+						"read_only":          false,
+						"content_editable":   false,
+						"rect":               map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
+					}},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_empty_diagnostics__") {
 		return map[string]any{
 			"result": map[string]any{

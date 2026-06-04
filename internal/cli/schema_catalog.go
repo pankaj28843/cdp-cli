@@ -335,6 +335,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "items", Type: "array<text_item>", Required: true, Description: "Text items duplicated for jq convenience."},
 			},
 		},
+		"locator-find": {
+			Name:        "locator-find",
+			Description: "User-facing locator discovery by role, text, label, placeholder, alt text, title, test id, or CSS.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when locator discovery completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "locator", Type: "locator_find_result", Required: true, Description: "Requested strategy, query, strictness, counts, and bounded matches."},
+				{Name: "matches", Type: "array<locator_match>", Required: true, Description: "Matches duplicated for jq convenience with selector hints, role/name/text, visibility, and geometry."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Suggested follow-up commands using a unique selector hint when available."},
+			},
+		},
 		"click": {
 			Name:        "click",
 			Description: "DOM or raw-input mouse click operation with optional post-action verification and final target evidence.",

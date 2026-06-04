@@ -130,6 +130,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newFramesCommand())
 	root.AddCommand(a.newObserveCommand())
 	root.AddCommand(a.newTextCommand())
+	root.AddCommand(a.newLocatorCommand())
 	root.AddCommand(a.newFormCommand())
 	root.AddCommand(a.newAssertCommand())
 	root.AddCommand(a.newClickCommand())

@@ -172,6 +172,7 @@ page_cleanup_short="$(jq -r '.commands.short' <<<"$page_cleanup_describe")"
 rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null
 "$binary" describe --command "text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "locator find" --json | jq -e '.ok == true and .commands.name == "find" and (.commands.examples | any(contains("--by role"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role"))' >/dev/null
 "$binary" describe --command "html" --json | jq -e '.ok == true and .commands.name == "html" and (.commands.examples | any(contains("--diagnose-empty"))) and (.commands.flags[] | select(.name == "diagnose-empty"))' >/dev/null
 "$binary" describe --command "dom query" --json | jq -e '.ok == true and .commands.name == "query" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "css inspect" --json | jq -e '.ok == true and .commands.name == "inspect" and (.commands.examples | length > 0)' >/dev/null
@@ -220,6 +221,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema storage-diff --json | jq -e '.ok == true and .schema.name == "storage-diff" and (.schema.fields | map(.name) | index("diff"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text"' >/dev/null
+"$binary" schema locator-find --json | jq -e '.ok == true and .schema.name == "locator-find" and (.schema.fields | map(.name) | index("locator")) and (.schema.fields | map(.name) | index("matches")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema html --json | jq -e '.ok == true and .schema.name == "html" and (.schema.fields | map(.name) | index("diagnostics"))' >/dev/null
 "$binary" schema dom-query --json | jq -e '.ok == true and .schema.name == "dom-query"' >/dev/null
 "$binary" schema css-inspect --json | jq -e '.ok == true and .schema.name == "css-inspect"' >/dev/null
