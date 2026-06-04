@@ -47,6 +47,7 @@ DEMO_HTML = """<!doctype html>
     #agent-input { max-width: 320px; padding: 8px; }
     #drag-target { display: inline-block; margin-top: 12px; padding: 8px 12px; background: #f0f4ff; border: 1px solid #99a; cursor: grab; }
     .overflow { width: 160px; white-space: nowrap; overflow: hidden; }
+    .hidden-fixture { display: none; }
   </style>
 </head>
 <body>
@@ -56,6 +57,7 @@ DEMO_HTML = """<!doctype html>
       <h2>Agent-visible post</h2>
       <p>Stable text for snapshot, text extraction, and workflow checks.</p>
       <button id="action">Click target</button>
+      <button id="dismiss" class="hidden-fixture">Dismiss</button>
       <label class="agent-form">
         Agent input
         <input id="agent-input" value="initial" autocomplete="off">

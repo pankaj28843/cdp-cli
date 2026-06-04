@@ -531,6 +531,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
+		"assert-hidden": {
+			Name:        "assert-hidden",
+			Description: "Element hidden-or-absent assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when no selected element is visible."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_visibility_result", Required: true, Description: "Selector or locator query, expected state, pass/fail status, matched count, visible/hidden counts, and bounded item diagnostics."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css; zero matches are allowed for hidden assertions."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting, omitted when a locator has zero matches."},
+			},
+		},
 		"snapshot": {
 			Name:        "snapshot",
 			Description: "Visible text extracted from selected page elements.",

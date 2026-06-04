@@ -609,6 +609,27 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			role = "button"
 			placeholder = ""
 		}
+		if query == "Gone" {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":            "https://example.test/app",
+						"title":          "Example App",
+						"by":             by,
+						"query":          query,
+						"role":           roleQuery,
+						"exact":          false,
+						"include_hidden": includeHidden,
+						"test_id_attr":   "data-testid",
+						"count":          0,
+						"returned":       0,
+						"strict":         false,
+						"matches":        []map[string]any{},
+					},
+				},
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -858,6 +879,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"selector":      selector,
 					"expected":      "visible",
 					"visible":       visibleCount > 0,
+					"hidden":        visibleCount == 0,
 					"passed":        visibleCount > 0,
 					"count":         count,
 					"visible_count": visibleCount,

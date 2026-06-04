@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
 
@@ -67,6 +69,7 @@ type assertVisibilityResult struct {
 	Selector     string                 `json:"selector"`
 	Expected     string                 `json:"expected"`
 	Visible      bool                   `json:"visible"`
+	Hidden       bool                   `json:"hidden"`
 	Passed       bool                   `json:"passed"`
 	Count        int                    `json:"count"`
 	VisibleCount int                    `json:"visible_count"`
@@ -155,6 +158,7 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertValueCommand())
 	cmd.AddCommand(a.newAssertTextCommand())
 	cmd.AddCommand(a.newAssertVisibleCommand())
+	cmd.AddCommand(a.newAssertHiddenCommand())
 	return cmd
 }
 
@@ -277,49 +281,122 @@ func (a *app) newAssertVisibleCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{Use: "visible <selector-or-locator>", Short: "Assert an element is visible by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
-			return err
-		}
-		ctx, cancel := a.browserCommandContext(cmd)
-		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
-		if err != nil {
-			return err
-		}
-		defer session.Close(ctx)
-
-		resolveOpts := locatorOpts
-		if resolveOpts.By != "css" {
-			resolveOpts.IncludeHidden = true
-		}
-		selector, locator, err := resolveActionSelector(ctx, session, args[0], resolveOpts, "assert visible")
-		if err != nil {
-			return err
-		}
-		var got assertVisibilityResult
-		if err := evaluateJSONValue(ctx, session, assertVisibilityExpression(selector, 20), "assert visible", &got); err != nil {
-			return err
-		}
-		if got.Error != nil {
-			return invalidSelectorError(selector, got.Error, "cdp assert visible 'button[type=submit]' --json")
-		}
-		got.Expected = "visible"
-		got.Passed = got.Visible
-		report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
-		if locator != nil {
-			report["locator"] = locator
-			report["resolved_selector"] = selector
-		}
-		if !got.Passed {
-			return commandErrorWithData("assertion_failed", "check_failed", fmt.Sprintf("visible assertion failed for %q: %d visible of %d matched", selector, got.VisibleCount, got.Count), ExitCheckFailed, []string{locatorActionFindCommand(args[0], resolveOpts) + " --json", "cdp dom query " + shellQuote(selector) + " --json"}, report)
-		}
-		return a.render(ctx, "assertion passed", report)
+		return a.runAssertVisibilityCommand(cmd, args[0], "visible", locatorOpts, targetID, urlContains, titleContains)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
+}
+
+func (a *app) newAssertHiddenCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "hidden <selector-or-locator>", Short: "Assert an element is hidden or absent by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertVisibilityCommand(cmd, args[0], "hidden", locatorOpts, targetID, urlContains, titleContains)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel := a.browserCommandContext(cmd)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	resolveOpts := locatorOpts
+	if resolveOpts.By != "css" {
+		resolveOpts.IncludeHidden = true
+	}
+	selector := query
+	var locator *locatorFindResult
+	if resolveOpts.By != "css" {
+		if expected == "hidden" {
+			selector, locator, err = resolveOptionalHiddenAssertionSelector(ctx, session, query, resolveOpts)
+		} else {
+			selector, locator, err = resolveActionSelector(ctx, session, query, resolveOpts, "assert "+expected)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	var got assertVisibilityResult
+	if selector == "" && expected == "hidden" && locator != nil && locator.Count == 0 {
+		got = assertVisibilityResult{Selector: query, Expected: "hidden", Visible: false, Hidden: true, Passed: true, Count: 0, VisibleCount: 0, HiddenCount: 0}
+	} else {
+		if err := evaluateJSONValue(ctx, session, assertVisibilityExpression(selector, 20), "assert "+expected, &got); err != nil {
+			return err
+		}
+		if got.Error != nil {
+			return invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'button[type=submit]' --json")
+		}
+		got.Expected = expected
+		got.Hidden = got.VisibleCount == 0
+		got.Passed = got.Visible
+		if expected == "hidden" {
+			got.Passed = got.Hidden
+		}
+	}
+
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		if selector != "" {
+			report["resolved_selector"] = selector
+		}
+	}
+	if !got.Passed {
+		return commandErrorWithData("assertion_failed", "check_failed", visibilityAssertionFailureMessage(expected, selector, got), ExitCheckFailed, visibilityAssertionRemediations(query, selector, resolveOpts), report)
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
+func resolveOptionalHiddenAssertionSelector(ctx context.Context, session *cdp.PageSession, query string, opts locatorActionOptions) (string, *locatorFindResult, error) {
+	var result locatorFindResult
+	if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert hidden locator", &result); err != nil {
+		return "", nil, err
+	}
+	if result.Error != nil {
+		return "", &result, commandError("invalid_locator", "usage", fmt.Sprintf("assert hidden locator %s %q: %s", opts.By, query, result.Error.Message), ExitUsage, []string{"cdp locator find Search --by label --json", "cdp locator find Submit --by role --role button --json"})
+	}
+	if result.Count == 0 {
+		return "", &result, nil
+	}
+	if result.Count != 1 || len(result.Matches) != 1 {
+		return "", &result, commandError("ambiguous_locator", "usage", fmt.Sprintf("assert hidden locator %s %q matched %d elements; refine the locator before asserting", opts.By, query, result.Count), ExitUsage, locatorActionRemediations("assert hidden", query, opts))
+	}
+	match := result.Matches[0]
+	selector := strings.TrimSpace(match.SelectorHint)
+	if selector == "" || match.SelectorAmbiguous {
+		return "", &result, commandError("ambiguous_locator", "usage", fmt.Sprintf("assert hidden locator %s %q matched one element but did not produce a unique CSS selector hint", opts.By, query), ExitUsage, []string{locatorActionFindCommand(query, opts), "cdp snapshot --selector body --json"})
+	}
+	return selector, &result, nil
+}
+
+func visibilityAssertionFailureMessage(expected, selector string, got assertVisibilityResult) string {
+	if expected == "hidden" {
+		return fmt.Sprintf("hidden assertion failed for %q: %d visible of %d matched", selector, got.VisibleCount, got.Count)
+	}
+	return fmt.Sprintf("visible assertion failed for %q: %d visible of %d matched", selector, got.VisibleCount, got.Count)
+}
+
+func visibilityAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
+	if selector == "" {
+		selector = query
+	}
+	return []string{locatorActionFindCommand(query, opts), "cdp dom query " + shellQuote(selector) + " --json"}
 }
 
 func assertionMatch(actual, expected, mode string) (bool, error) {
@@ -404,12 +481,12 @@ func assertVisibilityExpression(selector string, limit int) string {
   try {
     elements = Array.from(document.querySelectorAll(selector));
   } catch (error) {
-    return { url: location.href, title: document.title, selector, expected: "visible", visible: false, passed: false, count: 0, visible_count: 0, hidden_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+    return { url: location.href, title: document.title, selector, expected: "visible", visible: false, hidden: false, passed: false, count: 0, visible_count: 0, hidden_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
   }
   const allItems = elements.map(itemFor);
   const visibleCount = allItems.filter((item) => item.visible).length;
   const hiddenCount = allItems.length - visibleCount;
-  return { url: location.href, title: document.title, selector, expected: "visible", visible: visibleCount > 0, passed: visibleCount > 0, count: allItems.length, visible_count: visibleCount, hidden_count: hiddenCount, items: allItems.slice(0, limit), marker };
+  return { url: location.href, title: document.title, selector, expected: "visible", visible: visibleCount > 0, hidden: visibleCount === 0, passed: visibleCount > 0, count: allItems.length, visible_count: visibleCount, hidden_count: hiddenCount, items: allItems.slice(0, limit), marker };
 })()`, jsStringLiteral(selector), limit)
 }
 

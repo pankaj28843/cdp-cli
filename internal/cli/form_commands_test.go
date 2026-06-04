@@ -237,6 +237,126 @@ func TestAssertVisibleFailureJSON(t *testing.T) {
 	}
 }
 
+func TestAssertHiddenCSSJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "hidden", "#hidden-button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert hidden css exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Assertion struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Visible      bool   `json:"visible"`
+			Hidden       bool   `json:"hidden"`
+			Passed       bool   `json:"passed"`
+			Count        int    `json:"count"`
+			VisibleCount int    `json:"visible_count"`
+			HiddenCount  int    `json:"hidden_count"`
+			Items        []struct {
+				Visible bool   `json:"visible"`
+				Hidden  bool   `json:"hidden"`
+				Display string `json:"display"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert hidden css output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Assertion.Selector != "#hidden-button" || got.Assertion.Expected != "hidden" || got.Assertion.Visible || !got.Assertion.Hidden || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.VisibleCount != 0 || got.Assertion.HiddenCount != 1 || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Visible || !got.Assertion.Items[0].Hidden || got.Assertion.Items[0].Display != "none" {
+		t.Fatalf("assert hidden css = %+v, want passing hidden assertion with item diagnostics", got)
+	}
+}
+
+func TestAssertHiddenMissingLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "hidden", "Gone", "--by", "text", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert hidden missing locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By            string `json:"by"`
+			Query         string `json:"query"`
+			IncludeHidden bool   `json:"include_hidden"`
+			Count         int    `json:"count"`
+			Returned      int    `json:"returned"`
+			Strict        bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Visible      bool   `json:"visible"`
+			Hidden       bool   `json:"hidden"`
+			Passed       bool   `json:"passed"`
+			Count        int    `json:"count"`
+			VisibleCount int    `json:"visible_count"`
+			HiddenCount  int    `json:"hidden_count"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert hidden missing locator output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "" || got.Locator.By != "text" || got.Locator.Query != "Gone" || !got.Locator.IncludeHidden || got.Locator.Count != 0 || got.Locator.Returned != 0 || got.Locator.Strict || got.Assertion.Selector != "Gone" || got.Assertion.Expected != "hidden" || got.Assertion.Visible || !got.Assertion.Hidden || !got.Assertion.Passed || got.Assertion.Count != 0 || got.Assertion.VisibleCount != 0 || got.Assertion.HiddenCount != 0 {
+		t.Fatalf("assert hidden missing locator = %+v, want hidden pass with zero-match locator evidence", got)
+	}
+}
+
+func TestAssertHiddenFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "hidden", "Search", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("assert hidden visible locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Locator          struct {
+				By     string `json:"by"`
+				Query  string `json:"query"`
+				Role   string `json:"role"`
+				Strict bool   `json:"strict"`
+			} `json:"locator"`
+			Assertion struct {
+				Selector     string `json:"selector"`
+				Expected     string `json:"expected"`
+				Visible      bool   `json:"visible"`
+				Hidden       bool   `json:"hidden"`
+				Passed       bool   `json:"passed"`
+				Count        int    `json:"count"`
+				VisibleCount int    `json:"visible_count"`
+				HiddenCount  int    `json:"hidden_count"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert hidden failure output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "button#submit" || got.Data.Locator.By != "role" || got.Data.Locator.Query != "Search" || got.Data.Locator.Role != "button" || !got.Data.Locator.Strict || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "hidden" || !got.Data.Assertion.Visible || got.Data.Assertion.Hidden || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 1 || got.Data.Assertion.HiddenCount != 0 {
+		t.Fatalf("assert hidden failure = %+v, want failed hidden assertion with locator diagnostics", got)
+	}
+}
+
 func TestFormValuesListsVisibleControls(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()

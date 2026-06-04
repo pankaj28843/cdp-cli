@@ -153,6 +153,8 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.actual == "Click target"' >/dev/null
 "$binary" assert visible "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.visible == true and .assertion.visible_count == 1' >/dev/null
+"$binary" assert hidden "Dismiss" --by role --role button --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#dismiss" and .assertion.selector == "button#dismiss" and .assertion.hidden == true and .assertion.visible_count == 0 and .assertion.hidden_count == 1' >/dev/null
 "$binary" click "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "clicked" and .locator.strict == true and .resolved_selector == "button#action" and .click.selector == "button#action" and .page_state.same_target == true' >/dev/null
 rendered_dir="$state_dir/rendered-extract"
