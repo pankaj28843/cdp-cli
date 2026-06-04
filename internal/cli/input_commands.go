@@ -395,8 +395,11 @@ func resolveActionSelector(ctx context.Context, session *cdp.PageSession, query 
 
 func locatorActionRemediations(action, query string, opts locatorActionOptions) []string {
 	example := "cdp " + action + " " + shellQuote(query)
-	if action == "fill" {
+	switch action {
+	case "fill":
 		example += " <value>"
+	case "assert value", "assert text":
+		example += " <expected>"
 	}
 	example += " --by " + opts.By
 	if opts.By == "role" {

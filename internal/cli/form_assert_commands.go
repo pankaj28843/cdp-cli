@@ -54,6 +54,7 @@ type assertValueResult struct {
 }
 
 type assertTextResult struct {
+	Selector string     `json:"selector,omitempty"`
 	Expected string     `json:"expected"`
 	Actual   string     `json:"actual"`
 	Mode     string     `json:"mode"`
@@ -185,7 +186,20 @@ func (a *app) newAssertValueCommand() *cobra.Command {
 
 func (a *app) newAssertTextCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, mode string
-	cmd := &cobra.Command{Use: "text <expected>", Short: "Assert visible body text", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "text [selector-or-locator] <expected>", Short: "Assert visible text by body, CSS selector, or strict locator", Args: cobra.RangeArgs(1, 2), RunE: func(cmd *cobra.Command, args []string) error {
+		if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+			return err
+		}
+		selector := "body"
+		expected := args[0]
+		var locator *locatorFindResult
+		if len(args) == 1 && locatorOptionsNeedQuery(locatorOpts) {
+			return commandError("usage", "usage", "locator flags require both a locator query and expected text", ExitUsage, []string{"cdp assert text 'Saved successfully' --json", "cdp assert text 'Search' 'Search' --by role --role button --json"})
+		}
+		if len(args) == 2 {
+			expected = args[1]
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -193,21 +207,31 @@ func (a *app) newAssertTextCommand() *cobra.Command {
 			return err
 		}
 		defer session.Close(ctx)
+		if len(args) == 2 {
+			selector, locator, err = resolveActionSelector(ctx, session, args[0], locatorOpts, "assert text")
+			if err != nil {
+				return err
+			}
+		}
 		var got textResult
-		if err := evaluateJSONValue(ctx, session, textExpression("body", 0, 1), "assert text", &got); err != nil {
+		if err := evaluateJSONValue(ctx, session, textExpression(selector, 0, 1), "assert text", &got); err != nil {
 			return err
 		}
 		if got.Error != nil {
-			return invalidSelectorError("body", got.Error, "cdp assert text expected --json")
+			return invalidSelectorError(selector, got.Error, "cdp assert text expected --json")
 		}
-		passed, err := assertionMatch(got.Text, args[0], mode)
+		passed, err := assertionMatch(got.Text, expected, mode)
 		if err != nil {
 			return err
 		}
-		result := assertTextResult{Expected: args[0], Actual: got.Text, Mode: normalizeAssertMode(mode), Passed: passed, Count: got.Count, Error: got.Error}
+		result := assertTextResult{Selector: selector, Expected: expected, Actual: got.Text, Mode: normalizeAssertMode(mode), Passed: passed, Count: got.Count, Error: got.Error}
 		report := map[string]any{"ok": passed, "target": pageRow(target), "assertion": result}
+		if locator != nil {
+			report["locator"] = locator
+			report["resolved_selector"] = selector
+		}
 		if !passed {
-			return commandErrorWithData("assertion_failed", "check_failed", fmt.Sprintf("text assertion failed: %q was not found", args[0]), ExitCheckFailed, []string{"cdp text body --limit 0 --json"}, report)
+			return commandErrorWithData("assertion_failed", "check_failed", fmt.Sprintf("text assertion failed for %q: %q was not found", selector, expected), ExitCheckFailed, []string{"cdp text " + shellQuote(selector) + " --limit 0 --json"}, report)
 		}
 		return a.render(ctx, "assertion passed", report)
 	}}
@@ -215,7 +239,12 @@ func (a *app) newAssertTextCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "contains", "match mode: exact, contains, or regex")
+	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
+}
+
+func locatorOptionsNeedQuery(opts locatorActionOptions) bool {
+	return opts.By != "css" || opts.Role != "" || opts.Exact || opts.IncludeHidden || opts.TestIDAttr != "data-testid" || opts.Limit != 20
 }
 
 func assertionMatch(actual, expected, mode string) (bool, error) {

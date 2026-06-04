@@ -794,20 +794,36 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_text__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "main"
+		}
+		tag := "main"
+		text := "Synthetic main text"
+		switch selector {
+		case "body":
+			tag = "body"
+		case "button#submit":
+			tag = "button"
+			text = "Search button"
+		case "input#q":
+			tag = "input"
+			text = ""
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"url":      "https://example.test/app",
 					"title":    "Example App",
-					"selector": "main",
+					"selector": selector,
 					"count":    1,
-					"text":     "Synthetic main text",
+					"text":     text,
 					"items": []map[string]any{{
 						"index":       0,
-						"tag":         "main",
-						"text":        "Synthetic main text",
-						"text_length": 19,
+						"tag":         tag,
+						"text":        text,
+						"text_length": len(text),
 						"rect":        map[string]any{"x": 0, "y": 0, "width": 600, "height": 200},
 					}},
 				},
