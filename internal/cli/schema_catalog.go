@@ -489,11 +489,13 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait": {
 			Name:        "wait",
-			Description: "Page condition wait result for text, selector, or JavaScript expression checks.",
+			Description: "Page condition wait result for text, selector, locator, or JavaScript expression checks.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
 				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition, match status, evidence, count, elapsed time, and poll interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator result when waiting by user-facing locator."},
+				{Name: "matches", Type: "array<locator_match>", Required: false, Description: "Locator matches duplicated for jq convenience when waiting by locator."},
 			},
 		},
 		"snapshot": {

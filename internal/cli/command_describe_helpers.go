@@ -309,6 +309,10 @@ func commandExamples(path string) []string {
 			"cdp wait selector main --timeout 10s --json",
 			"cdp wait selector '[data-ready=\"true\"]' --poll 500ms --json",
 		},
+		"cdp wait locator": {
+			"cdp wait locator 'Search' --by role --role button --strict --timeout 10s --json",
+			"cdp wait locator 'Dashboard loaded' --by text --timeout 10s --json",
+		},
 		"cdp wait eval": {
 			"cdp wait eval 'window.__rendered === true' --timeout 10s --json",
 			"cdp wait eval 'document.readyState === \"complete\"' --poll 500ms --json",

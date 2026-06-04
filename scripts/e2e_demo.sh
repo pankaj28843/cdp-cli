@@ -143,6 +143,8 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .locator.strict == true and .locator.matches[0].selector_hint == "input#agent-input" and any(.next_commands[]; contains("cdp fill"))' >/dev/null
 "$binary" locator find "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .locator.strict == true and .locator.matches[0].role == "button" and .locator.matches[0].selector_hint == "button#action"' >/dev/null
+"$binary" wait locator "Agent input" --by label --strict --state-dir "$state_dir/cdp-state" --timeout 5s --json \
+  | jq -e '.ok == true and .wait.kind == "locator" and .wait.matched == true and .wait.strict == true and .locator.strict == true and .wait.resolved_selector == "input#agent-input"' >/dev/null
 "$binary" fill "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "filled" and .locator.strict == true and .resolved_selector == "input#agent-input" and .fill.selector == "input#agent-input" and .fill.value == "locator filled value"' >/dev/null
 "$binary" click "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \

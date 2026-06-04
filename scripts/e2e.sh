@@ -179,6 +179,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "layout overflow" --json | jq -e '.ok == true and .commands.name == "overflow" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "wait text" --json | jq -e '.ok == true and .commands.name == "text" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "wait selector" --json | jq -e '.ok == true and .commands.name == "selector" and (.commands.examples | length > 0)' >/dev/null
+"$binary" describe --command "wait locator" --json | jq -e '.ok == true and .commands.name == "locator" and (.commands.examples | any(contains("--by role"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "strict"))' >/dev/null
 "$binary" describe --command "wait eval" --json | jq -e '.ok == true and .commands.name == "eval" and (.commands.examples | any(contains("__rendered")))' >/dev/null
 "$binary" describe --command "snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | any(contains("--diagnose-empty"))) and (.commands.flags[] | select(.name == "debug-empty"))' >/dev/null
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | any(contains("--preset mobile"))) and (.commands.examples | any(contains("--tile-full-page"))) and (.commands.examples | any(contains("--element"))) and (.commands.flags[] | select(.name == "crop")) and (.commands.flags[] | select(.name == "navigate")) and (.commands.flags[] | select(.name == "preset")) and (.commands.flags[] | select(.name == "tile-full-page")) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
@@ -226,7 +227,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema dom-query --json | jq -e '.ok == true and .schema.name == "dom-query"' >/dev/null
 "$binary" schema css-inspect --json | jq -e '.ok == true and .schema.name == "css-inspect"' >/dev/null
 "$binary" schema layout-overflow --json | jq -e '.ok == true and .schema.name == "layout-overflow"' >/dev/null
-"$binary" schema wait --json | jq -e '.ok == true and .schema.name == "wait" and (.schema.fields[] | select(.name == "wait").description | contains("evidence"))' >/dev/null
+"$binary" schema wait --json | jq -e '.ok == true and .schema.name == "wait" and (.schema.fields[] | select(.name == "wait").description | contains("evidence")) and (.schema.fields | map(.name) | index("locator")) and (.schema.fields | map(.name) | index("matches"))' >/dev/null
 "$binary" schema workflow-hacker-news --json | jq -e '.ok == true and .schema.name == "workflow-hacker-news" and (.schema.fields | map(.name) | index("organization"))' >/dev/null
 "$binary" schema workflow-console-errors --json | jq -e '.ok == true and .schema.name == "workflow-console-errors"' >/dev/null
 "$binary" schema workflow-network-failures --json | jq -e '.ok == true and .schema.name == "workflow-network-failures"' >/dev/null

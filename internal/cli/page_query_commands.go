@@ -117,18 +117,34 @@ type layoutOverflowItem struct {
 }
 
 type waitResult struct {
-	Kind         string          `json:"kind"`
-	Needle       string          `json:"needle,omitempty"`
-	Selector     string          `json:"selector,omitempty"`
-	Expression   string          `json:"expression,omitempty"`
-	Matched      bool            `json:"matched"`
-	Count        int             `json:"count,omitempty"`
-	Value        json.RawMessage `json:"value,omitempty"`
-	Condition    string          `json:"condition,omitempty"`
-	Evidence     map[string]any  `json:"evidence,omitempty"`
-	ElapsedMS    int64           `json:"elapsed_ms"`
-	PollInterval string          `json:"poll_interval"`
-	Error        *evalError      `json:"error,omitempty"`
+	Kind         string             `json:"kind"`
+	Needle       string             `json:"needle,omitempty"`
+	Selector     string             `json:"selector,omitempty"`
+	Expression   string             `json:"expression,omitempty"`
+	By           string             `json:"by,omitempty"`
+	Query        string             `json:"query,omitempty"`
+	Role         string             `json:"role,omitempty"`
+	Strict       bool               `json:"strict,omitempty"`
+	Resolved     string             `json:"resolved_selector,omitempty"`
+	Matched      bool               `json:"matched"`
+	Count        int                `json:"count,omitempty"`
+	Value        json.RawMessage    `json:"value,omitempty"`
+	Condition    string             `json:"condition,omitempty"`
+	Evidence     map[string]any     `json:"evidence,omitempty"`
+	Locator      *locatorFindResult `json:"locator,omitempty"`
+	ElapsedMS    int64              `json:"elapsed_ms"`
+	PollInterval string             `json:"poll_interval"`
+	Error        *evalError         `json:"error,omitempty"`
+}
+
+type locatorWaitOptions struct {
+	By            string
+	Role          string
+	TestIDAttr    string
+	Exact         bool
+	IncludeHidden bool
+	Strict        bool
+	Limit         int
 }
 
 type evalError struct {
@@ -466,6 +482,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newWaitTextCommand())
 	cmd.AddCommand(a.newWaitSelectorCommand())
+	cmd.AddCommand(a.newWaitLocatorCommand())
 	cmd.AddCommand(a.newWaitEvalCommand())
 	return cmd
 }
@@ -570,6 +587,66 @@ func (a *app) newWaitSelectorCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newWaitLocatorCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
+	var poll time.Duration
+	var locatorOpts locatorWaitOptions
+	cmd := &cobra.Command{
+		Use:   "locator <query>",
+		Short: "Wait until a user-facing locator matches",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait locator Ready --by text --poll 250ms --json"})
+			}
+			if err := normalizeLocatorWaitOptions(&locatorOpts); err != nil {
+				return err
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			start := time.Now()
+			result, locator, err := waitForLocatorCondition(ctx, session, poll, args[0], locatorOpts)
+			result.ElapsedMS = time.Since(start).Milliseconds()
+			result.PollInterval = poll.String()
+			report := map[string]any{
+				"ok":     err == nil && result.Error == nil,
+				"target": pageRow(target),
+				"wait":   result,
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["matches"] = locator.Matches
+			}
+			if err != nil {
+				if ctx.Err() == nil {
+					return err
+				}
+				return commandErrorWithData("timeout", "timeout", fmt.Sprintf("wait locator %s %q not matched for target %s: %v", locatorOpts.By, args[0], session.TargetID, ctx.Err()), ExitTimeout, locatorWaitRemediations(args[0], locatorOpts), report)
+			}
+			if result.Error != nil {
+				return commandErrorWithData("invalid_locator", "usage", fmt.Sprintf("wait locator %s %q: %s", locatorOpts.By, args[0], result.Error.Message), ExitUsage, locatorWaitRemediations(args[0], locatorOpts), report)
+			}
+			return a.render(ctx, fmt.Sprintf("matched locator\t%s\t%s", locatorOpts.By, args[0]), report)
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
+	addLocatorWaitFlags(cmd, &locatorOpts)
+	return cmd
+}
+
 func (a *app) newWaitEvalCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
@@ -620,6 +697,129 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	return cmd
 }
 
+func addLocatorWaitFlags(cmd *cobra.Command, opts *locatorWaitOptions) {
+	cmd.Flags().StringVar(&opts.By, "by", "text", "locator strategy: role, text, label, placeholder, alt, title, test-id, or css")
+	cmd.Flags().StringVar(&opts.Role, "role", "", "ARIA role to match when --by role is used")
+	cmd.Flags().StringVar(&opts.TestIDAttr, "test-id-attr", "data-testid", "attribute name for --by test-id")
+	cmd.Flags().BoolVar(&opts.Exact, "exact", false, "require exact normalized text/name/attribute match")
+	cmd.Flags().BoolVar(&opts.IncludeHidden, "include-hidden", false, "include hidden locator matches")
+	cmd.Flags().BoolVar(&opts.Strict, "strict", false, "require exactly one locator match before succeeding")
+	cmd.Flags().IntVar(&opts.Limit, "limit", 20, "maximum locator matches to return")
+}
+
+func normalizeLocatorWaitOptions(opts *locatorWaitOptions) error {
+	opts.By = normalizeLocatorStrategy(opts.By)
+	opts.Role = strings.TrimSpace(opts.Role)
+	opts.TestIDAttr = strings.TrimSpace(opts.TestIDAttr)
+	return validateLocatorFindOptions(opts.By, opts.Role, opts.TestIDAttr, opts.Limit)
+}
+
+func waitForLocatorCondition(ctx context.Context, session *cdp.PageSession, poll time.Duration, query string, opts locatorWaitOptions) (waitResult, *locatorFindResult, error) {
+	var last waitResult
+	var lastLocator *locatorFindResult
+	for {
+		var locator locatorFindResult
+		if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "wait locator", &locator); err != nil {
+			return last, lastLocator, err
+		}
+		result := waitResultFromLocator(query, opts, locator)
+		last = result
+		lastLocator = &locator
+		if result.Matched || result.Error != nil {
+			result.addEvidence()
+			return result, &locator, nil
+		}
+
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			last.Condition = locatorWaitCondition(query, opts)
+			last.Evidence = locatorWaitEvidence(last, lastLocator)
+			return last, lastLocator, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func waitResultFromLocator(query string, opts locatorWaitOptions, locator locatorFindResult) waitResult {
+	matched := locator.Count > 0
+	if opts.Strict {
+		matched = locator.Count == 1
+	}
+	resolved := ""
+	if len(locator.Matches) == 1 && strings.TrimSpace(locator.Matches[0].SelectorHint) != "" && !locator.Matches[0].SelectorAmbiguous {
+		resolved = locator.Matches[0].SelectorHint
+	}
+	return waitResult{
+		Kind:     "locator",
+		By:       locator.By,
+		Query:    locator.Query,
+		Role:     locator.Role,
+		Strict:   opts.Strict,
+		Resolved: resolved,
+		Matched:  matched,
+		Count:    locator.Count,
+		Locator:  &locator,
+		Error:    locator.Error,
+	}
+}
+
+func locatorWaitCondition(query string, opts locatorWaitOptions) string {
+	if opts.Strict {
+		return fmt.Sprintf("locator %s %q matched exactly one element", opts.By, query)
+	}
+	return fmt.Sprintf("locator %s %q matched at least one element", opts.By, query)
+}
+
+func locatorWaitEvidence(result waitResult, locator *locatorFindResult) map[string]any {
+	evidence := map[string]any{
+		"by":       result.By,
+		"query":    result.Query,
+		"matched":  result.Matched,
+		"count":    result.Count,
+		"strict":   result.Strict,
+		"returned": 0,
+	}
+	if strings.TrimSpace(result.Role) != "" {
+		evidence["role"] = result.Role
+	}
+	if strings.TrimSpace(result.Resolved) != "" {
+		evidence["resolved_selector"] = result.Resolved
+	}
+	if locator != nil {
+		evidence["returned"] = locator.Returned
+	}
+	return evidence
+}
+
+func locatorWaitRemediations(query string, opts locatorWaitOptions) []string {
+	waitCommand := "cdp wait locator " + shellQuote(query) + " --by " + opts.By
+	findCommand := "cdp locator find " + shellQuote(query) + " --by " + opts.By
+	if opts.By == "role" {
+		role := shellQuote(opts.Role)
+		waitCommand += " --role " + role
+		findCommand += " --role " + role
+	}
+	if opts.Exact {
+		waitCommand += " --exact"
+		findCommand += " --exact"
+	}
+	if opts.IncludeHidden {
+		waitCommand += " --include-hidden"
+		findCommand += " --include-hidden"
+	}
+	if opts.Strict {
+		waitCommand += " --strict"
+	}
+	if opts.By == "test-id" && opts.TestIDAttr != "data-testid" {
+		attr := shellQuote(opts.TestIDAttr)
+		waitCommand += " --test-id-attr " + attr
+		findCommand += " --test-id-attr " + attr
+	}
+	return []string{waitCommand + " --timeout 15s --json", findCommand + " --json"}
+}
+
 func (r *waitResult) addEvidence() {
 	if !r.Matched {
 		return
@@ -634,6 +834,9 @@ func (r *waitResult) addEvidence() {
 	case "eval":
 		r.Condition = fmt.Sprintf("expression %q evaluated truthy", r.Expression)
 		r.Evidence = map[string]any{"expression": r.Expression, "matched": true, "value": r.Value}
+	case "locator":
+		r.Condition = locatorWaitCondition(r.Query, locatorWaitOptions{By: r.By, Strict: r.Strict})
+		r.Evidence = locatorWaitEvidence(*r, r.Locator)
 	}
 }
 

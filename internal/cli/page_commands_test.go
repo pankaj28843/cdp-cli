@@ -1175,6 +1175,64 @@ func TestWaitSelectorJSON(t *testing.T) {
 	}
 }
 
+func TestWaitLocatorByRoleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "locator", "Search", "--by", "role", "--role", "button", "--strict", "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind             string         `json:"kind"`
+			By               string         `json:"by"`
+			Query            string         `json:"query"`
+			Role             string         `json:"role"`
+			Strict           bool           `json:"strict"`
+			Matched          bool           `json:"matched"`
+			Count            int            `json:"count"`
+			ResolvedSelector string         `json:"resolved_selector"`
+			Condition        string         `json:"condition"`
+			Evidence         map[string]any `json:"evidence"`
+		} `json:"wait"`
+		Locator struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Role    string `json:"role"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Matches []struct {
+			SelectorHint string `json:"selector_hint"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait locator output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "locator" || got.Wait.By != "role" || got.Wait.Query != "Search" || got.Wait.Role != "button" || !got.Wait.Strict || !got.Wait.Matched || got.Wait.Count != 1 {
+		t.Fatalf("wait locator result = %+v, want strict matched role locator", got)
+	}
+	if got.Wait.ResolvedSelector != "button#submit" || !strings.Contains(got.Wait.Condition, "exactly one") || got.Wait.Evidence["by"] != "role" || got.Wait.Evidence["resolved_selector"] != "button#submit" {
+		t.Fatalf("wait locator evidence = %+v, want resolved selector evidence", got.Wait)
+	}
+	if got.Locator.By != "role" || got.Locator.Query != "Search" || got.Locator.Role != "button" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].SelectorHint != "button#submit" || got.Locator.Matches[0].Role != "button" {
+		t.Fatalf("top-level locator = %+v, want role locator metadata", got.Locator)
+	}
+	if len(got.Matches) != 1 || got.Matches[0].SelectorHint != "button#submit" {
+		t.Fatalf("top-level matches = %+v, want jq-friendly locator matches", got.Matches)
+	}
+}
+
 func TestWaitEvalJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
