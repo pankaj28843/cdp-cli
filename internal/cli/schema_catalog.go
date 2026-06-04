@@ -542,6 +542,28 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting, omitted when a locator has zero matches."},
 			},
 		},
+		"assert-enabled": {
+			Name:        "assert-enabled",
+			Description: "Element enabled assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element is enabled."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, and bounded item diagnostics."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
+		"assert-disabled": {
+			Name:        "assert-disabled",
+			Description: "Element disabled assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected elements are present and none are enabled."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, and bounded item diagnostics with disabled reasons."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
 		"snapshot": {
 			Name:        "snapshot",
 			Description: "Visible text extracted from selected page elements.",

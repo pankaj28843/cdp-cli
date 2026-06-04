@@ -357,6 +357,141 @@ func TestAssertHiddenFailureJSON(t *testing.T) {
 	}
 }
 
+func TestAssertEnabledByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "enabled", "Search", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert enabled by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By     string `json:"by"`
+			Query  string `json:"query"`
+			Role   string `json:"role"`
+			Strict bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector      string `json:"selector"`
+			Expected      string `json:"expected"`
+			Enabled       bool   `json:"enabled"`
+			Disabled      bool   `json:"disabled"`
+			Passed        bool   `json:"passed"`
+			Count         int    `json:"count"`
+			EnabledCount  int    `json:"enabled_count"`
+			DisabledCount int    `json:"disabled_count"`
+			Items         []struct {
+				Tag      string `json:"tag"`
+				Role     string `json:"role"`
+				Enabled  bool   `json:"enabled"`
+				Disabled bool   `json:"disabled"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert enabled by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#submit" || got.Locator.By != "role" || got.Locator.Query != "Search" || got.Locator.Role != "button" || !got.Locator.Strict {
+		t.Fatalf("assert enabled locator = %+v, want strict role locator", got)
+	}
+	if got.Assertion.Selector != "button#submit" || got.Assertion.Expected != "enabled" || !got.Assertion.Enabled || got.Assertion.Disabled || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.EnabledCount != 1 || got.Assertion.DisabledCount != 0 || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Tag != "button" || got.Assertion.Items[0].Role != "button" || !got.Assertion.Items[0].Enabled || got.Assertion.Items[0].Disabled {
+		t.Fatalf("assert enabled assertion = %+v, want enabled resolved button", got.Assertion)
+	}
+}
+
+func TestAssertDisabledByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "disabled", "Disabled target", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert disabled by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Role    string `json:"role"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				Disabled bool `json:"disabled"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector      string `json:"selector"`
+			Expected      string `json:"expected"`
+			Enabled       bool   `json:"enabled"`
+			Disabled      bool   `json:"disabled"`
+			Passed        bool   `json:"passed"`
+			Count         int    `json:"count"`
+			EnabledCount  int    `json:"enabled_count"`
+			DisabledCount int    `json:"disabled_count"`
+			Items         []struct {
+				Enabled        bool     `json:"enabled"`
+				Disabled       bool     `json:"disabled"`
+				DisabledReason []string `json:"disabled_reason"`
+				NativeDisabled bool     `json:"native_disabled"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert disabled by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#disabled-action" || got.Locator.By != "role" || got.Locator.Query != "Disabled target" || got.Locator.Role != "button" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || !got.Locator.Matches[0].Disabled {
+		t.Fatalf("assert disabled locator = %+v, want strict disabled role locator", got)
+	}
+	if got.Assertion.Selector != "button#disabled-action" || got.Assertion.Expected != "disabled" || got.Assertion.Enabled || !got.Assertion.Disabled || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.EnabledCount != 0 || got.Assertion.DisabledCount != 1 || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Enabled || !got.Assertion.Items[0].Disabled || !got.Assertion.Items[0].NativeDisabled || !containsString(got.Assertion.Items[0].DisabledReason, "native_disabled") {
+		t.Fatalf("assert disabled assertion = %+v, want disabled resolved button", got.Assertion)
+	}
+}
+
+func TestAssertEnabledFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "enabled", "Disabled target", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("assert enabled disabled locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Selector      string `json:"selector"`
+				Expected      string `json:"expected"`
+				Enabled       bool   `json:"enabled"`
+				Disabled      bool   `json:"disabled"`
+				Passed        bool   `json:"passed"`
+				Count         int    `json:"count"`
+				EnabledCount  int    `json:"enabled_count"`
+				DisabledCount int    `json:"disabled_count"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert enabled failure output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "button#disabled-action" || got.Data.Assertion.Selector != "button#disabled-action" || got.Data.Assertion.Expected != "enabled" || got.Data.Assertion.Enabled || !got.Data.Assertion.Disabled || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 0 || got.Data.Assertion.DisabledCount != 1 {
+		t.Fatalf("assert enabled failure = %+v, want failed enabled assertion with disabled diagnostics", got)
+	}
+}
+
 func TestFormValuesListsVisibleControls(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()

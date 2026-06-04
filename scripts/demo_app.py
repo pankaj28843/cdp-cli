@@ -57,6 +57,7 @@ DEMO_HTML = """<!doctype html>
       <h2>Agent-visible post</h2>
       <p>Stable text for snapshot, text extraction, and workflow checks.</p>
       <button id="action">Click target</button>
+      <button id="disabled-action" disabled>Disabled target</button>
       <button id="dismiss" class="hidden-fixture">Dismiss</button>
       <label class="agent-form">
         Agent input

@@ -205,11 +205,26 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
     return String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => "\\" + ch);
   };
   const attrSelector = (tag, attr, value) => tag + "[" + attr + "=" + JSON.stringify(value) + "]";
+  const nativeDisabledTags = new Set(["button", "select", "input", "textarea", "option", "optgroup"]);
   const visibleInfo = (el) => {
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     const hidden = el.hidden || el.closest("[hidden]") !== null || style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") === 0 || el.closest('[aria-hidden="true"]') !== null || el.getAttribute("aria-hidden") === "true";
     return { visible: !hidden && rect.width > 0 && rect.height > 0, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  };
+  const disabledInfo = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const nativeDisableable = nativeDisabledTags.has(tag);
+    const nativeDisabled = nativeDisableable && el.hasAttribute("disabled");
+    const fieldsetDisabled = nativeDisableable && Boolean(el.closest("fieldset[disabled]"));
+    let ariaDisabled = false;
+    for (let node = el; node && node.nodeType === Node.ELEMENT_NODE; node = node.parentElement) {
+      if (String(node.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+        ariaDisabled = true;
+        break;
+      }
+    }
+    return nativeDisabled || fieldsetDisabled || ariaDisabled;
   };
   const ownText = (el) => norm(Array.from(el.childNodes || []).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent || "").join(" "));
   const textOf = (el) => norm(ownText(el) || el.innerText || el.textContent || "");
@@ -323,7 +338,7 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
       alt: el.getAttribute("alt") || "",
       test_id: el.getAttribute(testIDAttr) || el.getAttribute("data-testid") || el.getAttribute("data-test-id") || el.getAttribute("data-test") || "",
       visible: visibility.visible,
-      disabled: Boolean(el.disabled) || el.getAttribute("aria-disabled") === "true",
+      disabled: disabledInfo(el),
       read_only: Boolean(el.readOnly) || el.getAttribute("aria-readonly") === "true",
       content_editable: Boolean(el.isContentEditable),
       rect: visibility.rect

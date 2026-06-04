@@ -155,6 +155,10 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.visible == true and .assertion.visible_count == 1' >/dev/null
 "$binary" assert hidden "Dismiss" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#dismiss" and .assertion.selector == "button#dismiss" and .assertion.hidden == true and .assertion.visible_count == 0 and .assertion.hidden_count == 1' >/dev/null
+"$binary" assert enabled "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.enabled == true and .assertion.enabled_count == 1 and .assertion.disabled_count == 0' >/dev/null
+"$binary" assert disabled "Disabled target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#disabled-action" and .assertion.selector == "button#disabled-action" and .assertion.disabled == true and .assertion.enabled_count == 0 and .assertion.disabled_count == 1 and (.assertion.items[0].disabled_reason | index("native_disabled"))' >/dev/null
 "$binary" click "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "clicked" and .locator.strict == true and .resolved_selector == "button#action" and .click.selector == "button#action" and .page_state.same_target == true' >/dev/null
 rendered_dir="$state_dir/rendered-extract"

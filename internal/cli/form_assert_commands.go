@@ -91,6 +91,37 @@ type assertVisibilityItem struct {
 	Rect       snapshotRect `json:"rect"`
 }
 
+type assertEnabledResult struct {
+	Selector      string              `json:"selector"`
+	Expected      string              `json:"expected"`
+	Enabled       bool                `json:"enabled"`
+	Disabled      bool                `json:"disabled"`
+	Passed        bool                `json:"passed"`
+	Count         int                 `json:"count"`
+	EnabledCount  int                 `json:"enabled_count"`
+	DisabledCount int                 `json:"disabled_count"`
+	Items         []assertEnabledItem `json:"items,omitempty"`
+	Error         *evalError          `json:"error,omitempty"`
+}
+
+type assertEnabledItem struct {
+	Index            int          `json:"index"`
+	Tag              string       `json:"tag"`
+	ID               string       `json:"id,omitempty"`
+	Role             string       `json:"role,omitempty"`
+	Name             string       `json:"name,omitempty"`
+	Enabled          bool         `json:"enabled"`
+	Disabled         bool         `json:"disabled"`
+	DisabledReason   []string     `json:"disabled_reason,omitempty"`
+	NativeDisabled   bool         `json:"native_disabled"`
+	FieldsetDisabled bool         `json:"fieldset_disabled"`
+	AriaDisabled     bool         `json:"aria_disabled"`
+	ReadOnly         bool         `json:"read_only"`
+	ContentEditable  bool         `json:"content_editable"`
+	Visible          bool         `json:"visible"`
+	Rect             snapshotRect `json:"rect"`
+}
+
 func (a *app) newFormCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "form", Short: "Inspect live form control state"}
 	cmd.AddCommand(a.newFormValuesCommand())
@@ -159,6 +190,8 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertTextCommand())
 	cmd.AddCommand(a.newAssertVisibleCommand())
 	cmd.AddCommand(a.newAssertHiddenCommand())
+	cmd.AddCommand(a.newAssertEnabledCommand())
+	cmd.AddCommand(a.newAssertDisabledCommand())
 	return cmd
 }
 
@@ -303,6 +336,71 @@ func (a *app) newAssertHiddenCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newAssertEnabledCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "enabled <selector-or-locator>", Short: "Assert an element is enabled by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertEnabledCommand(cmd, args[0], "enabled", locatorOpts, targetID, urlContains, titleContains)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) newAssertDisabledCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "disabled <selector-or-locator>", Short: "Assert an element is disabled by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertEnabledCommand(cmd, args[0], "disabled", locatorOpts, targetID, urlContains, titleContains)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) runAssertEnabledCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel := a.browserCommandContext(cmd)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	selector, locator, err := resolveActionSelector(ctx, session, query, locatorOpts, "assert "+expected)
+	if err != nil {
+		return err
+	}
+	var got assertEnabledResult
+	if err := evaluateJSONValue(ctx, session, assertEnabledExpression(selector, 20), "assert "+expected, &got); err != nil {
+		return err
+	}
+	if got.Error != nil {
+		return invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'button[type=submit]' --json")
+	}
+	got.Expected = expected
+	got.Passed = got.Enabled
+	if expected == "disabled" {
+		got.Passed = got.Disabled
+	}
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		report["resolved_selector"] = selector
+	}
+	if !got.Passed {
+		return commandErrorWithData("assertion_failed", "check_failed", enabledAssertionFailureMessage(expected, selector, got), ExitCheckFailed, []string{locatorActionFindCommand(query, locatorOpts), "cdp dom query " + shellQuote(selector) + " --json"}, report)
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
 func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
 	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 		return err
@@ -399,6 +497,10 @@ func visibilityAssertionRemediations(query, selector string, opts locatorActionO
 	return []string{locatorActionFindCommand(query, opts), "cdp dom query " + shellQuote(selector) + " --json"}
 }
 
+func enabledAssertionFailureMessage(expected, selector string, got assertEnabledResult) string {
+	return fmt.Sprintf("%s assertion failed for %q: %d enabled and %d disabled of %d matched", expected, selector, got.EnabledCount, got.DisabledCount, got.Count)
+}
+
 func assertionMatch(actual, expected, mode string) (bool, error) {
 	switch normalizeAssertMode(mode) {
 	case "exact":
@@ -487,6 +589,92 @@ func assertVisibilityExpression(selector string, limit int) string {
   const visibleCount = allItems.filter((item) => item.visible).length;
   const hiddenCount = allItems.length - visibleCount;
   return { url: location.href, title: document.title, selector, expected: "visible", visible: visibleCount > 0, hidden: visibleCount === 0, passed: visibleCount > 0, count: allItems.length, visible_count: visibleCount, hidden_count: hiddenCount, items: allItems.slice(0, limit), marker };
+})()`, jsStringLiteral(selector), limit)
+}
+
+func assertEnabledExpression(selector string, limit int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_assert_enabled__";
+  const selector = %s;
+  const limit = %d;
+  const nativeDisabledTags = new Set(["button", "select", "input", "textarea", "option", "optgroup"]);
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const roleOf = (el) => {
+    const explicit = norm(el.getAttribute("role")).split(" ")[0];
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    if (tag === "button") return "button";
+    if (tag === "a" && el.hasAttribute("href")) return "link";
+    if (/^h[1-6]$/.test(tag)) return "heading";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return el.multiple ? "listbox" : "combobox";
+    if (tag === "input") {
+      if (["button", "submit", "reset"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "range") return "slider";
+      if (type === "search") return "searchbox";
+      return "textbox";
+    }
+    return "";
+  };
+  const nameOf = (el) => norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || el.getAttribute("value") || el.innerText || el.textContent || "");
+  const visibilityOf = (el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
+    return { visible: !hidden && rect.width > 0 && rect.height > 0, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  };
+  const disabledInfo = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const nativeDisableable = nativeDisabledTags.has(tag);
+    const nativeDisabled = nativeDisableable && el.hasAttribute("disabled");
+    const fieldsetDisabled = nativeDisableable && Boolean(el.closest("fieldset[disabled]"));
+    let ariaDisabled = false;
+    for (let node = el; node && node.nodeType === Node.ELEMENT_NODE; node = node.parentElement) {
+      if (String(node.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+        ariaDisabled = true;
+        break;
+      }
+    }
+    const reason = [];
+    if (nativeDisabled) reason.push("native_disabled");
+    if (fieldsetDisabled) reason.push("fieldset_disabled");
+    if (ariaDisabled) reason.push("aria_disabled");
+    return { disabled: nativeDisabled || fieldsetDisabled || ariaDisabled, nativeDisabled, fieldsetDisabled, ariaDisabled, reason };
+  };
+  const itemFor = (el, index) => {
+    const disabled = disabledInfo(el);
+    const visibility = visibilityOf(el);
+    return {
+      index,
+      tag: el.tagName.toLowerCase(),
+      id: el.id || "",
+      role: roleOf(el),
+      name: nameOf(el).slice(0, 240),
+      enabled: !disabled.disabled,
+      disabled: disabled.disabled,
+      disabled_reason: disabled.reason,
+      native_disabled: disabled.nativeDisabled,
+      fieldset_disabled: disabled.fieldsetDisabled,
+      aria_disabled: disabled.ariaDisabled,
+      read_only: Boolean(el.readOnly) || el.getAttribute("aria-readonly") === "true",
+      content_editable: Boolean(el.isContentEditable),
+      visible: visibility.visible,
+      rect: visibility.rect
+    };
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, expected: "enabled", enabled: false, disabled: false, passed: false, count: 0, enabled_count: 0, disabled_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+  }
+  const allItems = elements.map(itemFor);
+  const enabledCount = allItems.filter((item) => item.enabled).length;
+  const disabledCount = allItems.filter((item) => item.disabled).length;
+  return { url: location.href, title: document.title, selector, expected: "enabled", enabled: enabledCount > 0, disabled: allItems.length > 0 && enabledCount === 0, passed: enabledCount > 0, count: allItems.length, enabled_count: enabledCount, disabled_count: disabledCount, items: allItems.slice(0, limit), marker };
 })()`, jsStringLiteral(selector), limit)
 }
 

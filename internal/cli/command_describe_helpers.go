@@ -558,6 +558,8 @@ func commandExamples(path string) []string {
 	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --json", "cdp assert text 'Search' 'Search' --by role --role button --json"}
 	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --json", "cdp assert visible 'Search' --by role --role button --json"}
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --json", "cdp assert hidden 'Dismiss' --by role --role button --json"}
+	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --json", "cdp assert enabled 'Search' --by role --role button --json"}
+	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --json", "cdp assert disabled 'Submit' --by role --role button --json"}
 
 	return examples[path]
 }

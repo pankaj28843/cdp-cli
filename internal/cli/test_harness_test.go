@@ -609,6 +609,16 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			role = "button"
 			placeholder = ""
 		}
+		disabled := false
+		if query == "Disabled target" {
+			selector = "button#disabled-action"
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Disabled target"
+			placeholder = ""
+			disabled = true
+		}
 		if query == "Gone" {
 			return map[string]any{
 				"result": map[string]any{
@@ -656,7 +666,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 						"text":               "",
 						"placeholder":        placeholder,
 						"visible":            true,
-						"disabled":           false,
+						"disabled":           disabled,
 						"read_only":          false,
 						"content_editable":   false,
 						"rect":               map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
@@ -885,6 +895,74 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"visible_count": visibleCount,
 					"hidden_count":  hiddenCount,
 					"items":         items,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_enabled__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "button#submit"
+		}
+		tag := "button"
+		role := "button"
+		name := "Search"
+		enabled := true
+		disabled := false
+		disabledReason := []string{}
+		if selector == "button#disabled-action" || selector == "#disabled-button" {
+			name = "Disabled target"
+			enabled = false
+			disabled = true
+			disabledReason = []string{"native_disabled"}
+		}
+		count := 1
+		enabledCount := 1
+		disabledCount := 0
+		if disabled {
+			enabledCount = 0
+			disabledCount = 1
+		}
+		if selector == "#missing" {
+			count = 0
+			enabledCount = 0
+			disabledCount = 0
+		}
+		items := []map[string]any{}
+		if count > 0 {
+			items = append(items, map[string]any{
+				"index":             0,
+				"tag":               tag,
+				"id":                strings.TrimPrefix(selector, "#"),
+				"role":              role,
+				"name":              name,
+				"enabled":           enabled,
+				"disabled":          disabled,
+				"disabled_reason":   disabledReason,
+				"native_disabled":   disabled,
+				"fieldset_disabled": false,
+				"aria_disabled":     false,
+				"read_only":         false,
+				"content_editable":  false,
+				"visible":           true,
+				"rect":              map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
+			})
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":            "https://example.test/app",
+					"title":          "Example App",
+					"selector":       selector,
+					"expected":       "enabled",
+					"enabled":        enabledCount > 0,
+					"disabled":       count > 0 && enabledCount == 0,
+					"passed":         enabledCount > 0,
+					"count":          count,
+					"enabled_count":  enabledCount,
+					"disabled_count": disabledCount,
+					"items":          items,
 				},
 			},
 		}
