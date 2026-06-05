@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -21,6 +22,16 @@ type LockMetadata struct {
 type LockHandle struct {
 	Path     string
 	Metadata LockMetadata
+}
+
+type LockInfo struct {
+	Path         string       `json:"path"`
+	Exists       bool         `json:"exists"`
+	Metadata     LockMetadata `json:"metadata,omitempty"`
+	ModifiedAt   string       `json:"modified_at,omitempty"`
+	Stale        bool         `json:"stale"`
+	StaleReason  string       `json:"stale_reason,omitempty"`
+	OwnerRunning *bool        `json:"owner_running,omitempty"`
 }
 
 func AcquireLock(ctx context.Context, stateDir, name string, timeout, staleAfter time.Duration, metadata LockMetadata) (LockHandle, bool, LockMetadata, error) {
@@ -126,22 +137,59 @@ func (h LockHandle) Release() error {
 }
 
 func readLockMetadata(path string, staleAfter time.Duration) (LockMetadata, bool) {
-	info, statErr := os.Stat(path)
+	info := InspectLock(path, staleAfter)
+	return info.Metadata, info.Stale
+}
+
+func InspectLock(path string, staleAfter time.Duration) LockInfo {
+	stat, statErr := os.Stat(path)
+	info := LockInfo{Path: path, Exists: statErr == nil}
 	var metadata LockMetadata
 	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &metadata)
 	}
+	info.Metadata = metadata
+	if statErr == nil {
+		info.ModifiedAt = stat.ModTime().UTC().Format(time.RFC3339)
+	}
+	if metadata.PID > 0 {
+		running := lockOwnerRunning(metadata.PID)
+		info.OwnerRunning = &running
+		if !running {
+			info.Stale = true
+			info.StaleReason = "owner_process_not_running"
+			return info
+		}
+	}
 	if staleAfter <= 0 {
-		return metadata, false
+		return info
 	}
 	var started time.Time
 	if metadata.StartedAt != "" {
 		started, _ = time.Parse(time.RFC3339, metadata.StartedAt)
 	}
 	if started.IsZero() && statErr == nil {
-		started = info.ModTime()
+		started = stat.ModTime()
 	}
-	return metadata, !started.IsZero() && time.Since(started) > staleAfter
+	if !started.IsZero() && time.Since(started) > staleAfter {
+		info.Stale = true
+		info.StaleReason = "age_exceeded"
+	}
+	return info
+}
+
+func lockOwnerRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return errors.Is(err, syscall.EPERM)
+	}
+	return true
 }
 
 func sanitizeLockName(name string) string {

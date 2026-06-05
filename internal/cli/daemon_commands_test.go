@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -539,7 +540,7 @@ func TestDaemonKeepaliveLockedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	stateDir := t.TempDir()
-	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headed-browser_url-browser-url", "active_probe")
+	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headed-browser_url-browser-url", os.Getpid(), "active_probe")
 
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
@@ -568,7 +569,7 @@ func TestDaemonKeepaliveLockIsScopedByBrowserMode(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	stateDir := t.TempDir()
-	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headless-browser_url-browser-url", "headless_active_probe")
+	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headless-browser_url-browser-url", os.Getpid(), "headless_active_probe")
 
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
@@ -591,17 +592,62 @@ func TestDaemonKeepaliveLockIsScopedByBrowserMode(t *testing.T) {
 	}
 }
 
-func writeKeepaliveLock(t *testing.T, stateDir, name, phase string) {
+func TestDaemonKeepaliveClearsDeadOwnerLock(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := t.TempDir()
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
+	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headed-browser_url-browser-url", exitedProcessPID(t), "active_probe")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "keepalive", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Locked bool   `json:"locked"`
+		Lock   struct {
+			Name string `json:"name"`
+		} `json:"lock"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.State == "locked" || got.Action == "skipped" || got.Locked || got.Lock.Name != "daemon-keepalive-headed-browser_url-browser-url" {
+		t.Fatalf("daemon keepalive = %+v, want dead-owner lock cleared and keepalive started", got)
+	}
+}
+
+func writeKeepaliveLock(t *testing.T, stateDir, name string, pid int, phase string) {
 	t.Helper()
 	lockDir := filepath.Join(stateDir, "locks")
 	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
 	lockPath := filepath.Join(lockDir, name+".lock")
-	lockBody := []byte(fmt.Sprintf(`{"name":%q,"pid":1234,"started_at":"2099-01-01T00:00:00Z","phase":%q}`+"\n", name, phase))
+	lockBody := []byte(fmt.Sprintf(`{"name":%q,"pid":%d,"started_at":"2099-01-01T00:00:00Z","phase":%q}`+"\n", name, pid, phase))
 	if err := os.WriteFile(lockPath, lockBody, 0o600); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
+}
+
+func exitedProcessPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait helper process: %v", err)
+	}
+	return pid
 }
 
 func TestDaemonRestartBrowserURLJSON(t *testing.T) {

@@ -279,6 +279,35 @@ func TestCronStatusAndDiffUseFakeCrontab(t *testing.T) {
 	}
 }
 
+func TestCronStatusClassifiesDeadDaemonKeepaliveLock(t *testing.T) {
+	_, crontabBin := fakeCrontab(t, "")
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+	lockName := "daemon-keepalive-headless-browser_url-headless"
+	writeKeepaliveLock(t, stateDir, lockName, exitedProcessPID(t), "checking")
+
+	var status struct {
+		OK          bool `json:"ok"`
+		DaemonLocks map[string]struct {
+			Exists       bool     `json:"exists"`
+			Stale        bool     `json:"stale"`
+			StaleReason  string   `json:"stale_reason"`
+			OwnerRunning bool     `json:"owner_running"`
+			PID          int      `json:"pid"`
+			Phase        string   `json:"phase"`
+			NextCommands []string `json:"next_commands"`
+		} `json:"daemon_locks"`
+	}
+	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	lock, ok := status.DaemonLocks[lockName]
+	if !status.OK || !ok || !lock.Exists || !lock.Stale || lock.StaleReason != "owner_process_not_running" || lock.OwnerRunning || lock.PID == 0 || lock.Phase != "checking" {
+		t.Fatalf("cron status daemon lock = %+v ok=%v statusOK=%v, want dead-owner stale classification", lock, ok, status.OK)
+	}
+	if !containsString(lock.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json") {
+		t.Fatalf("next commands = %+v, want safe headless stale-lock repair", lock.NextCommands)
+	}
+}
+
 type cronInstallResult struct {
 	OK        bool   `json:"ok"`
 	Action    string `json:"action"`

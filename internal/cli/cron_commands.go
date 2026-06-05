@@ -72,9 +72,11 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 			status := scheduledTasksStatusForSummary(available, err, summarizeCrontab(current))
 			store, storeErr := a.stateStore()
 			locks := map[string]any{}
+			daemonLocks := map[string]any{}
 			artifacts := map[string]any{}
 			if storeErr == nil {
 				locks = cronLockStates(store.Dir)
+				daemonLocks = cronDaemonLockStates(store.Dir)
 				artifacts = cronLastRunArtifacts(store.Dir)
 			}
 			data := map[string]any{
@@ -87,6 +89,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 				"intended_block":     extractCronManagedBlock(intended),
 				"scheduled_tasks":    status,
 				"locks":              locks,
+				"daemon_locks":       daemonLocks,
 				"last_run_artifacts": artifacts,
 				"processes_by_mode":  a.daemonProcessesByMode(ctx),
 				"next_commands":      []string{"cdp cron diff --json", "cdp cron install --profile agent --json", "cdp doctor --check scheduled-tasks --json"},
@@ -740,14 +743,67 @@ func cronLockStates(stateDir string) map[string]any {
 	locks := map[string]any{}
 	for _, name := range []string{"keepalive-headed", "cron-headed-heal", "keepalive-headless", "headless-health", "headless-profile-seed", "page-cleanup-headless"} {
 		path := filepath.Join(stateDir, "locks", name+".lock")
-		info, err := os.Stat(path)
-		locks[name] = map[string]any{
-			"path":   path,
-			"exists": err == nil,
-			"stale":  err == nil && time.Since(info.ModTime()) > 10*time.Minute,
-		}
+		locks[name] = cronLockStateEntry(name, path, 10*time.Minute)
 	}
 	return locks
+}
+
+func cronDaemonLockStates(stateDir string) map[string]any {
+	locks := map[string]any{}
+	matches, err := filepath.Glob(filepath.Join(stateDir, "locks", "daemon-keepalive-*.lock"))
+	if err != nil {
+		return locks
+	}
+	for _, path := range matches {
+		name := strings.TrimSuffix(filepath.Base(path), ".lock")
+		locks[name] = cronLockStateEntry(name, path, 10*time.Minute)
+	}
+	return locks
+}
+
+func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]any {
+	info := daemon.InspectLock(path, staleAfter)
+	entry := map[string]any{
+		"path":   path,
+		"exists": info.Exists,
+		"stale":  info.Stale,
+	}
+	if !info.Exists {
+		return entry
+	}
+	if info.ModifiedAt != "" {
+		entry["modified_at"] = info.ModifiedAt
+	}
+	if info.StaleReason != "" {
+		entry["stale_reason"] = info.StaleReason
+		entry["next_commands"] = cronLockRepairCommands(name)
+	}
+	if info.Metadata.Name != "" {
+		entry["name"] = info.Metadata.Name
+	}
+	if info.Metadata.PID > 0 {
+		entry["pid"] = info.Metadata.PID
+	}
+	if info.Metadata.StartedAt != "" {
+		entry["started_at"] = info.Metadata.StartedAt
+	}
+	if info.Metadata.Phase != "" {
+		entry["phase"] = info.Metadata.Phase
+	}
+	if info.OwnerRunning != nil {
+		entry["owner_running"] = *info.OwnerRunning
+	}
+	return entry
+}
+
+func cronLockRepairCommands(name string) []string {
+	if strings.Contains(name, "headless") {
+		return []string{"cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json", "cdp cron status --json"}
+	}
+	if strings.Contains(name, "headed") {
+		return []string{"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --stale-lock-after 1s --json", "cdp cron status --json"}
+	}
+	return []string{"cdp daemon keepalive --repair --stale-lock-after 1s --json", "cdp cron status --json"}
 }
 
 func cronLastRunArtifacts(stateDir string) map[string]any {
