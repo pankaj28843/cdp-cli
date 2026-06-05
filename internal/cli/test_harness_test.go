@@ -634,6 +634,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Subscribe to newsletter"
 			placeholder = ""
 		}
+		if query == "Optional updates" {
+			selector = "input#optional-updates"
+			tag = "input"
+			elementType = "checkbox"
+			role = "checkbox"
+			name = "Optional updates"
+			placeholder = ""
+		}
 		disabled := false
 		readOnly := false
 		contentEditable := false
@@ -1497,6 +1505,58 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			out["previous_checked"] = false
 			out["changed"] = false
 			out["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": out}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_checked__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "input#subscribe"
+		}
+		checked := true
+		name := "Subscribe to newsletter"
+		if selector == "input#optional-updates" {
+			checked = false
+			name = "Optional updates"
+		}
+		count := 1
+		items := []map[string]any{{
+			"index":            0,
+			"tag":              "input",
+			"id":               strings.TrimPrefix(selector, "input#"),
+			"type":             "checkbox",
+			"role":             "checkbox",
+			"name":             name,
+			"checked":          checked,
+			"supports_checked": true,
+			"visible":          true,
+			"rect":             map[string]any{"x": 10, "y": 170, "width": 20, "height": 20},
+		}}
+		checkedCount := 0
+		uncheckedCount := 1
+		if checked {
+			checkedCount = 1
+			uncheckedCount = 0
+		}
+		if selector == "#missing" {
+			count = 0
+			checkedCount = 0
+			uncheckedCount = 0
+			items = nil
+		}
+		out := map[string]any{
+			"url":               "https://example.test/app",
+			"title":             "Example App",
+			"selector":          selector,
+			"expected":          "checked",
+			"checked":           checkedCount > 0,
+			"unchecked":         count > 0 && checkedCount == 0,
+			"passed":            checkedCount > 0,
+			"count":             count,
+			"checked_count":     checkedCount,
+			"unchecked_count":   uncheckedCount,
+			"unsupported_count": 0,
+			"items":             items,
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "value": out}}
 	}

@@ -456,6 +456,139 @@ func TestAssertDisabledByRoleLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestAssertCheckedByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "checked", "Subscribe to newsletter", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert checked by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector         string `json:"selector"`
+			Expected         string `json:"expected"`
+			Checked          bool   `json:"checked"`
+			Unchecked        bool   `json:"unchecked"`
+			Passed           bool   `json:"passed"`
+			Count            int    `json:"count"`
+			CheckedCount     int    `json:"checked_count"`
+			UncheckedCount   int    `json:"unchecked_count"`
+			UnsupportedCount int    `json:"unsupported_count"`
+			Items            []struct {
+				Tag             string `json:"tag"`
+				Type            string `json:"type"`
+				Role            string `json:"role"`
+				Name            string `json:"name"`
+				Checked         bool   `json:"checked"`
+				SupportsChecked bool   `json:"supports_checked"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert checked by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#subscribe" || got.Locator.By != "label" || got.Locator.Query != "Subscribe to newsletter" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].SelectorHint != "input#subscribe" || got.Locator.Matches[0].Role != "checkbox" {
+		t.Fatalf("assert checked locator = %+v, want strict checkbox label locator", got)
+	}
+	if got.Assertion.Selector != "input#subscribe" || got.Assertion.Expected != "checked" || !got.Assertion.Checked || got.Assertion.Unchecked || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.CheckedCount != 1 || got.Assertion.UncheckedCount != 0 || got.Assertion.UnsupportedCount != 0 || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Tag != "input" || got.Assertion.Items[0].Type != "checkbox" || got.Assertion.Items[0].Role != "checkbox" || got.Assertion.Items[0].Name != "Subscribe to newsletter" || !got.Assertion.Items[0].Checked || !got.Assertion.Items[0].SupportsChecked {
+		t.Fatalf("assert checked assertion = %+v, want checked checkbox diagnostics", got.Assertion)
+	}
+}
+
+func TestAssertUncheckedByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "unchecked", "Optional updates", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert unchecked by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By     string `json:"by"`
+			Query  string `json:"query"`
+			Strict bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector       string `json:"selector"`
+			Expected       string `json:"expected"`
+			Checked        bool   `json:"checked"`
+			Unchecked      bool   `json:"unchecked"`
+			Passed         bool   `json:"passed"`
+			CheckedCount   int    `json:"checked_count"`
+			UncheckedCount int    `json:"unchecked_count"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert unchecked by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#optional-updates" || got.Locator.By != "label" || got.Locator.Query != "Optional updates" || !got.Locator.Strict {
+		t.Fatalf("assert unchecked locator = %+v, want strict optional checkbox label locator", got)
+	}
+	if got.Assertion.Selector != "input#optional-updates" || got.Assertion.Expected != "unchecked" || got.Assertion.Checked || !got.Assertion.Unchecked || !got.Assertion.Passed || got.Assertion.CheckedCount != 0 || got.Assertion.UncheckedCount != 1 {
+		t.Fatalf("assert unchecked assertion = %+v, want unchecked checkbox diagnostics", got.Assertion)
+	}
+}
+
+func TestAssertCheckedFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "checked", "Optional updates", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("assert checked failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Selector       string `json:"selector"`
+				Expected       string `json:"expected"`
+				Checked        bool   `json:"checked"`
+				Unchecked      bool   `json:"unchecked"`
+				Passed         bool   `json:"passed"`
+				CheckedCount   int    `json:"checked_count"`
+				UncheckedCount int    `json:"unchecked_count"`
+				Items          []struct {
+					Checked bool `json:"checked"`
+				} `json:"items"`
+			} `json:"assertion"`
+		} `json:"data"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert checked failure output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "input#optional-updates" || got.Data.Assertion.Selector != "input#optional-updates" || got.Data.Assertion.Expected != "checked" || got.Data.Assertion.Checked || !got.Data.Assertion.Unchecked || got.Data.Assertion.Passed || got.Data.Assertion.CheckedCount != 0 || got.Data.Assertion.UncheckedCount != 1 || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Checked || !containsString(got.RemediationCommands, "cdp form get 'input#optional-updates' --json") {
+		t.Fatalf("assert checked failure = %+v, want failed checked assertion with unchecked diagnostics", got)
+	}
+}
+
 func TestAssertEnabledFailureJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()

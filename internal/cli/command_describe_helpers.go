@@ -570,6 +570,8 @@ func commandExamples(path string) []string {
 	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --json", "cdp assert disabled 'Submit' --by role --role button --json"}
 	examples["cdp assert editable"] = []string{"cdp assert editable 'input[name=email]' --json", "cdp assert editable 'Search' --by label --json"}
 	examples["cdp assert readonly"] = []string{"cdp assert readonly 'textarea[readonly]' --json", "cdp assert readonly 'Read-only notes' --by label --json"}
+	examples["cdp assert checked"] = []string{"cdp assert checked 'Subscribe to newsletter' --by label --json", "cdp assert checked Subscribe --by role --role checkbox --json"}
+	examples["cdp assert unchecked"] = []string{"cdp assert unchecked 'Subscribe to newsletter' --by label --json", "cdp assert unchecked '#subscribe' --json"}
 
 	return examples[path]
 }

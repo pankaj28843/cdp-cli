@@ -159,6 +159,34 @@ type assertEditableItem struct {
 	Rect                 snapshotRect `json:"rect"`
 }
 
+type assertCheckedResult struct {
+	Selector         string              `json:"selector"`
+	Expected         string              `json:"expected"`
+	Checked          bool                `json:"checked"`
+	Unchecked        bool                `json:"unchecked"`
+	Passed           bool                `json:"passed"`
+	Count            int                 `json:"count"`
+	CheckedCount     int                 `json:"checked_count"`
+	UncheckedCount   int                 `json:"unchecked_count"`
+	UnsupportedCount int                 `json:"unsupported_count"`
+	Items            []assertCheckedItem `json:"items,omitempty"`
+	Error            *evalError          `json:"error,omitempty"`
+}
+
+type assertCheckedItem struct {
+	Index           int          `json:"index"`
+	Tag             string       `json:"tag"`
+	ID              string       `json:"id,omitempty"`
+	Type            string       `json:"type,omitempty"`
+	Role            string       `json:"role,omitempty"`
+	Name            string       `json:"name,omitempty"`
+	Checked         bool         `json:"checked"`
+	SupportsChecked bool         `json:"supports_checked"`
+	AriaChecked     string       `json:"aria_checked,omitempty"`
+	Visible         bool         `json:"visible"`
+	Rect            snapshotRect `json:"rect"`
+}
+
 func (a *app) newFormCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "form", Short: "Inspect live form control state"}
 	cmd.AddCommand(a.newFormValuesCommand())
@@ -231,6 +259,8 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertDisabledCommand())
 	cmd.AddCommand(a.newAssertEditableCommand())
 	cmd.AddCommand(a.newAssertReadonlyCommand())
+	cmd.AddCommand(a.newAssertCheckedCommand())
+	cmd.AddCommand(a.newAssertUncheckedCommand())
 	return cmd
 }
 
@@ -427,6 +457,71 @@ func (a *app) newAssertReadonlyCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newAssertCheckedCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "checked <selector-or-locator>", Short: "Assert a checkbox, radio, or switch is checked by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertCheckedCommand(cmd, args[0], "checked", locatorOpts, targetID, urlContains, titleContains)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) newAssertUncheckedCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "unchecked <selector-or-locator>", Short: "Assert a checkbox, radio, or switch is unchecked by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertCheckedCommand(cmd, args[0], "unchecked", locatorOpts, targetID, urlContains, titleContains)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel := a.browserCommandContext(cmd)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	selector, locator, err := resolveActionSelector(ctx, session, query, locatorOpts, "assert "+expected)
+	if err != nil {
+		return err
+	}
+	var got assertCheckedResult
+	if err := evaluateJSONValue(ctx, session, assertCheckedExpression(selector, 20), "assert "+expected, &got); err != nil {
+		return err
+	}
+	if got.Error != nil {
+		return invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'input[type=checkbox]' --json")
+	}
+	got.Expected = expected
+	got.Passed = got.Checked
+	if expected == "unchecked" {
+		got.Passed = got.Unchecked
+	}
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		report["resolved_selector"] = selector
+	}
+	if !got.Passed {
+		return commandErrorWithData("assertion_failed", "check_failed", checkedAssertionFailureMessage(expected, selector, got), ExitCheckFailed, checkedAssertionRemediations(query, selector, locatorOpts), report)
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
 func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
 	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 		return err
@@ -607,6 +702,14 @@ func enabledAssertionFailureMessage(expected, selector string, got assertEnabled
 
 func editableAssertionFailureMessage(expected, selector string, got assertEditableResult) string {
 	return fmt.Sprintf("%s assertion failed for %q: %d editable, %d read-only, %d disabled, and %d unsupported of %d matched", expected, selector, got.EditableCount, got.ReadOnlyCount, got.DisabledCount, got.UnsupportedCount, got.Count)
+}
+
+func checkedAssertionFailureMessage(expected, selector string, got assertCheckedResult) string {
+	return fmt.Sprintf("%s assertion failed for %q: %d checked, %d unchecked, and %d unsupported of %d matched", expected, selector, got.CheckedCount, got.UncheckedCount, got.UnsupportedCount, got.Count)
+}
+
+func checkedAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
+	return []string{locatorActionFindCommand(query, opts), "cdp form get " + shellQuote(selector) + " --json"}
 }
 
 func assertionMatch(actual, expected, mode string) (bool, error) {
@@ -894,6 +997,96 @@ func assertEditableExpression(selector string, limit int) string {
   const unsupportedCount = allItems.filter((item) => !item.supports_editable).length;
   const readOnly = allItems.length > 0 && editableCount === 0 && readOnlyCount > 0;
   return { url: location.href, title: document.title, selector, expected: "editable", editable: editableCount > 0, read_only: readOnly, passed: editableCount > 0, count: allItems.length, editable_count: editableCount, read_only_count: readOnlyCount, disabled_count: disabledCount, unsupported_count: unsupportedCount, items: allItems.slice(0, limit), marker };
+})()`, jsStringLiteral(selector), limit)
+}
+
+func assertCheckedExpression(selector string, limit int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_assert_checked__";
+  const selector = %s;
+  const limit = %d;
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const roleOf = (el) => {
+    const explicit = norm(el.getAttribute("role")).split(" ")[0];
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    if (tag === "input" && type === "checkbox") return "checkbox";
+    if (tag === "input" && type === "radio") return "radio";
+    return "";
+  };
+  const nameOf = (el) => {
+    const labelled = el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || "";
+    if (labelled) return norm(labelled);
+    if (el.id) {
+      const label = Array.from(document.querySelectorAll("label[for]")).find((candidate) => candidate.getAttribute("for") === el.id);
+      if (label) return norm(label.innerText || label.textContent);
+    }
+    const parent = el.closest("label");
+    return parent ? norm(parent.innerText || parent.textContent) : norm(el.innerText || el.textContent || el.value || "");
+  };
+  const visibilityOf = (el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
+    return { visible: !hidden && rect.width > 0 && rect.height > 0, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  };
+  const stateOf = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    const role = roleOf(el);
+    const native = tag === "input" && (type === "checkbox" || type === "radio");
+    const aria = !native && (role === "checkbox" || role === "switch" || role === "radio");
+    const ariaChecked = String(el.getAttribute("aria-checked") || "").toLowerCase();
+    if (!native && !aria) {
+      return { supportsChecked: false, tag, type, role, checked: false, ariaChecked: ariaChecked || "" };
+    }
+    const checked = native ? Boolean(el.checked) : ariaChecked === "true";
+    return { supportsChecked: true, tag, type, role, checked, ariaChecked: aria ? ariaChecked : "" };
+  };
+  const itemFor = (el, index) => {
+    const state = stateOf(el);
+    const visibility = visibilityOf(el);
+    return {
+      index,
+      tag: state.tag,
+      id: el.id || "",
+      type: state.type,
+      role: state.role,
+      name: nameOf(el).slice(0, 240),
+      checked: state.checked,
+      supports_checked: state.supportsChecked,
+      aria_checked: state.ariaChecked,
+      visible: visibility.visible,
+      rect: visibility.rect
+    };
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, expected: "checked", checked: false, unchecked: false, passed: false, count: 0, checked_count: 0, unchecked_count: 0, unsupported_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+  }
+  const allItems = elements.map(itemFor);
+  const supported = allItems.filter((item) => item.supports_checked);
+  const checkedCount = supported.filter((item) => item.checked).length;
+  const uncheckedCount = supported.length - checkedCount;
+  const unsupportedCount = allItems.length - supported.length;
+  return {
+    url: location.href,
+    title: document.title,
+    selector,
+    expected: "checked",
+    checked: checkedCount > 0,
+    unchecked: supported.length > 0 && checkedCount === 0,
+    passed: checkedCount > 0,
+    count: allItems.length,
+    checked_count: checkedCount,
+    unchecked_count: uncheckedCount,
+    unsupported_count: unsupportedCount,
+    items: allItems.slice(0, limit),
+    marker
+  };
 })()`, jsStringLiteral(selector), limit)
 }
 

@@ -88,6 +88,70 @@ func TestRuntimeOperationsAreModeAware(t *testing.T) {
 	}
 }
 
+func TestSaveRuntimeDoesNotExposePartialStateToReaders(t *testing.T) {
+	stateDir := t.TempDir()
+	runtime := daemon.Runtime{
+		PID:            os.Getpid(),
+		StartedAt:      "2026-06-05T00:00:00Z",
+		ConnectionMode: "browser_url",
+		SocketPath:     daemon.RuntimeSocketPath(stateDir),
+		Endpoint:       "ws://example.test/devtools/browser/" + strings.Repeat("x", 1<<20),
+	}
+	if err := daemon.SaveRuntime(context.Background(), stateDir, runtime); err != nil {
+		t.Fatalf("initial SaveRuntime returned error: %v", err)
+	}
+
+	done := make(chan struct{})
+	readerDone := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if _, ok, err := daemon.LoadRuntime(context.Background(), stateDir); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			} else if !ok {
+				select {
+				case errCh <- errors.New("runtime unexpectedly missing"):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 100; i++ {
+		runtime.PID = os.Getpid() + i + 1
+		if err := daemon.SaveRuntime(context.Background(), stateDir, runtime); err != nil {
+			close(done)
+			<-readerDone
+			t.Fatalf("SaveRuntime iteration %d returned error: %v", i, err)
+		}
+		select {
+		case err := <-errCh:
+			close(done)
+			<-readerDone
+			t.Fatalf("LoadRuntime observed partial state: %v", err)
+		default:
+		}
+	}
+	close(done)
+	<-readerDone
+	select {
+	case err := <-errCh:
+		t.Fatalf("LoadRuntime observed partial state: %v", err)
+	default:
+	}
+}
+
 func TestRuntimeLogsAreModeAware(t *testing.T) {
 	stateDir := t.TempDir()
 	if err := os.WriteFile(daemon.RuntimeLogPath(stateDir), []byte(`{"event":"headed_event"}`+"\n"), 0o600); err != nil {
