@@ -103,6 +103,123 @@ func TestCronInstallWarnsWhenPreservingPagesPollingHack(t *testing.T) {
 	}
 }
 
+func TestCronMigratePagesPollingDryRunReportsCandidatesAndPreservesCrontab(t *testing.T) {
+	initial := "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n* * * * * $HOME/.local/bin/cdp pages --browser-mode headed >/dev/null 2>&1\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var got struct {
+		OK                        bool     `json:"ok"`
+		Action                    string   `json:"action"`
+		Changed                   bool     `json:"changed"`
+		DryRun                    bool     `json:"dry_run"`
+		Applied                   bool     `json:"applied"`
+		CandidateCount            int      `json:"candidate_count"`
+		RemovedCount              int      `json:"removed_count"`
+		ManagedKeepaliveInstalled bool     `json:"managed_keepalive_installed"`
+		CandidateEntries          []string `json:"candidate_entries"`
+		RemovedEntries            []string `json:"removed_entries"`
+		Warnings                  []string `json:"warnings"`
+		NextCommands              []string `json:"next_commands"`
+	}
+	executeCronJSON(t, []string{"cron", "migrate", "pages-polling", "--state-dir", stateDir, "--json"}, &got)
+	if !got.OK || got.Action != "would_remove" || !got.Changed || !got.DryRun || got.Applied || got.CandidateCount != 1 || got.RemovedCount != 0 || got.ManagedKeepaliveInstalled {
+		t.Fatalf("cron migrate pages-polling dry-run = %+v, want one unapplied candidate and no managed keepalive", got)
+	}
+	if len(got.CandidateEntries) != 1 || !strings.Contains(got.CandidateEntries[0], "cdp pages --browser-mode headed") {
+		t.Fatalf("candidate entries = %+v, want pages polling line", got.CandidateEntries)
+	}
+	if len(got.RemovedEntries) != 0 {
+		t.Fatalf("removed entries = %+v, want none on dry-run", got.RemovedEntries)
+	}
+	if !containsString(got.Warnings, "managed daemon keepalive is not installed; run cdp cron install --profile agent --json and verify cdp cron status before applying this migration") {
+		t.Fatalf("warnings = %+v, want managed keepalive prerequisite", got.Warnings)
+	}
+	if !containsString(got.NextCommands, "cdp cron install --profile agent --json") {
+		t.Fatalf("next commands = %+v, want cron install guidance", got.NextCommands)
+	}
+	if after := readFileString(t, crontabPath); after != initial {
+		t.Fatalf("dry-run mutated crontab:\n%s", after)
+	}
+}
+
+func TestCronMigratePagesPollingApplyRequiresManagedKeepalive(t *testing.T) {
+	initial := "SHELL=/bin/sh\n* * * * * $HOME/.local/bin/cdp pages --browser-mode headed >/dev/null 2>&1\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"cron", "migrate", "pages-polling", "--apply", "--state-dir", stateDir, "--json"}, &stdout, &stderr, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("cron migrate pages-polling --apply exit = %d, want %d; stderr=%s stdout=%s", code, cli.ExitUsage, stderr.String(), stdout.String())
+	}
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		ErrClass            string   `json:"err_class"`
+		Message             string   `json:"message"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode apply error output: %v\n%s", err, stdout.String())
+	}
+	if got.OK || got.Code != "managed_keepalive_required" || got.ErrClass != "usage" || !strings.Contains(got.Message, "cdp cron install --profile agent --json") {
+		t.Fatalf("error envelope = %+v, want managed_keepalive_required usage guidance", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp cron install --profile agent --json") {
+		t.Fatalf("remediation commands = %+v, want cron install", got.RemediationCommands)
+	}
+	if after := readFileString(t, crontabPath); after != initial {
+		t.Fatalf("failed apply mutated crontab:\n%s", after)
+	}
+}
+
+func TestCronMigratePagesPollingApplyRemovesOnlyLegacyAfterManagedInstalled(t *testing.T) {
+	initial := "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n* * * * * $HOME/.local/bin/cdp pages --browser-mode headed >/dev/null 2>&1\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var install cronInstallResult
+	executeCronJSON(t, []string{"cron", "install", "--state-dir", stateDir, "--json"}, &install)
+	if !install.OK || !install.Changed {
+		t.Fatalf("cron install = %+v, want changed", install)
+	}
+
+	var got struct {
+		OK                        bool     `json:"ok"`
+		Action                    string   `json:"action"`
+		Changed                   bool     `json:"changed"`
+		DryRun                    bool     `json:"dry_run"`
+		Applied                   bool     `json:"applied"`
+		CandidateCount            int      `json:"candidate_count"`
+		RemovedCount              int      `json:"removed_count"`
+		ManagedKeepaliveInstalled bool     `json:"managed_keepalive_installed"`
+		RemovedEntries            []string `json:"removed_entries"`
+	}
+	executeCronJSON(t, []string{"cron", "migrate", "pages-polling", "--apply", "--state-dir", stateDir, "--json"}, &got)
+	if !got.OK || got.Action != "removed" || !got.Changed || got.DryRun || !got.Applied || got.CandidateCount != 1 || got.RemovedCount != 1 || !got.ManagedKeepaliveInstalled {
+		t.Fatalf("cron migrate pages-polling apply = %+v, want applied removal with managed keepalive", got)
+	}
+	if len(got.RemovedEntries) != 1 || !strings.Contains(got.RemovedEntries[0], "cdp pages --browser-mode headed") {
+		t.Fatalf("removed entries = %+v, want pages polling line", got.RemovedEntries)
+	}
+	after := readFileString(t, crontabPath)
+	if strings.Contains(after, " cdp pages ") {
+		t.Fatalf("migration left pages polling line behind:\n%s", after)
+	}
+	if !strings.Contains(after, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
+		t.Fatalf("migration did not preserve unmanaged backup line:\n%s", after)
+	}
+	for _, want := range []string{"# cdp-cli managed browser runtime tasks", "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "# End cdp-cli managed browser runtime tasks"} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("migration did not preserve managed block content %q:\n%s", want, after)
+		}
+	}
+}
+
 func TestCronRemoveOnlyRemovesManagedBlock(t *testing.T) {
 	initial := strings.Join([]string{
 		"SHELL=/bin/sh",

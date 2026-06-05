@@ -46,6 +46,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"doctor-capabilities",
 		"error-envelope",
 		"cron",
+		"cron-migrate-pages-polling",
 		"scheduled-tasks",
 		"headless-security",
 		"browser-mode",
@@ -76,17 +77,18 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 func TestSchemaCatalogBrowserModeContracts(t *testing.T) {
 	catalog := schemaCatalog()
 	cases := map[string][]string{
-		"browser-mode":           {"browser_mode", "browser_mode_source", "next_commands"},
-		"browser-profile-status": {"browser_mode", "state", "managed_browser", "profile_perm", "metadata_perm"},
-		"browser-profile-seed":   {"browser_mode", "state", "seed_strategy", "managed_browser"},
-		"managed-browser":        {"browser_mode", "user_data_dir", "profile_seed_strategy", "debugging_port"},
-		"connection-current":     {"browser_mode", "browser_mode_source", "connection", "effective_connection", "connection_matches_effective"},
-		"connection-resolve":     {"browser_mode", "browser_mode_source", "connection"},
-		"daemon-status":          {"daemon"},
-		"daemon-keepalive":       {"browser_mode", "connection", "mode", "lock"},
-		"cron":                   {"next_commands"},
-		"scheduled-tasks":        {"details", "next_commands"},
-		"headless-security":      {"browser_mode", "details", "next_commands"},
+		"browser-mode":               {"browser_mode", "browser_mode_source", "next_commands"},
+		"browser-profile-status":     {"browser_mode", "state", "managed_browser", "profile_perm", "metadata_perm"},
+		"browser-profile-seed":       {"browser_mode", "state", "seed_strategy", "managed_browser"},
+		"managed-browser":            {"browser_mode", "user_data_dir", "profile_seed_strategy", "debugging_port"},
+		"connection-current":         {"browser_mode", "browser_mode_source", "connection", "effective_connection", "connection_matches_effective"},
+		"connection-resolve":         {"browser_mode", "browser_mode_source", "connection"},
+		"daemon-status":              {"daemon"},
+		"daemon-keepalive":           {"browser_mode", "connection", "mode", "lock"},
+		"cron":                       {"next_commands"},
+		"cron-migrate-pages-polling": {"action", "dry_run", "applied", "candidate_count", "managed_keepalive_installed", "next_commands"},
+		"scheduled-tasks":            {"details", "next_commands"},
+		"headless-security":          {"browser_mode", "details", "next_commands"},
 	}
 	for schemaName, fieldNames := range cases {
 		info, ok := catalog[schemaName]

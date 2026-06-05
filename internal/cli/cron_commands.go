@@ -44,6 +44,7 @@ func (a *app) newCronCommand() *cobra.Command {
 	cmd.AddCommand(a.newCronStatusCommand())
 	cmd.AddCommand(a.newCronDiffCommand())
 	cmd.AddCommand(a.newCronInstallCommand())
+	cmd.AddCommand(a.newCronMigrateCommand())
 	cmd.AddCommand(a.newCronRemoveCommand())
 	cmd.AddCommand(a.newCronHealCommand())
 	return cmd
@@ -229,6 +230,80 @@ func (a *app) newCronRemoveCommand() *cobra.Command {
 			return a.render(ctx, fmt.Sprintf("cdp cron block %s", data["action"]), data)
 		},
 	}
+}
+
+func (a *app) newCronMigrateCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "migrate",
+		Short: "Migrate legacy unmanaged cron entries to cdp-managed tasks",
+	}
+	cmd.AddCommand(a.newCronMigratePagesPollingCommand())
+	return cmd
+}
+
+func (a *app) newCronMigratePagesPollingCommand() *cobra.Command {
+	var apply bool
+	cmd := &cobra.Command{
+		Use:   "pages-polling",
+		Short: "Remove unmanaged cdp pages polling entries after managed keepalive is installed",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+
+			current, err := readUserCrontab(ctx)
+			if err != nil && !isEmptyCrontab(err) {
+				return cronCommandError("read crontab", err)
+			}
+			managed := extractCronManagedBlock(current)
+			managedKeepaliveInstalled := summarizeCrontab(managed.Text).HasDaemonKeepalive
+			next, candidates := withoutLegacyPagesPollingCronEntries(current)
+			changed := current != next
+			dryRun := !apply
+			warnings := cronPagesPollingMigrationWarnings(changed, dryRun, managedKeepaliveInstalled)
+			nextCommands := cronPagesPollingMigrationNextCommands(changed, dryRun, managedKeepaliveInstalled)
+			candidateEntries := stringSliceOrEmpty(candidates)
+
+			if apply && changed && !managedKeepaliveInstalled {
+				return commandError(
+					"managed_keepalive_required",
+					"usage",
+					"managed daemon keepalive is not installed; run cdp cron install --profile agent --json and verify cdp cron status before removing legacy pages polling entries",
+					ExitUsage,
+					[]string{"cdp cron install --profile agent --json", "cdp cron status --json", "cdp cron migrate pages-polling --apply --json"},
+				)
+			}
+			if apply && changed {
+				if err := writeUserCrontab(ctx, next); err != nil {
+					return cronCommandError("write crontab", err)
+				}
+			}
+
+			action := "unchanged"
+			if changed && dryRun {
+				action = "would_remove"
+			} else if changed {
+				action = "removed"
+			}
+			data := map[string]any{
+				"ok":                          true,
+				"action":                      action,
+				"changed":                     changed,
+				"dry_run":                     dryRun,
+				"applied":                     apply && changed,
+				"candidate_count":             len(candidates),
+				"removed_count":               removedCount(changed, dryRun, len(candidates)),
+				"managed_keepalive_installed": managedKeepaliveInstalled,
+				"candidate_entries":           candidateEntries,
+				"removed_entries":             removedEntries(changed, dryRun, candidateEntries),
+				"warnings":                    warnings,
+				"next_commands":               nextCommands,
+			}
+			return a.render(ctx, fmt.Sprintf("legacy pages polling cron entries %s", action), data)
+		},
+	}
+	cmd.Flags().BoolVar(&apply, "apply", false, "write the crontab change after managed daemon keepalive is installed")
+	return cmd
 }
 
 func (a *app) newCronHealCommand() *cobra.Command {
@@ -534,6 +609,37 @@ func withoutCronManagedBlock(text string) string {
 	return out.String()
 }
 
+func withoutLegacyPagesPollingCronEntries(text string) (string, []string) {
+	var out strings.Builder
+	var removed []string
+	inBlock := false
+	for _, chunk := range splitLinesPreserve(text) {
+		line := strings.TrimRight(chunk, "\r\n")
+		switch line {
+		case cronManagedBlockStart:
+			inBlock = true
+		case cronManagedBlockEnd:
+			if inBlock {
+				inBlock = false
+			}
+		}
+		if !inBlock && isLegacyPagesPollingCronLine(line) {
+			removed = append(removed, strings.TrimSpace(line))
+			continue
+		}
+		out.WriteString(chunk)
+	}
+	return out.String(), removed
+}
+
+func isLegacyPagesPollingCronLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") || strings.Contains(line, "grep cdp") {
+		return false
+	}
+	return scheduledTaskContainsCDPCommand(line, "pages")
+}
+
 func appendCronManagedBlock(base, block string) string {
 	if strings.TrimSpace(base) == "" {
 		return block
@@ -581,6 +687,53 @@ func cronInstallWarnings(opts cronRenderOptions, summary crontabSummary) []strin
 		warnings = append(warnings, "current crontab contains unmanaged cdp pages polling; cron install preserves unmanaged lines, so remove the manual pages loop after managed keepalive is verified")
 	}
 	return warnings
+}
+
+func cronPagesPollingMigrationWarnings(changed, dryRun, managedKeepaliveInstalled bool) []string {
+	if !changed {
+		return nil
+	}
+	if !managedKeepaliveInstalled {
+		return []string{"managed daemon keepalive is not installed; run cdp cron install --profile agent --json and verify cdp cron status before applying this migration"}
+	}
+	if dryRun {
+		return []string{"dry-run only; rerun with --apply after reviewing candidate entries"}
+	}
+	return nil
+}
+
+func cronPagesPollingMigrationNextCommands(changed, dryRun, managedKeepaliveInstalled bool) []string {
+	if !changed {
+		return []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"}
+	}
+	if !managedKeepaliveInstalled {
+		return []string{"cdp cron install --profile agent --json", "cdp cron status --json", "cdp cron migrate pages-polling --apply --json"}
+	}
+	if dryRun {
+		return []string{"cdp cron migrate pages-polling --apply --json", "cdp doctor --check scheduled-tasks --json"}
+	}
+	return []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"}
+}
+
+func removedCount(changed, dryRun bool, count int) int {
+	if changed && !dryRun {
+		return count
+	}
+	return 0
+}
+
+func removedEntries(changed, dryRun bool, entries []string) []string {
+	if changed && !dryRun {
+		return entries
+	}
+	return []string{}
+}
+
+func stringSliceOrEmpty(entries []string) []string {
+	if entries == nil {
+		return []string{}
+	}
+	return entries
 }
 
 func cronLockStates(stateDir string) map[string]any {

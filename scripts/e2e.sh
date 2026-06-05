@@ -31,6 +31,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("cdp cron install --profile agent")))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
 "$binary" describe --command "cron install" --json | jq -e '.ok == true and .commands.name == "install" and (.commands.examples | any(contains("--profile agent"))) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run"))' >/dev/null
+"$binary" describe --command "cron migrate pages-polling" --json | jq -e '.ok == true and .commands.name == "pages-polling" and (.commands.examples | any(contains("migrate pages-polling --json"))) and (.commands.examples | any(contains("--apply"))) and (.commands.flags[] | select(.name == "apply"))' >/dev/null
 "$binary" describe --command "cron heal headed" --json | jq -e '.ok == true and .commands.name == "headed" and (.commands.examples | any(contains("--reconnect 30s")))' >/dev/null
 "$binary" describe --command "doctor" --json | jq -e '.ok == true and .commands.name == "doctor" and (.commands.examples | any(contains("scheduled-tasks")))' >/dev/null
 "$binary" describe --command "browser mode get" --json | jq -e '.ok == true and .commands.name == "get" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
@@ -63,6 +64,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities")) and (.schema.fields | map(.name) | index("bootstrap_path"))' >/dev/null
 "$binary" schema scheduled-tasks --json | jq -e '.ok == true and .schema.name == "scheduled-tasks" and (.schema.fields | map(.name) | index("details")) and (.schema.fields[] | select(.name == "details").description | contains("legacy pages polling")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema cron --json | jq -e '.ok == true and .schema.name == "cron" and (.schema.fields | map(.name) | index("next_commands")) and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("dry_run"))' >/dev/null
+"$binary" schema cron-migrate-pages-polling --json | jq -e '.ok == true and .schema.name == "cron-migrate-pages-polling" and (.schema.fields | map(.name) | index("candidate_count")) and (.schema.fields | map(.name) | index("managed_keepalive_installed")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema headless-security --json | jq -e '.ok == true and .schema.name == "headless-security" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
 "$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("budget"))' >/dev/null
@@ -129,10 +131,18 @@ EOF_CRONTAB_BIN
 chmod +x "$fake_crontab_bin"
 cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
+0 0 * * * /usr/local/bin/backup
 * * * * * /bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do nohup $HOME/.local/bin/cdp pages --browser-mode headed >/dev/null 2>&1 & sleep 5; done'
 EOF_CRONTAB
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].status == "warn" and (.[0].message | contains("cdp pages polling")) and .[0].details.has_pages_polling_keepalive == true and .[0].details.has_headed_pages_polling == true and .[0].details.pages_polling_count == 1' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and (.warnings | any(contains("unmanaged cdp pages polling")))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron migrate pages-polling --state-dir "$state_dir" --json | jq -e '.ok == true and .action == "would_remove" and .dry_run == true and .applied == false and .candidate_count == 1 and .removed_count == 0 and .managed_keepalive_installed == false and (.warnings | any(contains("managed daemon keepalive is not installed")))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.warnings | any(contains("unmanaged cdp pages polling"))) and (.managed_block.entries | length == 5)' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron migrate pages-polling --apply --state-dir "$state_dir" --json | jq -e '.ok == true and .action == "removed" and .dry_run == false and .applied == true and .candidate_count == 1 and .removed_count == 1 and .managed_keepalive_installed == true and (.removed_entries | length == 1)' >/dev/null
+rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
+rg -q 'cdp-cli managed browser runtime tasks' "$fake_crontab_store"
+rg -q -- '--browser-mode headed daemon keepalive --auto-connect --repair --probe passive' "$fake_crontab_store"
+! rg -q 'cdp pages --browser-mode headed' "$fake_crontab_store"
 cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup

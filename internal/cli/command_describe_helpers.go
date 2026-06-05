@@ -113,6 +113,7 @@ func commandExamples(path string) []string {
 		"cdp cron": {
 			"cdp cron status --json",
 			"cdp cron install --profile agent --json",
+			"cdp cron migrate pages-polling --json",
 		},
 		"cdp cron status": {
 			"cdp cron status --json",
@@ -129,6 +130,13 @@ func commandExamples(path string) []string {
 		},
 		"cdp cron diff": {
 			"cdp cron diff --json",
+		},
+		"cdp cron migrate": {
+			"cdp cron migrate pages-polling --json",
+		},
+		"cdp cron migrate pages-polling": {
+			"cdp cron migrate pages-polling --json",
+			"cdp cron migrate pages-polling --apply --json",
 		},
 		"cdp cron heal": {
 			"cdp cron heal headed --json",
