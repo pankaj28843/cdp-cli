@@ -28,6 +28,8 @@ var fakeDelayedAssertEnabledAttempts atomic.Int64
 var fakeDelayedAssertDisabledAttempts atomic.Int64
 var fakeDelayedAssertEditableAttempts atomic.Int64
 var fakeDelayedAssertReadonlyAttempts atomic.Int64
+var fakeDelayedAssertTextAttempts atomic.Int64
+var fakeDelayedAssertValueAttempts atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -722,6 +724,22 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Delayed readonly"
 			placeholder = ""
 		}
+		if query == "Delayed text" {
+			selector = "button#delayed-text"
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Delayed text"
+			placeholder = ""
+		}
+		if query == "Delayed value" {
+			selector = "input#delayed-value"
+			tag = "input"
+			elementType = "text"
+			role = "textbox"
+			name = "Delayed value"
+			placeholder = ""
+		}
 		if query == "Gone" {
 			return map[string]any{
 				"result": map[string]any{
@@ -910,6 +928,22 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 				"role":          "searchbox",
 				"name":          "Search",
 				"value":         "hello",
+				"read_only":     false,
+				"disabled":      false,
+			}
+		}
+		if selector == "input#delayed-value" {
+			value := "pending"
+			if fakeDelayedAssertValueAttempts.Add(1) >= 3 {
+				value = "ready"
+			}
+			control = map[string]any{
+				"selector_hint": "input#delayed-value",
+				"tag":           "input",
+				"type":          "text",
+				"role":          "textbox",
+				"name":          "Delayed value",
+				"value":         value,
 				"read_only":     false,
 				"disabled":      false,
 			}
@@ -1251,6 +1285,12 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		case "button#submit":
 			tag = "button"
 			text = "Search button"
+		case "button#delayed-text":
+			tag = "button"
+			text = "Pending text"
+			if fakeDelayedAssertTextAttempts.Add(1) >= 3 {
+				text = "Ready text"
+			}
 		case "input#q":
 			tag = "input"
 			text = ""

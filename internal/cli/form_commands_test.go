@@ -80,6 +80,79 @@ func TestAssertValueByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestAssertValueRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertValueAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "value", "Delayed value", "ready", "--by", "label", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert value retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Actual       string `json:"actual"`
+			Mode         string `json:"mode"`
+			Passed       bool   `json:"passed"`
+			Count        int    `json:"count"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert value retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#delayed-value" || got.Assertion.Selector != "input#delayed-value" || got.Assertion.Expected != "ready" || got.Assertion.Actual != "ready" || got.Assertion.Mode != "exact" || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert value retry = %+v, want retried value assertion with timing evidence", got)
+	}
+}
+
+func TestAssertValueTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "value", "Search", "never", "--by", "label", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert value timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Selector     string `json:"selector"`
+				Expected     string `json:"expected"`
+				Actual       string `json:"actual"`
+				Mode         string `json:"mode"`
+				Passed       bool   `json:"passed"`
+				Count        int    `json:"count"`
+				Attempts     int    `json:"attempts"`
+				ElapsedMS    int64  `json:"elapsed_ms"`
+				PollInterval string `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert value timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#q" || got.Data.Assertion.Selector != "input#q" || got.Data.Assertion.Expected != "never" || got.Data.Assertion.Actual != "hello" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp form get 'input#q' --json") {
+		t.Fatalf("assert value timeout = %+v, want timeout with last value diagnostics", got)
+	}
+}
+
 func TestAssertTextBodyCompatibilityJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
@@ -150,6 +223,79 @@ func TestAssertTextByRoleLocatorJSON(t *testing.T) {
 	}
 	if got.Assertion.Selector != "button#submit" || got.Assertion.Expected != "Search button" || got.Assertion.Actual != "Search button" || got.Assertion.Mode != "contains" || !got.Assertion.Passed || got.Assertion.Count != 1 {
 		t.Fatalf("assert text assertion = %+v, want assertion on resolved button text", got.Assertion)
+	}
+}
+
+func TestAssertTextRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertTextAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "text", "Delayed text", "Ready text", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert text retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Actual       string `json:"actual"`
+			Mode         string `json:"mode"`
+			Passed       bool   `json:"passed"`
+			Count        int    `json:"count"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert text retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#delayed-text" || got.Assertion.Selector != "button#delayed-text" || got.Assertion.Expected != "Ready text" || got.Assertion.Actual != "Ready text" || got.Assertion.Mode != "contains" || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert text retry = %+v, want retried text assertion with timing evidence", got)
+	}
+}
+
+func TestAssertTextTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "text", "Search", "Never text", "--by", "role", "--role", "button", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert text timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Selector     string `json:"selector"`
+				Expected     string `json:"expected"`
+				Actual       string `json:"actual"`
+				Mode         string `json:"mode"`
+				Passed       bool   `json:"passed"`
+				Count        int    `json:"count"`
+				Attempts     int    `json:"attempts"`
+				ElapsedMS    int64  `json:"elapsed_ms"`
+				PollInterval string `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert text timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "Never text" || got.Data.Assertion.Actual != "Search button" || got.Data.Assertion.Mode != "contains" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp text 'button#submit' --limit 0 --json") {
+		t.Fatalf("assert text timeout = %+v, want timeout with last text diagnostics", got)
 	}
 }
 

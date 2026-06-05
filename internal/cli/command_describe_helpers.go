@@ -565,8 +565,8 @@ func commandExamples(path string) []string {
 	examples["cdp workflow lighthouse"] = []string{"cdp workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --json"}
 	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json"}
 	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json"}
-	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --json", "cdp assert value 'Search' expected --by label --json"}
-	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --json", "cdp assert text 'Search' 'Search' --by role --role button --json"}
+	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --timeout 5s --json", "cdp assert value 'Search' expected --by label --poll 100ms --json"}
+	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --timeout 5s --json", "cdp assert text 'Search' 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
 	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}

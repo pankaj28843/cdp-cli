@@ -549,22 +549,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"assert-value": {
 			Name:        "assert-value",
-			Description: "Form-control value assertion result.",
+			Description: "Auto-retrying form-control value assertion result.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the assertion passed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_value_result", Required: true, Description: "Selector, expected value, actual value, match mode, pass/fail status, count, and control metadata."},
+				{Name: "assertion", Type: "assert_value_result", Required: true, Description: "Selector, expected value, actual value, match mode, pass/fail status, count, control metadata, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
 		"assert-text": {
 			Name:        "assert-text",
-			Description: "Visible text assertion result for page body, CSS selector, or strict locator.",
+			Description: "Auto-retrying visible text assertion result for page body, CSS selector, or strict locator.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the assertion passed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_text_result", Required: true, Description: "Selector, expected text, actual visible text, match mode, pass/fail status, count, and selector error metadata."},
+				{Name: "assertion", Type: "assert_text_result", Required: true, Description: "Selector, expected text, actual visible text, match mode, pass/fail status, count, selector error metadata, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},

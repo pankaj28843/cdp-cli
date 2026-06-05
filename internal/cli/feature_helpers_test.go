@@ -18,9 +18,9 @@ func TestAssertValueFailureSingleJSONEnvelope(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "value", "textarea", "not-the-value", "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitCheckFailed {
-		t.Fatalf("assert value exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	code := cli.Execute(context.Background(), []string{"assert", "value", "textarea", "not-the-value", "--timeout", "100ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert value exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
 	var got struct {
 		OK   bool   `json:"ok"`
@@ -35,7 +35,7 @@ func TestAssertValueFailureSingleJSONEnvelope(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert value output is not one JSON document: %v; stdout=%s", err, out.String())
 	}
-	if got.OK || got.Code != "assertion_failed" || got.Data.Assertion.Passed || got.Data.Assertion.Actual != "SGVsbG8gVVg=" {
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Passed || got.Data.Assertion.Actual != "SGVsbG8gVVg=" {
 		t.Fatalf("assert failure envelope = %+v, want single error envelope with assertion data", got)
 	}
 }

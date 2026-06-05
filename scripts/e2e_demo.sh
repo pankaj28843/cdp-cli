@@ -147,22 +147,22 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .wait.kind == "locator" and .wait.matched == true and .wait.strict == true and .locator.strict == true and .wait.resolved_selector == "input#agent-input"' >/dev/null
 "$binary" fill "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "filled" and .locator.strict == true and .resolved_selector == "input#agent-input" and .fill.selector == "input#agent-input" and .fill.value == "locator filled value" and .actionability.actionable == true and .actionability.checks.editable.passed == true' >/dev/null
-"$binary" assert value "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "input#agent-input" and .assertion.selector == "input#agent-input"' >/dev/null
+"$binary" assert value "Agent input" "locator filled value" --by label --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "input#agent-input" and .assertion.selector == "input#agent-input"' >/dev/null
 "$binary" fill "Agent input" "trial should not write" --by label --trial --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "trial" and .fill.trial == true and .fill.filled == false and .locator.strict == true and .resolved_selector == "input#agent-input" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.enabled.passed == true and .actionability.checks.editable.passed == true' >/dev/null
-"$binary" assert value "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .assertion.passed == true and .assertion.actual == "locator filled value"' >/dev/null
+"$binary" assert value "Agent input" "locator filled value" --by label --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .assertion.actual == "locator filled value"' >/dev/null
 "$binary" fill "#hidden-agent-input" "forced hidden value" --force --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "filled" and .fill.force == true and .fill.filled == true and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("visible")) and .actionability.checks.visible.required == false and .actionability.checks.visible.skipped == true and .actionability.checks.visible.passed == false and .actionability.checks.editable.passed == true' >/dev/null
-"$binary" assert value "#hidden-agent-input" "forced hidden value" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .assertion.passed == true and .assertion.actual == "forced hidden value"' >/dev/null
+"$binary" assert value "#hidden-agent-input" "forced hidden value" --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .assertion.actual == "forced hidden value"' >/dev/null
 "$binary" select "Plan" pro --by label --trial --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "trial" and .select.trial == true and .select.selected == false and .select.value == "pro" and .locator.strict == true and .resolved_selector == "select#plan" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.enabled.passed == true and ((.actionability.required_checks | index("stable")) == null) and ((.actionability.required_checks | index("receives_events")) == null)' >/dev/null
 "$binary" select "Plan" pro --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "selected" and .select.selected == true and .select.value == "pro" and .select.previous == "free" and .select.matched_by == "value" and (.select.selected_values | index("pro")) and .locator.strict == true and .resolved_selector == "select#plan" and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
-"$binary" assert value "Plan" pro --by label --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "select#plan" and .assertion.actual == "pro"' >/dev/null
+"$binary" assert value "Plan" pro --by label --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "select#plan" and .assertion.actual == "pro"' >/dev/null
 "$binary" select "#hidden-plan" pro --force --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "selected" and .select.force == true and .select.selected == true and .select.value == "pro" and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("visible")) and .actionability.checks.visible.required == false and .actionability.checks.visible.skipped == true and .actionability.checks.visible.passed == false and .actionability.checks.enabled.passed == true' >/dev/null
 "$binary" check "Subscribe" --by role --role checkbox --trial --state-dir "$state_dir/cdp-state" --json \
@@ -179,8 +179,8 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .action == "checked" and .check.checked == true and .check.force == true and .check.changed == true and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.required == false and .actionability.checks.receives_events.skipped == true and .actionability.checks.receives_events.passed == false and .actionability.checks.enabled.passed == true' >/dev/null
 "$binary" assert checked "#covered-checkbox" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .assertion.checked == true and .assertion.checked_count == 1 and .assertion.unsupported_count == 0 and .assertion.items[0].id == "covered-checkbox" and .assertion.items[0].type == "checkbox"' >/dev/null
-"$binary" assert text "Click target" "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .assertion.passed == true and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.actual == "Click target"' >/dev/null
+"$binary" assert text "Click target" "Click target" --by role --role button --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.actual == "Click target"' >/dev/null
 "$binary" assert visible "Click target" --by role --role button --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.visible == true and .assertion.visible_count == 1' >/dev/null
 "$binary" assert hidden "Dismiss" --by role --role button --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
