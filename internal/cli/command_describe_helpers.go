@@ -569,8 +569,8 @@ func commandExamples(path string) []string {
 	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --json", "cdp assert text 'Search' 'Search' --by role --role button --json"}
 	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
-	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --json", "cdp assert enabled 'Search' --by role --role button --json"}
-	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --json", "cdp assert disabled 'Submit' --by role --role button --json"}
+	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}
+	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --timeout 5s --json", "cdp assert disabled 'Submit' --by role --role button --poll 100ms --json"}
 	examples["cdp assert editable"] = []string{"cdp assert editable 'input[name=email]' --json", "cdp assert editable 'Search' --by label --json"}
 	examples["cdp assert readonly"] = []string{"cdp assert readonly 'textarea[readonly]' --json", "cdp assert readonly 'Read-only notes' --by label --json"}
 	examples["cdp assert checked"] = []string{"cdp assert checked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert checked Subscribe --by role --role checkbox --poll 100ms --json"}

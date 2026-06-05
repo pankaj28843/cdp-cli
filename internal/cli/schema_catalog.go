@@ -593,22 +593,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"assert-enabled": {
 			Name:        "assert-enabled",
-			Description: "Element enabled assertion result for CSS selector or strict locator.",
+			Description: "Auto-retrying element enabled assertion result for CSS selector or strict locator.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element is enabled."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, and bounded item diagnostics."},
+				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
 		"assert-disabled": {
 			Name:        "assert-disabled",
-			Description: "Element disabled assertion result for CSS selector or strict locator.",
+			Description: "Auto-retrying element disabled assertion result for CSS selector or strict locator.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected elements are present and none are enabled."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, and bounded item diagnostics with disabled reasons."},
+				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, bounded item diagnostics with disabled reasons, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},

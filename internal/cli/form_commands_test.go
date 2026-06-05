@@ -239,7 +239,7 @@ func TestAssertVisibleTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "visible", "#hidden-button", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"assert", "visible", "#hidden-button", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("assert visible hidden exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -390,7 +390,7 @@ func TestAssertHiddenFailureJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "hidden", "Search", "--by", "role", "--role", "button", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"assert", "hidden", "Search", "--by", "role", "--role", "button", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("assert hidden visible locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -528,6 +528,74 @@ func TestAssertDisabledByRoleLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestAssertEnabledRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertEnabledAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "enabled", "Delayed enabled", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert enabled retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Enabled      bool   `json:"enabled"`
+			Disabled     bool   `json:"disabled"`
+			Passed       bool   `json:"passed"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert enabled retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#delayed-enabled" || got.Assertion.Selector != "button#delayed-enabled" || got.Assertion.Expected != "enabled" || !got.Assertion.Enabled || got.Assertion.Disabled || !got.Assertion.Passed || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert enabled retry = %+v, want retried enabled assertion with timing evidence", got)
+	}
+}
+
+func TestAssertDisabledRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertDisabledAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "disabled", "Delayed disabled", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert disabled retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Enabled      bool   `json:"enabled"`
+			Disabled     bool   `json:"disabled"`
+			Passed       bool   `json:"passed"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert disabled retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#delayed-disabled" || got.Assertion.Selector != "button#delayed-disabled" || got.Assertion.Expected != "disabled" || got.Assertion.Enabled || !got.Assertion.Disabled || !got.Assertion.Passed || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert disabled retry = %+v, want retried disabled assertion with timing evidence", got)
+	}
+}
+
 func TestAssertCheckedByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
@@ -661,7 +729,7 @@ func TestAssertCheckedTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "checked", "Optional updates", "--by", "label", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"assert", "checked", "Optional updates", "--by", "label", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("assert checked timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -697,15 +765,15 @@ func TestAssertCheckedTimeoutJSON(t *testing.T) {
 	}
 }
 
-func TestAssertEnabledFailureJSON(t *testing.T) {
+func TestAssertEnabledTimeoutJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "enabled", "Disabled target", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitCheckFailed {
-		t.Fatalf("assert enabled disabled locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	code := cli.Execute(context.Background(), []string{"assert", "enabled", "Disabled target", "--by", "role", "--role", "button", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert enabled disabled locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -722,14 +790,56 @@ func TestAssertEnabledFailureJSON(t *testing.T) {
 				Count         int    `json:"count"`
 				EnabledCount  int    `json:"enabled_count"`
 				DisabledCount int    `json:"disabled_count"`
+				Attempts      int    `json:"attempts"`
+				ElapsedMS     int64  `json:"elapsed_ms"`
+				PollInterval  string `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("assert enabled failure output is invalid JSON: %v", err)
+		t.Fatalf("assert enabled timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "button#disabled-action" || got.Data.Assertion.Selector != "button#disabled-action" || got.Data.Assertion.Expected != "enabled" || got.Data.Assertion.Enabled || !got.Data.Assertion.Disabled || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 0 || got.Data.Assertion.DisabledCount != 1 {
-		t.Fatalf("assert enabled failure = %+v, want failed enabled assertion with disabled diagnostics", got)
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#disabled-action" || got.Data.Assertion.Selector != "button#disabled-action" || got.Data.Assertion.Expected != "enabled" || got.Data.Assertion.Enabled || !got.Data.Assertion.Disabled || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 0 || got.Data.Assertion.DisabledCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert enabled timeout = %+v, want timeout with disabled diagnostics", got)
+	}
+}
+
+func TestAssertDisabledTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "disabled", "Search", "--by", "role", "--role", "button", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert disabled enabled locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Selector      string `json:"selector"`
+				Expected      string `json:"expected"`
+				Enabled       bool   `json:"enabled"`
+				Disabled      bool   `json:"disabled"`
+				Passed        bool   `json:"passed"`
+				Count         int    `json:"count"`
+				EnabledCount  int    `json:"enabled_count"`
+				DisabledCount int    `json:"disabled_count"`
+				Attempts      int    `json:"attempts"`
+				ElapsedMS     int64  `json:"elapsed_ms"`
+				PollInterval  string `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert disabled timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "disabled" || !got.Data.Assertion.Enabled || got.Data.Assertion.Disabled || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 1 || got.Data.Assertion.DisabledCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert disabled timeout = %+v, want timeout with enabled diagnostics", got)
 	}
 }
 

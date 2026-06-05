@@ -24,6 +24,8 @@ import (
 var fakeDelayedAssertCheckedAttempts atomic.Int64
 var fakeDelayedAssertVisibleAttempts atomic.Int64
 var fakeDelayedAssertHiddenAttempts atomic.Int64
+var fakeDelayedAssertEnabledAttempts atomic.Int64
+var fakeDelayedAssertDisabledAttempts atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -608,6 +610,9 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		role := "searchbox"
 		name := query
 		placeholder := "Search"
+		disabled := false
+		readOnly := false
+		contentEditable := false
 		if by == "role" && roleQuery == "button" {
 			selector = "button#submit"
 			tag = "button"
@@ -663,9 +668,23 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Delayed visible"
 			placeholder = ""
 		}
-		disabled := false
-		readOnly := false
-		contentEditable := false
+		if query == "Delayed enabled" {
+			selector = "button#delayed-enabled"
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Delayed enabled"
+			placeholder = ""
+			disabled = true
+		}
+		if query == "Delayed disabled" {
+			selector = "button#delayed-disabled"
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Delayed disabled"
+			placeholder = ""
+		}
 		if query == "Disabled target" {
 			selector = "button#disabled-action"
 			tag = "button"
@@ -1009,6 +1028,22 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			enabled = false
 			disabled = true
 			disabledReason = []string{"native_disabled"}
+		}
+		if selector == "button#delayed-enabled" {
+			name = "Delayed enabled"
+			enabled = fakeDelayedAssertEnabledAttempts.Add(1) >= 3
+			disabled = !enabled
+			if disabled {
+				disabledReason = []string{"native_disabled"}
+			}
+		}
+		if selector == "button#delayed-disabled" {
+			name = "Delayed disabled"
+			disabled = fakeDelayedAssertDisabledAttempts.Add(1) >= 3
+			enabled = !disabled
+			if disabled {
+				disabledReason = []string{"native_disabled"}
+			}
 		}
 		count := 1
 		enabledCount := 1
