@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 const (
 	networkWaitKindRequest  = "request"
 	networkWaitKindResponse = "response"
+	networkWaitKindIdle     = "network-idle"
 )
 
 type networkWaitCriteria struct {
@@ -52,6 +54,26 @@ type networkWaitEvent struct {
 	ErrorText         string  `json:"error_text,omitempty"`
 	Canceled          bool    `json:"canceled,omitempty"`
 	EncodedDataLength float64 `json:"encoded_data_length,omitempty"`
+}
+
+type networkIdleOptions struct {
+	Idle              time.Duration
+	MaxInflight       int
+	IgnoreURLContains []string
+	Redact            string
+}
+
+type networkIdleObservation struct {
+	Matched        bool
+	EventCount     int
+	RequestCount   int
+	CompletedCount int
+	FailedCount    int
+	IgnoredCount   int
+	InFlight       map[string]networkWaitEvent
+	LastEvent      *networkWaitEvent
+	QuietSince     time.Time
+	IdleFor        time.Duration
 }
 
 func (a *app) newWaitRequestCommand() *cobra.Command {
@@ -109,6 +131,63 @@ func (a *app) newWaitRequestCommand() *cobra.Command {
 	cmd.Flags().StringVar(&matchURL, "match-url", "", "substring that the request URL must contain")
 	cmd.Flags().StringVar(&method, "method", "", "HTTP method to match, such as GET or POST")
 	cmd.Flags().StringVar(&resourceType, "resource-type", "", "CDP resource type to match, such as Document, Fetch, XHR, or Script")
+	cmd.Flags().StringVar(&redact, "redact", "safe", "redaction preset for returned URLs: safe or none")
+	return cmd
+}
+
+func (a *app) newWaitNetworkIdleCommand() *cobra.Command {
+	var targetID string
+	var pageURLContains string
+	var titleContains string
+	var idle time.Duration
+	var maxInflight int
+	var ignoreURLContains []string
+	var redact string
+	cmd := &cobra.Command{
+		Use:   "network-idle",
+		Short: "Wait until observed network traffic is quiet",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts := networkIdleOptions{
+				Idle:              idle,
+				MaxInflight:       maxInflight,
+				IgnoreURLContains: ignoreURLContains,
+				Redact:            redact,
+			}
+			if err := normalizeNetworkIdleOptions(&opts); err != nil {
+				return err
+			}
+			redactor, err := networkWaitRedactor(opts.Redact)
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			client, session, target, err := a.attachPageEventSession(ctx, targetID, pageURLContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			start := time.Now()
+			observation, err := waitForNetworkIdle(ctx, client, session.SessionID, opts)
+			elapsed := time.Since(start)
+			report := networkIdleReport(observation, opts, elapsed, a.effectiveNetworkWaitTimeout(), redactor)
+			report["target"] = pageRow(target)
+			if err != nil {
+				return networkIdleError(ctx, session.TargetID, opts, report, err)
+			}
+			return a.render(ctx, fmt.Sprintf("matched network-idle\tinflight=%d\tidle=%s", len(observation.InFlight), durationString(opts.Idle)), report)
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&idle, "idle", 500*time.Millisecond, "quiet network window required before succeeding")
+	cmd.Flags().IntVar(&maxInflight, "max-inflight", 0, "maximum tracked in-flight requests allowed during the idle window")
+	cmd.Flags().StringArrayVar(&ignoreURLContains, "ignore-url-contains", nil, "ignore requests whose URL contains this substring; may be repeated")
 	cmd.Flags().StringVar(&redact, "redact", "safe", "redaction preset for returned URLs: safe or none")
 	return cmd
 }
@@ -204,6 +283,28 @@ func normalizeNetworkWaitCriteria(criteria *networkWaitCriteria) error {
 	return nil
 }
 
+func normalizeNetworkIdleOptions(opts *networkIdleOptions) error {
+	if opts.Idle <= 0 {
+		return commandError("usage", "usage", "--idle must be positive", ExitUsage, []string{"cdp wait network-idle --idle 500ms --json"})
+	}
+	if opts.MaxInflight < 0 {
+		return commandError("usage", "usage", "--max-inflight must be non-negative", ExitUsage, []string{"cdp wait network-idle --max-inflight 0 --json"})
+	}
+	filtered := opts.IgnoreURLContains[:0]
+	for _, item := range opts.IgnoreURLContains {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			filtered = append(filtered, item)
+		}
+	}
+	opts.IgnoreURLContains = filtered
+	opts.Redact = artifacts.NormalizeMode(opts.Redact)
+	if opts.Redact != artifacts.ModeSafe && opts.Redact != artifacts.ModeNone {
+		return commandError("usage", "usage", "--redact must be safe or none", ExitUsage, []string{"cdp wait network-idle --redact safe --json"})
+	}
+	return nil
+}
+
 func validHTTPStatus(status int) bool {
 	return status >= 100 && status <= 999
 }
@@ -277,12 +378,156 @@ func waitForNetworkEvent(ctx context.Context, client browserEventClient, session
 	}
 }
 
+func waitForNetworkIdle(ctx context.Context, client browserEventClient, sessionID string, opts networkIdleOptions) (networkIdleObservation, error) {
+	if err := client.CallSession(ctx, sessionID, "Network.enable", map[string]any{}, nil); err != nil {
+		return networkIdleObservation{}, err
+	}
+
+	observation := networkIdleObservation{InFlight: map[string]networkWaitEvent{}}
+	recordsByID := map[string]*networkRequest{}
+	ignoredIDs := map[string]bool{}
+
+	observe := func(event cdp.Event) {
+		if event.SessionID != "" && event.SessionID != sessionID {
+			return
+		}
+		update, ok := networkRequestFromEvent(event)
+		if !ok || update.ID == "" {
+			return
+		}
+		observation.EventCount++
+		record, ok := recordsByID[update.ID]
+		if !ok {
+			copyUpdate := update
+			recordsByID[update.ID] = &copyUpdate
+			record = &copyUpdate
+		} else {
+			mergeNetworkRequest(record, update)
+		}
+
+		switch event.Method {
+		case "Network.requestWillBeSent":
+			if networkIdleURLIgnored(record.URL, opts.IgnoreURLContains) {
+				ignoredIDs[record.ID] = true
+				delete(observation.InFlight, record.ID)
+				observation.IgnoredCount++
+				return
+			}
+			delete(ignoredIDs, record.ID)
+			observation.RequestCount++
+			waitEvent := networkWaitEventFromRequest(networkWaitKindForCDPMethod(event.Method), event.Method, *record)
+			observation.InFlight[record.ID] = waitEvent
+			observation.LastEvent = &waitEvent
+		case "Network.responseReceived":
+			if ignoredIDs[record.ID] {
+				return
+			}
+			waitEvent := networkWaitEventFromRequest(networkWaitKindForCDPMethod(event.Method), event.Method, *record)
+			if _, ok := observation.InFlight[record.ID]; ok {
+				observation.InFlight[record.ID] = waitEvent
+			}
+			observation.LastEvent = &waitEvent
+		case "Network.loadingFinished", "Network.loadingFailed":
+			if ignoredIDs[record.ID] {
+				return
+			}
+			if event.Method == "Network.loadingFailed" {
+				observation.FailedCount++
+			} else {
+				observation.CompletedCount++
+			}
+			delete(observation.InFlight, record.ID)
+			waitEvent := networkWaitEventFromRequest(networkWaitKindForCDPMethod(event.Method), event.Method, *record)
+			observation.LastEvent = &waitEvent
+		}
+	}
+
+	events, err := client.DrainEvents(ctx)
+	if err != nil {
+		return observation, err
+	}
+	for _, event := range events {
+		observe(event)
+	}
+	quietSince := time.Time{}
+	refreshQuiet := func(now time.Time) {
+		if len(observation.InFlight) <= opts.MaxInflight {
+			if quietSince.IsZero() {
+				quietSince = now
+			}
+			observation.QuietSince = quietSince
+			observation.IdleFor = now.Sub(quietSince)
+			return
+		}
+		quietSince = time.Time{}
+		observation.QuietSince = time.Time{}
+		observation.IdleFor = 0
+	}
+
+	refreshQuiet(time.Now())
+	for {
+		if !quietSince.IsZero() {
+			remaining := opts.Idle - time.Since(quietSince)
+			if remaining <= 0 {
+				observation.Matched = true
+				observation.IdleFor = opts.Idle
+				return observation, nil
+			}
+			eventCtx, cancel := context.WithTimeout(ctx, remaining)
+			event, err := client.ReadEvent(eventCtx)
+			cancel()
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+					observation.Matched = true
+					observation.IdleFor = opts.Idle
+					return observation, nil
+				}
+				return observation, err
+			}
+			observe(event)
+			refreshQuiet(time.Now())
+			continue
+		}
+
+		event, err := client.ReadEvent(ctx)
+		if err != nil {
+			return observation, err
+		}
+		observe(event)
+		refreshQuiet(time.Now())
+	}
+}
+
+func networkIdleURLIgnored(rawURL string, substrings []string) bool {
+	for _, substring := range substrings {
+		if strings.Contains(rawURL, substring) {
+			return true
+		}
+	}
+	return false
+}
+
 func networkWaitCDPMethod(kind string) string {
 	switch kind {
 	case networkWaitKindRequest:
 		return "Network.requestWillBeSent"
 	case networkWaitKindResponse:
 		return "Network.responseReceived"
+	default:
+		return ""
+	}
+}
+
+func networkWaitKindForCDPMethod(method string) string {
+	switch method {
+	case "Network.requestWillBeSent":
+		return networkWaitKindRequest
+	case "Network.responseReceived":
+		return networkWaitKindResponse
+	case "Network.loadingFinished":
+		return "loading-finished"
+	case "Network.loadingFailed":
+		return "loading-failed"
 	default:
 		return ""
 	}
@@ -331,6 +576,64 @@ func networkWaitEventFromRequest(kind string, cdpMethod string, req networkReque
 		Canceled:          req.Canceled,
 		EncodedDataLength: req.EncodedDataLength,
 	}
+}
+
+func networkIdleReport(observation networkIdleObservation, opts networkIdleOptions, elapsed time.Duration, timeout time.Duration, redactor *artifacts.Redactor) map[string]any {
+	inFlight := networkIdleInFlightEvents(observation, redactor)
+	wait := map[string]any{
+		"kind":                networkWaitKindIdle,
+		"matched":             observation.Matched,
+		"idle":                durationString(opts.Idle),
+		"max_inflight":        opts.MaxInflight,
+		"elapsed_ms":          elapsed.Milliseconds(),
+		"timeout":             durationString(timeout),
+		"source":              "cdp-network-events",
+		"scope":               "events observed after Network.enable",
+		"event_count":         observation.EventCount,
+		"request_count":       observation.RequestCount,
+		"completed_count":     observation.CompletedCount,
+		"failed_count":        observation.FailedCount,
+		"ignored_count":       observation.IgnoredCount,
+		"in_flight_count":     len(inFlight),
+		"in_flight":           inFlight,
+		"ignore_url_contains": opts.IgnoreURLContains,
+		"redact":              opts.Redact,
+		"idle_for_ms":         observation.IdleFor.Milliseconds(),
+		"warnings": []string{
+			"network-idle is a quiescence signal, not proof that the app is ready; prefer URL, text, selector, assertion, or response waits for success checks",
+		},
+		"evidence": map[string]any{
+			"headers": false,
+			"bodies":  false,
+			"bounded": true,
+		},
+	}
+	report := map[string]any{
+		"ok":   observation.Matched,
+		"wait": wait,
+	}
+	if observation.LastEvent != nil {
+		last := redactNetworkWaitEvent(*observation.LastEvent, redactor, "last_event.url")
+		report["last_event"] = last
+		wait["last_event"] = last
+	}
+	return report
+}
+
+func networkIdleInFlightEvents(observation networkIdleObservation, redactor *artifacts.Redactor) []networkWaitEvent {
+	if len(observation.InFlight) == 0 {
+		return []networkWaitEvent{}
+	}
+	ids := make([]string, 0, len(observation.InFlight))
+	for id := range observation.InFlight {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]networkWaitEvent, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, redactNetworkWaitEvent(observation.InFlight[id], redactor, "in_flight.url"))
+	}
+	return out
 }
 
 func networkWaitReport(kind string, criteria networkWaitCriteria, observation networkWaitObservation, elapsed time.Duration, timeout time.Duration, redact string, redactor *artifacts.Redactor) map[string]any {
@@ -397,6 +700,46 @@ func networkWaitCriteriaReport(criteria networkWaitCriteria) map[string]any {
 func redactNetworkWaitEvent(event networkWaitEvent, redactor *artifacts.Redactor, field string) networkWaitEvent {
 	event.URL = redactor.URL(event.URL, field)
 	return event
+}
+
+func networkIdleError(ctx context.Context, targetID string, opts networkIdleOptions, report map[string]any, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return commandErrorWithData(
+			"timeout",
+			"timeout",
+			fmt.Sprintf("wait network-idle did not observe an idle %s window for target %s: %v", durationString(opts.Idle), targetID, context.DeadlineExceeded),
+			ExitTimeout,
+			networkIdleRemediations(opts),
+			report,
+		)
+	}
+	var cmdErr *CommandError
+	if errors.As(err, &cmdErr) {
+		return err
+	}
+	return commandError(
+		"connection_failed",
+		"connection",
+		fmt.Sprintf("wait network-idle target %s: %v", targetID, err),
+		ExitConnection,
+		[]string{"cdp pages --json", "cdp doctor --json"},
+	)
+}
+
+func networkIdleRemediations(opts networkIdleOptions) []string {
+	waitCommand := "cdp wait network-idle --idle " + durationString(opts.Idle)
+	if opts.MaxInflight != 0 {
+		waitCommand += " --max-inflight " + fmt.Sprint(opts.MaxInflight)
+	}
+	for _, item := range opts.IgnoreURLContains {
+		waitCommand += " --ignore-url-contains " + shellQuote(item)
+	}
+	return []string{
+		waitCommand + " --timeout 15s --json",
+		"cdp wait response --match-url /api --timeout 15s --json",
+		"cdp wait selector main --timeout 15s --json",
+		"cdp network --wait 5s --json",
+	}
 }
 
 func networkWaitError(ctx context.Context, targetID string, kind string, criteria networkWaitCriteria, report map[string]any, err error) error {

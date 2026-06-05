@@ -491,6 +491,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 	cmd.AddCommand(a.newWaitLoadStateCommand())
 	cmd.AddCommand(a.newWaitRequestCommand())
 	cmd.AddCommand(a.newWaitResponseCommand())
+	cmd.AddCommand(a.newWaitNetworkIdleCommand())
 	return cmd
 }
 
@@ -809,6 +810,9 @@ func waitForLoadStateCondition(ctx context.Context, session *cdp.PageSession, po
 	for {
 		var result waitResult
 		if err := evaluateJSONValue(ctx, session, waitLoadStateExpression(state), "wait load-state", &result); err != nil {
+			if ctx.Err() != nil {
+				return decorateLoadStateTimeoutResult(last, state), ctx.Err()
+			}
 			return last, err
 		}
 		last = result
@@ -821,12 +825,22 @@ func waitForLoadStateCondition(ctx context.Context, session *cdp.PageSession, po
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			last.Condition = loadStateWaitCondition(state)
-			last.Evidence = loadStateWaitEvidence(last)
-			return last, ctx.Err()
+			return decorateLoadStateTimeoutResult(last, state), ctx.Err()
 		case <-timer.C:
 		}
 	}
+}
+
+func decorateLoadStateTimeoutResult(result waitResult, state string) waitResult {
+	if result.Kind == "" {
+		result.Kind = "load-state"
+	}
+	if result.State == "" {
+		result.State = state
+	}
+	result.Condition = loadStateWaitCondition(state)
+	result.Evidence = loadStateWaitEvidence(result)
+	return result
 }
 
 func normalizeLoadState(raw string) (string, error) {

@@ -346,6 +346,10 @@ func commandExamples(path string) []string {
 			"cdp wait response --match-url /api/search --status 200 --timeout 10s --json",
 			"cdp wait response --method GET --status-min 200 --status-max 399 --json",
 		},
+		"cdp wait network-idle": {
+			"cdp wait network-idle --idle 500ms --timeout 10s --json",
+			"cdp wait network-idle --ignore-url-contains /events --idle 1s --json",
+		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",

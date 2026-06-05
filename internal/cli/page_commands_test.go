@@ -1308,7 +1308,7 @@ func TestWaitLoadStateTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "load-state", "load", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "load-state", "load", "--timeout", "200ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait load-state timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}

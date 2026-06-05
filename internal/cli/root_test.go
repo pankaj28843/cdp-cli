@@ -326,6 +326,156 @@ func TestWaitResponseTimeoutJSON(t *testing.T) {
 	}
 }
 
+func TestWaitNetworkIdleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait network-idle exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind           string   `json:"kind"`
+			Matched        bool     `json:"matched"`
+			Idle           string   `json:"idle"`
+			MaxInflight    int      `json:"max_inflight"`
+			EventCount     int      `json:"event_count"`
+			RequestCount   int      `json:"request_count"`
+			CompletedCount int      `json:"completed_count"`
+			FailedCount    int      `json:"failed_count"`
+			InFlightCount  int      `json:"in_flight_count"`
+			InFlight       []any    `json:"in_flight"`
+			Warnings       []string `json:"warnings"`
+			LastEvent      struct {
+				Kind      string `json:"kind"`
+				CDPMethod string `json:"cdp_method"`
+				RequestID string `json:"request_id"`
+			} `json:"last_event"`
+			Evidence struct {
+				Headers bool `json:"headers"`
+				Bodies  bool `json:"bodies"`
+				Bounded bool `json:"bounded"`
+			} `json:"evidence"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait network-idle output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "network-idle" || !got.Wait.Matched || got.Wait.Idle != "10ms" || got.Wait.MaxInflight != 0 || got.Wait.EventCount == 0 || got.Wait.RequestCount != 2 || got.Wait.CompletedCount != 1 || got.Wait.FailedCount != 1 || got.Wait.InFlightCount != 0 || len(got.Wait.InFlight) != 0 || got.Wait.LastEvent.Kind != "loading-failed" || got.Wait.LastEvent.CDPMethod != "Network.loadingFailed" || got.Wait.LastEvent.RequestID != "request-failed" {
+		t.Fatalf("wait network-idle output = %+v, want quiet network evidence", got)
+	}
+	if len(got.Wait.Warnings) == 0 || !strings.Contains(got.Wait.Warnings[0], "not proof") {
+		t.Fatalf("wait network-idle warnings = %+v, want readiness warning", got.Wait.Warnings)
+	}
+	if got.Wait.Evidence.Headers || got.Wait.Evidence.Bodies || !got.Wait.Evidence.Bounded {
+		t.Fatalf("wait network-idle evidence = %+v, want bounded evidence without headers or bodies", got.Wait.Evidence)
+	}
+}
+
+func TestWaitNetworkIdleTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "busy-page", "type": "page", "title": "Busy App", "url": "https://example.test/busy", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "10ms", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait network-idle timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Wait struct {
+				Kind          string `json:"kind"`
+				Matched       bool   `json:"matched"`
+				InFlightCount int    `json:"in_flight_count"`
+				InFlight      []struct {
+					RequestID string `json:"request_id"`
+					URL       string `json:"url"`
+				} `json:"in_flight"`
+				LastEvent struct {
+					Kind      string `json:"kind"`
+					RequestID string `json:"request_id"`
+					URL       string `json:"url"`
+				} `json:"last_event"`
+			} `json:"wait"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait network-idle timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "network-idle" || got.Data.Wait.Matched || got.Data.Wait.InFlightCount != 1 || len(got.Data.Wait.InFlight) != 1 || got.Data.Wait.InFlight[0].RequestID != "request-pending" || got.Data.Wait.LastEvent.Kind != "request" || got.Data.Wait.LastEvent.RequestID != "request-pending" {
+		t.Fatalf("wait network-idle timeout = %+v, want pending request evidence", got)
+	}
+	if strings.Contains(got.Data.Wait.InFlight[0].URL, "token=abc") || !strings.Contains(got.Data.Wait.InFlight[0].URL, "redacted") {
+		t.Fatalf("wait network-idle in-flight URL was not safely redacted: %q", got.Data.Wait.InFlight[0].URL)
+	}
+	if !containsString(got.RemediationCommands, "cdp network --wait 5s --json") {
+		t.Fatalf("wait network-idle remediation commands = %+v, want network diagnostic command", got.RemediationCommands)
+	}
+}
+
+func TestWaitNetworkIdleIgnoreURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "busy-page", "type": "page", "title": "Busy App", "url": "https://example.test/busy", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "10ms", "--ignore-url-contains", "/stream", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait network-idle ignore exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Matched           bool     `json:"matched"`
+			IgnoredCount      int      `json:"ignored_count"`
+			InFlightCount     int      `json:"in_flight_count"`
+			IgnoreURLContains []string `json:"ignore_url_contains"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait network-idle ignore output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Wait.Matched || got.Wait.IgnoredCount != 1 || got.Wait.InFlightCount != 0 || len(got.Wait.IgnoreURLContains) != 1 || got.Wait.IgnoreURLContains[0] != "/stream" {
+		t.Fatalf("wait network-idle ignore output = %+v, want ignored pending stream and idle match", got)
+	}
+}
+
+func TestWaitNetworkIdleInvalidOptionsJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "0", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("wait network-idle invalid exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait network-idle invalid output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "--idle must be positive") {
+		t.Fatalf("wait network-idle invalid output = %+v, want usage error", got)
+	}
+}
+
 func TestWaitNetworkUnsupportedRedactionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"wait", "response", "--redact", "headers", "--json"}, &out, &errOut, cli.BuildInfo{})

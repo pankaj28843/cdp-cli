@@ -404,6 +404,20 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					map[string]any{"sessionId": req.SessionID, "method": "Network.webSocketFrameError", "params": map[string]any{"requestId": "ws-1", "timestamp": 3.85, "errorMessage": "synthetic ws warning"}},
 					map[string]any{"sessionId": req.SessionID, "method": "Network.webSocketClosed", "params": map[string]any{"requestId": "ws-1", "timestamp": 4.0}},
 				)
+				if strings.Contains(req.SessionID, "busy") {
+					events = append(events, map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Network.requestWillBeSent",
+						"params": map[string]any{
+							"requestId": "request-pending",
+							"type":      "Fetch",
+							"request": map[string]any{
+								"url":    "https://example.test/stream?token=abc",
+								"method": "GET",
+							},
+						},
+					})
+				}
 			} else if req.Method == "Network.getRequestPostData" {
 				var params struct {
 					RequestID string `json:"requestId"`
