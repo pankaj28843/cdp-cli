@@ -60,6 +60,8 @@ type typeResult struct {
 	Selector string     `json:"selector"`
 	Count    int        `json:"count"`
 	Typing   bool       `json:"typing"`
+	Trial    bool       `json:"trial,omitempty"`
+	Force    bool       `json:"force,omitempty"`
 	Typed    string     `json:"typed"`
 	Previous string     `json:"previous"`
 	Value    string     `json:"value,omitempty"`
@@ -490,7 +492,7 @@ func resolveActionSelector(ctx context.Context, session *cdp.PageSession, query 
 func locatorActionRemediations(action, query string, opts locatorActionOptions) []string {
 	example := "cdp " + action + " " + shellQuote(query)
 	switch action {
-	case "fill":
+	case "fill", "type":
 		example += " <value>"
 	case "select":
 		example += " <value>"
@@ -783,9 +785,12 @@ func (a *app) newTypeCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
 	var strategy string
+	var locatorOpts locatorActionOptions
+	var trial bool
+	var force bool
 	cmd := &cobra.Command{
-		Use:   "type <selector> <text>",
-		Short: "Type text into the first matching editable element",
+		Use:   "type <selector-or-locator> <text>",
+		Short: "Type text into the first matching editable element by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			strategy = strings.ToLower(strings.TrimSpace(strategy))
@@ -794,6 +799,9 @@ func (a *app) newTypeCommand() *cobra.Command {
 			}
 			if strategy != "auto" && strategy != "dom" && strategy != "insert-text" {
 				return commandError("usage", "usage", "--strategy must be auto, dom, or insert-text", ExitUsage, []string{"cdp type '[contenteditable=true]' hello --strategy auto --json"})
+			}
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -804,15 +812,63 @@ func (a *app) newTypeCommand() *cobra.Command {
 			}
 			defer session.Close(ctx)
 
-			result, err := performTextInput(ctx, session, args[0], args[1], strategy)
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "type")
 			if err != nil {
 				return err
 			}
+
+			actionability, err := evaluateActionability(ctx, session, selector, "type")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp type input[name='email'] user@example.com --trial --json")
+			}
+			prepareActionability(&actionability, "type", trial, force)
+			if trial {
+				result := typeResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Typing: false, Trial: true, Force: force, Typed: args[1], Previous: "", Strategy: strategy}
+				report := map[string]any{
+					"ok":            actionability.Actionable,
+					"action":        "trial",
+					"target":        pageRow(target),
+					"type":          result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				if !actionability.Actionable {
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("type", selector, actionability), ExitCheckFailed, actionabilityRemediations("type", args[0], selector, locatorOpts), report)
+				}
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
+			}
+			if !actionability.Actionable {
+				result := typeResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Typing: false, Force: force, Typed: args[1], Previous: "", Strategy: strategy}
+				report := map[string]any{
+					"ok":            false,
+					"action":        "blocked",
+					"target":        pageRow(target),
+					"type":          result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("type", selector, actionability), ExitCheckFailed, actionabilityRemediations("type", args[0], selector, locatorOpts), report)
+			}
+
+			result, err := performTextInput(ctx, session, selector, args[1], strategy)
+			if err != nil {
+				return err
+			}
+			result.Force = force
 			if result.Error != nil {
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("type %q: %s", args[0], result.Error.Message),
+					fmt.Sprintf("type %q: %s", selector, result.Error.Message),
 					ExitUsage,
 					[]string{"cdp type input[name='email'] user@example.com --json"},
 				)
@@ -821,23 +877,32 @@ func (a *app) newTypeCommand() *cobra.Command {
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("no editable element found for selector %q", args[0]),
+					fmt.Sprintf("no editable element found for selector %q", selector),
 					ExitUsage,
 					[]string{"cdp type #name Alice --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("typed\t%s\t%s", target.TargetID, result.Selector), map[string]any{
-				"ok":     true,
-				"action": "typed",
-				"target": pageRow(target),
-				"type":   result,
-			})
+			report := map[string]any{
+				"ok":            true,
+				"action":        "typed",
+				"target":        pageRow(target),
+				"type":          result,
+				"actionability": actionability,
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			return a.render(ctx, fmt.Sprintf("typed\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&strategy, "strategy", "auto", "text input strategy: auto, dom, or insert-text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without typing text")
+	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential type actionability checks and record skipped checks in JSON")
 	return cmd
 }
 

@@ -115,7 +115,7 @@ func actionabilityForceSkippedChecks(action string) []string {
 	switch action {
 	case "click", "hover", "drag", "check", "uncheck":
 		return []string{"receives_events"}
-	case "fill", "select":
+	case "fill", "type", "select":
 		return []string{"visible"}
 	default:
 		return nil
@@ -161,7 +161,7 @@ func failedActionabilityChecks(result actionabilityResult) []string {
 
 func actionabilityRemediations(action, query, selector string, opts locatorActionOptions) []string {
 	commands := []string{locatorActionFindCommand(query, opts), "cdp dom query " + shellQuote(selector) + " --json"}
-	if action == "fill" {
+	if action == "fill" || action == "type" {
 		commands = append(commands, "cdp assert editable "+shellQuote(selector)+" --json")
 	} else if action == "hover" || action == "drag" {
 		commands = append(commands, "cdp assert visible "+shellQuote(selector)+" --json", "cdp layout overflow --json")
@@ -237,7 +237,7 @@ func actionabilityExpression(selector, action string) string {
     return out;
   };
   const requiredChecksFor = () => {
-    if (action === "fill") return ["attached", "visible", "enabled", "editable"];
+    if (action === "fill" || action === "type") return ["attached", "visible", "enabled", "editable"];
     if (action === "select") return ["attached", "visible", "enabled"];
     if (action === "hover" || action === "drag") return ["attached", "visible", "stable", "receives_events"];
     return ["attached", "visible", "stable", "receives_events", "enabled"];

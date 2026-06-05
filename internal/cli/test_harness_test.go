@@ -1696,6 +1696,15 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
 			point = map[string]any{"x": 160, "y": 40, "hit_tag": "input", "hit_id": "q", "hit_role": "searchbox", "target_matches": true}
 		}
+		if selector == "[contenteditable=true]" {
+			tag = "div"
+			role = "textbox"
+			name = "Rich editor"
+			editable = true
+			supportsEditing = true
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "", "hit_role": "textbox", "target_matches": true}
+		}
 		if selector == "input#hidden-field" || selector == "#hidden-input" {
 			tag = "input"
 			elementType = "text"
@@ -1746,7 +1755,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 		required := []string{"attached", "visible", "stable", "receives_events", "enabled"}
 		switch action {
-		case "fill":
+		case "fill", "type":
 			required = []string{"attached", "visible", "enabled", "editable"}
 		case "select":
 			required = []string{"attached", "visible", "enabled"}
@@ -2121,19 +2130,39 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_type__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		text := expressionStringArg(req.Expression, "const text = String(")
+		strategy := expressionStringArg(req.Expression, "const strategy = ")
+		if selector == "" {
+			selector = "input#q"
+		}
+		kind := "input"
+		chosenStrategy := "dom"
+		value := "before" + text
+		if selector == "[contenteditable=true]" {
+			kind = "contenteditable"
+			chosenStrategy = "insert-text"
+			value = "before"
+		}
+		if strategy == "insert-text" {
+			chosenStrategy = "insert-text"
+			if selector != "[contenteditable=true]" {
+				value = "before"
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
 					"url":      "https://example.test/app",
 					"title":    "Example App",
-					"selector": "[contenteditable=true]",
+					"selector": selector,
 					"count":    1,
-					"typed":    expressionStringArg(req.Expression, "const text = String("),
+					"typed":    text,
 					"previous": "before",
-					"value":    "before",
-					"kind":     "contenteditable",
-					"strategy": "insert-text",
+					"value":    value,
+					"kind":     kind,
+					"strategy": chosenStrategy,
 					"typing":   true,
 				},
 			},

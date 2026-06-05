@@ -1363,6 +1363,210 @@ func TestActionLocatorRoleRequiresRoleFlag(t *testing.T) {
 	}
 }
 
+func TestTypeByLabelLocatorTrialJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "Search", "trial value", "--by", "label", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("type trial by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Type struct {
+			Selector string `json:"selector"`
+			Typing   bool   `json:"typing"`
+			Trial    bool   `json:"trial"`
+			Typed    string `json:"typed"`
+			Strategy string `json:"strategy"`
+		} `json:"type"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Trial      bool     `json:"trial"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Visible struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"visible"`
+				Stable struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"stable"`
+				ReceivesEvents struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"receives_events"`
+				Enabled struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"enabled"`
+				Editable struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"editable"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("type trial by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.ResolvedSelector != "input#q" || got.Locator.By != "label" || got.Locator.Query != "Search" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].SelectorHint != "input#q" {
+		t.Fatalf("type trial locator = %+v, want strict label locator", got)
+	}
+	if got.Type.Selector != "input#q" || got.Type.Typing || !got.Type.Trial || got.Type.Typed != "trial value" || got.Type.Strategy != "auto" {
+		t.Fatalf("type trial action = %+v, want non-mutating type trial", got.Type)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Trial || len(got.Actionability.Required) != 4 || containsString(got.Actionability.Required, "stable") || containsString(got.Actionability.Required, "receives_events") || !got.Actionability.Checks.Visible.Required || !got.Actionability.Checks.Visible.Passed || got.Actionability.Checks.Stable.Required || !got.Actionability.Checks.Stable.Skipped || got.Actionability.Checks.ReceivesEvents.Required || !got.Actionability.Checks.ReceivesEvents.Skipped || !got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Passed || !got.Actionability.Checks.Editable.Required || !got.Actionability.Checks.Editable.Passed {
+		t.Fatalf("type trial actionability = %+v, want fill-like editable checks", got.Actionability)
+	}
+}
+
+func TestTypeByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "Search", "typed value", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("type by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Type             struct {
+			Selector string `json:"selector"`
+			Typing   bool   `json:"typing"`
+			Typed    string `json:"typed"`
+			Value    string `json:"value"`
+			Kind     string `json:"kind"`
+			Strategy string `json:"strategy"`
+		} `json:"type"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("type by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "typed" || got.ResolvedSelector != "input#q" || got.Type.Selector != "input#q" || !got.Type.Typing || got.Type.Typed != "typed value" || got.Type.Value != "beforetyped value" || got.Type.Kind != "input" || got.Type.Strategy != "dom" || !got.Actionability.Actionable {
+		t.Fatalf("type by label = %+v, want typed value on resolved input", got)
+	}
+}
+
+func TestTypeForceSkipsVisibleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "input#hidden-field", "forced value", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("force hidden type exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Type   struct {
+			Selector string `json:"selector"`
+			Typing   bool   `json:"typing"`
+			Force    bool   `json:"force"`
+			Value    string `json:"value"`
+		} `json:"type"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Force      bool     `json:"force"`
+			Skipped    []string `json:"skipped_checks"`
+			Checks     struct {
+				Visible struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Skipped  bool   `json:"skipped"`
+					Message  string `json:"message"`
+				} `json:"visible"`
+				Editable struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"editable"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force hidden type output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "typed" || got.Type.Selector != "input#hidden-field" || !got.Type.Typing || !got.Type.Force || got.Type.Value != "beforeforced value" || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "visible") || got.Actionability.Checks.Visible.Required || got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Visible.Skipped || !strings.Contains(got.Actionability.Checks.Visible.Message, "--force") || !got.Actionability.Checks.Editable.Required || !got.Actionability.Checks.Editable.Passed {
+		t.Fatalf("force hidden type = %+v, want visible skipped and editable enforced", got)
+	}
+}
+
+func TestTypeForceReadonlyStillFailsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "Read-only notes", "typed value", "--by", "label", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("force readonly type exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Type   struct {
+				Selector string `json:"selector"`
+				Typing   bool   `json:"typing"`
+				Force    bool   `json:"force"`
+			} `json:"type"`
+			Actionability struct {
+				Actionable bool     `json:"actionable"`
+				Force      bool     `json:"force"`
+				Skipped    []string `json:"skipped_checks"`
+				Checks     struct {
+					Editable struct {
+						Required bool `json:"required"`
+						Passed   bool `json:"passed"`
+						Skipped  bool `json:"skipped"`
+					} `json:"editable"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("force readonly type output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Type.Selector != "textarea#readonly-notes" || got.Data.Type.Typing || !got.Data.Type.Force || got.Data.Actionability.Actionable || !got.Data.Actionability.Force || !containsString(got.Data.Actionability.Skipped, "visible") || !got.Data.Actionability.Checks.Editable.Required || got.Data.Actionability.Checks.Editable.Passed || got.Data.Actionability.Checks.Editable.Skipped {
+		t.Fatalf("force readonly type = %+v, want editable still enforced", got)
+	}
+}
+
 func TestTypeContentEditableUsesInsertTextJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
