@@ -47,6 +47,7 @@ DEMO_HTML = """<!doctype html>
     .checkbox-row { align-items: center; display: flex; gap: 8px; }
     #agent-input { max-width: 320px; padding: 8px; }
     #plan { max-width: 320px; padding: 8px; }
+    #action { background-color: rgb(20, 92, 160); color: rgb(255, 255, 255); }
     #drag-target { display: inline-block; margin-top: 12px; padding: 8px 12px; background: #f0f4ff; border: 1px solid #99a; cursor: grab; }
     .covered-wrap { position: relative; display: inline-block; margin-left: 8px; }
     .cover-overlay { position: absolute; inset: 0; z-index: 2; background: rgba(255, 255, 255, 0); }

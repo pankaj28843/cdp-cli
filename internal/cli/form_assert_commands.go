@@ -129,6 +129,50 @@ type assertAttributeResult struct {
 	Error            *evalError `json:"error,omitempty"`
 }
 
+type assertFocusedResult struct {
+	Selector       string              `json:"selector"`
+	Expected       string              `json:"expected"`
+	Focused        bool                `json:"focused"`
+	Passed         bool                `json:"passed"`
+	Count          int                 `json:"count"`
+	FocusedCount   int                 `json:"focused_count"`
+	ActiveSelector string              `json:"active_selector,omitempty"`
+	ActiveTag      string              `json:"active_tag,omitempty"`
+	ActiveID       string              `json:"active_id,omitempty"`
+	ActiveRole     string              `json:"active_role,omitempty"`
+	ActiveName     string              `json:"active_name,omitempty"`
+	Items          []assertFocusedItem `json:"items,omitempty"`
+	Attempts       int                 `json:"attempts,omitempty"`
+	ElapsedMS      int64               `json:"elapsed_ms,omitempty"`
+	PollInterval   string              `json:"poll_interval,omitempty"`
+	Error          *evalError          `json:"error,omitempty"`
+}
+
+type assertFocusedItem struct {
+	Index   int          `json:"index"`
+	Tag     string       `json:"tag"`
+	ID      string       `json:"id,omitempty"`
+	Role    string       `json:"role,omitempty"`
+	Name    string       `json:"name,omitempty"`
+	Focused bool         `json:"focused"`
+	Visible bool         `json:"visible"`
+	Rect    snapshotRect `json:"rect"`
+}
+
+type assertCSSResult struct {
+	Selector     string     `json:"selector"`
+	Property     string     `json:"property"`
+	Expected     string     `json:"expected"`
+	Actual       string     `json:"actual"`
+	Mode         string     `json:"mode"`
+	Passed       bool       `json:"passed"`
+	Count        int        `json:"count"`
+	Attempts     int        `json:"attempts,omitempty"`
+	ElapsedMS    int64      `json:"elapsed_ms,omitempty"`
+	PollInterval string     `json:"poll_interval,omitempty"`
+	Error        *evalError `json:"error,omitempty"`
+}
+
 type assertVisibilityResult struct {
 	Selector     string                 `json:"selector"`
 	Expected     string                 `json:"expected"`
@@ -333,6 +377,8 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertTitleCommand())
 	cmd.AddCommand(a.newAssertCountCommand())
 	cmd.AddCommand(a.newAssertAttributeCommand())
+	cmd.AddCommand(a.newAssertFocusedCommand())
+	cmd.AddCommand(a.newAssertCSSCommand())
 	cmd.AddCommand(a.newAssertVisibleCommand())
 	cmd.AddCommand(a.newAssertHiddenCommand())
 	cmd.AddCommand(a.newAssertEnabledCommand())
@@ -789,12 +835,51 @@ func (a *app) newAssertAttributeCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newAssertFocusedCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "focused <selector-or-locator>", Short: "Assert an element has focus by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertFocusedCommand(cmd, args[0], locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) newAssertCSSCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, mode string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "css <selector-or-locator> <property> <expected>", Short: "Assert a computed CSS property by CSS selector or strict locator", Args: cobra.ExactArgs(3), RunE: func(cmd *cobra.Command, args []string) error {
+		property := strings.TrimSpace(args[1])
+		if !validCSSPropertyName(property) {
+			return commandError("usage", "usage", "<property> must be a simple CSS property name", ExitUsage, []string{"cdp assert css button background-color 'rgb(20, 92, 160)' --json"})
+		}
+		return a.runAssertCSSCommand(cmd, args[0], property, args[2], mode, locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
 func parseExpectedCount(value string) (int, error) {
 	expected, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || expected < 0 {
 		return 0, commandError("usage", "usage", "<expected-count> must be a non-negative integer", ExitUsage, []string{"cdp assert count '.result' 3 --json"})
 	}
 	return expected, nil
+}
+
+func validCSSPropertyName(value string) bool {
+	return validLocatorAttributeName(value)
 }
 
 func (a *app) runAssertCountCommand(cmd *cobra.Command, query string, expected int, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
@@ -1060,6 +1145,236 @@ func attributeAssertionPendingResult(query, attribute, expected, mode string, co
 		Attempts:         attempts,
 		ElapsedMS:        time.Since(start).Milliseconds(),
 		PollInterval:     poll.String(),
+	}
+}
+
+func (a *app) runAssertFocusedCommand(cmd *cobra.Command, query string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert focused 'Search' --by label --poll 250ms --json"})
+	}
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, locator, selector, err := waitForFocusedAssertion(assertionCtx, session, query, locatorOpts, poll, start)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		if strings.TrimSpace(selector) != "" {
+			report["resolved_selector"] = selector
+		}
+	}
+	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("focused assertion for %q did not pass before timeout: %v", query, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, focusedAssertionRemediations(query, selector, locatorOpts), report)
+		}
+		return err
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForFocusedAssertion(ctx context.Context, session *cdp.PageSession, query string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertFocusedResult, *locatorFindResult, string, error) {
+	attempts := 0
+	last := assertFocusedResult{Selector: query, Expected: "focused", PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		selector := query
+		var locator *locatorFindResult
+		if opts.By != "css" {
+			var result locatorFindResult
+			if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert focused locator", &result); err != nil {
+				return last, lastLocator, lastSelector, err
+			}
+			locator = &result
+			lastLocator = locator
+			if result.Error != nil {
+				return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert focused locator %s %q: %s", opts.By, query, result.Error.Message), ExitUsage, locatorActionRemediations("assert focused", query, opts))
+			}
+			if result.Count != 1 || len(result.Matches) != 1 || strings.TrimSpace(result.Matches[0].SelectorHint) == "" || result.Matches[0].SelectorAmbiguous {
+				last = focusedAssertionPendingResult(query, result.Count, attempts, start, poll)
+				lastSelector = ""
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+			selector = strings.TrimSpace(result.Matches[0].SelectorHint)
+			lastSelector = selector
+		}
+
+		var got assertFocusedResult
+		if err := evaluateJSONValue(ctx, session, assertFocusedExpression(selector, 20), "assert focused", &got); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		if got.Error != nil {
+			return got, locator, selector, invalidSelectorError(selector, got.Error, "cdp assert focused 'input[name=q]' --json")
+		}
+		finishFocusedAssertionResult(&got, attempts, start, poll)
+		last = got
+		lastLocator = locator
+		lastSelector = selector
+		if got.Passed {
+			return got, locator, selector, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
+	}
+}
+
+func finishFocusedAssertionResult(got *assertFocusedResult, attempts int, start time.Time, poll time.Duration) {
+	got.Expected = "focused"
+	got.Passed = got.Focused
+	got.Attempts = attempts
+	got.ElapsedMS = time.Since(start).Milliseconds()
+	got.PollInterval = poll.String()
+}
+
+func focusedAssertionPendingResult(query string, count, attempts int, start time.Time, poll time.Duration) assertFocusedResult {
+	return assertFocusedResult{
+		Selector:     query,
+		Expected:     "focused",
+		Focused:      false,
+		Passed:       false,
+		Count:        count,
+		FocusedCount: 0,
+		Attempts:     attempts,
+		ElapsedMS:    time.Since(start).Milliseconds(),
+		PollInterval: poll.String(),
+	}
+}
+
+func (a *app) runAssertCSSCommand(cmd *cobra.Command, query, property, expected, mode string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert css button background-color 'rgb(20, 92, 160)' --poll 250ms --json"})
+	}
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, locator, selector, err := waitForCSSAssertion(assertionCtx, session, query, property, expected, mode, locatorOpts, poll, start)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		if strings.TrimSpace(selector) != "" {
+			report["resolved_selector"] = selector
+		}
+	}
+	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("CSS assertion for %q did not pass before timeout: %v", query, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, cssAssertionRemediations(query, property, expected, mode, selector, locatorOpts), report)
+		}
+		return err
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForCSSAssertion(ctx context.Context, session *cdp.PageSession, query, property, expected, mode string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertCSSResult, *locatorFindResult, string, error) {
+	attempts := 0
+	normalizedMode := normalizeAssertMode(mode)
+	last := assertCSSResult{Selector: query, Property: property, Expected: expected, Mode: normalizedMode, PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		selector := query
+		var locator *locatorFindResult
+		if opts.By != "css" {
+			var result locatorFindResult
+			if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert css locator", &result); err != nil {
+				return last, lastLocator, lastSelector, err
+			}
+			locator = &result
+			lastLocator = locator
+			if result.Error != nil {
+				return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert css locator %s %q: %s", opts.By, query, result.Error.Message), ExitUsage, cssAssertionRemediations(query, property, expected, normalizedMode, "", opts))
+			}
+			if result.Count != 1 || len(result.Matches) != 1 || strings.TrimSpace(result.Matches[0].SelectorHint) == "" || result.Matches[0].SelectorAmbiguous {
+				last = cssAssertionPendingResult(query, property, expected, normalizedMode, result.Count, attempts, start, poll)
+				lastSelector = ""
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+			selector = strings.TrimSpace(result.Matches[0].SelectorHint)
+			lastSelector = selector
+		}
+		var got assertCSSResult
+		if err := evaluateJSONValue(ctx, session, assertCSSExpression(selector, property), "assert css", &got); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		result := assertCSSResultFromProbe(selector, property, expected, normalizedMode, got, attempts, start, poll)
+		if got.Error != nil {
+			return result, locator, selector, invalidSelectorError(selector, got.Error, "cdp assert css button color blue --json")
+		}
+		passed, err := assertionMatch(got.Actual, expected, normalizedMode)
+		if err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		result.Passed = got.Count == 1 && passed
+		last = result
+		lastLocator = locator
+		lastSelector = selector
+		if result.Passed {
+			return result, locator, selector, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
+	}
+}
+
+func assertCSSResultFromProbe(selector, property, expected, mode string, got assertCSSResult, attempts int, start time.Time, poll time.Duration) assertCSSResult {
+	return assertCSSResult{
+		Selector:     selector,
+		Property:     property,
+		Expected:     expected,
+		Actual:       got.Actual,
+		Mode:         normalizeAssertMode(mode),
+		Passed:       false,
+		Count:        got.Count,
+		Error:        got.Error,
+		Attempts:     attempts,
+		ElapsedMS:    time.Since(start).Milliseconds(),
+		PollInterval: poll.String(),
+	}
+}
+
+func cssAssertionPendingResult(query, property, expected, mode string, count, attempts int, start time.Time, poll time.Duration) assertCSSResult {
+	return assertCSSResult{
+		Selector:     query,
+		Property:     property,
+		Expected:     expected,
+		Actual:       "",
+		Mode:         normalizeAssertMode(mode),
+		Passed:       false,
+		Count:        count,
+		Attempts:     attempts,
+		ElapsedMS:    time.Since(start).Milliseconds(),
+		PollInterval: poll.String(),
 	}
 }
 
@@ -1812,6 +2127,42 @@ func attributeAssertionCommand(query, attribute, expected, mode string, opts loc
 	return command + locatorAssertionFlagSuffix(opts) + " --json"
 }
 
+func focusedAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
+	commands := []string{}
+	if opts.By != "css" {
+		commands = append(commands, locatorActionFindCommand(query, opts))
+	}
+	if strings.TrimSpace(selector) == "" {
+		selector = query
+	}
+	commands = append(commands, "cdp dom query "+shellQuote(selector)+" --json")
+	commands = append(commands, focusedAssertionCommand(query, opts))
+	return commands
+}
+
+func focusedAssertionCommand(query string, opts locatorActionOptions) string {
+	command := "cdp assert focused " + shellQuote(query)
+	return command + locatorAssertionFlagSuffix(opts) + " --json"
+}
+
+func cssAssertionRemediations(query, property, expected, mode, selector string, opts locatorActionOptions) []string {
+	commands := []string{}
+	if opts.By != "css" {
+		commands = append(commands, locatorActionFindCommand(query, opts))
+	}
+	if strings.TrimSpace(selector) == "" {
+		selector = query
+	}
+	commands = append(commands, "cdp css inspect "+shellQuote(selector)+" --json")
+	commands = append(commands, cssAssertionCommand(query, property, expected, mode, opts))
+	return commands
+}
+
+func cssAssertionCommand(query, property, expected, mode string, opts locatorActionOptions) string {
+	command := "cdp assert css " + shellQuote(query) + " " + shellQuote(property) + " " + shellQuote(expected) + " --mode " + shellQuote(normalizeAssertMode(mode))
+	return command + locatorAssertionFlagSuffix(opts) + " --json"
+}
+
 func locatorAssertionFlagSuffix(opts locatorActionOptions) string {
 	if opts.By == "css" {
 		return ""
@@ -1905,6 +2256,125 @@ func assertAttributeExpression(selector, attribute string) string {
   const present = element.hasAttribute(attributeName);
   return { url: location.href, title: document.title, selector, attribute: attributeName, attribute_present: present, value: present ? String(element.getAttribute(attributeName) || "") : "", count: elements.length, marker };
 })()`, jsStringLiteral(selector), jsStringLiteral(attribute))
+}
+
+func assertFocusedExpression(selector string, limit int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_assert_focused__";
+  const selector = %s;
+  const limit = %d;
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const cssEscape = (value) => {
+    if (globalThis.CSS && typeof CSS.escape === "function") return CSS.escape(String(value));
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => "\\" + ch);
+  };
+  const roleOf = (el) => {
+    if (!el || !el.tagName) return "";
+    const explicit = norm(el.getAttribute("role")).split(" ")[0];
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    if (tag === "button") return "button";
+    if (tag === "a" && el.hasAttribute("href")) return "link";
+    if (/^h[1-6]$/.test(tag)) return "heading";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return el.multiple ? "listbox" : "combobox";
+    if (tag === "input") {
+      if (["button", "submit", "reset"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "range") return "slider";
+      if (type === "search") return "searchbox";
+      return "textbox";
+    }
+    return "";
+  };
+  const nameOf = (el) => {
+    if (!el || !el.getAttribute) return "";
+    return norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || el.getAttribute("value") || el.innerText || el.textContent || "");
+  };
+  const selectorOf = (el) => {
+    if (!el || !el.tagName) return "";
+    const tag = el.tagName.toLowerCase();
+    if (el.id) return tag + "#" + cssEscape(el.id);
+    const attrs = ["name", "aria-label", "data-testid", "role"];
+    for (const attr of attrs) {
+      const value = el.getAttribute(attr);
+      if (value) return tag + "[" + attr + "=" + JSON.stringify(value) + "]";
+    }
+    const sameTag = Array.from(document.querySelectorAll(tag));
+    const index = sameTag.indexOf(el) + 1;
+    return index > 0 ? tag + ":nth-of-type(" + index + ")" : tag;
+  };
+  const visibilityOf = (el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
+    return { visible: !hidden && rect.width > 0 && rect.height > 0, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, expected: "focused", focused: false, passed: false, count: 0, focused_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+  }
+  const active = document.activeElement;
+  const allItems = elements.map((el, index) => {
+    const visibility = visibilityOf(el);
+    return {
+      index,
+      tag: el.tagName.toLowerCase(),
+      id: el.id || "",
+      role: roleOf(el),
+      name: nameOf(el).slice(0, 240),
+      focused: el === active,
+      visible: visibility.visible,
+      rect: visibility.rect
+    };
+  });
+  const focusedCount = allItems.filter((item) => item.focused).length;
+  return {
+    url: location.href,
+    title: document.title,
+    selector,
+    expected: "focused",
+    focused: focusedCount > 0,
+    passed: focusedCount > 0,
+    count: allItems.length,
+    focused_count: focusedCount,
+    active_selector: selectorOf(active),
+    active_tag: active && active.tagName ? active.tagName.toLowerCase() : "",
+    active_id: active && active.id ? active.id : "",
+    active_role: roleOf(active),
+    active_name: nameOf(active).slice(0, 240),
+    items: allItems.slice(0, limit),
+    marker
+  };
+})()`, jsStringLiteral(selector), limit)
+}
+
+func assertCSSExpression(selector, property string) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_assert_css__";
+  const selector = %s;
+  const propertyName = %s;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, property: propertyName, value: "", actual: "", count: 0, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length !== 1) {
+    return { url: location.href, title: document.title, selector, property: propertyName, value: "", actual: "", count: elements.length, marker };
+  }
+  const computed = getComputedStyle(elements[0]);
+  let value = computed.getPropertyValue(propertyName);
+  if (value === "" && propertyName in computed) {
+    value = String(computed[propertyName] || "");
+  }
+  value = String(value || "").trim();
+  return { url: location.href, title: document.title, selector, property: propertyName, value, actual: value, count: elements.length, marker };
+})()`, jsStringLiteral(selector), jsStringLiteral(property))
 }
 
 func formValuesExpression(includeHidden bool) string {

@@ -34,6 +34,8 @@ var fakeDelayedAssertValueAttempts atomic.Int64
 var fakeDelayedAssertPageAttempts atomic.Int64
 var fakeDelayedAssertCountAttempts atomic.Int64
 var fakeDelayedAssertAttributeAttempts atomic.Int64
+var fakeDelayedAssertFocusedAttempts atomic.Int64
+var fakeDelayedAssertCSSAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
@@ -1012,6 +1014,87 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"attribute_present": true,
 					"value":             value,
 					"count":             1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_focused__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "input#q"
+		}
+		focused := selector == "input#q" && fakeDelayedAssertFocusedAttempts.Add(1) >= 3
+		focusedCount := 0
+		if focused {
+			focusedCount = 1
+		}
+		activeSelector := "body"
+		activeTag := "body"
+		activeID := ""
+		activeRole := ""
+		activeName := "Example App"
+		if focused {
+			activeSelector = selector
+			activeTag = "input"
+			activeID = "q"
+			activeRole = "searchbox"
+			activeName = "Search"
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":             "https://example.test/app",
+					"title":           "Example App",
+					"selector":        selector,
+					"expected":        "focused",
+					"focused":         focused,
+					"passed":          focused,
+					"count":           1,
+					"focused_count":   focusedCount,
+					"active_selector": activeSelector,
+					"active_tag":      activeTag,
+					"active_id":       activeID,
+					"active_role":     activeRole,
+					"active_name":     activeName,
+					"items": []map[string]any{{
+						"index":   0,
+						"tag":     "input",
+						"id":      "q",
+						"role":    "searchbox",
+						"name":    "Search",
+						"focused": focused,
+						"visible": true,
+						"rect":    map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_css__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		propertyName := expressionStringArg(req.Expression, "const propertyName = ")
+		if selector == "" {
+			selector = "button#checkout"
+		}
+		if propertyName == "" {
+			propertyName = "background-color"
+		}
+		value := "rgb(100, 100, 100)"
+		if selector == "button#checkout" && propertyName == "background-color" && fakeDelayedAssertCSSAttempts.Add(1) >= 3 {
+			value = "rgb(20, 92, 160)"
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": selector,
+					"property": propertyName,
+					"value":    value,
+					"actual":   value,
+					"count":    1,
 				},
 			},
 		}
