@@ -263,6 +263,14 @@ require_artifact "$action_capture_dir/action-capture.manifest.json"
   | jq -e '.ok == true and .action == "hovered" and .resolved_selector == "button#action" and .hover.hovered == true and .hover.count >= 1 and .actionability.actionable == true' >/dev/null
 "$binary" hover "#covered-action" --force --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "hovered" and .hover.hovered == true and .hover.force == true and .actionability.force == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.skipped == true' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" hover "scroll-target" --by test-id --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "hovered" and .resolved_selector == "button#scroll-target" and .hover.hovered == true and .auto_scroll.before.in_viewport == false and .auto_scroll.after.in_viewport == true and .auto_scroll.changed == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" drag "scroll-target" 8 12 --by test-id --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "dragged" and .resolved_selector == "button#scroll-target" and .drag.dragged == true and .drag.delta_x == 8 and .drag.delta_y == 12 and .auto_scroll.before.in_viewport == false and .auto_scroll.after.in_viewport == true and .auto_scroll.changed == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true' >/dev/null
 "$binary" eval 'document.querySelector("#drag-target").scrollIntoView({block:"center"})' --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true' >/dev/null
 "$binary" drag "drag-target" 8 12 --by test-id --trial --state-dir "$state_dir/cdp-state" --json \

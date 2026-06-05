@@ -149,14 +149,23 @@ func actionabilityFailureMessage(action, selector string, result actionabilityRe
 }
 
 func shouldAutoScrollBeforePointerAction(action string, result actionabilityResult) bool {
-	if action != "click" || result.Actionable || result.Checks == nil {
+	switch action {
+	case "click", "hover", "drag":
+	default:
+		return false
+	}
+	if result.Actionable || result.Checks == nil {
 		return false
 	}
 	inViewport, ok := result.Checks["in_viewport"]
 	if !ok || inViewport.Passed {
 		return false
 	}
-	for _, name := range []string{"attached", "visible", "stable", "enabled"} {
+	requiredBeforeScroll := []string{"attached", "visible", "stable"}
+	if action == "click" {
+		requiredBeforeScroll = append(requiredBeforeScroll, "enabled")
+	}
+	for _, name := range requiredBeforeScroll {
 		check, ok := result.Checks[name]
 		if !ok || !check.Passed {
 			return false

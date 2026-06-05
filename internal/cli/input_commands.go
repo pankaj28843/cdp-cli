@@ -1188,6 +1188,24 @@ func (a *app) newHoverCommand() *cobra.Command {
 				return invalidSelectorError(selector, actionability.Error, "cdp hover 'button.primary' --trial --json")
 			}
 			prepareActionability(&actionability, "hover", trial, force)
+			var autoScroll *scrollResult
+			if !trial && shouldAutoScrollBeforePointerAction("hover", actionability) {
+				scrolled, err := autoScrollPointerTarget(ctx, session, selector)
+				if err != nil {
+					return err
+				}
+				autoScroll = &scrolled
+				if scrolled.Error == nil && scrolled.After.InViewport {
+					actionability, err = evaluateActionability(ctx, session, selector, "hover")
+					if err != nil {
+						return err
+					}
+					if actionability.Error != nil {
+						return invalidSelectorError(selector, actionability.Error, "cdp hover 'button.primary' --trial --json")
+					}
+					prepareActionability(&actionability, "hover", trial, force)
+				}
+			}
 			if trial {
 				result := hoverResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Hovered: false, Trial: true, Force: force, X: actionability.Point.X, Y: actionability.Point.Y}
 				report := map[string]any{
@@ -1218,6 +1236,9 @@ func (a *app) newHoverCommand() *cobra.Command {
 				if locator != nil {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
+				}
+				if autoScroll != nil {
+					report["auto_scroll"] = autoScroll
 				}
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("hover", selector, actionability), ExitCheckFailed, actionabilityRemediations("hover", args[0], selector, locatorOpts), report)
 			}
@@ -1255,6 +1276,9 @@ func (a *app) newHoverCommand() *cobra.Command {
 			if locator != nil {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
+			}
+			if autoScroll != nil {
+				report["auto_scroll"] = autoScroll
 			}
 			return a.render(ctx, fmt.Sprintf("hovered\t%s\t%s", target.TargetID, result.Selector), report)
 		},
@@ -1313,6 +1337,24 @@ func (a *app) newDragCommand() *cobra.Command {
 				return invalidSelectorError(selector, actionability.Error, "cdp drag '#drag-me' 10 20 --trial --json")
 			}
 			prepareActionability(&actionability, "drag", trial, force)
+			var autoScroll *scrollResult
+			if !trial && shouldAutoScrollBeforePointerAction("drag", actionability) {
+				scrolled, err := autoScrollPointerTarget(ctx, session, selector)
+				if err != nil {
+					return err
+				}
+				autoScroll = &scrolled
+				if scrolled.Error == nil && scrolled.After.InViewport {
+					actionability, err = evaluateActionability(ctx, session, selector, "drag")
+					if err != nil {
+						return err
+					}
+					if actionability.Error != nil {
+						return invalidSelectorError(selector, actionability.Error, "cdp drag '#drag-me' 10 20 --trial --json")
+					}
+					prepareActionability(&actionability, "drag", trial, force)
+				}
+			}
 			if trial {
 				result := dragResult{URL: actionability.URL, Title: actionability.Title, Selector: selector, Count: actionability.Count, Dragged: false, Trial: true, Force: force, DeltaX: dx, DeltaY: dy, StartX: actionability.Point.X, StartY: actionability.Point.Y, EndX: actionability.Point.X + float64(dx), EndY: actionability.Point.Y + float64(dy)}
 				report := map[string]any{
@@ -1343,6 +1385,9 @@ func (a *app) newDragCommand() *cobra.Command {
 				if locator != nil {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
+				}
+				if autoScroll != nil {
+					report["auto_scroll"] = autoScroll
 				}
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("drag", selector, actionability), ExitCheckFailed, actionabilityRemediations("drag", args[0], selector, locatorOpts), report)
 			}
@@ -1380,6 +1425,9 @@ func (a *app) newDragCommand() *cobra.Command {
 			if locator != nil {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
+			}
+			if autoScroll != nil {
+				report["auto_scroll"] = autoScroll
 			}
 			return a.render(ctx, fmt.Sprintf("dragged\t%s\t%s", target.TargetID, result.Selector), report)
 		},

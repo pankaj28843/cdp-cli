@@ -1526,6 +1526,66 @@ func TestHoverByRoleLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestHoverAutoScrollsOffscreenTargetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"hover", "scroll-target", "--by", "test-id", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("offscreen hover exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Hover            struct {
+			Selector string `json:"selector"`
+			Hovered  bool   `json:"hovered"`
+		} `json:"hover"`
+		AutoScroll struct {
+			Selector string `json:"selector"`
+			Scrolled bool   `json:"scrolled"`
+			Changed  bool   `json:"changed"`
+			Block    string `json:"block"`
+			Inline   string `json:"inline"`
+			Before   struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"before"`
+			After struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"after"`
+		} `json:"auto_scroll"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Passed bool `json:"passed"`
+				} `json:"receives_events"`
+				InViewport struct {
+					Passed bool `json:"passed"`
+				} `json:"in_viewport"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("offscreen hover output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "hovered" || got.ResolvedSelector != "div#scroll-target" || got.Hover.Selector != "div#scroll-target" || !got.Hover.Hovered {
+		t.Fatalf("offscreen hover action = %+v, want hovered resolved target", got)
+	}
+	if got.AutoScroll.Selector != "div#scroll-target" || !got.AutoScroll.Scrolled || !got.AutoScroll.Changed || got.AutoScroll.Block != "center" || got.AutoScroll.Inline != "nearest" || got.AutoScroll.Before.InViewport || !got.AutoScroll.After.InViewport {
+		t.Fatalf("offscreen hover auto_scroll = %+v, want before/after scroll evidence", got.AutoScroll)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.InViewport.Passed {
+		t.Fatalf("offscreen hover actionability = %+v, want rechecked actionability after auto-scroll", got.Actionability)
+	}
+}
+
 func TestHoverActionabilityFailureJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -1668,6 +1728,68 @@ func TestDragTrialByTestIDLocatorJSON(t *testing.T) {
 	}
 	if got.Drag.Selector != "div#drag-target" || got.Drag.Dragged || !got.Drag.Trial || got.Drag.DeltaX != 8 || got.Drag.DeltaY != 12 || got.Drag.StartX != 90 || got.Drag.StartY != 70 || got.Drag.EndX != 98 || got.Drag.EndY != 82 || !got.Actionability.Actionable || !got.Actionability.Trial || len(got.Actionability.Required) != 4 || containsString(got.Actionability.Required, "enabled") || got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Skipped {
 		t.Fatalf("drag trial action = %+v, want non-dispatching pointer-only actionability checks", got)
+	}
+}
+
+func TestDragAutoScrollsOffscreenTargetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"drag", "scroll-target", "8", "12", "--by", "test-id", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("offscreen drag exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Drag             struct {
+			Selector string `json:"selector"`
+			Dragged  bool   `json:"dragged"`
+			DeltaX   int    `json:"delta_x"`
+			DeltaY   int    `json:"delta_y"`
+		} `json:"drag"`
+		AutoScroll struct {
+			Selector string `json:"selector"`
+			Scrolled bool   `json:"scrolled"`
+			Changed  bool   `json:"changed"`
+			Block    string `json:"block"`
+			Inline   string `json:"inline"`
+			Before   struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"before"`
+			After struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"after"`
+		} `json:"auto_scroll"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Passed bool `json:"passed"`
+				} `json:"receives_events"`
+				InViewport struct {
+					Passed bool `json:"passed"`
+				} `json:"in_viewport"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("offscreen drag output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "dragged" || got.ResolvedSelector != "div#scroll-target" || got.Drag.Selector != "div#scroll-target" || !got.Drag.Dragged || got.Drag.DeltaX != 8 || got.Drag.DeltaY != 12 {
+		t.Fatalf("offscreen drag action = %+v, want dragged resolved target", got)
+	}
+	if got.AutoScroll.Selector != "div#scroll-target" || !got.AutoScroll.Scrolled || !got.AutoScroll.Changed || got.AutoScroll.Block != "center" || got.AutoScroll.Inline != "nearest" || got.AutoScroll.Before.InViewport || !got.AutoScroll.After.InViewport {
+		t.Fatalf("offscreen drag auto_scroll = %+v, want before/after scroll evidence", got.AutoScroll)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.InViewport.Passed {
+		t.Fatalf("offscreen drag actionability = %+v, want rechecked actionability after auto-scroll", got.Actionability)
 	}
 }
 
