@@ -89,11 +89,12 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		"--selector", "[contenteditable=true]",
 		"--wait-before", "0s",
 		"--wait-after", "0s",
-		"--include", "network,websocket,console,dom,text,a11y,storage-diff",
+		"--include", "network,websocket,console,dom,text,a11y,screenshot,storage-diff",
 		"--a11y-depth", "4",
 		"--a11y-limit", "10",
 		"--before-screenshot", beforePath,
 		"--after-screenshot", afterPath,
+		"--screenshot-full-page",
 		"--evidence-out-dir", evidenceDir,
 		"--out", outPath,
 		"--json",
@@ -124,6 +125,14 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		Evidence struct {
 			ArtifactCount int `json:"artifact_count"`
 			Before        struct {
+				Screenshot struct {
+					Bytes    int  `json:"bytes"`
+					FullPage bool `json:"full_page"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"screenshot"`
 				Text struct {
 					Count    int `json:"count"`
 					Artifact struct {
@@ -148,6 +157,14 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 				} `json:"a11y"`
 			} `json:"before"`
 			After struct {
+				Screenshot struct {
+					Bytes    int  `json:"bytes"`
+					FullPage bool `json:"full_page"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"screenshot"`
 				Text struct {
 					Count    int `json:"count"`
 					Artifact struct {
@@ -221,9 +238,11 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		t.Fatalf("workflow action-capture collectors = %+v, want network, websocket, console, and artifact", got)
 	}
 	wantEvidence := map[string]string{
+		"workflow-action-capture-before-screenshot": filepath.Join(evidenceDir, "action-capture.before.screenshot.png"),
 		"workflow-action-capture-before-text":       filepath.Join(evidenceDir, "action-capture.before.text.json"),
 		"workflow-action-capture-before-dom":        filepath.Join(evidenceDir, "action-capture.before.dom.json"),
 		"workflow-action-capture-before-a11y":       filepath.Join(evidenceDir, "action-capture.before.a11y.json"),
+		"workflow-action-capture-after-screenshot":  filepath.Join(evidenceDir, "action-capture.after.screenshot.png"),
 		"workflow-action-capture-after-text":        filepath.Join(evidenceDir, "action-capture.after.text.json"),
 		"workflow-action-capture-after-dom":         filepath.Join(evidenceDir, "action-capture.after.dom.json"),
 		"workflow-action-capture-after-a11y":        filepath.Join(evidenceDir, "action-capture.after.a11y.json"),
@@ -233,9 +252,13 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		"workflow-action-capture-manifest":          filepath.Join(evidenceDir, "action-capture.manifest.json"),
 	}
 	if got.Evidence.ArtifactCount != len(wantEvidence) ||
+		got.Evidence.Before.Screenshot.Bytes == 0 ||
+		!got.Evidence.Before.Screenshot.FullPage ||
 		got.Evidence.Before.Text.Count == 0 ||
 		got.Evidence.Before.DOM.Count == 0 ||
 		got.Evidence.Before.A11y.Count == 0 ||
+		got.Evidence.After.Screenshot.Bytes == 0 ||
+		!got.Evidence.After.Screenshot.FullPage ||
 		got.Evidence.After.Text.Count == 0 ||
 		got.Evidence.After.DOM.Count == 0 ||
 		got.Evidence.After.A11y.Count == 0 ||
@@ -245,7 +268,9 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		got.Evidence.Manifest.ReferencedArtifactCount != len(wantEvidence)+1 {
 		t.Fatalf("workflow action-capture evidence = %+v, want before/after and event evidence", got.Evidence)
 	}
-	if got.Evidence.Before.Text.Artifact.Path != wantEvidence["workflow-action-capture-before-text"] ||
+	if got.Evidence.Before.Screenshot.Artifact.Path != wantEvidence["workflow-action-capture-before-screenshot"] ||
+		got.Evidence.Before.Text.Artifact.Path != wantEvidence["workflow-action-capture-before-text"] ||
+		got.Evidence.After.Screenshot.Artifact.Path != wantEvidence["workflow-action-capture-after-screenshot"] ||
 		got.Evidence.After.DOM.Artifact.Path != wantEvidence["workflow-action-capture-after-dom"] ||
 		got.Evidence.Before.A11y.Artifact.Path != wantEvidence["workflow-action-capture-before-a11y"] ||
 		got.Evidence.After.A11y.Artifact.Path != wantEvidence["workflow-action-capture-after-a11y"] ||
@@ -267,6 +292,12 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("evidence artifact %s was not written: %v", path, err)
+		}
+		if strings.Contains(typ, "screenshot") {
+			if !bytes.Contains(raw, []byte("synthetic screenshot")) {
+				t.Fatalf("screenshot evidence artifact %s = %q, want screenshot bytes", path, string(raw))
+			}
+			continue
 		}
 		if typ == "workflow-action-capture-manifest" {
 			if !bytes.Contains(raw, []byte(`"workflow"`)) ||
@@ -312,6 +343,32 @@ func TestWorkflowActionCaptureA11yRequiresEvidenceOutDir(t *testing.T) {
 	}
 	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "--evidence-out-dir") {
 		t.Fatalf("workflow action-capture usage = %+v, want evidence-out-dir usage error", got)
+	}
+}
+
+func TestWorkflowActionCaptureScreenshotRequiresEvidenceOutDir(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "action-capture",
+		"--action", "press:Enter",
+		"--selector", "body",
+		"--include", "screenshot",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("workflow action-capture exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow action-capture usage output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "--include screenshot requires --evidence-out-dir") {
+		t.Fatalf("workflow action-capture usage = %+v, want screenshot evidence-out-dir usage error", got)
 	}
 }
 

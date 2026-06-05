@@ -35,6 +35,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	var evidenceOutDir string
 	var beforeScreenshot string
 	var afterScreenshot string
+	var screenshotFullPage bool
 	var limit int
 	var a11yDepth int
 	var a11yLimit int
@@ -60,6 +61,9 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 			}
 			if includeSet["a11y"] && evidenceOutDir == "" {
 				return commandError("usage", "usage", "--include a11y requires --evidence-out-dir because accessibility snapshots may include page content", ExitUsage, []string{"cdp workflow action-capture --action click:button --include dom,text,a11y --evidence-out-dir tmp/action-capture --json"})
+			}
+			if includeSet["screenshot"] && evidenceOutDir == "" {
+				return commandError("usage", "usage", "--include screenshot requires --evidence-out-dir because screenshots may include page content", ExitUsage, []string{"cdp workflow action-capture --action click:button --include screenshot --evidence-out-dir tmp/action-capture --json"})
 			}
 			parsedAction, err := parseActionCaptureAction(action, actionJSON, selector)
 			if err != nil {
@@ -108,7 +112,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 			artifacts := []map[string]any{}
 			beforeAt := time.Now().UTC().Format(time.RFC3339Nano)
 			if strings.TrimSpace(beforeScreenshot) != "" {
-				artifact, err := captureWorkflowScreenshot(ctx, session, beforeScreenshot, false, "before-screenshot")
+				artifact, err := captureWorkflowScreenshot(ctx, session, beforeScreenshot, screenshotFullPage, "before-screenshot")
 				if err != nil {
 					collectorErrors = append(collectorErrors, collectorError("before_screenshot", err))
 				} else {
@@ -125,7 +129,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 
 			evidenceReport := map[string]any{}
 			if evidenceOutDir != "" {
-				beforeEvidence, beforeArtifacts, beforeErrors := collectActionCaptureEvidence(ctx, session, includeSet, evidenceOutDir, "before", a11yDepth, a11yLimit)
+				beforeEvidence, beforeArtifacts, beforeErrors := collectActionCaptureEvidence(ctx, session, includeSet, evidenceOutDir, "before", a11yDepth, a11yLimit, screenshotFullPage)
 				evidenceReport["before"] = beforeEvidence
 				artifacts = append(artifacts, beforeArtifacts...)
 				collectorErrors = append(collectorErrors, beforeErrors...)
@@ -147,7 +151,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 			}
 			afterAt := time.Now().UTC().Format(time.RFC3339Nano)
 			if strings.TrimSpace(afterScreenshot) != "" {
-				artifact, err := captureWorkflowScreenshot(ctx, session, afterScreenshot, false, "after-screenshot")
+				artifact, err := captureWorkflowScreenshot(ctx, session, afterScreenshot, screenshotFullPage, "after-screenshot")
 				if err != nil {
 					collectorErrors = append(collectorErrors, collectorError("after_screenshot", err))
 				} else {
@@ -155,7 +159,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 				}
 			}
 			if evidenceOutDir != "" {
-				afterEvidence, afterArtifacts, afterErrors := collectActionCaptureEvidence(ctx, session, includeSet, evidenceOutDir, "after", a11yDepth, a11yLimit)
+				afterEvidence, afterArtifacts, afterErrors := collectActionCaptureEvidence(ctx, session, includeSet, evidenceOutDir, "after", a11yDepth, a11yLimit, screenshotFullPage)
 				evidenceReport["after"] = afterEvidence
 				artifacts = append(artifacts, afterArtifacts...)
 				collectorErrors = append(collectorErrors, afterErrors...)
@@ -280,16 +284,17 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
-	cmd.Flags().StringVar(&include, "include", "network,websocket,console,dom,text", "comma-separated collectors: network,websocket,console,dom,text,a11y,all")
+	cmd.Flags().StringVar(&include, "include", "network,websocket,console,dom,text", "comma-separated collectors: network,websocket,console,dom,text,a11y,screenshot,all")
 	cmd.Flags().StringVar(&action, "action", "", "action shorthand: click:<selector>, type:<text>, insert-text:<text>, or press:<key>")
 	cmd.Flags().StringVar(&actionJSON, "action-json", "", "JSON action object with type, selector, text/value, or key")
 	cmd.Flags().StringVar(&selector, "selector", "", "selector for click/type/insert-text or optional press focus target")
 	cmd.Flags().DurationVar(&waitBefore, "wait-before", time.Second, "delay after arming collectors and before action")
 	cmd.Flags().DurationVar(&waitAfter, "wait-after", 5*time.Second, "delay after action before collecting evidence")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the unified JSON artifact")
-	cmd.Flags().StringVar(&evidenceOutDir, "evidence-out-dir", "", "optional directory for before/after text, DOM, accessibility, action event, and manifest artifacts")
+	cmd.Flags().StringVar(&evidenceOutDir, "evidence-out-dir", "", "optional directory for before/after text, DOM, accessibility, screenshot, action event, and manifest artifacts")
 	cmd.Flags().StringVar(&beforeScreenshot, "before-screenshot", "", "optional before-action screenshot path")
 	cmd.Flags().StringVar(&afterScreenshot, "after-screenshot", "", "optional after-action screenshot path")
+	cmd.Flags().BoolVar(&screenshotFullPage, "screenshot-full-page", false, "capture full-page screenshots for action-capture screenshot artifacts")
 	cmd.Flags().IntVar(&limit, "limit", 500, "maximum events per collector; use 0 for no limit")
 	cmd.Flags().IntVar(&a11yDepth, "a11y-depth", 4, "maximum accessibility tree depth for --include a11y evidence")
 	cmd.Flags().IntVar(&a11yLimit, "a11y-limit", 100, "maximum accessibility nodes per before/after --include a11y artifact")
@@ -298,7 +303,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 }
 
 func invalidActionCaptureIncludes(includeSet map[string]bool) []string {
-	valid := parseCSVSet("network,websocket,console,dom,text,a11y,storage-diff,all")
+	valid := parseCSVSet("network,websocket,console,dom,text,a11y,screenshot,storage-diff,all")
 	invalid := []string{}
 	for key := range includeSet {
 		if !valid[key] {
@@ -391,7 +396,7 @@ func performActionCaptureAction(ctx context.Context, session *cdp.PageSession, a
 	}
 }
 
-func collectActionCaptureEvidence(ctx context.Context, session *cdp.PageSession, includeSet map[string]bool, outDir, phase string, a11yDepth, a11yLimit int) (map[string]any, []map[string]any, []map[string]string) {
+func collectActionCaptureEvidence(ctx context.Context, session *cdp.PageSession, includeSet map[string]bool, outDir, phase string, a11yDepth, a11yLimit int, screenshotFullPage bool) (map[string]any, []map[string]any, []map[string]string) {
 	capturedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	evidence := map[string]any{
 		"at":      capturedAt,
@@ -399,6 +404,20 @@ func collectActionCaptureEvidence(ctx context.Context, session *cdp.PageSession,
 	}
 	artifacts := []map[string]any{}
 	collectorErrors := []map[string]string{}
+	if includeSet["screenshot"] {
+		artifact, err := captureActionCaptureEvidenceScreenshot(ctx, session, outDir, phase, screenshotFullPage)
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError(phase+"_screenshot", err))
+		} else {
+			evidence["screenshot"] = map[string]any{
+				"format":    artifact["format"],
+				"bytes":     artifact["bytes"],
+				"full_page": artifact["full_page"],
+				"artifact":  artifact,
+			}
+			artifacts = append(artifacts, artifact)
+		}
+	}
 	if includeSet["text"] {
 		var text textResult
 		if err := evaluateJSONValue(ctx, session, textExpression("body", 1, 0), "action-capture "+phase+" text", &text); err != nil {
@@ -479,6 +498,17 @@ func collectActionCaptureEvidence(ctx context.Context, session *cdp.PageSession,
 		}
 	}
 	return evidence, artifacts, collectorErrors
+}
+
+func captureActionCaptureEvidenceScreenshot(ctx context.Context, session *cdp.PageSession, outDir, phase string, fullPage bool) (map[string]any, error) {
+	path := filepath.Join(outDir, fmt.Sprintf("action-capture.%s.screenshot.png", phase))
+	artifact, err := captureWorkflowScreenshot(ctx, session, path, fullPage, "workflow-action-capture-"+phase+"-screenshot")
+	if err != nil {
+		return nil, err
+	}
+	artifact["phase"] = phase
+	artifact["collector"] = "screenshot"
+	return artifact, nil
 }
 
 func writeActionCaptureEvidenceArtifact(outDir, phase, collector string, payload any) (map[string]any, error) {
@@ -647,7 +677,7 @@ func actionCaptureEvidenceArtifacts(evidence map[string]any) []map[string]any {
 		if !ok {
 			continue
 		}
-		for _, collector := range []string{"text", "dom", "a11y"} {
+		for _, collector := range []string{"screenshot", "text", "dom", "a11y"} {
 			collectorEvidence, ok := phaseEvidence[collector].(map[string]any)
 			if !ok {
 				continue

@@ -496,7 +496,8 @@ func commandExamples(path string) []string {
 			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --json",
 		},
 		"cdp workflow action-capture": {
-			"cdp workflow action-capture --action click:'button.submit' --include network,console,dom,text,a11y --wait-after 2s --evidence-out-dir tmp/action-capture --json",
+			"cdp workflow action-capture --action click:'button.submit' --include network,console,dom,text,a11y,screenshot --wait-after 2s --evidence-out-dir tmp/action-capture --json",
+			"cdp workflow action-capture --action click:'button.submit' --include screenshot --screenshot-full-page --evidence-out-dir tmp/action-capture --json",
 			"cdp workflow action-capture --action press:Enter --selector 'input[name=q]' --include network,console,dom,text --out tmp/action-capture.json --json",
 		},
 		"cdp workflow a11y": {
