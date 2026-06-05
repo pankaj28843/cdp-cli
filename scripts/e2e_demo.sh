@@ -197,6 +197,16 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .action == "checked" and .check.checked == true and .check.force == true and .check.changed == true and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.required == false and .actionability.checks.receives_events.skipped == true and .actionability.checks.receives_events.passed == false and .actionability.checks.enabled.passed == true' >/dev/null
 "$binary" assert checked "#covered-checkbox" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .assertion.checked == true and .assertion.checked_count == 1 and .assertion.unsupported_count == 0 and .assertion.items[0].id == "covered-checkbox" and .assertion.items[0].type == "checkbox"' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" check "Below fold checkbox" --by label --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "checked" and .check.checked == true and .check.desired_checked == true and .check.previous_checked == false and .check.changed == true and .locator.strict == true and .resolved_selector == "input#below-fold-checkbox" and .auto_scroll.before.in_viewport == false and .auto_scroll.after.in_viewport == true and .auto_scroll.changed == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" uncheck "Below fold checkbox" --by label --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "unchecked" and .uncheck.checked == false and .uncheck.desired_checked == false and .uncheck.previous_checked == true and .uncheck.changed == true and .locator.strict == true and .resolved_selector == "input#below-fold-checkbox" and .auto_scroll.before.in_viewport == false and .auto_scroll.after.in_viewport == true and .auto_scroll.changed == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
 "$binary" assert text "Click target" "Click target" --by role --role button --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "button#action" and .assertion.selector == "button#action" and .assertion.actual == "Click target"' >/dev/null
 "$binary" assert visible "Click target" --by role --role button --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \

@@ -150,7 +150,7 @@ func actionabilityFailureMessage(action, selector string, result actionabilityRe
 
 func shouldAutoScrollBeforePointerAction(action string, result actionabilityResult) bool {
 	switch action {
-	case "click", "hover", "drag":
+	case "click", "hover", "drag", "check", "uncheck":
 	default:
 		return false
 	}
@@ -162,7 +162,7 @@ func shouldAutoScrollBeforePointerAction(action string, result actionabilityResu
 		return false
 	}
 	requiredBeforeScroll := []string{"attached", "visible", "stable"}
-	if action == "click" {
+	if action == "click" || action == "check" || action == "uncheck" {
 		requiredBeforeScroll = append(requiredBeforeScroll, "enabled")
 	}
 	for _, name := range requiredBeforeScroll {

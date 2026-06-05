@@ -1347,6 +1347,138 @@ func TestUncheckByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestCheckAutoScrollsOffscreenTargetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"check", "Below fold checkbox", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("offscreen check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Check            struct {
+			Selector       string `json:"selector"`
+			Checked        bool   `json:"checked"`
+			DesiredChecked bool   `json:"desired_checked"`
+			Previous       bool   `json:"previous_checked"`
+			Changed        bool   `json:"changed"`
+		} `json:"check"`
+		AutoScroll struct {
+			Selector string `json:"selector"`
+			Scrolled bool   `json:"scrolled"`
+			Changed  bool   `json:"changed"`
+			Block    string `json:"block"`
+			Inline   string `json:"inline"`
+			Before   struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"before"`
+			After struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"after"`
+		} `json:"auto_scroll"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Passed bool `json:"passed"`
+				} `json:"receives_events"`
+				InViewport struct {
+					Passed bool `json:"passed"`
+				} `json:"in_viewport"`
+				Enabled struct {
+					Passed bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("offscreen check output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "checked" || got.ResolvedSelector != "input#below-fold-checkbox" || got.Check.Selector != "input#below-fold-checkbox" || !got.Check.Checked || !got.Check.DesiredChecked || got.Check.Previous || !got.Check.Changed {
+		t.Fatalf("offscreen check action = %+v, want checked resolved checkbox", got)
+	}
+	if got.AutoScroll.Selector != "input#below-fold-checkbox" || !got.AutoScroll.Scrolled || !got.AutoScroll.Changed || got.AutoScroll.Block != "center" || got.AutoScroll.Inline != "nearest" || got.AutoScroll.Before.InViewport || !got.AutoScroll.After.InViewport {
+		t.Fatalf("offscreen check auto_scroll = %+v, want before/after scroll evidence", got.AutoScroll)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.InViewport.Passed || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("offscreen check actionability = %+v, want rechecked actionability after auto-scroll", got.Actionability)
+	}
+}
+
+func TestUncheckAutoScrollsOffscreenTargetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"uncheck", "Below fold checkbox", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("offscreen uncheck exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Uncheck          struct {
+			Selector       string `json:"selector"`
+			Checked        bool   `json:"checked"`
+			DesiredChecked bool   `json:"desired_checked"`
+			Previous       bool   `json:"previous_checked"`
+			Changed        bool   `json:"changed"`
+		} `json:"uncheck"`
+		AutoScroll struct {
+			Selector string `json:"selector"`
+			Scrolled bool   `json:"scrolled"`
+			Changed  bool   `json:"changed"`
+			Block    string `json:"block"`
+			Inline   string `json:"inline"`
+			Before   struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"before"`
+			After struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"after"`
+		} `json:"auto_scroll"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Passed bool `json:"passed"`
+				} `json:"receives_events"`
+				InViewport struct {
+					Passed bool `json:"passed"`
+				} `json:"in_viewport"`
+				Enabled struct {
+					Passed bool `json:"passed"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("offscreen uncheck output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "unchecked" || got.ResolvedSelector != "input#below-fold-checkbox" || got.Uncheck.Selector != "input#below-fold-checkbox" || got.Uncheck.Checked || got.Uncheck.DesiredChecked || !got.Uncheck.Previous || !got.Uncheck.Changed {
+		t.Fatalf("offscreen uncheck action = %+v, want unchecked resolved checkbox", got)
+	}
+	if got.AutoScroll.Selector != "input#below-fold-checkbox" || !got.AutoScroll.Scrolled || !got.AutoScroll.Changed || got.AutoScroll.Block != "center" || got.AutoScroll.Inline != "nearest" || got.AutoScroll.Before.InViewport || !got.AutoScroll.After.InViewport {
+		t.Fatalf("offscreen uncheck auto_scroll = %+v, want before/after scroll evidence", got.AutoScroll)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.InViewport.Passed || !got.Actionability.Checks.Enabled.Passed {
+		t.Fatalf("offscreen uncheck actionability = %+v, want rechecked actionability after auto-scroll", got.Actionability)
+	}
+}
+
 func TestCheckTrialByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

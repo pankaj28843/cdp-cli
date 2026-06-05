@@ -763,6 +763,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			name = "Subscribe to newsletter"
 			placeholder = ""
 		}
+		if query == "Below fold checkbox" {
+			selector = "input#below-fold-checkbox"
+			tag = "input"
+			elementType = "checkbox"
+			role = "checkbox"
+			name = "Below fold checkbox"
+			placeholder = ""
+		}
 		if query == "Optional updates" {
 			selector = "input#optional-updates"
 			tag = "input"
@@ -1856,6 +1864,22 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			receivesEvents = false
 			point = map[string]any{"x": 20, "y": 180, "hit_tag": "label", "hit_id": "checkbox-cover", "hit_role": "", "target_matches": false}
 		}
+		if selector == "input#below-fold-checkbox" {
+			tag = "input"
+			elementType = "checkbox"
+			role = "checkbox"
+			name = "Below fold checkbox"
+			inViewport = false
+			receivesEvents = false
+			rect = map[string]any{"x": 10, "y": 1800, "width": 20, "height": 20}
+			point = map[string]any{"x": 20, "y": 1810, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
+			if _, ok := scrolledSelectors.Load(selector); ok {
+				inViewport = true
+				receivesEvents = true
+				rect = map[string]any{"x": 10, "y": 260, "width": 20, "height": 20}
+				point = map[string]any{"x": 20, "y": 270, "hit_tag": "input", "hit_id": "below-fold-checkbox", "hit_role": "checkbox", "target_matches": true}
+			}
+		}
 		if selector == "input#q" {
 			tag = "input"
 			elementType = "search"
@@ -2183,6 +2207,9 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			"type":             "checkbox",
 			"role":             "checkbox",
 			"name":             "Subscribe to newsletter",
+		}
+		if selector == "input#below-fold-checkbox" {
+			out["name"] = "Below fold checkbox"
 		}
 		if !mutate {
 			out["checked"] = previous

@@ -188,6 +188,24 @@ func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
 				return invalidSelectorError(selector, actionability.Error, "cdp "+name+" 'Subscribe to newsletter' --by label --trial --json")
 			}
 			prepareActionability(&actionability, name, trial, force)
+			var autoScroll *scrollResult
+			if !trial && shouldAutoScrollBeforePointerAction(name, actionability) {
+				scrolled, err := autoScrollPointerTarget(ctx, session, selector)
+				if err != nil {
+					return err
+				}
+				autoScroll = &scrolled
+				if scrolled.Error == nil && scrolled.After.InViewport {
+					actionability, err = evaluateActionability(ctx, session, selector, name)
+					if err != nil {
+						return err
+					}
+					if actionability.Error != nil {
+						return invalidSelectorError(selector, actionability.Error, "cdp "+name+" 'Subscribe to newsletter' --by label --trial --json")
+					}
+					prepareActionability(&actionability, name, trial, force)
+				}
+			}
 
 			result := checkResult{
 				URL:            actionability.URL,
@@ -237,6 +255,9 @@ func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				if autoScroll != nil {
+					report["auto_scroll"] = autoScroll
+				}
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage(name, selector, actionability), ExitCheckFailed, actionabilityRemediations(name, args[0], selector, locatorOpts), report)
 			}
 
@@ -260,6 +281,9 @@ func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
 			if locator != nil {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
+			}
+			if autoScroll != nil {
+				report["auto_scroll"] = autoScroll
 			}
 			return a.render(ctx, fmt.Sprintf("%s\t%s\t%s", actionName, target.TargetID, result.Selector), report)
 		},

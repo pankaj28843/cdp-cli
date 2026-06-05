@@ -112,6 +112,10 @@ DEMO_HTML = """<!doctype html>
     </article>
     <p class="overflow">This sentence intentionally overflows its box for layout diagnostics.</p>
     <div class="scroll-spacer" aria-hidden="true"></div>
+    <label class="agent-form checkbox-row" for="below-fold-checkbox">
+      <input id="below-fold-checkbox" name="below_fold_checkbox" type="checkbox">
+      Below fold checkbox
+    </label>
     <button id="scroll-target" data-testid="scroll-target">Scroll target</button>
     <output id="status">booting</output>
   </main>
