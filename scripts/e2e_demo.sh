@@ -234,12 +234,14 @@ require_artifact "$rendered_dir/links.json"
   | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action" and .target.url == .after_target.url and .final_target.url == .after_target.url and .page_state.same_target == true and .page_state.url_changed == false and .actionability.actionable == true' >/dev/null
 action_capture_dir="$state_dir/action-capture"
 mkdir -p "$action_capture_dir"
-"$binary" workflow action-capture --action click:#action --state-dir "$state_dir/cdp-state" --wait-before 0s --wait-after 250ms --include network,console,dom,text --evidence-out-dir "$action_capture_dir" --json \
-  | jq -e --arg before "$action_capture_dir/action-capture.before.text.json" --arg after "$action_capture_dir/action-capture.after.dom.json" --arg network "$action_capture_dir/action-capture.action.network.json" --arg console "$action_capture_dir/action-capture.action.console.json" '.ok == true and .workflow.name == "action-capture" and .action.type == "click" and .evidence.artifact_count == 6 and .evidence.before.text.artifact.path == $before and .evidence.after.dom.artifact.path == $after and .evidence.events.network.artifact.path == $network and .evidence.events.console.artifact.path == $console and (.artifacts | length >= 6)' >/dev/null
+"$binary" workflow action-capture --action click:#action --state-dir "$state_dir/cdp-state" --wait-before 0s --wait-after 250ms --include network,console,dom,text,a11y --evidence-out-dir "$action_capture_dir" --json \
+  | jq -e --arg before "$action_capture_dir/action-capture.before.text.json" --arg after "$action_capture_dir/action-capture.after.dom.json" --arg before_a11y "$action_capture_dir/action-capture.before.a11y.json" --arg after_a11y "$action_capture_dir/action-capture.after.a11y.json" --arg network "$action_capture_dir/action-capture.action.network.json" --arg console "$action_capture_dir/action-capture.action.console.json" '.ok == true and .workflow.name == "action-capture" and .action.type == "click" and .evidence.artifact_count == 8 and .evidence.before.text.artifact.path == $before and .evidence.after.dom.artifact.path == $after and .evidence.before.a11y.artifact.path == $before_a11y and .evidence.after.a11y.artifact.path == $after_a11y and .evidence.events.network.artifact.path == $network and .evidence.events.console.artifact.path == $console and (.artifacts | length >= 8)' >/dev/null
 require_artifact "$action_capture_dir/action-capture.before.text.json"
 require_artifact "$action_capture_dir/action-capture.before.dom.json"
+require_artifact "$action_capture_dir/action-capture.before.a11y.json"
 require_artifact "$action_capture_dir/action-capture.after.text.json"
 require_artifact "$action_capture_dir/action-capture.after.dom.json"
+require_artifact "$action_capture_dir/action-capture.after.a11y.json"
 require_artifact "$action_capture_dir/action-capture.action.network.json"
 require_artifact "$action_capture_dir/action-capture.action.console.json"
 "$binary" fill "#agent-input" "filled value" --state-dir "$state_dir/cdp-state" --json \

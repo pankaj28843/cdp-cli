@@ -558,6 +558,29 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{
 					"data": base64.StdEncoding.EncodeToString([]byte("synthetic screenshot")),
 				}
+			} else if req.Method == "Accessibility.getFullAXTree" {
+				resp["result"] = map[string]any{
+					"nodes": []map[string]any{
+						{
+							"nodeId":  "1",
+							"ignored": false,
+							"role":    map[string]any{"type": "role", "value": "RootWebArea"},
+							"name":    map[string]any{"type": "computedString", "value": "Example App"},
+						},
+						{
+							"nodeId":  "2",
+							"ignored": false,
+							"role":    map[string]any{"type": "role", "value": "textbox"},
+							"name":    map[string]any{"type": "computedString", "value": "Editor"},
+						},
+						{
+							"nodeId":  "3",
+							"ignored": false,
+							"role":    map[string]any{"type": "role", "value": "button"},
+							"name":    map[string]any{"type": "computedString", "value": "Submit"},
+						},
+					},
+				}
 			} else if req.Method == "Browser.getVersion" {
 				resp["result"] = map[string]any{"product": "Chrome/Test", "protocolVersion": "1.3"}
 			} else if req.Method == "SystemInfo.getProcessInfo" {
