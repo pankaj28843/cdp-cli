@@ -556,15 +556,17 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait": {
 			Name:        "wait",
-			Description: "Page condition wait result for text, selector, locator, JavaScript expression, load-state, request, response, or network-idle checks.",
+			Description: "Page condition wait result for text, selector, locator, JavaScript expression, load-state, request, response, network-idle, or dialog checks.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition or CDP event method, load state and readyState when applicable, criteria, match status, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, elapsed time, timeout, and poll interval when applicable."},
+				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition or CDP event method, load state and readyState when applicable, criteria, match status, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, elapsed time, timeout, and poll interval when applicable."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator result when waiting by user-facing locator."},
 				{Name: "matches", Type: "array<locator_match>", Required: false, Description: "Locator matches duplicated for jq convenience when waiting by locator."},
 				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched request or response CDP event metadata with safe URL redaction by default and no headers or bodies."},
-				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed request/response candidate or network-idle request lifecycle event."},
+				{Name: "dialog", Type: "dialog_wait_event", Required: false, Description: "Matched JavaScript dialog metadata and optional accept/dismiss handling evidence."},
+				{Name: "last_event", Type: "network_or_dialog_wait_event", Required: false, Description: "Last observed request/response candidate, network-idle lifecycle event, or dialog event."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands, especially for unhandled dialogs."},
 			},
 		},
 		"assert-value": {

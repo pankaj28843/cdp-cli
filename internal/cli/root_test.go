@@ -476,6 +476,132 @@ func TestWaitNetworkIdleInvalidOptionsJSON(t *testing.T) {
 	}
 }
 
+func TestWaitDialogJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "dialog-page", "type": "page", "title": "Dialog App", "url": "https://example.test/dialog", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "dialog", "--type", "confirm", "--message-contains", "Delete", "--action", "dismiss", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait dialog exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Wait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			CDPMethod     string `json:"cdp_method"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				Type            string `json:"type"`
+				MessageContains string `json:"message_contains"`
+			} `json:"criteria"`
+			Evidence struct {
+				Headers bool `json:"headers"`
+				Bodies  bool `json:"bodies"`
+				Bounded bool `json:"bounded"`
+			} `json:"evidence"`
+		} `json:"wait"`
+		Dialog struct {
+			Type               string `json:"type"`
+			Message            string `json:"message"`
+			URL                string `json:"url"`
+			FrameID            string `json:"frame_id"`
+			CDPMethod          string `json:"cdp_method"`
+			Action             string `json:"action"`
+			Handled            bool   `json:"handled"`
+			Accepted           bool   `json:"accepted"`
+			PromptTextSupplied bool   `json:"prompt_text_supplied"`
+		} `json:"dialog"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait dialog output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "dialog-page" || got.Wait.Kind != "dialog" || !got.Wait.Matched || got.Wait.CDPMethod != "Page.javascriptDialogOpening" || got.Wait.EventCount != 1 || got.Wait.ObservedCount != 1 || got.Wait.Criteria.Type != "confirm" || got.Wait.Criteria.MessageContains != "Delete" {
+		t.Fatalf("wait dialog output = %+v, want matched dialog wait evidence", got)
+	}
+	if got.Dialog.Type != "confirm" || got.Dialog.Message != "Delete item?" || got.Dialog.FrameID != "frame-main" || got.Dialog.CDPMethod != "Page.javascriptDialogOpening" || got.Dialog.Action != "dismiss" || !got.Dialog.Handled || got.Dialog.Accepted || got.Dialog.PromptTextSupplied {
+		t.Fatalf("wait dialog dialog = %+v, want dismissed confirm dialog evidence", got.Dialog)
+	}
+	if strings.Contains(got.Dialog.URL, "token=abc") || !strings.Contains(got.Dialog.URL, "redacted") {
+		t.Fatalf("wait dialog URL was not safely redacted: %q", got.Dialog.URL)
+	}
+	if got.Wait.Evidence.Headers || got.Wait.Evidence.Bodies || !got.Wait.Evidence.Bounded {
+		t.Fatalf("wait dialog evidence = %+v, want bounded evidence without headers or bodies", got.Wait.Evidence)
+	}
+	if !containsString(got.NextCommands, "cdp snapshot --json") {
+		t.Fatalf("wait dialog next commands = %+v, want snapshot follow-up after handled dialog", got.NextCommands)
+	}
+}
+
+func TestWaitDialogTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "dialog", "--type", "alert", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait dialog timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Wait struct {
+				Kind          string `json:"kind"`
+				Matched       bool   `json:"matched"`
+				EventCount    int    `json:"event_count"`
+				ObservedCount int    `json:"observed_count"`
+				Criteria      struct {
+					Type string `json:"type"`
+				} `json:"criteria"`
+			} `json:"wait"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait dialog timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "dialog" || got.Data.Wait.Matched || got.Data.Wait.EventCount != 0 || got.Data.Wait.ObservedCount != 0 || got.Data.Wait.Criteria.Type != "alert" {
+		t.Fatalf("wait dialog timeout = %+v, want timeout envelope with wait criteria", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp dialog dismiss --json") {
+		t.Fatalf("wait dialog remediation commands = %+v, want dialog dismiss command", got.RemediationCommands)
+	}
+}
+
+func TestWaitDialogInvalidOptionsJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "dialog", "--type", "modal", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("wait dialog invalid exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait dialog invalid output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "--type must be alert") {
+		t.Fatalf("wait dialog invalid output = %+v, want usage error", got)
+	}
+}
+
 func TestWaitNetworkUnsupportedRedactionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"wait", "response", "--redact", "headers", "--json"}, &out, &errOut, cli.BuildInfo{})

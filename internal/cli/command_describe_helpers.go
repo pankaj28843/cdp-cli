@@ -350,6 +350,10 @@ func commandExamples(path string) []string {
 			"cdp wait network-idle --idle 500ms --timeout 10s --json",
 			"cdp wait network-idle --ignore-url-contains /events --idle 1s --json",
 		},
+		"cdp wait dialog": {
+			"cdp wait dialog --type confirm --action dismiss --timeout 10s --json",
+			"cdp wait dialog --message-contains 'Delete item?' --action accept --json",
+		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",

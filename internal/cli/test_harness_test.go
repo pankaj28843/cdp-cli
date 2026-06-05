@@ -264,7 +264,24 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				blocksDuckDuckGo := (strings.Contains(lowerURL, "duck-only-block") || strings.Contains(lowerURL, "duck+only+block") || strings.Contains(lowerURL, "duck%20only%20block")) && strings.Contains(lowerURL, "duckduckgo.com")
 				blockedSessions[req.SessionID] = blocksAllSERPs || blocksDuckDuckGo
 				resp["result"] = map[string]any{"frameId": "frame-1"}
-			} else if req.Method == "Page.enable" || req.Method == "Page.disable" {
+			} else if req.Method == "Page.enable" {
+				resp["result"] = map[string]any{}
+				if strings.Contains(req.SessionID, "dialog") {
+					events = append(events, map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Page.javascriptDialogOpening",
+						"params": map[string]any{
+							"url":               "https://example.test/dialog?token=abc",
+							"frameId":           "frame-main",
+							"message":           "Delete item?",
+							"type":              "confirm",
+							"hasBrowserHandler": false,
+						},
+					})
+				}
+			} else if req.Method == "Page.disable" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Page.handleJavaScriptDialog" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.reload" {
 				resp["result"] = map[string]any{}

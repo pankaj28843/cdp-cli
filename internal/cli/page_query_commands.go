@@ -492,6 +492,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 	cmd.AddCommand(a.newWaitRequestCommand())
 	cmd.AddCommand(a.newWaitResponseCommand())
 	cmd.AddCommand(a.newWaitNetworkIdleCommand())
+	cmd.AddCommand(a.newWaitDialogCommand())
 	return cmd
 }
 
