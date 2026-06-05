@@ -728,6 +728,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			name = "Drag target"
 			placeholder = ""
 		}
+		if query == "Scroll target" || query == "scroll-target" {
+			selector = "div#scroll-target"
+			tag = "div"
+			elementType = ""
+			role = ""
+			name = "Scroll target"
+			placeholder = ""
+		}
 		if query == "Plan" {
 			selector = "select#plan"
 			tag = "select"
@@ -1670,6 +1678,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		editable := false
 		readOnly := false
 		supportsEditing := false
+		inViewport := true
 		rect := map[string]any{"x": 10, "y": 20, "width": 600, "height": 200}
 		point := map[string]any{"x": 310, "y": 120, "hit_tag": tag, "hit_id": "", "hit_role": role, "target_matches": true}
 		if selector == "button#submit" {
@@ -1695,6 +1704,20 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			rect = map[string]any{"x": 20, "y": 40, "width": 140, "height": 60}
 			point = map[string]any{"x": 90, "y": 70, "hit_tag": "div", "hit_id": "drag-target", "hit_role": "", "target_matches": true}
 		}
+		if selector == "div#scroll-target" || selector == "#scroll-target" {
+			tag = "div"
+			name = "Scroll target"
+			inViewport = false
+			rect = map[string]any{"x": 20, "y": 1800, "width": 180, "height": 80}
+			point = map[string]any{"x": 110, "y": 1840, "hit_tag": "div", "hit_id": "scroll-target", "hit_role": "", "target_matches": true}
+		}
+		if selector == "#moving-target" {
+			tag = "div"
+			name = "Moving target"
+			stable = false
+			rect = map[string]any{"x": 20, "y": 1800, "width": 180, "height": 80}
+			point = map[string]any{"x": 110, "y": 1840, "hit_tag": "div", "hit_id": "moving-target", "hit_role": "", "target_matches": true}
+		}
 		if selector == "select#plan" || selector == "select#disabled-plan" || selector == "select#hidden-plan" {
 			tag = "select"
 			role = "combobox"
@@ -1707,6 +1730,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 		if selector == "select#hidden-plan" {
 			visible = false
+			inViewport = false
 			receivesEvents = false
 			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
 			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
@@ -1721,6 +1745,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 		if selector == "#hidden-upload" {
 			visible = false
+			inViewport = false
 			receivesEvents = false
 			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
 			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
@@ -1765,6 +1790,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			role = "textbox"
 			name = "Hidden field"
 			visible = false
+			inViewport = false
 			receivesEvents = false
 			editable = true
 			supportsEditing = true
@@ -1786,6 +1812,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			role = "button"
 			name = "Hidden button"
 			visible = false
+			inViewport = false
 			receivesEvents = false
 			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
 			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
@@ -1801,6 +1828,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		if selector == "#missing" {
 			count = 0
 			visible = false
+			inViewport = false
 			stable = false
 			receivesEvents = false
 			enabled = false
@@ -1813,6 +1841,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			required = []string{"attached"}
 		case "file":
 			required = []string{"attached"}
+		case "scroll":
+			required = []string{"attached", "stable"}
 		case "fill", "type":
 			required = []string{"attached", "visible", "enabled", "editable"}
 		case "select":
@@ -1842,7 +1872,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			"receives_events": check("receives_events", receivesEvents, map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]),
 			"enabled":         check("enabled", enabled, map[bool]string{true: "", false: "element is disabled"}[enabled]),
 			"editable":        check("editable", editable, map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]),
-			"in_viewport":     map[string]any{"required": false, "passed": visible, "skipped": true},
+			"in_viewport":     map[string]any{"required": false, "passed": inViewport, "skipped": true},
 		}
 		passedByName := map[string]bool{
 			"attached":        count > 0,
@@ -2435,6 +2465,78 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 				},
 			},
 		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_scroll__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		block := expressionStringArg(req.Expression, "const block = ")
+		inline := expressionStringArg(req.Expression, "const inline = ")
+		mutate := strings.Contains(req.Expression, "const mutate = true")
+		if selector == "" {
+			selector = "div#scroll-target"
+		}
+		if block == "" {
+			block = "center"
+		}
+		if inline == "" {
+			inline = "nearest"
+		}
+		before := map[string]any{
+			"rect":              map[string]any{"x": 20, "y": 1800, "width": 180, "height": 80},
+			"in_viewport":       false,
+			"fully_in_viewport": false,
+			"viewport_width":    800,
+			"viewport_height":   600,
+			"scroll_x":          0,
+			"scroll_y":          0,
+		}
+		after := before
+		changed := false
+		scrolled := false
+		if mutate {
+			after = map[string]any{
+				"rect":              map[string]any{"x": 20, "y": 260, "width": 180, "height": 80},
+				"in_viewport":       true,
+				"fully_in_viewport": true,
+				"viewport_width":    800,
+				"viewport_height":   600,
+				"scroll_x":          0,
+				"scroll_y":          1540,
+			}
+			changed = true
+			scrolled = true
+		}
+		count := 1
+		value := map[string]any{
+			"url":      "https://example.test/app",
+			"title":    "Example App",
+			"selector": selector,
+			"count":    count,
+			"scrolled": scrolled,
+			"changed":  changed,
+			"trial":    !mutate,
+			"block":    block,
+			"inline":   inline,
+			"before":   before,
+			"after":    after,
+		}
+		if selector == "#missing" {
+			empty := map[string]any{
+				"rect":              map[string]any{"x": 0, "y": 0, "width": 0, "height": 0},
+				"in_viewport":       false,
+				"fully_in_viewport": false,
+				"viewport_width":    800,
+				"viewport_height":   600,
+				"scroll_x":          0,
+				"scroll_y":          0,
+			}
+			value["count"] = 0
+			value["scrolled"] = false
+			value["changed"] = false
+			value["before"] = empty
+			value["after"] = empty
+			value["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_wait_text__") {
 		matched := !strings.Contains(req.Expression, "Never Ready")

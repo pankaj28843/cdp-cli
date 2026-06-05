@@ -1023,6 +1023,165 @@ func TestFileHiddenInputUsesAttachedOnlyActionability(t *testing.T) {
 	}
 }
 
+func TestScrollTrialByTestIDLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"scroll", "scroll-target", "--by", "test-id", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("scroll trial exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Scroll struct {
+			Selector string `json:"selector"`
+			Scrolled bool   `json:"scrolled"`
+			Changed  bool   `json:"changed"`
+			Trial    bool   `json:"trial"`
+			Block    string `json:"block"`
+			Inline   string `json:"inline"`
+			Before   struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"before"`
+			After struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"after"`
+		} `json:"scroll"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Trial      bool     `json:"trial"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Stable struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"stable"`
+				Visible struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"visible"`
+				InViewport struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+					Skipped  bool `json:"skipped"`
+				} `json:"in_viewport"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("scroll trial output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.ResolvedSelector != "div#scroll-target" || got.Locator.By != "test-id" || got.Locator.Query != "scroll-target" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].SelectorHint != "div#scroll-target" {
+		t.Fatalf("scroll trial locator = %+v, want strict test-id locator", got)
+	}
+	if got.Scroll.Selector != "div#scroll-target" || got.Scroll.Scrolled || got.Scroll.Changed || !got.Scroll.Trial || got.Scroll.Block != "center" || got.Scroll.Inline != "nearest" || got.Scroll.Before.InViewport || got.Scroll.After.InViewport || !got.Actionability.Actionable || !got.Actionability.Trial || len(got.Actionability.Required) != 2 || !containsString(got.Actionability.Required, "stable") || !got.Actionability.Checks.Stable.Required || !got.Actionability.Checks.Stable.Passed || got.Actionability.Checks.Visible.Required || !got.Actionability.Checks.Visible.Skipped || got.Actionability.Checks.InViewport.Required || got.Actionability.Checks.InViewport.Passed || !got.Actionability.Checks.InViewport.Skipped {
+		t.Fatalf("scroll trial = %+v, want non-mutating stable target evidence", got)
+	}
+}
+
+func TestScrollByTestIDLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"scroll", "scroll-target", "--by", "test-id", "--block", "end", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("scroll exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Scroll struct {
+			Selector string `json:"selector"`
+			Scrolled bool   `json:"scrolled"`
+			Changed  bool   `json:"changed"`
+			Trial    bool   `json:"trial"`
+			Block    string `json:"block"`
+			Inline   string `json:"inline"`
+			Before   struct {
+				InViewport bool    `json:"in_viewport"`
+				ScrollY    float64 `json:"scroll_y"`
+			} `json:"before"`
+			After struct {
+				InViewport      bool    `json:"in_viewport"`
+				FullyInViewport bool    `json:"fully_in_viewport"`
+				ScrollY         float64 `json:"scroll_y"`
+			} `json:"after"`
+		} `json:"scroll"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Required   []string `json:"required_checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("scroll output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "scrolled" || got.Scroll.Selector != "div#scroll-target" || !got.Scroll.Scrolled || !got.Scroll.Changed || got.Scroll.Trial || got.Scroll.Block != "end" || got.Scroll.Inline != "nearest" || got.Scroll.Before.InViewport || got.Scroll.Before.ScrollY != 0 || !got.Scroll.After.InViewport || !got.Scroll.After.FullyInViewport || got.Scroll.After.ScrollY <= got.Scroll.Before.ScrollY || !got.Actionability.Actionable || len(got.Actionability.Required) != 2 || !containsString(got.Actionability.Required, "stable") {
+		t.Fatalf("scroll = %+v, want viewport-changing scroll evidence", got)
+	}
+}
+
+func TestScrollActionabilityFailureJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"scroll", "#moving-target", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("moving scroll exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Scroll struct {
+				Scrolled bool `json:"scrolled"`
+				Trial    bool `json:"trial"`
+			} `json:"scroll"`
+			Actionability struct {
+				Actionable bool `json:"actionable"`
+				Checks     struct {
+					Stable struct {
+						Required bool   `json:"required"`
+						Passed   bool   `json:"passed"`
+						Message  string `json:"message"`
+					} `json:"stable"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("moving scroll output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Scroll.Scrolled || got.Data.Scroll.Trial || got.Data.Actionability.Actionable || !got.Data.Actionability.Checks.Stable.Required || got.Data.Actionability.Checks.Stable.Passed || got.Data.Actionability.Checks.Stable.Message == "" {
+		t.Fatalf("moving scroll = %+v, want failed stable actionability", got)
+	}
+}
+
 func TestCheckByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

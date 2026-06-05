@@ -62,6 +62,31 @@ type fileResult struct {
 	Error          *evalError `json:"error,omitempty"`
 }
 
+type scrollViewportEvidence struct {
+	Rect            snapshotRect `json:"rect"`
+	InViewport      bool         `json:"in_viewport"`
+	FullyInViewport bool         `json:"fully_in_viewport"`
+	ViewportWidth   float64      `json:"viewport_width"`
+	ViewportHeight  float64      `json:"viewport_height"`
+	ScrollX         float64      `json:"scroll_x"`
+	ScrollY         float64      `json:"scroll_y"`
+}
+
+type scrollResult struct {
+	URL      string                 `json:"url,omitempty"`
+	Title    string                 `json:"title,omitempty"`
+	Selector string                 `json:"selector"`
+	Count    int                    `json:"count"`
+	Scrolled bool                   `json:"scrolled"`
+	Changed  bool                   `json:"changed"`
+	Trial    bool                   `json:"trial,omitempty"`
+	Block    string                 `json:"block"`
+	Inline   string                 `json:"inline"`
+	Before   scrollViewportEvidence `json:"before"`
+	After    scrollViewportEvidence `json:"after"`
+	Error    *evalError             `json:"error,omitempty"`
+}
+
 func (a *app) newFocusCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	cmd := &cobra.Command{
@@ -259,6 +284,129 @@ func checkCommandResultError(action, selector string, err *evalError) error {
 		return commandError(action+"_failed", "check_failed", fmt.Sprintf("%s %q: %s", action, selector, err.Message), ExitCheckFailed, []string{"cdp form get " + shellQuote(selector) + " --json"})
 	default:
 		return commandError("invalid_selector", "usage", fmt.Sprintf("%s %q: %s", action, selector, err.Message), ExitUsage, []string{"cdp " + action + " input[type=checkbox] --json"})
+	}
+}
+
+func (a *app) newScrollCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	var trial bool
+	var block, inline string
+	cmd := &cobra.Command{
+		Use:   "scroll <selector-or-locator>",
+		Short: "Scroll a CSS selector or strict locator into the viewport and report before/after evidence",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
+			var err error
+			block, err = normalizeScrollAlignment(block, "--block")
+			if err != nil {
+				return err
+			}
+			inline, err = normalizeScrollAlignment(inline, "--inline")
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "scroll")
+			if err != nil {
+				return err
+			}
+			actionability, err := evaluateActionability(ctx, session, selector, "scroll")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp scroll '#target' --trial --json")
+			}
+			prepareActionability(&actionability, "scroll", trial, false)
+			if !actionability.Actionable {
+				result := scrollResult{
+					URL:      actionability.URL,
+					Title:    actionability.Title,
+					Selector: selector,
+					Count:    actionability.Count,
+					Trial:    trial,
+					Block:    block,
+					Inline:   inline,
+				}
+				action := "blocked"
+				if trial {
+					action = "trial"
+				}
+				report := map[string]any{
+					"ok":            false,
+					"action":        action,
+					"target":        pageRow(target),
+					"scroll":        result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("scroll", selector, actionability), ExitCheckFailed, actionabilityRemediations("scroll", args[0], selector, locatorOpts), report)
+			}
+
+			var result scrollResult
+			if err := evaluateJSONValue(ctx, session, scrollExpression(selector, block, inline, !trial), "scroll", &result); err != nil {
+				return err
+			}
+			result.Trial = trial
+			result.Block = block
+			result.Inline = inline
+			if result.Error != nil {
+				return invalidSelectorError(selector, result.Error, "cdp scroll '#target' --json")
+			}
+			report := map[string]any{
+				"ok":            true,
+				"action":        "scrolled",
+				"target":        pageRow(target),
+				"scroll":        result,
+				"actionability": actionability,
+			}
+			if trial {
+				report["action"] = "trial"
+			} else if !result.After.InViewport {
+				report["ok"] = false
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			if !trial && !result.After.InViewport {
+				return commandErrorWithData("scroll_failed", "check_failed", fmt.Sprintf("scroll %q did not bring the element into the viewport", selector), ExitCheckFailed, []string{"cdp layout overflow --json", "cdp scroll " + shellQuote(selector) + " --block center --json"}, report)
+			}
+			return a.render(ctx, fmt.Sprintf("%s\t%s\t%s", report["action"], target.TargetID, selector), report)
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "resolve the target and report scroll evidence without changing page scroll")
+	cmd.Flags().StringVar(&block, "block", "center", "vertical scroll alignment: start, center, end, or nearest")
+	cmd.Flags().StringVar(&inline, "inline", "nearest", "horizontal scroll alignment: start, center, end, or nearest")
+	return cmd
+}
+
+func normalizeScrollAlignment(value, flag string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "start", "center", "end", "nearest":
+		return value, nil
+	default:
+		return "", commandError("usage", "usage", flag+" must be start, center, end, or nearest", ExitUsage, []string{"cdp scroll '#target' --block center --inline nearest --json"})
 	}
 }
 

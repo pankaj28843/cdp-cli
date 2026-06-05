@@ -148,6 +148,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newPressCommand())
 	root.AddCommand(a.newHoverCommand())
 	root.AddCommand(a.newDragCommand())
+	root.AddCommand(a.newScrollCommand())
 	root.AddCommand(a.newHTMLCommand())
 	root.AddCommand(a.newDOMCommand())
 	root.AddCommand(a.newCSSCommand())

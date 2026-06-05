@@ -1611,6 +1611,62 @@ func dragExpression(selector string, dx, dy int) string {
 })()`, jsStringLiteral(selector), dx, dy)
 }
 
+func scrollExpression(selector, block, inline string, mutate bool) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_scroll__";
+  const selector = %s;
+  const block = %s;
+  const inline = %s;
+  const mutate = %t;
+  const zeroViewport = () => ({
+    rect: { x: 0, y: 0, width: 0, height: 0 },
+    in_viewport: false,
+    fully_in_viewport: false,
+    viewport_width: window.innerWidth || 0,
+    viewport_height: window.innerHeight || 0,
+    scroll_x: window.scrollX || 0,
+    scroll_y: window.scrollY || 0
+  });
+  const evidence = (el) => {
+    const rect = el.getBoundingClientRect();
+    const inViewport = rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;
+    const fullyInViewport = rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.left >= 0 && rect.bottom <= window.innerHeight && rect.right <= window.innerWidth;
+    return {
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      in_viewport: inViewport,
+      fully_in_viewport: fullyInViewport,
+      viewport_width: window.innerWidth || 0,
+      viewport_height: window.innerHeight || 0,
+      scroll_x: window.scrollX || 0,
+      scroll_y: window.scrollY || 0
+    };
+  };
+  const changed = (before, after) => Math.abs(before.scroll_x - after.scroll_x) > 0.5 || Math.abs(before.scroll_y - after.scroll_y) > 0.5 || Math.abs(before.rect.x - after.rect.x) > 0.5 || Math.abs(before.rect.y - after.rect.y) > 0.5;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    const empty = zeroViewport();
+    return { url: location.href, title: document.title, selector, count: 0, scrolled: false, changed: false, trial: !mutate, block, inline, before: empty, after: empty, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    const empty = zeroViewport();
+    return { url: location.href, title: document.title, selector, count: 0, scrolled: false, changed: false, trial: !mutate, block, inline, before: empty, after: empty, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const el = elements[0];
+  const before = evidence(el);
+  if (mutate) {
+    el.scrollIntoView({ block, inline, behavior: "auto" });
+  }
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      const after = evidence(el);
+      resolve({ url: location.href, title: document.title, selector, count: elements.length, scrolled: mutate && after.in_viewport, changed: changed(before, after), trial: !mutate, block, inline, before, after, marker });
+    });
+  });
+})()`, jsStringLiteral(selector), jsStringLiteral(block), jsStringLiteral(inline), mutate)
+}
+
 func observeExpression(selector string, limit int) string {
 	selectorJSON, _ := json.Marshal(selector)
 	return fmt.Sprintf(`(() => {

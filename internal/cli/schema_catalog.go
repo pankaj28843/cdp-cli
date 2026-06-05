@@ -524,6 +524,19 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector resolved from a locator before actionability checks."},
 			},
 		},
+		"scroll": {
+			Name:        "scroll",
+			Description: "Resolve a CSS selector or strict locator, require attached/stable target evidence, then scroll it into view unless running a non-mutating trial.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when scroll completed, or when --trial target checks passed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name: scrolled, trial, or blocked in error data."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "scroll", Type: "scroll_result", Required: true, Description: "Selector, matched count, scrolled/changed/trial flags, alignment options, and before/after viewport evidence."},
+				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Attached and stable checks used before scrolling. Visible, receives-events, enabled, editable, and in-viewport are reported but not required."},
+				{Name: "locator", Type: "locator_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector resolved from a locator before scroll checks."},
+			},
+		},
 		"file": {
 			Name:        "file",
 			Description: "Resolve a CSS selector or strict locator to input[type=file], optionally run a non-mutating trial, then assign the local file path through CDP without printing file contents.",

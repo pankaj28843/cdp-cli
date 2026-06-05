@@ -53,6 +53,8 @@ DEMO_HTML = """<!doctype html>
     .cover-overlay { position: absolute; inset: 0; z-index: 2; background: rgba(255, 255, 255, 0); }
     .overflow { width: 160px; white-space: nowrap; overflow: hidden; }
     .hidden-fixture { display: none; }
+    .scroll-spacer { height: 900px; }
+    #scroll-target { display: block; margin-top: 24px; padding: 12px; border: 1px solid #99a; }
   </style>
 </head>
 <body>
@@ -109,6 +111,8 @@ DEMO_HTML = """<!doctype html>
       <div id="drag-target" data-testid="drag-target" draggable="true">Drag target</div>
     </article>
     <p class="overflow">This sentence intentionally overflows its box for layout diagnostics.</p>
+    <div class="scroll-spacer" aria-hidden="true"></div>
+    <button id="scroll-target" data-testid="scroll-target">Scroll target</button>
     <output id="status">booting</output>
   </main>
   <script>

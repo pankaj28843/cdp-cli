@@ -163,7 +163,7 @@ func actionabilityRemediations(action, query, selector string, opts locatorActio
 	commands := []string{locatorActionFindCommand(query, opts), "cdp dom query " + shellQuote(selector) + " --json"}
 	if action == "fill" || action == "type" {
 		commands = append(commands, "cdp assert editable "+shellQuote(selector)+" --json")
-	} else if action == "hover" || action == "drag" {
+	} else if action == "hover" || action == "drag" || action == "scroll" {
 		commands = append(commands, "cdp assert visible "+shellQuote(selector)+" --json", "cdp layout overflow --json")
 	} else if action == "press" {
 		commands = append(commands, "cdp assert count "+shellQuote(selector)+" 1 --json")
@@ -243,6 +243,7 @@ func actionabilityExpression(selector, action string) string {
   const requiredChecksFor = () => {
     if (action === "press") return ["attached"];
     if (action === "file") return ["attached"];
+    if (action === "scroll") return ["attached", "stable"];
     if (action === "fill" || action === "type") return ["attached", "visible", "enabled", "editable"];
     if (action === "select") return ["attached", "visible", "enabled"];
     if (action === "hover" || action === "drag") return ["attached", "visible", "stable", "receives_events"];
