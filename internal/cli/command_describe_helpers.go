@@ -372,6 +372,10 @@ func commandExamples(path string) []string {
 			"cdp wait popup --match-url /oauth/callback --timeout 10s --json",
 			"cdp wait popup --title-contains Checkout --match-title Receipt --json",
 		},
+		"cdp wait download": {
+			"cdp wait download --match-url /report.csv --filename-contains report --download-dir tmp/downloads --json",
+			"cdp wait download --state started --timeout 10s --json",
+		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",

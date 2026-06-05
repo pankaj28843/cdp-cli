@@ -386,6 +386,19 @@ jq -e '.ok == true and .wait.kind == "popup" and .wait.matched == true and .wait
 popup_target="$(jq -r '.popup.target.id' "$wait_popup_output")"
 "$binary" page close --target "$popup_target" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "closed"' >/dev/null
+wait_download_output="$state_dir/wait-download.json"
+"$binary" wait download --match-url /download/report.txt --filename-contains report.txt --download-dir "$state_dir/downloads" --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_download_output" &
+wait_download_pid=$!
+sleep 0.2
+"$binary" click "Download report" --by role --role button --strategy raw-input --state-dir "$state_dir/cdp-state" --force --json \
+  | jq -e '.ok == true and .action == "clicked" and .click.strategy == "raw-input"' >/dev/null
+wait "$wait_download_pid"
+require_artifact "$wait_download_output"
+jq -e '.ok == true and .wait.kind == "download" and .wait.matched == true and .wait.criteria.url_contains == "/download/report.txt" and .wait.criteria.filename_contains == "report.txt" and .wait.criteria.state == "completed" and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and .download.suggested_filename == "report.txt" and .download.completed == true and .download.received_bytes > 0 and .event.cdp_method == "Browser.downloadWillBegin" and .progress.cdp_method == "Browser.downloadProgress" and (.next_commands | any(contains("ls -lah")))' "$wait_download_output" >/dev/null
+download_file="$(jq -r '.download.file_path // empty' "$wait_download_output")"
+if [[ -n "$download_file" ]]; then
+  require_artifact "$download_file"
+fi
 capture_output="$state_dir/network-capture.json"
 "$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$state_dir/network-capture.local.json" --json >"$capture_output"
 require_artifact "$capture_output"

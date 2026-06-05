@@ -25,6 +25,13 @@ class DemoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"ok": False}).encode())
             return
+        if self.path.startswith("/download/report.txt"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Disposition", 'attachment; filename="report.txt"')
+            self.end_headers()
+            self.wfile.write(b"synthetic report\n")
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -73,6 +80,7 @@ DEMO_HTML = """<!doctype html>
       </span>
       <button id="disabled-action" disabled>Disabled target</button>
       <button id="popup-action">Open popup</button>
+      <button id="download-action">Download report</button>
       <button id="dismiss" class="hidden-fixture">Dismiss</button>
       <input id="hidden-agent-input" class="hidden-fixture" value="hidden initial">
       <label class="agent-form">
@@ -171,6 +179,9 @@ DEMO_HTML = """<!doctype html>
     console.error('synthetic demo error');
     document.querySelector('#popup-action').addEventListener('click', () => {
       window.open('/popup', '_blank');
+    });
+    document.querySelector('#download-action').addEventListener('click', () => {
+      window.location.href = '/download/report.txt';
     });
     document.querySelector('#partial-selection').indeterminate = true;
     fetch('/api/ok').then(() => fetch('/api/fail'));

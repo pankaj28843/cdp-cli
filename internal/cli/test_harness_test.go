@@ -291,6 +291,41 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					windowID = 2
 				}
 				resp["result"] = map[string]any{"windowId": windowID, "bounds": map[string]any{"windowState": "normal"}}
+			} else if req.Method == "Browser.setDownloadBehavior" {
+				resp["result"] = map[string]any{}
+				var params struct {
+					Behavior      string `json:"behavior"`
+					EventsEnabled bool   `json:"eventsEnabled"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				if params.EventsEnabled && params.Behavior != "default" {
+					for _, target := range targetInfos {
+						if target["targetId"] == "download-page" {
+							events = append(events,
+								map[string]any{
+									"method": "Browser.downloadWillBegin",
+									"params": map[string]any{
+										"frameId":           "frame-download",
+										"guid":              "download-1",
+										"url":               "https://example.test/download/report.csv?token=abc",
+										"suggestedFilename": "report.csv",
+									},
+								},
+								map[string]any{
+									"method": "Browser.downloadProgress",
+									"params": map[string]any{
+										"guid":          "download-1",
+										"totalBytes":    18,
+										"receivedBytes": 18,
+										"state":         "completed",
+										"filePath":      "/tmp/cdp-downloads/download-1",
+									},
+								},
+							)
+							break
+						}
+					}
+				}
 			} else if req.Method == "Page.navigate" {
 				var params struct {
 					URL string `json:"url"`

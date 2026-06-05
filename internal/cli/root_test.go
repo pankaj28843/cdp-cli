@@ -843,6 +843,173 @@ func TestWaitPopupTimeoutJSON(t *testing.T) {
 	}
 }
 
+func TestWaitDownloadJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "download-page", "type": "page", "title": "Download App", "url": "https://example.test/downloads", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	downloadDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "download", "--match-url", "/download/report.csv", "--filename-contains", "report.csv", "--download-dir", downloadDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait download exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Wait struct {
+			Kind          string   `json:"kind"`
+			Matched       bool     `json:"matched"`
+			CDPMethods    []string `json:"cdp_methods"`
+			DownloadDir   string   `json:"download_dir"`
+			EventCount    int      `json:"event_count"`
+			ObservedCount int      `json:"observed_count"`
+			Criteria      struct {
+				URLContains      string `json:"url_contains"`
+				FilenameContains string `json:"filename_contains"`
+				State            string `json:"state"`
+			} `json:"criteria"`
+			Evidence struct {
+				Headers bool `json:"headers"`
+				Bodies  bool `json:"bodies"`
+				Bounded bool `json:"bounded"`
+			} `json:"evidence"`
+			Warnings []string `json:"warnings"`
+		} `json:"wait"`
+		Event struct {
+			Kind              string `json:"kind"`
+			GUID              string `json:"guid"`
+			URL               string `json:"url"`
+			SuggestedFilename string `json:"suggested_filename"`
+			FrameID           string `json:"frame_id"`
+			CDPMethod         string `json:"cdp_method"`
+		} `json:"event"`
+		Progress struct {
+			Kind          string  `json:"kind"`
+			GUID          string  `json:"guid"`
+			State         string  `json:"state"`
+			TotalBytes    float64 `json:"total_bytes"`
+			ReceivedBytes float64 `json:"received_bytes"`
+			FilePath      string  `json:"file_path"`
+			CDPMethod     string  `json:"cdp_method"`
+		} `json:"progress"`
+		Download struct {
+			GUID              string  `json:"guid"`
+			URL               string  `json:"url"`
+			SuggestedFilename string  `json:"suggested_filename"`
+			State             string  `json:"state"`
+			Completed         bool    `json:"completed"`
+			Canceled          bool    `json:"canceled"`
+			TotalBytes        float64 `json:"total_bytes"`
+			ReceivedBytes     float64 `json:"received_bytes"`
+			FilePath          string  `json:"file_path"`
+		} `json:"download"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait download output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "download-page" || got.Wait.Kind != "download" || !got.Wait.Matched || got.Wait.DownloadDir == "" || got.Wait.EventCount != 2 || got.Wait.ObservedCount != 1 || got.Wait.Criteria.URLContains != "/download/report.csv" || got.Wait.Criteria.FilenameContains != "report.csv" || got.Wait.Criteria.State != "completed" {
+		t.Fatalf("wait download output = %+v, want matched download wait evidence", got)
+	}
+	if !containsString(got.Wait.CDPMethods, "Browser.downloadWillBegin") || !containsString(got.Wait.CDPMethods, "Browser.downloadProgress") {
+		t.Fatalf("wait download CDP methods = %+v, want Browser download methods", got.Wait.CDPMethods)
+	}
+	if got.Event.Kind != "will-begin" || got.Event.GUID != "download-1" || got.Event.SuggestedFilename != "report.csv" || got.Event.FrameID != "frame-download" || got.Event.CDPMethod != "Browser.downloadWillBegin" {
+		t.Fatalf("wait download event = %+v, want will-begin metadata", got.Event)
+	}
+	if strings.Contains(got.Event.URL, "token=abc") || strings.Contains(got.Download.URL, "token=abc") || !strings.Contains(got.Event.URL, "redacted") {
+		t.Fatalf("wait download URL was not safely redacted: event=%q download=%q", got.Event.URL, got.Download.URL)
+	}
+	if got.Progress.Kind != "progress" || got.Progress.GUID != "download-1" || got.Progress.State != "completed" || got.Progress.TotalBytes != 18 || got.Progress.ReceivedBytes != 18 || got.Progress.FilePath != "/tmp/cdp-downloads/download-1" || got.Progress.CDPMethod != "Browser.downloadProgress" {
+		t.Fatalf("wait download progress = %+v, want completed progress metadata", got.Progress)
+	}
+	if got.Download.GUID != "download-1" || got.Download.SuggestedFilename != "report.csv" || got.Download.State != "completed" || !got.Download.Completed || got.Download.Canceled || got.Download.TotalBytes != 18 || got.Download.ReceivedBytes != 18 {
+		t.Fatalf("wait download summary = %+v, want completed download", got.Download)
+	}
+	if got.Wait.Evidence.Headers || got.Wait.Evidence.Bodies || !got.Wait.Evidence.Bounded {
+		t.Fatalf("wait download evidence = %+v, want bounded evidence without headers or bodies", got.Wait.Evidence)
+	}
+	if len(got.Wait.Warnings) == 0 || !strings.Contains(got.Wait.Warnings[0], "browser-scoped") {
+		t.Fatalf("wait download warnings = %+v, want browser-scoped warning", got.Wait.Warnings)
+	}
+	hasListCommand := false
+	for _, command := range got.NextCommands {
+		if strings.HasPrefix(command, "ls -lah ") {
+			hasListCommand = true
+			break
+		}
+	}
+	if !hasListCommand {
+		t.Fatalf("wait download next commands = %+v, want download dir listing", got.NextCommands)
+	}
+}
+
+func TestWaitDownloadTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "download", "--match-url", "/missing", "--download-dir", t.TempDir(), "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait download timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Wait struct {
+				Kind          string `json:"kind"`
+				Matched       bool   `json:"matched"`
+				EventCount    int    `json:"event_count"`
+				ObservedCount int    `json:"observed_count"`
+				Criteria      struct {
+					URLContains string `json:"url_contains"`
+					State       string `json:"state"`
+				} `json:"criteria"`
+			} `json:"wait"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait download timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "download" || got.Data.Wait.Matched || got.Data.Wait.EventCount != 0 || got.Data.Wait.ObservedCount != 0 || got.Data.Wait.Criteria.URLContains != "/missing" || got.Data.Wait.Criteria.State != "completed" {
+		t.Fatalf("wait download timeout = %+v, want timeout envelope with criteria", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp pages --json") {
+		t.Fatalf("wait download remediation commands = %+v, want pages command", got.RemediationCommands)
+	}
+}
+
+func TestWaitDownloadInvalidStateJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "download", "--state", "done", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("wait download invalid exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait download invalid output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "--state must be") {
+		t.Fatalf("wait download invalid output = %+v, want usage error", got)
+	}
+}
+
 func TestWaitNetworkUnsupportedRedactionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"wait", "response", "--redact", "headers", "--json"}, &out, &errOut, cli.BuildInfo{})
