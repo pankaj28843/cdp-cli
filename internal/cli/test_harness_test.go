@@ -1163,6 +1163,70 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_class__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		className := expressionStringArg(req.Expression, "const className = ")
+		classList := []string{"fixture"}
+		tag := "button"
+		id := "checkout"
+		role := "button"
+		name := "Checkout"
+		count := 1
+		if selector == "#missing" {
+			classList = nil
+			tag = ""
+			id = ""
+			role = ""
+			name = ""
+			count = 0
+		}
+		if selector == "button#checkout" {
+			classList = []string{"primary", "checkout"}
+		}
+		hasClass := false
+		for _, item := range classList {
+			if item == className {
+				hasClass = true
+				break
+			}
+		}
+		matchingCount := 0
+		if hasClass && count > 0 {
+			matchingCount = 1
+		}
+		items := []map[string]any{}
+		if count > 0 {
+			items = append(items, map[string]any{
+				"index":      0,
+				"tag":        tag,
+				"id":         id,
+				"role":       role,
+				"name":       name,
+				"class_list": classList,
+				"has_class":  hasClass,
+				"visible":    true,
+				"rect":       map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
+			})
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":            "https://example.test/app",
+					"title":          "Example App",
+					"selector":       selector,
+					"class_name":     className,
+					"expected":       className,
+					"has_class":      hasClass,
+					"passed":         hasClass,
+					"count":          count,
+					"matching_count": matchingCount,
+					"failing_count":  count - matchingCount,
+					"items":          items,
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_assert_focused__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")
 		if selector == "" {

@@ -690,6 +690,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
+		"assert-class": {
+			Name:        "assert-class",
+			Description: "Auto-retrying class token assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element has the class token."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_class_result", Required: true, Description: "Selector, expected class token, has_class boolean, optional diff for failed state matches, matching/failing counts, bounded item class_list diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
 		"assert-focused": {
 			Name:        "assert-focused",
 			Description: "Auto-retrying focused-element assertion result for CSS selector or strict locator.",

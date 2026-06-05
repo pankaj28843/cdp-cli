@@ -151,6 +151,8 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .assertion.passed == true and .assertion.expected == 1 and .assertion.actual == 1 and .assertion.count == 1 and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.count == 1 and .locator.strict == true' >/dev/null
 "$binary" assert attribute "Click target" id action --by role --role button --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .assertion.selector == "button#action" and .assertion.attribute == "id" and .assertion.attribute_present == true and .assertion.expected == "action" and .assertion.actual == "action" and .assertion.mode == "exact" and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "button#action"' >/dev/null
+"$binary" assert class article card --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .assertion.passed == true and .assertion.selector == "article" and .assertion.class_name == "card" and .assertion.expected == "card" and .assertion.has_class == true and .assertion.matching_count == 1 and .assertion.count == 1 and (.assertion.items[0].class_list | index("card")) and .assertion.poll_interval == "100ms"' >/dev/null
 "$binary" wait locator "Agent input" --by label --strict --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.kind == "locator" and .wait.matched == true and .wait.strict == true and .locator.strict == true and .wait.resolved_selector == "input#agent-input"' >/dev/null
 "$binary" fill "Agent input" "locator filled value" --by label --state-dir "$state_dir/cdp-state" --json \

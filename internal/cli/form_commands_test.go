@@ -700,6 +700,94 @@ func TestAssertAttributeTimeoutJSON(t *testing.T) {
 	}
 }
 
+func TestAssertClassByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "class", "Checkout", "primary", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert class role locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By     string `json:"by"`
+			Query  string `json:"query"`
+			Role   string `json:"role"`
+			Strict bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector      string `json:"selector"`
+			ClassName     string `json:"class_name"`
+			Expected      string `json:"expected"`
+			HasClass      bool   `json:"has_class"`
+			Passed        bool   `json:"passed"`
+			Count         int    `json:"count"`
+			MatchingCount int    `json:"matching_count"`
+			FailingCount  int    `json:"failing_count"`
+			Attempts      int    `json:"attempts"`
+			PollInterval  string `json:"poll_interval"`
+			Items         []struct {
+				Tag       string   `json:"tag"`
+				ID        string   `json:"id"`
+				Role      string   `json:"role"`
+				ClassList []string `json:"class_list"`
+				HasClass  bool     `json:"has_class"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert class role locator output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#checkout" || got.Locator.By != "role" || got.Locator.Query != "Checkout" || got.Locator.Role != "button" || !got.Locator.Strict || got.Assertion.Selector != "button#checkout" || got.Assertion.ClassName != "primary" || got.Assertion.Expected != "primary" || !got.Assertion.HasClass || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.MatchingCount != 1 || got.Assertion.FailingCount != 0 || got.Assertion.Attempts != 1 || got.Assertion.PollInterval != "10ms" || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Tag != "button" || got.Assertion.Items[0].ID != "checkout" || got.Assertion.Items[0].Role != "button" || !containsString(got.Assertion.Items[0].ClassList, "primary") || !got.Assertion.Items[0].HasClass {
+		t.Fatalf("assert class role locator = %+v, want strict locator class token diagnostics", got)
+	}
+}
+
+func TestAssertClassTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "class", "button#checkout", "missing", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert class timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Assertion struct {
+				Selector      string                  `json:"selector"`
+				ClassName     string                  `json:"class_name"`
+				Expected      string                  `json:"expected"`
+				HasClass      bool                    `json:"has_class"`
+				Diff          *assertionStateDiffJSON `json:"diff"`
+				Passed        bool                    `json:"passed"`
+				Count         int                     `json:"count"`
+				MatchingCount int                     `json:"matching_count"`
+				FailingCount  int                     `json:"failing_count"`
+				Attempts      int                     `json:"attempts"`
+				ElapsedMS     int64                   `json:"elapsed_ms"`
+				PollInterval  string                  `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert class timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.ClassName != "missing" || got.Data.Assertion.Expected != "missing" || got.Data.Assertion.HasClass || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "has_class" || got.Data.Assertion.Diff.Actual != "missing_class" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.MatchingCount != 0 || got.Data.Assertion.FailingCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp dom query 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert class 'button#checkout' missing --json") {
+		t.Fatalf("assert class timeout = %+v, want timeout with last class-token diagnostics", got)
+	}
+}
+
 func TestAssertFocusedByLabelRetriesUntilPassJSON(t *testing.T) {
 	fakeDelayedAssertFocusedAttempts.Store(0)
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})

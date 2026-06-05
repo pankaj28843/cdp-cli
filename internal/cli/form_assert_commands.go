@@ -134,6 +134,35 @@ type assertAttributeResult struct {
 	Error            *evalError           `json:"error,omitempty"`
 }
 
+type assertClassResult struct {
+	Selector      string              `json:"selector"`
+	ClassName     string              `json:"class_name"`
+	Expected      string              `json:"expected"`
+	HasClass      bool                `json:"has_class"`
+	Diff          *assertionStateDiff `json:"diff,omitempty"`
+	Passed        bool                `json:"passed"`
+	Count         int                 `json:"count"`
+	MatchingCount int                 `json:"matching_count"`
+	FailingCount  int                 `json:"failing_count"`
+	Items         []assertClassItem   `json:"items,omitempty"`
+	Attempts      int                 `json:"attempts,omitempty"`
+	ElapsedMS     int64               `json:"elapsed_ms,omitempty"`
+	PollInterval  string              `json:"poll_interval,omitempty"`
+	Error         *evalError          `json:"error,omitempty"`
+}
+
+type assertClassItem struct {
+	Index     int          `json:"index"`
+	Tag       string       `json:"tag"`
+	ID        string       `json:"id,omitempty"`
+	Role      string       `json:"role,omitempty"`
+	Name      string       `json:"name,omitempty"`
+	ClassList []string     `json:"class_list"`
+	HasClass  bool         `json:"has_class"`
+	Visible   bool         `json:"visible"`
+	Rect      snapshotRect `json:"rect"`
+}
+
 type assertFocusedResult struct {
 	Selector       string              `json:"selector"`
 	Expected       string              `json:"expected"`
@@ -789,6 +818,7 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertTitleCommand())
 	cmd.AddCommand(a.newAssertCountCommand())
 	cmd.AddCommand(a.newAssertAttributeCommand())
+	cmd.AddCommand(a.newAssertClassCommand())
 	cmd.AddCommand(a.newAssertFocusedCommand())
 	cmd.AddCommand(a.newAssertCSSCommand())
 	cmd.AddCommand(a.newAssertRoleCommand())
@@ -1262,6 +1292,25 @@ func (a *app) newAssertAttributeCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newAssertClassCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "class <selector-or-locator> <class>", Short: "Assert an element has a class token by CSS selector or strict locator", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		className, err := normalizeAssertClassName(args[1])
+		if err != nil {
+			return err
+		}
+		return a.runAssertClassCommand(cmd, args[0], className, locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
 func (a *app) newAssertFocusedCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	var poll time.Duration
@@ -1519,6 +1568,49 @@ func (a *app) runAssertAttributeCommand(cmd *cobra.Command, query, attribute, ex
 	return a.render(ctx, "assertion passed", report)
 }
 
+func normalizeAssertClassName(value string) (string, error) {
+	className := strings.TrimSpace(value)
+	if className == "" || strings.ContainsAny(className, " \t\r\n\f") {
+		return "", commandError("usage", "usage", "<class> must be one non-empty class token", ExitUsage, []string{"cdp assert class button primary --json"})
+	}
+	return className, nil
+}
+
+func (a *app) runAssertClassCommand(cmd *cobra.Command, query, className string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert class button primary --poll 250ms --json"})
+	}
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, locator, selector, err := waitForClassAssertion(assertionCtx, session, query, className, locatorOpts, poll, start)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		if strings.TrimSpace(selector) != "" {
+			report["resolved_selector"] = selector
+		}
+	}
+	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("class assertion for %q did not pass before timeout: %v", query, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, classAssertionRemediations(query, className, selector, locatorOpts), report)
+		}
+		return err
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
 func waitForAttributeAssertion(ctx context.Context, session *cdp.PageSession, query, attribute, expected, mode string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertAttributeResult, *locatorFindResult, string, error) {
 	attempts := 0
 	normalizedMode := normalizeAssertMode(mode)
@@ -1578,6 +1670,56 @@ func waitForAttributeAssertion(ctx context.Context, session *cdp.PageSession, qu
 	}
 }
 
+func waitForClassAssertion(ctx context.Context, session *cdp.PageSession, query, className string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertClassResult, *locatorFindResult, string, error) {
+	attempts := 0
+	last := assertClassResult{Selector: query, ClassName: className, Expected: className, PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		selector := query
+		var locator *locatorFindResult
+		if opts.By != "css" {
+			var result locatorFindResult
+			if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert class locator", &result); err != nil {
+				return last, lastLocator, lastSelector, err
+			}
+			locator = &result
+			lastLocator = locator
+			if result.Error != nil {
+				return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert class locator %s %q: %s", opts.By, query, result.Error.Message), ExitUsage, classAssertionRemediations(query, className, "", opts))
+			}
+			if result.Count != 1 || len(result.Matches) != 1 || strings.TrimSpace(result.Matches[0].SelectorHint) == "" || result.Matches[0].SelectorAmbiguous {
+				last = classAssertionPendingResult(query, className, result.Count, attempts, start, poll)
+				lastSelector = ""
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+			selector = strings.TrimSpace(result.Matches[0].SelectorHint)
+			lastSelector = selector
+		}
+		var got assertClassResult
+		if err := evaluateJSONValue(ctx, session, assertClassExpression(selector, className, 20), "assert class", &got); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		if got.Error != nil {
+			return got, locator, selector, invalidSelectorError(selector, got.Error, "cdp assert class button primary --json")
+		}
+		finishClassAssertionResult(&got, className, attempts, start, poll)
+		last = got
+		lastLocator = locator
+		lastSelector = selector
+		if got.Passed {
+			return got, locator, selector, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
+	}
+}
+
 type assertAttributeProbeResult struct {
 	URL              string     `json:"url"`
 	Title            string     `json:"title"`
@@ -1603,6 +1745,49 @@ func assertAttributeResultFromProbe(selector, attribute, expected, mode string, 
 		ElapsedMS:        time.Since(start).Milliseconds(),
 		PollInterval:     poll.String(),
 	}
+}
+
+func finishClassAssertionResult(got *assertClassResult, className string, attempts int, start time.Time, poll time.Duration) {
+	got.ClassName = className
+	got.Expected = className
+	got.HasClass = got.MatchingCount > 0
+	got.FailingCount = got.Count - got.MatchingCount
+	if got.FailingCount < 0 {
+		got.FailingCount = 0
+	}
+	got.Passed = got.Count > 0 && got.MatchingCount > 0
+	if !got.Passed {
+		got.Diff = classAssertionDiff(*got)
+	}
+	got.Attempts = attempts
+	got.ElapsedMS = time.Since(start).Milliseconds()
+	got.PollInterval = poll.String()
+}
+
+func classAssertionPendingResult(query, className string, count, attempts int, start time.Time, poll time.Duration) assertClassResult {
+	got := assertClassResult{
+		Selector:      query,
+		ClassName:     className,
+		Expected:      className,
+		HasClass:      false,
+		Passed:        false,
+		Count:         count,
+		MatchingCount: 0,
+		FailingCount:  count,
+		Attempts:      attempts,
+		ElapsedMS:     time.Since(start).Milliseconds(),
+		PollInterval:  poll.String(),
+	}
+	got.Diff = classAssertionDiff(got)
+	return got
+}
+
+func classAssertionDiff(got assertClassResult) *assertionStateDiff {
+	actual := "missing_class"
+	if got.MatchingCount > 0 {
+		actual = "has_class"
+	}
+	return stateAssertionDiff("has_class", actual, got.Count, got.MatchingCount)
 }
 
 func attributeAssertionPendingResult(query, attribute, expected, mode string, count, attempts int, start time.Time, poll time.Duration) assertAttributeResult {
@@ -3132,6 +3317,24 @@ func attributeAssertionCommand(query, attribute, expected, mode string, opts loc
 	return command + locatorAssertionFlagSuffix(opts) + " --json"
 }
 
+func classAssertionRemediations(query, className, selector string, opts locatorActionOptions) []string {
+	commands := []string{}
+	if opts.By != "css" {
+		commands = append(commands, locatorActionFindCommand(query, opts))
+	}
+	if strings.TrimSpace(selector) == "" {
+		selector = query
+	}
+	commands = append(commands, "cdp dom query "+shellQuote(selector)+" --json")
+	commands = append(commands, classAssertionCommand(query, className, opts))
+	return commands
+}
+
+func classAssertionCommand(query, className string, opts locatorActionOptions) string {
+	command := "cdp assert class " + shellQuote(query) + " " + shellQuote(className)
+	return command + locatorAssertionFlagSuffix(opts) + " --json"
+}
+
 func focusedAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
 	commands := []string{}
 	if opts.By != "css" {
@@ -3279,6 +3482,79 @@ func assertAttributeExpression(selector, attribute string) string {
   const present = element.hasAttribute(attributeName);
   return { url: location.href, title: document.title, selector, attribute: attributeName, attribute_present: present, value: present ? String(element.getAttribute(attributeName) || "") : "", count: elements.length, marker };
 })()`, jsStringLiteral(selector), jsStringLiteral(attribute))
+}
+
+func assertClassExpression(selector, className string, limit int) string {
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_assert_class__";
+  const selector = %s;
+  const className = %s;
+  const limit = %d;
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const roleOf = (el) => {
+    const explicit = norm(el.getAttribute("role")).split(" ")[0];
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    const type = String(el.getAttribute("type") || "").toLowerCase();
+    if (tag === "button") return "button";
+    if (tag === "a" && el.hasAttribute("href")) return "link";
+    if (/^h[1-6]$/.test(tag)) return "heading";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return el.multiple ? "listbox" : "combobox";
+    if (tag === "input") {
+      if (["button", "submit", "reset"].includes(type)) return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "range") return "slider";
+      if (type === "search") return "searchbox";
+      return "textbox";
+    }
+    return "";
+  };
+  const nameOf = (el) => norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || el.getAttribute("value") || el.innerText || el.textContent || "");
+  const visibilityOf = (el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
+    return { visible: !hidden && rect.width > 0 && rect.height > 0, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  };
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, class_name: className, expected: className, has_class: false, passed: false, count: 0, matching_count: 0, failing_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+  }
+  const allItems = elements.map((el, index) => {
+    const visibility = visibilityOf(el);
+    const classList = Array.from(el.classList || []);
+    return {
+      index,
+      tag: el.tagName.toLowerCase(),
+      id: el.id || "",
+      role: roleOf(el),
+      name: nameOf(el).slice(0, 240),
+      class_list: classList,
+      has_class: el.classList ? el.classList.contains(className) : false,
+      visible: visibility.visible,
+      rect: visibility.rect
+    };
+  });
+  const matchingCount = allItems.filter((item) => item.has_class).length;
+  return {
+    url: location.href,
+    title: document.title,
+    selector,
+    class_name: className,
+    expected: className,
+    has_class: matchingCount > 0,
+    passed: matchingCount > 0,
+    count: allItems.length,
+    matching_count: matchingCount,
+    failing_count: allItems.length - matchingCount,
+    items: allItems.slice(0, limit),
+    marker
+  };
+})()`, jsStringLiteral(selector), jsStringLiteral(className), limit)
 }
 
 func assertFocusedExpression(selector string, limit int) string {
