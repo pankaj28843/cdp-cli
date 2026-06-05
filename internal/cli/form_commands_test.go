@@ -1151,6 +1151,129 @@ func TestAssertVisibleByRoleLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestAssertAttachedByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "attached", "Search", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert attached by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By            string `json:"by"`
+			Query         string `json:"query"`
+			Role          string `json:"role"`
+			IncludeHidden bool   `json:"include_hidden"`
+			Strict        bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector string `json:"selector"`
+			Expected string `json:"expected"`
+			Attached bool   `json:"attached"`
+			Detached bool   `json:"detached"`
+			Passed   bool   `json:"passed"`
+			Count    int    `json:"count"`
+			Items    []struct {
+				Tag     string `json:"tag"`
+				Role    string `json:"role"`
+				Visible bool   `json:"visible"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert attached by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#submit" || got.Locator.By != "role" || got.Locator.Query != "Search" || got.Locator.Role != "button" || !got.Locator.IncludeHidden || !got.Locator.Strict {
+		t.Fatalf("assert attached locator = %+v, want strict role locator including hidden for attachment assertion", got)
+	}
+	if got.Assertion.Selector != "button#submit" || got.Assertion.Expected != "attached" || !got.Assertion.Attached || got.Assertion.Detached || !got.Assertion.Passed || got.Assertion.Count != 1 || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Tag != "button" || got.Assertion.Items[0].Role != "button" || !got.Assertion.Items[0].Visible {
+		t.Fatalf("assert attached assertion = %+v, want attached resolved button", got.Assertion)
+	}
+}
+
+func TestAssertDetachedMissingLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "detached", "Gone", "--by", "text", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert detached missing locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By            string `json:"by"`
+			Query         string `json:"query"`
+			IncludeHidden bool   `json:"include_hidden"`
+			Count         int    `json:"count"`
+			Returned      int    `json:"returned"`
+			Strict        bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector string `json:"selector"`
+			Expected string `json:"expected"`
+			Attached bool   `json:"attached"`
+			Detached bool   `json:"detached"`
+			Passed   bool   `json:"passed"`
+			Count    int    `json:"count"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert detached missing locator output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "" || got.Locator.By != "text" || got.Locator.Query != "Gone" || !got.Locator.IncludeHidden || got.Locator.Count != 0 || got.Locator.Returned != 0 || got.Locator.Strict || got.Assertion.Selector != "Gone" || got.Assertion.Expected != "detached" || got.Assertion.Attached || !got.Assertion.Detached || !got.Assertion.Passed || got.Assertion.Count != 0 {
+		t.Fatalf("assert detached missing locator = %+v, want detached pass with zero-match locator evidence", got)
+	}
+}
+
+func TestAssertAttachedTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "attached", "#missing", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert attached missing exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Assertion struct {
+				Selector     string                  `json:"selector"`
+				Expected     string                  `json:"expected"`
+				Attached     bool                    `json:"attached"`
+				Detached     bool                    `json:"detached"`
+				Diff         *assertionStateDiffJSON `json:"diff"`
+				Passed       bool                    `json:"passed"`
+				Count        int                     `json:"count"`
+				Attempts     int                     `json:"attempts"`
+				ElapsedMS    int64                   `json:"elapsed_ms"`
+				PollInterval string                  `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert attached missing output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "#missing" || got.Data.Assertion.Expected != "attached" || got.Data.Assertion.Attached || !got.Data.Assertion.Detached || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "no_matches" || got.Data.Assertion.Diff.Expected != "attached" || got.Data.Assertion.Diff.Actual != "detached" || got.Data.Assertion.Diff.Count != 0 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp dom query '#missing' --json") {
+		t.Fatalf("assert attached missing = %+v, want timeout with detached diagnostics", got)
+	}
+}
+
 func TestAssertVisibleRetriesUntilPassJSON(t *testing.T) {
 	fakeDelayedAssertVisibleAttempts.Store(0)
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})

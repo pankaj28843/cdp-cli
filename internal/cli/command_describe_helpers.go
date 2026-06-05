@@ -620,6 +620,8 @@ func commandExamples(path string) []string {
 	examples["cdp assert css"] = []string{"cdp assert css 'button[type=submit]' background-color 'rgb(20, 92, 160)' --mode exact --timeout 5s --json", "cdp assert css Checkout color 'rgb(255, 255, 255)' --by role --role button --poll 100ms --json"}
 	examples["cdp assert role"] = []string{"cdp assert role 'button[type=submit]' button --timeout 5s --json", "cdp assert role Checkout button --by role --role button --poll 100ms --json"}
 	examples["cdp assert name"] = []string{"cdp assert name 'button[type=submit]' Submit --mode exact --timeout 5s --json", "cdp assert name Checkout Checkout --by role --role button --poll 100ms --json"}
+	examples["cdp assert attached"] = []string{"cdp assert attached '#app' --timeout 5s --json", "cdp assert attached 'Search' --by role --role button --poll 100ms --json"}
+	examples["cdp assert detached"] = []string{"cdp assert detached '#loading-spinner' --timeout 5s --json", "cdp assert detached 'Gone' --by text --poll 100ms --json"}
 	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
 	examples["cdp assert in-viewport"] = []string{"cdp assert in-viewport '#footer' --timeout 5s --json", "cdp assert in-viewport 'Load more' --by role --role button --poll 100ms --json"}

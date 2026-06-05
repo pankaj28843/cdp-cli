@@ -239,6 +239,31 @@ type assertVisibilityItem struct {
 	Rect       snapshotRect `json:"rect"`
 }
 
+type assertAttachmentResult struct {
+	Selector     string                 `json:"selector"`
+	Expected     string                 `json:"expected"`
+	Attached     bool                   `json:"attached"`
+	Detached     bool                   `json:"detached"`
+	Diff         *assertionStateDiff    `json:"diff,omitempty"`
+	Passed       bool                   `json:"passed"`
+	Count        int                    `json:"count"`
+	Items        []assertAttachmentItem `json:"items,omitempty"`
+	Attempts     int                    `json:"attempts,omitempty"`
+	ElapsedMS    int64                  `json:"elapsed_ms,omitempty"`
+	PollInterval string                 `json:"poll_interval,omitempty"`
+	Error        *evalError             `json:"error,omitempty"`
+}
+
+type assertAttachmentItem struct {
+	Index   int          `json:"index"`
+	Tag     string       `json:"tag"`
+	ID      string       `json:"id,omitempty"`
+	Role    string       `json:"role,omitempty"`
+	Name    string       `json:"name,omitempty"`
+	Visible bool         `json:"visible"`
+	Rect    snapshotRect `json:"rect"`
+}
+
 type assertViewportResult struct {
 	Selector           string               `json:"selector"`
 	Expected           string               `json:"expected"`
@@ -768,6 +793,8 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertCSSCommand())
 	cmd.AddCommand(a.newAssertRoleCommand())
 	cmd.AddCommand(a.newAssertNameCommand())
+	cmd.AddCommand(a.newAssertAttachedCommand())
+	cmd.AddCommand(a.newAssertDetachedCommand())
 	cmd.AddCommand(a.newAssertVisibleCommand())
 	cmd.AddCommand(a.newAssertHiddenCommand())
 	cmd.AddCommand(a.newAssertInViewportCommand())
@@ -1989,6 +2016,36 @@ func (a *app) newAssertVisibleCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newAssertAttachedCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "attached <selector-or-locator>", Short: "Assert an element is attached to the DOM by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertAttachmentCommand(cmd, args[0], "attached", locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) newAssertDetachedCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "detached <selector-or-locator>", Short: "Assert an element is detached from the DOM by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertAttachmentCommand(cmd, args[0], "detached", locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
 func (a *app) newAssertHiddenCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	var poll time.Duration
@@ -2492,6 +2549,46 @@ func enabledAssertionPendingResult(query, expected string, count, attempts int, 
 	}
 }
 
+func (a *app) runAssertAttachmentCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert attached 'Search' --by role --role button --poll 250ms --json"})
+	}
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	resolveOpts := locatorOpts
+	if resolveOpts.By != "css" {
+		resolveOpts.IncludeHidden = true
+	}
+
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, locator, selector, err := waitForAttachmentAssertion(assertionCtx, session, query, expected, resolveOpts, poll, start)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		if selector != "" {
+			report["resolved_selector"] = selector
+		}
+	}
+	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("%s assertion for %q did not pass before timeout: %v", expected, query, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, attachmentAssertionRemediations(query, selector, resolveOpts), report)
+		}
+		return err
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
 func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert visible 'Search' --by role --role button --poll 250ms --json"})
@@ -2584,11 +2681,138 @@ func isTimeoutCommandError(err error) bool {
 	return errors.As(err, &cmdErr) && cmdErr.Code == "timeout"
 }
 
+func waitForAttachmentAssertion(ctx context.Context, session *cdp.PageSession, query, expected string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertAttachmentResult, *locatorFindResult, string, error) {
+	attempts := 0
+	last := assertAttachmentResult{Selector: query, Expected: expected, PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		selector := query
+		var locator *locatorFindResult
+		if opts.By != "css" {
+			var result locatorFindResult
+			if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert "+expected+" locator", &result); err != nil {
+				return last, lastLocator, lastSelector, err
+			}
+			locator = &result
+			lastLocator = locator
+			if result.Error != nil {
+				return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert %s locator %s %q: %s", expected, opts.By, query, result.Error.Message), ExitUsage, locatorActionRemediations("assert "+expected, query, opts))
+			}
+			if expected == "detached" && result.Count == 0 {
+				got := assertAttachmentResult{Selector: query, Expected: "detached", Attached: false, Detached: true, Passed: true, Count: 0}
+				finishAttachmentAssertionResult(&got, expected, attempts, start, poll)
+				return got, locator, "", nil
+			}
+			if result.Count != 1 || len(result.Matches) != 1 || strings.TrimSpace(result.Matches[0].SelectorHint) == "" || result.Matches[0].SelectorAmbiguous {
+				if result.Count > 1 || (result.Count == 1 && len(result.Matches) == 1 && result.Matches[0].SelectorAmbiguous) {
+					return last, locator, "", commandError("ambiguous_locator", "usage", fmt.Sprintf("assert %s locator %s %q matched %d elements; refine the locator before asserting", expected, opts.By, query, result.Count), ExitUsage, locatorActionRemediations("assert "+expected, query, opts))
+				}
+				last = attachmentAssertionPendingResult(query, expected, result.Count, attempts, start, poll)
+				lastSelector = ""
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+			selector = strings.TrimSpace(result.Matches[0].SelectorHint)
+			lastSelector = selector
+		}
+
+		var probe assertVisibilityResult
+		if err := evaluateJSONValue(ctx, session, assertVisibilityExpression(selector, 20), "assert "+expected, &probe); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		if probe.Error != nil {
+			return last, locator, selector, invalidSelectorError(selector, probe.Error, "cdp assert "+expected+" '#target' --json")
+		}
+		got := attachmentResultFromVisibility(probe)
+		finishAttachmentAssertionResult(&got, expected, attempts, start, poll)
+		last = got
+		lastLocator = locator
+		lastSelector = selector
+		if got.Passed {
+			return got, locator, selector, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
+	}
+}
+
 func assertionTimeoutCause(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return err
+}
+
+func attachmentResultFromVisibility(probe assertVisibilityResult) assertAttachmentResult {
+	items := make([]assertAttachmentItem, 0, len(probe.Items))
+	for _, item := range probe.Items {
+		items = append(items, assertAttachmentItem{
+			Index:   item.Index,
+			Tag:     item.Tag,
+			ID:      item.ID,
+			Role:    item.Role,
+			Name:    item.Name,
+			Visible: item.Visible,
+			Rect:    item.Rect,
+		})
+	}
+	return assertAttachmentResult{
+		Selector: probe.Selector,
+		Attached: probe.Count > 0,
+		Detached: probe.Count == 0,
+		Count:    probe.Count,
+		Items:    items,
+		Error:    probe.Error,
+	}
+}
+
+func finishAttachmentAssertionResult(got *assertAttachmentResult, expected string, attempts int, start time.Time, poll time.Duration) {
+	got.Expected = expected
+	got.Attached = got.Count > 0
+	got.Detached = got.Count == 0
+	got.Passed = got.Attached
+	if expected == "detached" {
+		got.Passed = got.Detached
+	}
+	if !got.Passed {
+		got.Diff = attachmentAssertionDiff(*got)
+	}
+	got.Attempts = attempts
+	got.ElapsedMS = time.Since(start).Milliseconds()
+	got.PollInterval = poll.String()
+}
+
+func attachmentAssertionPendingResult(query, expected string, count, attempts int, start time.Time, poll time.Duration) assertAttachmentResult {
+	got := assertAttachmentResult{
+		Selector:     query,
+		Expected:     expected,
+		Attached:     count > 0,
+		Detached:     count == 0,
+		Passed:       false,
+		Count:        count,
+		Attempts:     attempts,
+		ElapsedMS:    time.Since(start).Milliseconds(),
+		PollInterval: poll.String(),
+	}
+	got.Diff = attachmentAssertionDiff(got)
+	return got
+}
+
+func attachmentAssertionDiff(got assertAttachmentResult) *assertionStateDiff {
+	actual := "attached"
+	if got.Count == 0 {
+		actual = "detached"
+	}
+	matchingCount := 0
+	if got.Expected == "attached" && got.Count > 0 {
+		matchingCount = got.Count
+	}
+	return stateAssertionDiff(got.Expected, actual, got.Count, matchingCount)
 }
 
 func waitForViewportAssertion(ctx context.Context, session *cdp.PageSession, query string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertViewportResult, *locatorFindResult, string, error) {
@@ -2794,6 +3018,13 @@ func visibilityAssertionFailureMessage(expected, selector string, got assertVisi
 }
 
 func visibilityAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
+	if selector == "" {
+		selector = query
+	}
+	return []string{locatorActionFindCommand(query, opts), "cdp dom query " + shellQuote(selector) + " --json"}
+}
+
+func attachmentAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
 	if selector == "" {
 		selector = query
 	}
