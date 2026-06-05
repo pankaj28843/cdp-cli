@@ -268,6 +268,21 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "lock", Type: "lock_metadata", Required: true, Description: "Keepalive lock metadata."},
 			},
 		},
+		"daemon-health-check": {
+			Name:        "daemon-health-check",
+			Description: "Cron-safe managed headless daemon repair and validation result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the managed headless daemon was healthy and navigation/JS/DOM/screenshot validation passed."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Selected browser runtime mode, always headless for this command."},
+				{Name: "state", Type: "string", Required: true, Description: "Health-check state: healthy, failed, or locked."},
+				{Name: "action", Type: "string", Required: true, Description: "Action taken: validated, diagnosed, or skipped."},
+				{Name: "health", Type: "browser_health", Required: false, Description: "Daemon/browser health after any requested repair."},
+				{Name: "steps", Type: "array<health_check_step>", Required: false, Description: "Ordered health, optional repair, open, JavaScript, DOM text, and screenshot validation steps."},
+				{Name: "artifacts", Type: "object", Required: false, Description: "Local run directory, latest summary JSON, and screenshot artifact paths."},
+				{Name: "failure_count", Type: "number", Required: false, Description: "Consecutive failure count stored next to health-check artifacts."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe diagnostics and repair commands for managed headless runtime recovery."},
+			},
+		},
 		"daemon-logs": {
 			Name:        "daemon-logs",
 			Description: "Daemon JSONL log entries for the selected browser runtime mode.",

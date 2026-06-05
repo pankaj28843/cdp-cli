@@ -525,7 +525,7 @@ func managedCronBlock(opts cronRenderOptions) string {
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headless" {
 		lines = append(lines,
 			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
-			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
+			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health-check --repair --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
 			fmt.Sprintf("%s %s", seedSchedule, cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy %s --if-older-than %s --json >> %s/profile-seed-headless.log 2>&1", cdpBin, seedStrategy, seedAfter, logDir))),
 			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
 		)

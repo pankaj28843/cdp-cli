@@ -184,6 +184,101 @@ func TestDaemonHealthReportsRecentCrashLogsJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonHealthCheckHeadlessHealthyJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	artifactDir := filepath.Join(stateDir, "health-artifacts")
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	runtime, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil || !ok {
+		t.Fatalf("LoadRuntimeForMode headless ok=%v err=%v, want runtime", ok, err)
+	}
+	runtime.ManagedProfilePath = browser.ManagedProfileDir(stateDir)
+	runtime.ProfileSeedStrategy = "managed"
+	runtime.ChromePort = "9222"
+	runtime.ManagedBrowser = &browser.ManagedStatus{BrowserMode: "headless", UserDataDir: browser.ManagedProfileDir(stateDir), DebuggingPort: "9222", ProfileSeedStrategy: "managed"}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", runtime); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK          bool   `json:"ok"`
+		State       string `json:"state"`
+		Action      string `json:"action"`
+		BrowserMode string `json:"browser_mode"`
+		Health      struct {
+			State string `json:"state"`
+		} `json:"health"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Steps []struct {
+			Name string `json:"name"`
+			OK   bool   `json:"ok"`
+		} `json:"steps"`
+		Artifacts struct {
+			RunDir     string `json:"run_dir"`
+			Summary    string `json:"summary"`
+			Screenshot string `json:"screenshot"`
+		} `json:"artifacts"`
+		FailureCount int `json:"failure_count"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon health-check output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.State != "healthy" || got.Action != "validated" || got.BrowserMode != "headless" || got.Health.State != "healthy" || got.Target.ID == "" || got.FailureCount != 0 {
+		t.Fatalf("daemon health-check = %+v, want healthy validated headless result", got)
+	}
+	for _, want := range []string{"health", "open", "javascript", "dom_text", "screenshot"} {
+		found := false
+		for _, step := range got.Steps {
+			if step.Name == want && step.OK {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("steps = %+v, missing successful %s step", got.Steps, want)
+		}
+	}
+	for _, path := range []string{got.Artifacts.RunDir, got.Artifacts.Summary, got.Artifacts.Screenshot} {
+		if path == "" {
+			t.Fatalf("artifacts = %+v, want populated paths", got.Artifacts)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("artifact %s missing: %v", path, err)
+		}
+	}
+}
+
 func TestDaemonStatusUsesSelectedBrowserModeRuntime(t *testing.T) {
 	stateDir := filepath.Join(os.TempDir(), "cdp-cli-mode-runtime-test")
 	if err := os.RemoveAll(stateDir); err != nil {

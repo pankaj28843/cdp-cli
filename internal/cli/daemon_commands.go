@@ -2,9 +2,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,8 +17,6 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
-	"os/exec"
-	"path/filepath"
 )
 
 func (a *app) newDaemonCommand() *cobra.Command {
@@ -30,6 +31,7 @@ func (a *app) newDaemonCommand() *cobra.Command {
 	cmd.AddCommand(a.newDaemonRestartCommand())
 	cmd.AddCommand(a.newDaemonKeepaliveCommand())
 	cmd.AddCommand(a.newDaemonHealthCommand())
+	cmd.AddCommand(a.newDaemonHealthCheckCommand())
 	cmd.AddCommand(a.newDaemonHoldCommand())
 	cmd.AddCommand(a.newDaemonLogsCommand())
 	return cmd
@@ -476,6 +478,371 @@ func (a *app) newDaemonHealthCommand() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&processInfo, "process-info", false, "include optional SystemInfo.getProcessInfo process counts when a daemon runtime is healthy")
 	return cmd
+}
+
+const defaultHeadlessHealthCheckURL = "data:text/html,%3Cmain%20data-cdp-health%3D%22ok%22%3Ecdp-headless-health%3C%2Fmain%3E"
+
+type daemonHealthCheckOptions struct {
+	Repair           bool
+	HealthURL        string
+	OutDir           string
+	FailureThreshold int
+	LockTimeout      time.Duration
+	StaleLockAfter   time.Duration
+	Reconnect        time.Duration
+	ChromeCommand    string
+}
+
+func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
+	opts := daemonHealthCheckOptions{
+		HealthURL:        defaultHeadlessHealthCheckURL,
+		FailureThreshold: 3,
+		StaleLockAfter:   10 * time.Minute,
+		Reconnect:        30 * time.Second,
+		ChromeCommand:    defaultChromeCommand(),
+	}
+	cmd := &cobra.Command{
+		Use:   "health-check",
+		Short: "Repair and validate the managed headless daemon runtime",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.FailureThreshold <= 0 || opts.LockTimeout < 0 || opts.StaleLockAfter < 0 || opts.Reconnect < 0 {
+				return commandError("invalid_argument", "usage", "--failure-threshold must be positive and durations must be non-negative", ExitUsage, []string{"cdp --browser-mode headless daemon health-check --repair --json"})
+			}
+			if a.browserModeName() != string(config.BrowserModeHeadless) {
+				return commandError("invalid_browser_mode", "usage", "daemon health-check is only supported for --browser-mode headless", ExitUsage, []string{"cdp --browser-mode headless daemon health-check --repair --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, 90*time.Second)
+			defer cancel()
+			return a.runDaemonHealthCheck(ctx, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.Repair, "repair", false, "start or replace the managed headless daemon before validation when health is not healthy")
+	cmd.Flags().StringVar(&opts.HealthURL, "health-url", opts.HealthURL, "synthetic URL used for navigation/DOM/JS/screenshot validation")
+	cmd.Flags().StringVar(&opts.OutDir, "out-dir", "", "directory for health-check JSON and screenshot artifacts; defaults under the cdp state directory")
+	cmd.Flags().IntVar(&opts.FailureThreshold, "failure-threshold", opts.FailureThreshold, "write a feature-request candidate after this many consecutive failures")
+	cmd.Flags().DurationVar(&opts.LockTimeout, "lock-timeout", opts.LockTimeout, "how long to wait for another health-check lock; 0s skips immediately")
+	cmd.Flags().DurationVar(&opts.StaleLockAfter, "stale-lock-after", opts.StaleLockAfter, "remove a health-check lock older than this duration; 0 disables stale cleanup")
+	cmd.Flags().DurationVar(&opts.Reconnect, "reconnect", opts.Reconnect, "daemon reconnect interval to use when --repair starts the managed runtime")
+	cmd.Flags().StringVar(&opts.ChromeCommand, "chrome-command", opts.ChromeCommand, "Chrome command for managed headless repair; empty disables launch")
+	return cmd
+}
+
+func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOptions) error {
+	store, err := a.stateStore()
+	if err != nil {
+		return err
+	}
+	outDir := strings.TrimSpace(opts.OutDir)
+	if outDir == "" {
+		outDir = filepath.Join(store.Dir, "headless-health")
+	}
+	lockName := "daemon-health-check-headless"
+	lock, acquired, existingLock, err := daemon.AcquireLock(ctx, store.Dir, lockName, opts.LockTimeout, opts.StaleLockAfter, daemon.LockMetadata{Name: lockName, Phase: "checking"})
+	if err != nil {
+		return commandError("lock_failed", "connection", fmt.Sprintf("acquire health-check lock: %v", err), ExitConnection, []string{"cdp --browser-mode headless daemon health --json"})
+	}
+	if !acquired {
+		return a.render(ctx, "headless health-check locked", map[string]any{
+			"ok":           true,
+			"browser_mode": a.browserModeName(),
+			"state":        "locked",
+			"action":       "skipped",
+			"locked":       true,
+			"lock":         existingLock,
+			"next_commands": []string{
+				"cdp --browser-mode headless daemon health --json",
+				"cdp cron status --json",
+			},
+		})
+	}
+	defer lock.Release()
+
+	runID := time.Now().UTC().Format("20060102T150405Z")
+	runDir := filepath.Join(outDir, runID)
+	summaryPath := filepath.Join(outDir, "latest.json")
+	screenshotPath := filepath.Join(runDir, "screenshot.png")
+	steps := []map[string]any{}
+	report := map[string]any{
+		"ok":           false,
+		"browser_mode": a.browserModeName(),
+		"state":        "failed",
+		"action":       "diagnosed",
+		"run_id":       runID,
+		"locked":       false,
+		"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
+		"steps":        steps,
+		"artifacts": map[string]any{
+			"run_dir":    runDir,
+			"summary":    summaryPath,
+			"screenshot": screenshotPath,
+		},
+		"next_commands": headlessHealthCheckNextCommands(),
+	}
+	fail := func(failure string, cause error) error {
+		if cause != nil {
+			report["error"] = cause.Error()
+		}
+		report["failure"] = failure
+		count := a.updateHeadlessHealthCheckFailure(ctx, outDir, runDir, summaryPath, opts.FailureThreshold, true)
+		report["failure_count"] = count
+		_ = writeJSONArtifact(summaryPath, report)
+		return commandErrorWithData("headless_health_check_failed", "check_failed", fmt.Sprintf("headless health-check failed: %s", failure), ExitCheckFailed, headlessHealthCheckNextCommands(), report)
+	}
+	addStep := func(name string, ok bool, fields map[string]any) {
+		step := map[string]any{"name": name, "ok": ok}
+		for key, value := range fields {
+			step[key] = value
+		}
+		steps = append(steps, step)
+		report["steps"] = steps
+	}
+
+	status, health, err := a.selectedDaemonHealth(ctx)
+	report["daemon"] = status
+	report["health"] = health
+	if err != nil {
+		addStep("health", false, map[string]any{"error": err.Error()})
+		if !opts.Repair {
+			return fail("health_failed", err)
+		}
+	} else {
+		addStep("health", healthState(health) == "healthy", map[string]any{"state": healthState(health)})
+	}
+
+	if (err != nil || healthState(health) != "healthy") && opts.Repair {
+		if err := lock.Update(ctx, "repairing"); err != nil {
+			return err
+		}
+		repair, err := a.repairManagedHeadlessForHealthCheck(ctx, store.Dir, opts)
+		addStep("repair", err == nil, map[string]any{"repair": repair})
+		if err != nil {
+			return fail("repair_failed", err)
+		}
+		report["repair"] = repair
+		status, health, err = a.selectedDaemonHealth(ctx)
+		if err != nil {
+			addStep("health_after_repair", false, map[string]any{"error": err.Error()})
+			return fail("health_after_repair_failed", err)
+		}
+		report["daemon"] = status
+		report["health"] = health
+		addStep("health_after_repair", healthState(health) == "healthy", map[string]any{"state": healthState(health)})
+	}
+	if healthState(health) != "healthy" {
+		return fail("health_not_healthy", nil)
+	}
+
+	target, session, closeSession, err := a.openHealthCheckTarget(ctx, opts.HealthURL)
+	if err != nil {
+		addStep("open", false, map[string]any{"error": err.Error()})
+		return fail("navigate_failed", err)
+	}
+	defer closeSession()
+	report["target"] = pageRow(target)
+	addStep("open", true, map[string]any{"target_id": target.TargetID})
+
+	var js struct {
+		OK   bool   `json:"ok"`
+		Text string `json:"text"`
+	}
+	if err := evaluateJSONValue(ctx, session, headlessHealthCheckExpression(), "headless health-check javascript", &js); err != nil {
+		addStep("javascript", false, map[string]any{"error": err.Error()})
+		return fail("javascript_failed", err)
+	}
+	addStep("javascript", js.OK, map[string]any{"text": js.Text})
+	if !js.OK {
+		return fail("javascript_unexpected_result", nil)
+	}
+
+	var text textResult
+	if err := evaluateJSONValue(ctx, session, textExpression("body", 1, 1), "headless health-check text", &text); err != nil {
+		addStep("dom_text", false, map[string]any{"error": err.Error()})
+		return fail("dom_text_failed", err)
+	}
+	addStep("dom_text", text.Count > 0, map[string]any{"count": text.Count})
+	if text.Count == 0 {
+		return fail("dom_text_empty", nil)
+	}
+
+	shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{Format: "png"})
+	if err != nil {
+		addStep("screenshot", false, map[string]any{"error": err.Error()})
+		return fail("screenshot_failed", err)
+	}
+	writtenScreenshot, err := writeArtifactFile(screenshotPath, shot.Data)
+	if err != nil {
+		addStep("screenshot", false, map[string]any{"error": err.Error()})
+		return fail("screenshot_write_failed", err)
+	}
+	addStep("screenshot", true, map[string]any{"path": writtenScreenshot, "bytes": len(shot.Data)})
+
+	report["ok"] = true
+	report["state"] = "healthy"
+	report["action"] = "validated"
+	report["failure"] = nil
+	report["failure_count"] = a.updateHeadlessHealthCheckFailure(ctx, outDir, runDir, summaryPath, opts.FailureThreshold, false)
+	if err := lock.Update(ctx, "healthy"); err != nil {
+		return err
+	}
+	if err := writeJSONArtifact(summaryPath, report); err != nil {
+		return err
+	}
+	return a.render(ctx, fmt.Sprintf("headless-health-check\t%s", report["state"]), report)
+}
+
+func (a *app) selectedDaemonHealth(ctx context.Context) (daemon.Status, map[string]any, error) {
+	probe, err := a.browserProbe(ctx)
+	if err != nil {
+		probe = browser.ProbeResult{
+			State:               "probe_failed",
+			Message:             err.Error(),
+			ConnectionMode:      a.connectionMode(),
+			RemediationCommands: headlessHealthCheckNextCommands(),
+		}
+		status := a.daemonStatus(ctx, probe)
+		health := a.browserHealthSnapshot(ctx, status, false)
+		status.Health = health
+		return status, health, err
+	}
+	status := a.daemonStatus(ctx, probe)
+	health := a.browserHealthSnapshot(ctx, status, false)
+	status.Health = health
+	return status, health, nil
+}
+
+func (a *app) repairManagedHeadlessForHealthCheck(ctx context.Context, storeDir string, opts daemonHealthCheckOptions) (map[string]any, error) {
+	repair := map[string]any{"previous_state": "unknown"}
+	stop, err := a.stopSelectedRuntime(ctx)
+	if err != nil {
+		return repair, err
+	}
+	repair["stop"] = stop
+	if stop.DaemonStopped {
+		repair["previous_state"] = "runtime_stopped"
+	} else {
+		repair["previous_state"] = "not_running"
+	}
+	managed, chrome, err := a.ensureManagedChromeForKeepalive(ctx, storeDir, opts.ChromeCommand)
+	if err != nil {
+		return repair, err
+	}
+	a.opts.browserURL = managedHTTPURL(managed.Endpoint)
+	a.opts.autoConnect = false
+	a.opts.userDataDir = managed.Metadata.UserDataDir
+	result, err := a.runDaemonStart(ctx, daemonStartConfig{
+		reconnect:         opts.Reconnect,
+		connectionName:    a.connectionStateName(ctx),
+		remember:          true,
+		managedKeepAlive:  managed,
+		skipSelectedApply: true,
+	})
+	if err != nil {
+		return repair, err
+	}
+	repair["chrome"] = chrome
+	repair["daemon"] = result.data["daemon"]
+	repair["start"] = result.data["start"]
+	return repair, nil
+}
+
+func (a *app) openHealthCheckTarget(ctx context.Context, rawURL string) (cdp.TargetInfo, *cdp.PageSession, func(), error) {
+	client, closeClient, err := a.browserCDPClient(ctx)
+	if err != nil {
+		return cdp.TargetInfo{}, nil, nil, err
+	}
+	targetID, err := a.createPageTarget(ctx, client, rawURL)
+	if err != nil {
+		_ = closeClient(ctx)
+		return cdp.TargetInfo{}, nil, nil, err
+	}
+	target, err := cdp.TargetInfoWithClient(ctx, client, targetID)
+	if err != nil {
+		_ = cdp.CloseTargetWithClient(ctx, client, targetID)
+		_ = closeClient(ctx)
+		return cdp.TargetInfo{}, nil, nil, err
+	}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
+	if err != nil {
+		_ = cdp.CloseTargetWithClient(ctx, client, targetID)
+		_ = closeClient(ctx)
+		return cdp.TargetInfo{}, nil, nil, err
+	}
+	closeSession := func() {
+		_ = cdp.CloseTargetWithClient(context.Background(), client, targetID)
+		_ = session.Close(context.Background())
+	}
+	return target, session, closeSession, nil
+}
+
+func headlessHealthCheckExpression() string {
+	return `(() => {
+  const marker = "__cdp_cli_headless_health_check__";
+  const text = String(document.querySelector("[data-cdp-health]")?.textContent || "");
+  return { ok: text === "cdp-headless-health", text, marker };
+})()`
+}
+
+func headlessHealthCheckNextCommands() []string {
+	return []string{
+		"cdp --browser-mode headless daemon health --json",
+		"cdp --browser-mode headless daemon logs --tail 50 --json",
+		"cdp --browser-mode headless daemon keepalive --repair --json",
+		"cdp cron status --json",
+	}
+}
+
+func healthState(health map[string]any) string {
+	return fmt.Sprint(health["state"])
+}
+
+func (a *app) updateHeadlessHealthCheckFailure(ctx context.Context, outDir, runDir, summaryPath string, threshold int, failed bool) int {
+	countPath := filepath.Join(outDir, "failure-count")
+	count := 0
+	if failed {
+		if raw, err := os.ReadFile(countPath); err == nil {
+			fmt.Sscanf(strings.TrimSpace(string(raw)), "%d", &count)
+		}
+		count++
+	} else {
+		count = 0
+	}
+	_ = os.MkdirAll(outDir, 0o700)
+	_ = os.WriteFile(countPath, []byte(fmt.Sprintf("%d\n", count)), 0o600)
+	if failed && count >= threshold {
+		_ = writeHeadlessHealthCheckCandidate(filepath.Join(outDir, "feature-request-candidate.md"), count, runDir, summaryPath)
+	}
+	return count
+}
+
+func writeHeadlessHealthCheckCandidate(path string, count int, runDir, summaryPath string) error {
+	body := fmt.Sprintf(`# Investigate Repeated Headless Health-Check Failures
+
+## Problem
+
+The cron-compatible headless health check failed %d consecutive times.
+
+## Current Behaviour
+
+- Run artifacts: %s
+- Summary: %s
+
+## Proposed Solution
+
+Inspect the diagnostics, identify whether launch, daemon RPC, navigation, DOM/JS, or screenshot capture failed, then convert this candidate into a managed feature request.
+`, count, runDir, summaryPath)
+	_, err := writeArtifactFile(path, []byte(body))
+	return err
+}
+
+func writeJSONArtifact(path string, value any) error {
+	payload, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return commandError("artifact_write_failed", "internal", fmt.Sprintf("marshal health-check summary: %v", err), ExitInternal, []string{"cdp --browser-mode headless daemon health-check --json"})
+	}
+	payload = append(payload, '\n')
+	_, err = writeArtifactFile(path, payload)
+	return err
 }
 
 func (a *app) newDaemonLogsCommand() *cobra.Command {

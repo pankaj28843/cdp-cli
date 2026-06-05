@@ -106,6 +106,11 @@ func commandExamples(path string) []string {
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp --connection default daemon keepalive --probe auto --json",
 		},
+		"cdp daemon health-check": {
+			"cdp --browser-mode headless daemon health-check --repair --json",
+			"cdp --browser-mode headless daemon health-check --repair --failure-threshold 1 --json",
+			"cdp --browser-mode headless daemon health-check --out-dir tmp/headless-health --json",
+		},
 		"cdp daemon logs": {
 			"cdp daemon logs --tail 100 --json",
 			"cdp daemon logs --tail 0 --json",

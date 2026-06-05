@@ -141,6 +141,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 
 	mux := http.NewServeMux()
 	var server *httptest.Server
+	targetInfos := append([]map[string]any(nil), targets...)
+	var createdTargets atomic.Int64
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		if server == nil {
 			http.Error(w, "test server was not initialized", http.StatusInternalServerError)
@@ -211,14 +213,14 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["sessionId"] = req.SessionID
 			}
 			if req.Method == "Target.getTargets" {
-				resp["result"] = map[string]any{"targetInfos": targets}
+				resp["result"] = map[string]any{"targetInfos": targetInfos}
 			} else if req.Method == "Target.getTargetInfo" {
 				var params struct {
 					TargetID string `json:"targetId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
 				var found map[string]any
-				for _, target := range targets {
+				for _, target := range targetInfos {
 					if target["targetId"] == params.TargetID {
 						found = target
 						break
@@ -231,7 +233,23 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Target.createTarget" {
 				fakeTargetCreateCount.Add(1)
-				resp["result"] = map[string]any{"targetId": "created-page"}
+				createIndex := createdTargets.Add(1)
+				targetID := "created-page"
+				if createIndex > 1 {
+					targetID = fmt.Sprintf("created-page-%d", createIndex)
+				}
+				var params struct {
+					URL string `json:"url"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				targetInfos = append(targetInfos, map[string]any{
+					"targetId": targetID,
+					"type":     "page",
+					"title":    "Created",
+					"url":      params.URL,
+					"attached": false,
+				})
+				resp["result"] = map[string]any{"targetId": targetID}
 			} else if req.Method == "Target.attachToTarget" {
 				var params struct {
 					TargetID string `json:"targetId"`
@@ -2392,6 +2410,17 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 					"matched":     matched,
 					"url":         "https://example.test/app",
 					"title":       "Example App",
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_headless_health_check__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"ok":   true,
+					"text": "cdp-headless-health",
 				},
 			},
 		}
