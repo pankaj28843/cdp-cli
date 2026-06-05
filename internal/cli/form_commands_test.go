@@ -20,6 +20,25 @@ type assertionStringDiffJSON struct {
 	ActualSnippet   string `json:"actual_snippet"`
 }
 
+type assertionCountDiffJSON struct {
+	Reason        string `json:"reason"`
+	ExpectedCount int    `json:"expected_count"`
+	ActualCount   int    `json:"actual_count"`
+	Delta         int    `json:"delta"`
+}
+
+type assertionStateDiffJSON struct {
+	Reason         string `json:"reason"`
+	Expected       string `json:"expected"`
+	Actual         string `json:"actual"`
+	Count          int    `json:"count"`
+	MatchingCount  int    `json:"matching_count"`
+	FailingCount   int    `json:"failing_count"`
+	ActiveSelector string `json:"active_selector"`
+	ActiveRole     string `json:"active_role"`
+	ActiveName     string `json:"active_name"`
+}
+
 func TestFormValuesAndSelectorAssertionsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
@@ -556,6 +575,47 @@ func TestAssertCountLocatorRetriesUntilPassJSON(t *testing.T) {
 	}
 }
 
+func TestAssertCountTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "count", ".cart-item", "5", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert count timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Assertion struct {
+				Selector     string                  `json:"selector"`
+				Expected     int                     `json:"expected"`
+				Actual       int                     `json:"actual"`
+				Diff         *assertionCountDiffJSON `json:"diff"`
+				Passed       bool                    `json:"passed"`
+				Count        int                     `json:"count"`
+				Attempts     int                     `json:"attempts"`
+				ElapsedMS    int64                   `json:"elapsed_ms"`
+				PollInterval string                  `json:"poll_interval"`
+				Items        []struct {
+					Tag string `json:"tag"`
+					ID  string `json:"id"`
+				} `json:"items"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert count timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != ".cart-item" || got.Data.Assertion.Expected != 5 || got.Data.Assertion.Actual != 3 || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "too_few" || got.Data.Assertion.Diff.ExpectedCount != 5 || got.Data.Assertion.Diff.ActualCount != 3 || got.Data.Assertion.Diff.Delta != -2 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 3 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 3 || got.Data.Assertion.Items[0].Tag != "li" || got.Data.Assertion.Items[0].ID != "cart-item-1" || !containsString(got.RemediationCommands, "cdp dom query .cart-item --json") || !containsString(got.RemediationCommands, "cdp assert count .cart-item 5 --json") {
+		t.Fatalf("assert count timeout = %+v, want timeout with count diff diagnostics", got)
+	}
+}
+
 func TestAssertAttributeByRoleRetriesUntilPassJSON(t *testing.T) {
 	fakeDelayedAssertAttributeAttempts.Store(0)
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
@@ -709,21 +769,23 @@ func TestAssertFocusedTimeoutJSON(t *testing.T) {
 		RemediationCommands []string `json:"remediation_commands"`
 		Data                struct {
 			Assertion struct {
-				Selector       string `json:"selector"`
-				Focused        bool   `json:"focused"`
-				Passed         bool   `json:"passed"`
-				FocusedCount   int    `json:"focused_count"`
-				ActiveSelector string `json:"active_selector"`
-				Attempts       int    `json:"attempts"`
-				ElapsedMS      int64  `json:"elapsed_ms"`
-				PollInterval   string `json:"poll_interval"`
+				Selector       string                  `json:"selector"`
+				Focused        bool                    `json:"focused"`
+				Diff           *assertionStateDiffJSON `json:"diff"`
+				Passed         bool                    `json:"passed"`
+				Count          int                     `json:"count"`
+				FocusedCount   int                     `json:"focused_count"`
+				ActiveSelector string                  `json:"active_selector"`
+				Attempts       int                     `json:"attempts"`
+				ElapsedMS      int64                   `json:"elapsed_ms"`
+				PollInterval   string                  `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert focused timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "input#never-focused" || got.Data.Assertion.Focused || got.Data.Assertion.Passed || got.Data.Assertion.FocusedCount != 0 || got.Data.Assertion.ActiveSelector != "body" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp dom query 'input#never-focused' --json") || !containsString(got.RemediationCommands, "cdp assert focused 'input#never-focused' --json") {
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "input#never-focused" || got.Data.Assertion.Focused || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "focused" || got.Data.Assertion.Diff.Actual != "not_focused" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Diff.ActiveSelector != "body" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.FocusedCount != 0 || got.Data.Assertion.ActiveSelector != "body" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp dom query 'input#never-focused' --json") || !containsString(got.RemediationCommands, "cdp assert focused 'input#never-focused' --json") {
 		t.Fatalf("assert focused timeout = %+v, want timeout with last focus diagnostics", got)
 	}
 }
@@ -1138,15 +1200,16 @@ func TestAssertVisibleTimeoutJSON(t *testing.T) {
 		Code string `json:"code"`
 		Data struct {
 			Assertion struct {
-				Selector     string `json:"selector"`
-				Visible      bool   `json:"visible"`
-				Passed       bool   `json:"passed"`
-				Count        int    `json:"count"`
-				VisibleCount int    `json:"visible_count"`
-				HiddenCount  int    `json:"hidden_count"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Selector     string                  `json:"selector"`
+				Visible      bool                    `json:"visible"`
+				Diff         *assertionStateDiffJSON `json:"diff"`
+				Passed       bool                    `json:"passed"`
+				Count        int                     `json:"count"`
+				VisibleCount int                     `json:"visible_count"`
+				HiddenCount  int                     `json:"hidden_count"`
+				Attempts     int                     `json:"attempts"`
+				ElapsedMS    int64                   `json:"elapsed_ms"`
+				PollInterval string                  `json:"poll_interval"`
 				Items        []struct {
 					Visible bool   `json:"visible"`
 					Display string `json:"display"`
@@ -1157,7 +1220,7 @@ func TestAssertVisibleTimeoutJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert visible hidden output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "#hidden-button" || got.Data.Assertion.Visible || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 0 || got.Data.Assertion.HiddenCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Visible || got.Data.Assertion.Items[0].Display != "none" {
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "#hidden-button" || got.Data.Assertion.Visible || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "visible" || got.Data.Assertion.Diff.Actual != "hidden" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 0 || got.Data.Assertion.HiddenCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Visible || got.Data.Assertion.Items[0].Display != "none" {
 		t.Fatalf("assert visible hidden = %+v, want timeout with last visibility diagnostics", got)
 	}
 }
@@ -1296,24 +1359,25 @@ func TestAssertHiddenFailureJSON(t *testing.T) {
 				Strict bool   `json:"strict"`
 			} `json:"locator"`
 			Assertion struct {
-				Selector     string `json:"selector"`
-				Expected     string `json:"expected"`
-				Visible      bool   `json:"visible"`
-				Hidden       bool   `json:"hidden"`
-				Passed       bool   `json:"passed"`
-				Count        int    `json:"count"`
-				VisibleCount int    `json:"visible_count"`
-				HiddenCount  int    `json:"hidden_count"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Selector     string                  `json:"selector"`
+				Expected     string                  `json:"expected"`
+				Visible      bool                    `json:"visible"`
+				Hidden       bool                    `json:"hidden"`
+				Diff         *assertionStateDiffJSON `json:"diff"`
+				Passed       bool                    `json:"passed"`
+				Count        int                     `json:"count"`
+				VisibleCount int                     `json:"visible_count"`
+				HiddenCount  int                     `json:"hidden_count"`
+				Attempts     int                     `json:"attempts"`
+				ElapsedMS    int64                   `json:"elapsed_ms"`
+				PollInterval string                  `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert hidden failure output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Locator.By != "role" || got.Data.Locator.Query != "Search" || got.Data.Locator.Role != "button" || !got.Data.Locator.Strict || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "hidden" || !got.Data.Assertion.Visible || got.Data.Assertion.Hidden || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 1 || got.Data.Assertion.HiddenCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Locator.By != "role" || got.Data.Locator.Query != "Search" || got.Data.Locator.Role != "button" || !got.Data.Locator.Strict || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "hidden" || !got.Data.Assertion.Visible || got.Data.Assertion.Hidden || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "hidden" || got.Data.Assertion.Diff.Actual != "visible" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 1 || got.Data.Assertion.HiddenCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
 		t.Fatalf("assert hidden failure = %+v, want timeout hidden assertion with locator diagnostics", got)
 	}
 }
@@ -1629,16 +1693,18 @@ func TestAssertCheckedTimeoutJSON(t *testing.T) {
 		Data struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Selector       string `json:"selector"`
-				Expected       string `json:"expected"`
-				Checked        bool   `json:"checked"`
-				Unchecked      bool   `json:"unchecked"`
-				Passed         bool   `json:"passed"`
-				CheckedCount   int    `json:"checked_count"`
-				UncheckedCount int    `json:"unchecked_count"`
-				Attempts       int    `json:"attempts"`
-				ElapsedMS      int64  `json:"elapsed_ms"`
-				PollInterval   string `json:"poll_interval"`
+				Selector       string                  `json:"selector"`
+				Expected       string                  `json:"expected"`
+				Checked        bool                    `json:"checked"`
+				Unchecked      bool                    `json:"unchecked"`
+				Diff           *assertionStateDiffJSON `json:"diff"`
+				Passed         bool                    `json:"passed"`
+				Count          int                     `json:"count"`
+				CheckedCount   int                     `json:"checked_count"`
+				UncheckedCount int                     `json:"unchecked_count"`
+				Attempts       int                     `json:"attempts"`
+				ElapsedMS      int64                   `json:"elapsed_ms"`
+				PollInterval   string                  `json:"poll_interval"`
 				Items          []struct {
 					Checked bool `json:"checked"`
 				} `json:"items"`
@@ -1649,7 +1715,7 @@ func TestAssertCheckedTimeoutJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert checked timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#optional-updates" || got.Data.Assertion.Selector != "input#optional-updates" || got.Data.Assertion.Expected != "checked" || got.Data.Assertion.Checked || !got.Data.Assertion.Unchecked || got.Data.Assertion.Passed || got.Data.Assertion.CheckedCount != 0 || got.Data.Assertion.UncheckedCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Checked || !containsString(got.RemediationCommands, "cdp form get 'input#optional-updates' --json") {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#optional-updates" || got.Data.Assertion.Selector != "input#optional-updates" || got.Data.Assertion.Expected != "checked" || got.Data.Assertion.Checked || !got.Data.Assertion.Unchecked || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "checked" || got.Data.Assertion.Diff.Actual != "unchecked" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.CheckedCount != 0 || got.Data.Assertion.UncheckedCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Checked || !containsString(got.RemediationCommands, "cdp form get 'input#optional-updates' --json") {
 		t.Fatalf("assert checked timeout = %+v, want timeout with last unchecked diagnostics", got)
 	}
 }
@@ -1671,24 +1737,25 @@ func TestAssertEnabledTimeoutJSON(t *testing.T) {
 		Data struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Selector      string `json:"selector"`
-				Expected      string `json:"expected"`
-				Enabled       bool   `json:"enabled"`
-				Disabled      bool   `json:"disabled"`
-				Passed        bool   `json:"passed"`
-				Count         int    `json:"count"`
-				EnabledCount  int    `json:"enabled_count"`
-				DisabledCount int    `json:"disabled_count"`
-				Attempts      int    `json:"attempts"`
-				ElapsedMS     int64  `json:"elapsed_ms"`
-				PollInterval  string `json:"poll_interval"`
+				Selector      string                  `json:"selector"`
+				Expected      string                  `json:"expected"`
+				Enabled       bool                    `json:"enabled"`
+				Disabled      bool                    `json:"disabled"`
+				Diff          *assertionStateDiffJSON `json:"diff"`
+				Passed        bool                    `json:"passed"`
+				Count         int                     `json:"count"`
+				EnabledCount  int                     `json:"enabled_count"`
+				DisabledCount int                     `json:"disabled_count"`
+				Attempts      int                     `json:"attempts"`
+				ElapsedMS     int64                   `json:"elapsed_ms"`
+				PollInterval  string                  `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert enabled timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#disabled-action" || got.Data.Assertion.Selector != "button#disabled-action" || got.Data.Assertion.Expected != "enabled" || got.Data.Assertion.Enabled || !got.Data.Assertion.Disabled || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 0 || got.Data.Assertion.DisabledCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#disabled-action" || got.Data.Assertion.Selector != "button#disabled-action" || got.Data.Assertion.Expected != "enabled" || got.Data.Assertion.Enabled || !got.Data.Assertion.Disabled || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "enabled" || got.Data.Assertion.Diff.Actual != "disabled" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 0 || got.Data.Assertion.DisabledCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
 		t.Fatalf("assert enabled timeout = %+v, want timeout with disabled diagnostics", got)
 	}
 }
@@ -1710,24 +1777,25 @@ func TestAssertDisabledTimeoutJSON(t *testing.T) {
 		Data struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Selector      string `json:"selector"`
-				Expected      string `json:"expected"`
-				Enabled       bool   `json:"enabled"`
-				Disabled      bool   `json:"disabled"`
-				Passed        bool   `json:"passed"`
-				Count         int    `json:"count"`
-				EnabledCount  int    `json:"enabled_count"`
-				DisabledCount int    `json:"disabled_count"`
-				Attempts      int    `json:"attempts"`
-				ElapsedMS     int64  `json:"elapsed_ms"`
-				PollInterval  string `json:"poll_interval"`
+				Selector      string                  `json:"selector"`
+				Expected      string                  `json:"expected"`
+				Enabled       bool                    `json:"enabled"`
+				Disabled      bool                    `json:"disabled"`
+				Diff          *assertionStateDiffJSON `json:"diff"`
+				Passed        bool                    `json:"passed"`
+				Count         int                     `json:"count"`
+				EnabledCount  int                     `json:"enabled_count"`
+				DisabledCount int                     `json:"disabled_count"`
+				Attempts      int                     `json:"attempts"`
+				ElapsedMS     int64                   `json:"elapsed_ms"`
+				PollInterval  string                  `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert disabled timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "disabled" || !got.Data.Assertion.Enabled || got.Data.Assertion.Disabled || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 1 || got.Data.Assertion.DisabledCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "disabled" || !got.Data.Assertion.Enabled || got.Data.Assertion.Disabled || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "disabled" || got.Data.Assertion.Diff.Actual != "enabled" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EnabledCount != 1 || got.Data.Assertion.DisabledCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
 		t.Fatalf("assert disabled timeout = %+v, want timeout with enabled diagnostics", got)
 	}
 }
@@ -1916,23 +1984,25 @@ func TestAssertEditableTimeoutJSON(t *testing.T) {
 		Data struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Selector      string `json:"selector"`
-				Expected      string `json:"expected"`
-				Editable      bool   `json:"editable"`
-				ReadOnly      bool   `json:"read_only"`
-				Passed        bool   `json:"passed"`
-				EditableCount int    `json:"editable_count"`
-				ReadOnlyCount int    `json:"read_only_count"`
-				Attempts      int    `json:"attempts"`
-				ElapsedMS     int64  `json:"elapsed_ms"`
-				PollInterval  string `json:"poll_interval"`
+				Selector      string                  `json:"selector"`
+				Expected      string                  `json:"expected"`
+				Editable      bool                    `json:"editable"`
+				ReadOnly      bool                    `json:"read_only"`
+				Diff          *assertionStateDiffJSON `json:"diff"`
+				Passed        bool                    `json:"passed"`
+				Count         int                     `json:"count"`
+				EditableCount int                     `json:"editable_count"`
+				ReadOnlyCount int                     `json:"read_only_count"`
+				Attempts      int                     `json:"attempts"`
+				ElapsedMS     int64                   `json:"elapsed_ms"`
+				PollInterval  string                  `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert editable timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "textarea#readonly-notes" || got.Data.Assertion.Selector != "textarea#readonly-notes" || got.Data.Assertion.Expected != "editable" || got.Data.Assertion.Editable || !got.Data.Assertion.ReadOnly || got.Data.Assertion.Passed || got.Data.Assertion.EditableCount != 0 || got.Data.Assertion.ReadOnlyCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "textarea#readonly-notes" || got.Data.Assertion.Selector != "textarea#readonly-notes" || got.Data.Assertion.Expected != "editable" || got.Data.Assertion.Editable || !got.Data.Assertion.ReadOnly || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "editable" || got.Data.Assertion.Diff.Actual != "readonly" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EditableCount != 0 || got.Data.Assertion.ReadOnlyCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
 		t.Fatalf("assert editable timeout = %+v, want timeout with read-only diagnostics", got)
 	}
 }
@@ -1954,23 +2024,25 @@ func TestAssertReadonlyTimeoutJSON(t *testing.T) {
 		Data struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Selector      string `json:"selector"`
-				Expected      string `json:"expected"`
-				Editable      bool   `json:"editable"`
-				ReadOnly      bool   `json:"read_only"`
-				Passed        bool   `json:"passed"`
-				EditableCount int    `json:"editable_count"`
-				ReadOnlyCount int    `json:"read_only_count"`
-				Attempts      int    `json:"attempts"`
-				ElapsedMS     int64  `json:"elapsed_ms"`
-				PollInterval  string `json:"poll_interval"`
+				Selector      string                  `json:"selector"`
+				Expected      string                  `json:"expected"`
+				Editable      bool                    `json:"editable"`
+				ReadOnly      bool                    `json:"read_only"`
+				Diff          *assertionStateDiffJSON `json:"diff"`
+				Passed        bool                    `json:"passed"`
+				Count         int                     `json:"count"`
+				EditableCount int                     `json:"editable_count"`
+				ReadOnlyCount int                     `json:"read_only_count"`
+				Attempts      int                     `json:"attempts"`
+				ElapsedMS     int64                   `json:"elapsed_ms"`
+				PollInterval  string                  `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert readonly timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#q" || got.Data.Assertion.Selector != "input#q" || got.Data.Assertion.Expected != "readonly" || !got.Data.Assertion.Editable || got.Data.Assertion.ReadOnly || got.Data.Assertion.Passed || got.Data.Assertion.EditableCount != 1 || got.Data.Assertion.ReadOnlyCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#q" || got.Data.Assertion.Selector != "input#q" || got.Data.Assertion.Expected != "readonly" || !got.Data.Assertion.Editable || got.Data.Assertion.ReadOnly || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "readonly" || got.Data.Assertion.Diff.Actual != "editable" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.EditableCount != 1 || got.Data.Assertion.ReadOnlyCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
 		t.Fatalf("assert readonly timeout = %+v, want timeout with editable diagnostics", got)
 	}
 }

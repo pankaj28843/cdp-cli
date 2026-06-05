@@ -96,17 +96,18 @@ type assertPageInfo struct {
 }
 
 type assertCountResult struct {
-	Query        string            `json:"query,omitempty"`
-	Selector     string            `json:"selector,omitempty"`
-	Expected     int               `json:"expected"`
-	Actual       int               `json:"actual"`
-	Passed       bool              `json:"passed"`
-	Count        int               `json:"count"`
-	Items        []assertCountItem `json:"items,omitempty"`
-	Attempts     int               `json:"attempts,omitempty"`
-	ElapsedMS    int64             `json:"elapsed_ms,omitempty"`
-	PollInterval string            `json:"poll_interval,omitempty"`
-	Error        *evalError        `json:"error,omitempty"`
+	Query        string              `json:"query,omitempty"`
+	Selector     string              `json:"selector,omitempty"`
+	Expected     int                 `json:"expected"`
+	Actual       int                 `json:"actual"`
+	Diff         *assertionCountDiff `json:"diff,omitempty"`
+	Passed       bool                `json:"passed"`
+	Count        int                 `json:"count"`
+	Items        []assertCountItem   `json:"items,omitempty"`
+	Attempts     int                 `json:"attempts,omitempty"`
+	ElapsedMS    int64               `json:"elapsed_ms,omitempty"`
+	PollInterval string              `json:"poll_interval,omitempty"`
+	Error        *evalError          `json:"error,omitempty"`
 }
 
 type assertCountItem struct {
@@ -137,6 +138,7 @@ type assertFocusedResult struct {
 	Selector       string              `json:"selector"`
 	Expected       string              `json:"expected"`
 	Focused        bool                `json:"focused"`
+	Diff           *assertionStateDiff `json:"diff,omitempty"`
 	Passed         bool                `json:"passed"`
 	Count          int                 `json:"count"`
 	FocusedCount   int                 `json:"focused_count"`
@@ -212,6 +214,7 @@ type assertVisibilityResult struct {
 	Expected     string                 `json:"expected"`
 	Visible      bool                   `json:"visible"`
 	Hidden       bool                   `json:"hidden"`
+	Diff         *assertionStateDiff    `json:"diff,omitempty"`
 	Passed       bool                   `json:"passed"`
 	Count        int                    `json:"count"`
 	VisibleCount int                    `json:"visible_count"`
@@ -241,6 +244,7 @@ type assertEnabledResult struct {
 	Expected      string              `json:"expected"`
 	Enabled       bool                `json:"enabled"`
 	Disabled      bool                `json:"disabled"`
+	Diff          *assertionStateDiff `json:"diff,omitempty"`
 	Passed        bool                `json:"passed"`
 	Count         int                 `json:"count"`
 	EnabledCount  int                 `json:"enabled_count"`
@@ -275,6 +279,7 @@ type assertEditableResult struct {
 	Expected         string               `json:"expected"`
 	Editable         bool                 `json:"editable"`
 	ReadOnly         bool                 `json:"read_only"`
+	Diff             *assertionStateDiff  `json:"diff,omitempty"`
 	Passed           bool                 `json:"passed"`
 	Count            int                  `json:"count"`
 	EditableCount    int                  `json:"editable_count"`
@@ -316,6 +321,7 @@ type assertCheckedResult struct {
 	Checked            bool                `json:"checked"`
 	Unchecked          bool                `json:"unchecked"`
 	Indeterminate      bool                `json:"indeterminate"`
+	Diff               *assertionStateDiff `json:"diff,omitempty"`
 	Passed             bool                `json:"passed"`
 	Count              int                 `json:"count"`
 	CheckedCount       int                 `json:"checked_count"`
@@ -360,6 +366,25 @@ type assertionStringDiff struct {
 	ActualSnippet   string `json:"actual_snippet,omitempty"`
 }
 
+type assertionCountDiff struct {
+	Reason        string `json:"reason"`
+	ExpectedCount int    `json:"expected_count"`
+	ActualCount   int    `json:"actual_count"`
+	Delta         int    `json:"delta"`
+}
+
+type assertionStateDiff struct {
+	Reason         string `json:"reason"`
+	Expected       string `json:"expected"`
+	Actual         string `json:"actual"`
+	Count          int    `json:"count"`
+	MatchingCount  int    `json:"matching_count,omitempty"`
+	FailingCount   int    `json:"failing_count,omitempty"`
+	ActiveSelector string `json:"active_selector,omitempty"`
+	ActiveRole     string `json:"active_role,omitempty"`
+	ActiveName     string `json:"active_name,omitempty"`
+}
+
 func stringAssertionDiff(actual, expected, mode string) *assertionStringDiff {
 	normalizedMode := normalizeAssertMode(mode)
 	diff := &assertionStringDiff{
@@ -398,6 +423,185 @@ func stringAssertionDiff(actual, expected, mode string) *assertionStringDiff {
 		diff.ActualSnippet = assertionMismatchSnippet(actual, prefix)
 	}
 	return diff
+}
+
+func countAssertionDiff(expected, actual int) *assertionCountDiff {
+	if expected == actual {
+		return nil
+	}
+	reason := "count_mismatch"
+	if actual < expected {
+		reason = "too_few"
+	} else if actual > expected {
+		reason = "too_many"
+	}
+	return &assertionCountDiff{
+		Reason:        reason,
+		ExpectedCount: expected,
+		ActualCount:   actual,
+		Delta:         actual - expected,
+	}
+}
+
+func stateAssertionDiff(expected, actual string, count, matchingCount int) *assertionStateDiff {
+	if expected == actual {
+		return nil
+	}
+	if matchingCount < 0 {
+		matchingCount = 0
+	}
+	if matchingCount > count {
+		matchingCount = count
+	}
+	failingCount := count - matchingCount
+	if failingCount < 0 {
+		failingCount = 0
+	}
+	reason := "state_mismatch"
+	if actual == "unresolved" {
+		reason = "locator_not_resolved"
+	} else if count == 0 || actual == "absent" {
+		reason = "no_matches"
+	} else if matchingCount > 0 {
+		reason = "partial_match"
+	}
+	return &assertionStateDiff{
+		Reason:        reason,
+		Expected:      expected,
+		Actual:        actual,
+		Count:         count,
+		MatchingCount: matchingCount,
+		FailingCount:  failingCount,
+	}
+}
+
+func pendingStateActual(count int) string {
+	if count == 0 {
+		return "absent"
+	}
+	return "unresolved"
+}
+
+func focusedAssertionDiff(got assertFocusedResult) *assertionStateDiff {
+	diff := stateAssertionDiff("focused", focusedActualState(got), got.Count, got.FocusedCount)
+	if diff == nil {
+		return nil
+	}
+	diff.ActiveSelector = got.ActiveSelector
+	diff.ActiveRole = got.ActiveRole
+	diff.ActiveName = got.ActiveName
+	return diff
+}
+
+func focusedActualState(got assertFocusedResult) string {
+	if got.Count == 0 {
+		return "absent"
+	}
+	if got.Focused {
+		return "focused"
+	}
+	return "not_focused"
+}
+
+func visibilityAssertionDiff(got assertVisibilityResult) *assertionStateDiff {
+	matchingCount := got.VisibleCount
+	if got.Expected == "hidden" {
+		matchingCount = got.HiddenCount
+	}
+	return stateAssertionDiff(got.Expected, visibilityActualState(got), got.Count, matchingCount)
+}
+
+func visibilityActualState(got assertVisibilityResult) string {
+	if got.Count == 0 {
+		return "absent"
+	}
+	if got.VisibleCount > 0 && got.HiddenCount > 0 {
+		return "mixed"
+	}
+	if got.VisibleCount > 0 {
+		return "visible"
+	}
+	return "hidden"
+}
+
+func enabledAssertionDiff(got assertEnabledResult) *assertionStateDiff {
+	matchingCount := got.EnabledCount
+	if got.Expected == "disabled" {
+		matchingCount = got.DisabledCount
+	}
+	return stateAssertionDiff(got.Expected, enabledActualState(got), got.Count, matchingCount)
+}
+
+func enabledActualState(got assertEnabledResult) string {
+	if got.Count == 0 {
+		return "absent"
+	}
+	if got.EnabledCount > 0 && got.DisabledCount > 0 {
+		return "mixed"
+	}
+	if got.EnabledCount > 0 {
+		return "enabled"
+	}
+	if got.DisabledCount > 0 {
+		return "disabled"
+	}
+	return "unresolved"
+}
+
+func editableAssertionDiff(got assertEditableResult) *assertionStateDiff {
+	matchingCount := got.EditableCount
+	if got.Expected == "readonly" {
+		matchingCount = got.ReadOnlyCount
+	}
+	return stateAssertionDiff(got.Expected, editableActualState(got), got.Count, matchingCount)
+}
+
+func editableActualState(got assertEditableResult) string {
+	if got.Count == 0 {
+		return "absent"
+	}
+	if got.EditableCount > 0 && got.ReadOnlyCount == 0 && got.DisabledCount == 0 && got.UnsupportedCount == 0 {
+		return "editable"
+	}
+	if got.ReadOnlyCount > 0 && got.EditableCount == 0 && got.DisabledCount == 0 && got.UnsupportedCount == 0 {
+		return "readonly"
+	}
+	if got.DisabledCount > 0 && got.EditableCount == 0 && got.ReadOnlyCount == 0 && got.UnsupportedCount == 0 {
+		return "disabled"
+	}
+	if got.UnsupportedCount > 0 && got.EditableCount == 0 && got.ReadOnlyCount == 0 && got.DisabledCount == 0 {
+		return "unsupported"
+	}
+	return "mixed"
+}
+
+func checkedAssertionDiff(got assertCheckedResult) *assertionStateDiff {
+	matchingCount := got.CheckedCount
+	if got.Expected == "unchecked" {
+		matchingCount = got.UncheckedCount
+	} else if got.Expected == "indeterminate" {
+		matchingCount = got.IndeterminateCount
+	}
+	return stateAssertionDiff(got.Expected, checkedActualState(got), got.Count, matchingCount)
+}
+
+func checkedActualState(got assertCheckedResult) string {
+	if got.Count == 0 {
+		return "absent"
+	}
+	if got.CheckedCount > 0 && got.UncheckedCount == 0 && got.IndeterminateCount == 0 && got.UnsupportedCount == 0 {
+		return "checked"
+	}
+	if got.UncheckedCount > 0 && got.CheckedCount == 0 && got.IndeterminateCount == 0 && got.UnsupportedCount == 0 {
+		return "unchecked"
+	}
+	if got.IndeterminateCount > 0 && got.CheckedCount == 0 && got.UncheckedCount == 0 && got.UnsupportedCount == 0 {
+		return "indeterminate"
+	}
+	if got.UnsupportedCount > 0 && got.CheckedCount == 0 && got.UncheckedCount == 0 && got.IndeterminateCount == 0 {
+		return "unsupported"
+	}
+	return "mixed"
 }
 
 func runeLength(value string) int {
@@ -1151,6 +1355,9 @@ func waitForCountAssertion(ctx context.Context, session *cdp.PageSession, query 
 			result = assertCountResultFromLocator(query, expected, got, attempts, start, poll)
 		}
 		result.Passed = result.Actual == expected
+		if !result.Passed {
+			result.Diff = countAssertionDiff(expected, result.Actual)
+		}
 		last = result
 		if result.Passed {
 			return result, locator, nil
@@ -1446,6 +1653,9 @@ func waitForFocusedAssertion(ctx context.Context, session *cdp.PageSession, quer
 func finishFocusedAssertionResult(got *assertFocusedResult, attempts int, start time.Time, poll time.Duration) {
 	got.Expected = "focused"
 	got.Passed = got.Focused
+	if !got.Passed {
+		got.Diff = focusedAssertionDiff(*got)
+	}
 	got.Attempts = attempts
 	got.ElapsedMS = time.Since(start).Milliseconds()
 	got.PollInterval = poll.String()
@@ -1458,6 +1668,7 @@ func focusedAssertionPendingResult(query string, count, attempts int, start time
 		Focused:      false,
 		Passed:       false,
 		Count:        count,
+		Diff:         stateAssertionDiff("focused", pendingStateActual(count), count, 0),
 		FocusedCount: 0,
 		Attempts:     attempts,
 		ElapsedMS:    time.Since(start).Milliseconds(),
@@ -1962,6 +2173,9 @@ func finishCheckedAssertionResult(got *assertCheckedResult, expected string, att
 	} else if expected == "indeterminate" {
 		got.Passed = got.Indeterminate
 	}
+	if !got.Passed {
+		got.Diff = checkedAssertionDiff(*got)
+	}
 	got.Attempts = attempts
 	got.ElapsedMS = time.Since(start).Milliseconds()
 	got.PollInterval = poll.String()
@@ -1976,6 +2190,7 @@ func checkedAssertionPendingResult(query, expected string, count, attempts int, 
 		Indeterminate:      false,
 		Passed:             false,
 		Count:              count,
+		Diff:               stateAssertionDiff(expected, pendingStateActual(count), count, 0),
 		Attempts:           attempts,
 		ElapsedMS:          time.Since(start).Milliseconds(),
 		PollInterval:       poll.String(),
@@ -2088,6 +2303,9 @@ func finishEditableAssertionResult(got *assertEditableResult, expected string, a
 	if expected == "readonly" {
 		got.Passed = got.ReadOnly
 	}
+	if !got.Passed {
+		got.Diff = editableAssertionDiff(*got)
+	}
 	got.Attempts = attempts
 	got.ElapsedMS = time.Since(start).Milliseconds()
 	got.PollInterval = poll.String()
@@ -2101,6 +2319,7 @@ func editableAssertionPendingResult(query, expected string, count, attempts int,
 		ReadOnly:         false,
 		Passed:           false,
 		Count:            count,
+		Diff:             stateAssertionDiff(expected, pendingStateActual(count), count, 0),
 		EditableCount:    0,
 		ReadOnlyCount:    0,
 		DisabledCount:    0,
@@ -2203,6 +2422,9 @@ func finishEnabledAssertionResult(got *assertEnabledResult, expected string, att
 	if expected == "disabled" {
 		got.Passed = got.Disabled
 	}
+	if !got.Passed {
+		got.Diff = enabledAssertionDiff(*got)
+	}
 	got.Attempts = attempts
 	got.ElapsedMS = time.Since(start).Milliseconds()
 	got.PollInterval = poll.String()
@@ -2216,6 +2438,7 @@ func enabledAssertionPendingResult(query, expected string, count, attempts int, 
 		Disabled:      false,
 		Passed:        false,
 		Count:         count,
+		Diff:          stateAssertionDiff(expected, pendingStateActual(count), count, 0),
 		EnabledCount:  0,
 		DisabledCount: 0,
 		Attempts:      attempts,
@@ -2354,6 +2577,9 @@ func finishVisibilityAssertionResult(got *assertVisibilityResult, expected strin
 	if expected == "hidden" {
 		got.Passed = got.Hidden
 	}
+	if !got.Passed {
+		got.Diff = visibilityAssertionDiff(*got)
+	}
 	got.Attempts = attempts
 	got.ElapsedMS = time.Since(start).Milliseconds()
 	got.PollInterval = poll.String()
@@ -2367,6 +2593,7 @@ func visibilityAssertionPendingResult(query, expected string, count, attempts in
 		Hidden:       count == 0,
 		Passed:       false,
 		Count:        count,
+		Diff:         stateAssertionDiff(expected, pendingStateActual(count), count, 0),
 		VisibleCount: 0,
 		HiddenCount:  0,
 		Attempts:     attempts,

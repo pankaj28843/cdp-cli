@@ -593,7 +593,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the exact count assertion passed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_count_result", Required: true, Description: "Selector or locator query, expected count, actual count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_count_result", Required: true, Description: "Selector or locator query, expected count, actual count, optional diff for failed count matches, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator resolution details when --by is not css; multiple matches are allowed for count assertions."},
 			},
 		},
@@ -614,7 +614,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element has focus."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_focused_result", Required: true, Description: "Selector, expected state, focused boolean, focused count, active element metadata, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_focused_result", Required: true, Description: "Selector, expected state, focused boolean, optional diff for failed state matches, focused count, active element metadata, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -658,7 +658,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element is visible."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_visibility_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, visible/hidden counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_visibility_result", Required: true, Description: "Selector, expected state, optional diff for failed state matches, pass/fail status, matched count, visible/hidden counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -669,7 +669,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when no selected element is visible."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_visibility_result", Required: true, Description: "Selector or locator query, expected state, pass/fail status, matched count, visible/hidden counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_visibility_result", Required: true, Description: "Selector or locator query, expected state, optional diff for failed state matches, pass/fail status, matched count, visible/hidden counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css; zero matches are allowed for hidden assertions."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting, omitted when a locator has zero matches."},
 			},
@@ -680,7 +680,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element is enabled."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, optional diff for failed state matches, pass/fail status, matched count, enabled/disabled counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -691,7 +691,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected elements are present and none are enabled."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, enabled/disabled counts, bounded item diagnostics with disabled reasons, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_enabled_result", Required: true, Description: "Selector, expected state, optional diff for failed state matches, pass/fail status, matched count, enabled/disabled counts, bounded item diagnostics with disabled reasons, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -702,7 +702,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element is editable."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, optional diff for failed state matches, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -713,7 +713,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected elements are present, none are editable, and at least one is read-only."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, bounded item diagnostics with read-only reasons, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, optional diff for failed state matches, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, bounded item diagnostics with read-only reasons, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -724,7 +724,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected checked-capable element is checked."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, optional diff for failed state matches, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -735,7 +735,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected checked-capable elements are present and none are checked."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, optional diff for failed state matches, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -746,7 +746,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected checked-capable element is indeterminate."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, optional diff for failed state matches, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
