@@ -38,6 +38,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp workflow hacker-news", want: []string{"hacker-news"}},
 		{path: "cdp workflow verify", want: []string{"workflow verify"}},
 		{path: "cdp workflow debug-bundle", want: []string{"debug-bundle"}},
+		{path: "cdp workflow action-capture", want: []string{"--evidence-out-dir"}},
 	}
 
 	for _, tt := range tests {

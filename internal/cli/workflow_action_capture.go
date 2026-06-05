@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	var waitBefore time.Duration
 	var waitAfter time.Duration
 	var outPath string
+	var evidenceOutDir string
 	var beforeScreenshot string
 	var afterScreenshot string
 	var limit int
@@ -115,6 +117,15 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 				}
 			}
 
+			evidenceOutDir = strings.TrimSpace(evidenceOutDir)
+			evidenceReport := map[string]any{}
+			if evidenceOutDir != "" {
+				beforeEvidence, beforeArtifacts, beforeErrors := collectActionCaptureEvidence(ctx, session, includeSet, evidenceOutDir, "before")
+				evidenceReport["before"] = beforeEvidence
+				artifacts = append(artifacts, beforeArtifacts...)
+				collectorErrors = append(collectorErrors, beforeErrors...)
+			}
+
 			actionStarted := time.Now().UTC().Format(time.RFC3339Nano)
 			actionResult, err := performActionCaptureAction(ctx, session, parsedAction)
 			if err != nil {
@@ -138,22 +149,34 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 					artifacts = append(artifacts, artifact)
 				}
 			}
+			if evidenceOutDir != "" {
+				afterEvidence, afterArtifacts, afterErrors := collectActionCaptureEvidence(ctx, session, includeSet, evidenceOutDir, "after")
+				evidenceReport["after"] = afterEvidence
+				artifacts = append(artifacts, afterArtifacts...)
+				collectorErrors = append(collectorErrors, afterErrors...)
+				evidenceReport["artifact_count"] = len(beforeAfterEvidenceArtifacts(evidenceReport))
+			}
 
+			workflowReport := map[string]any{
+				"name":               "action-capture",
+				"include":            setKeys(includeSet),
+				"wait_before":        durationString(waitBefore),
+				"wait_after":         durationString(waitAfter),
+				"before_at":          beforeAt,
+				"action_started_at":  actionStarted,
+				"action_finished_at": actionFinished,
+				"after_at":           afterAt,
+				"collector_errors":   collectorErrors,
+			}
 			report := map[string]any{
-				"ok":     true,
-				"target": pageRow(target),
-				"workflow": map[string]any{
-					"name":               "action-capture",
-					"include":            setKeys(includeSet),
-					"wait_before":        durationString(waitBefore),
-					"wait_after":         durationString(waitAfter),
-					"before_at":          beforeAt,
-					"action_started_at":  actionStarted,
-					"action_finished_at": actionFinished,
-					"after_at":           afterAt,
-					"collector_errors":   collectorErrors,
-				},
-				"action": actionResult,
+				"ok":       true,
+				"target":   pageRow(target),
+				"workflow": workflowReport,
+				"action":   actionResult,
+			}
+			if evidenceOutDir != "" {
+				report["evidence"] = evidenceReport
+				report["local_artifact_warning"] = "action capture artifacts may include local page content, headers, tokens, and message data; keep these artifacts local"
 			}
 			if len(artifacts) > 0 {
 				report["artifacts"] = artifacts
@@ -200,8 +223,9 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 					report["storage_diff"] = map[string]any{"has_diff": storageDiffHasChanges(diff), "diff": diff}
 				}
 			}
+			workflowReport["collector_errors"] = collectorErrors
 			if strings.TrimSpace(outPath) != "" {
-				report["local_artifact_warning"] = "action capture may include local page content, headers, tokens, and message data; keep this artifact local"
+				report["local_artifact_warning"] = "action capture artifacts may include local page content, headers, tokens, and message data; keep these artifacts local"
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
 					return commandError("internal", "internal", fmt.Sprintf("marshal action capture report: %v", err), ExitInternal, []string{"cdp workflow action-capture --json"})
@@ -228,6 +252,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&waitBefore, "wait-before", time.Second, "delay after arming collectors and before action")
 	cmd.Flags().DurationVar(&waitAfter, "wait-after", 5*time.Second, "delay after action before collecting evidence")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the unified JSON artifact")
+	cmd.Flags().StringVar(&evidenceOutDir, "evidence-out-dir", "", "optional directory for before/after text and DOM evidence artifacts")
 	cmd.Flags().StringVar(&beforeScreenshot, "before-screenshot", "", "optional before-action screenshot path")
 	cmd.Flags().StringVar(&afterScreenshot, "after-screenshot", "", "optional after-action screenshot path")
 	cmd.Flags().IntVar(&limit, "limit", 500, "maximum events per collector; use 0 for no limit")
@@ -327,6 +352,108 @@ func performActionCaptureAction(ctx context.Context, session *cdp.PageSession, a
 	default:
 		return nil, commandError("usage", "usage", "unsupported action type", ExitUsage, []string{"cdp workflow action-capture --action press:Enter --json"})
 	}
+}
+
+func collectActionCaptureEvidence(ctx context.Context, session *cdp.PageSession, includeSet map[string]bool, outDir, phase string) (map[string]any, []map[string]any, []map[string]string) {
+	capturedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	evidence := map[string]any{
+		"at":      capturedAt,
+		"out_dir": outDir,
+	}
+	artifacts := []map[string]any{}
+	collectorErrors := []map[string]string{}
+	if includeSet["text"] {
+		var text textResult
+		if err := evaluateJSONValue(ctx, session, textExpression("body", 1, 0), "action-capture "+phase+" text", &text); err != nil {
+			collectorErrors = append(collectorErrors, collectorError(phase+"_text", err))
+		} else {
+			artifact, err := writeActionCaptureEvidenceArtifact(outDir, phase, "text", map[string]any{
+				"phase":       phase,
+				"captured_at": capturedAt,
+				"collector":   "text",
+				"text":        text,
+			})
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError(phase+"_text_artifact", err))
+			} else {
+				evidence["text"] = map[string]any{
+					"selector": text.Selector,
+					"count":    text.Count,
+					"url":      text.URL,
+					"title":    text.Title,
+					"artifact": artifact,
+				}
+				artifacts = append(artifacts, artifact)
+			}
+		}
+	}
+	if includeSet["dom"] {
+		var dom htmlResult
+		if err := evaluateJSONValue(ctx, session, htmlExpression("body", 1, 20000), "action-capture "+phase+" dom", &dom); err != nil {
+			collectorErrors = append(collectorErrors, collectorError(phase+"_dom", err))
+		} else {
+			artifact, err := writeActionCaptureEvidenceArtifact(outDir, phase, "dom", map[string]any{
+				"phase":       phase,
+				"captured_at": capturedAt,
+				"collector":   "dom",
+				"dom":         dom,
+			})
+			if err != nil {
+				collectorErrors = append(collectorErrors, collectorError(phase+"_dom_artifact", err))
+			} else {
+				evidence["dom"] = map[string]any{
+					"selector": dom.Selector,
+					"count":    dom.Count,
+					"url":      dom.URL,
+					"title":    dom.Title,
+					"artifact": artifact,
+				}
+				artifacts = append(artifacts, artifact)
+			}
+		}
+	}
+	return evidence, artifacts, collectorErrors
+}
+
+func writeActionCaptureEvidenceArtifact(outDir, phase, collector string, payload any) (map[string]any, error) {
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, commandError("internal", "internal", fmt.Sprintf("marshal action capture %s %s evidence: %v", phase, collector, err), ExitInternal, []string{"cdp workflow action-capture --json"})
+	}
+	path := filepath.Join(outDir, fmt.Sprintf("action-capture.%s.%s.json", phase, collector))
+	writtenPath, err := writeArtifactFile(path, append(raw, '\n'))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"type":      "workflow-action-capture-" + phase + "-" + collector,
+		"path":      writtenPath,
+		"bytes":     len(raw) + 1,
+		"phase":     phase,
+		"collector": collector,
+	}, nil
+}
+
+func beforeAfterEvidenceArtifacts(evidence map[string]any) []map[string]any {
+	artifacts := []map[string]any{}
+	for _, phase := range []string{"before", "after"} {
+		phaseEvidence, ok := evidence[phase].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, collector := range []string{"text", "dom"} {
+			collectorEvidence, ok := phaseEvidence[collector].(map[string]any)
+			if !ok {
+				continue
+			}
+			artifact, ok := collectorEvidence["artifact"].(map[string]any)
+			if !ok {
+				continue
+			}
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	return artifacts
 }
 
 func captureWorkflowScreenshot(ctx context.Context, session *cdp.PageSession, outPath string, fullPage bool, artifactType string) (map[string]any, error) {

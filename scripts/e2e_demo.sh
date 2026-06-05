@@ -232,6 +232,14 @@ require_artifact "$rendered_dir/links.json"
   | jq -e '.ok == true and .html.count == 0 and (.warnings | length >= 1) and .diagnostics.selector_match_count == 0 and (.diagnostics.possible_causes | index("selector_matched_zero"))' >/dev/null
 "$binary" click "#action" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action" and .target.url == .after_target.url and .final_target.url == .after_target.url and .page_state.same_target == true and .page_state.url_changed == false and .actionability.actionable == true' >/dev/null
+action_capture_dir="$state_dir/action-capture"
+mkdir -p "$action_capture_dir"
+"$binary" workflow action-capture --action click:#action --state-dir "$state_dir/cdp-state" --wait-before 0s --wait-after 250ms --include dom,text --evidence-out-dir "$action_capture_dir" --json \
+  | jq -e --arg before "$action_capture_dir/action-capture.before.text.json" --arg after "$action_capture_dir/action-capture.after.dom.json" '.ok == true and .workflow.name == "action-capture" and .action.type == "click" and .evidence.artifact_count == 4 and .evidence.before.text.artifact.path == $before and .evidence.after.dom.artifact.path == $after and (.artifacts | length >= 4)' >/dev/null
+require_artifact "$action_capture_dir/action-capture.before.text.json"
+require_artifact "$action_capture_dir/action-capture.before.dom.json"
+require_artifact "$action_capture_dir/action-capture.after.text.json"
+require_artifact "$action_capture_dir/action-capture.after.dom.json"
 "$binary" fill "#agent-input" "filled value" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.value == "filled value" and .actionability.actionable == true' >/dev/null
 "$binary" type "#agent-input" " plus typed" --state-dir "$state_dir/cdp-state" --json \

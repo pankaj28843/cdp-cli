@@ -79,6 +79,7 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 
 	dir := t.TempDir()
 	outPath := filepath.Join(dir, "action.local.json")
+	evidenceDir := filepath.Join(dir, "evidence")
 	beforePath := filepath.Join(dir, "before.png")
 	afterPath := filepath.Join(dir, "after.png")
 	var out, errOut bytes.Buffer
@@ -91,6 +92,7 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		"--include", "network,websocket,console,dom,text,storage-diff",
 		"--before-screenshot", beforePath,
 		"--after-screenshot", afterPath,
+		"--evidence-out-dir", evidenceDir,
 		"--out", outPath,
 		"--json",
 	}, &out, &errOut, cli.BuildInfo{})
@@ -117,6 +119,41 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		StorageDiff struct {
 			HasDiff bool `json:"has_diff"`
 		} `json:"storage_diff"`
+		Evidence struct {
+			ArtifactCount int `json:"artifact_count"`
+			Before        struct {
+				Text struct {
+					Count    int `json:"count"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"text"`
+				DOM struct {
+					Count    int `json:"count"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"dom"`
+			} `json:"before"`
+			After struct {
+				Text struct {
+					Count    int `json:"count"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"text"`
+				DOM struct {
+					Count    int `json:"count"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"dom"`
+			} `json:"after"`
+		} `json:"evidence"`
 		Artifacts []struct {
 			Type string `json:"type"`
 			Path string `json:"path"`
@@ -133,6 +170,36 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 	}
 	if len(got.Requests) == 0 || len(got.WebSockets) == 0 || len(got.Messages) == 0 || got.Artifact.Path != outPath {
 		t.Fatalf("workflow action-capture collectors = %+v, want network, websocket, console, and artifact", got)
+	}
+	wantEvidence := map[string]string{
+		"workflow-action-capture-before-text": filepath.Join(evidenceDir, "action-capture.before.text.json"),
+		"workflow-action-capture-before-dom":  filepath.Join(evidenceDir, "action-capture.before.dom.json"),
+		"workflow-action-capture-after-text":  filepath.Join(evidenceDir, "action-capture.after.text.json"),
+		"workflow-action-capture-after-dom":   filepath.Join(evidenceDir, "action-capture.after.dom.json"),
+	}
+	if got.Evidence.ArtifactCount != len(wantEvidence) || got.Evidence.Before.Text.Count == 0 || got.Evidence.Before.DOM.Count == 0 || got.Evidence.After.Text.Count == 0 || got.Evidence.After.DOM.Count == 0 {
+		t.Fatalf("workflow action-capture evidence = %+v, want before/after text and DOM evidence", got.Evidence)
+	}
+	if got.Evidence.Before.Text.Artifact.Path != wantEvidence["workflow-action-capture-before-text"] || got.Evidence.After.DOM.Artifact.Path != wantEvidence["workflow-action-capture-after-dom"] {
+		t.Fatalf("workflow action-capture evidence paths = %+v, want stable before/after artifact paths", got.Evidence)
+	}
+	seenEvidence := map[string]string{}
+	for _, artifact := range got.Artifacts {
+		if _, ok := wantEvidence[artifact.Type]; ok {
+			seenEvidence[artifact.Type] = artifact.Path
+		}
+	}
+	for typ, path := range wantEvidence {
+		if seenEvidence[typ] != path {
+			t.Fatalf("workflow action-capture artifacts = %+v, missing %s at %s", got.Artifacts, typ, path)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("evidence artifact %s was not written: %v", path, err)
+		}
+		if !bytes.Contains(raw, []byte(`"phase"`)) || !bytes.Contains(raw, []byte(`"collector"`)) {
+			t.Fatalf("evidence artifact %s = %s, want phase and collector metadata", path, string(raw))
+		}
 	}
 	if _, err := os.Stat(beforePath); err != nil {
 		t.Fatalf("before screenshot was not written: %v", err)

@@ -943,7 +943,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "requests", Type: "array<network_capture_request>", Required: false, Description: "Network records observed during the action window."},
 				{Name: "websockets", Type: "array<network_capture_request>", Required: false, Description: "WebSocket records observed during the action window."},
 				{Name: "messages", Type: "array<console_message>", Required: false, Description: "Console/log messages observed during the action window."},
-				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Screenshot and JSON artifact references."},
+				{Name: "evidence", Type: "object", Required: false, Description: "Before/after text and DOM evidence summaries with artifact references when --evidence-out-dir is used."},
+				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Screenshot, before/after evidence, and JSON artifact references."},
 			},
 		},
 		"workflow-a11y": {
