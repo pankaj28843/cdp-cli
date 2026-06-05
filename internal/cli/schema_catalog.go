@@ -615,22 +615,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"assert-editable": {
 			Name:        "assert-editable",
-			Description: "Element editable assertion result for CSS selector or strict locator.",
+			Description: "Auto-retrying element editable assertion result for CSS selector or strict locator.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element is editable."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, and bounded item diagnostics."},
+				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
 		"assert-readonly": {
 			Name:        "assert-readonly",
-			Description: "Element read-only assertion result for CSS selector or strict locator.",
+			Description: "Auto-retrying element read-only assertion result for CSS selector or strict locator.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected elements are present, none are editable, and at least one is read-only."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, and bounded item diagnostics with read-only reasons."},
+				{Name: "assertion", Type: "assert_editable_result", Required: true, Description: "Selector, expected state, pass/fail status, matched count, editable/read-only/disabled/unsupported counts, bounded item diagnostics with read-only reasons, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},

@@ -571,8 +571,8 @@ func commandExamples(path string) []string {
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
 	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --timeout 5s --json", "cdp assert disabled 'Submit' --by role --role button --poll 100ms --json"}
-	examples["cdp assert editable"] = []string{"cdp assert editable 'input[name=email]' --json", "cdp assert editable 'Search' --by label --json"}
-	examples["cdp assert readonly"] = []string{"cdp assert readonly 'textarea[readonly]' --json", "cdp assert readonly 'Read-only notes' --by label --json"}
+	examples["cdp assert editable"] = []string{"cdp assert editable 'input[name=email]' --timeout 5s --json", "cdp assert editable 'Search' --by label --poll 100ms --json"}
+	examples["cdp assert readonly"] = []string{"cdp assert readonly 'textarea[readonly]' --timeout 5s --json", "cdp assert readonly 'Read-only notes' --by label --poll 100ms --json"}
 	examples["cdp assert checked"] = []string{"cdp assert checked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert checked Subscribe --by role --role checkbox --poll 100ms --json"}
 	examples["cdp assert unchecked"] = []string{"cdp assert unchecked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert unchecked '#subscribe' --poll 100ms --json"}
 

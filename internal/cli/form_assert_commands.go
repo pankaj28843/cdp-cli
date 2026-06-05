@@ -142,6 +142,9 @@ type assertEditableResult struct {
 	DisabledCount    int                  `json:"disabled_count"`
 	UnsupportedCount int                  `json:"unsupported_count"`
 	Items            []assertEditableItem `json:"items,omitempty"`
+	Attempts         int                  `json:"attempts,omitempty"`
+	ElapsedMS        int64                `json:"elapsed_ms,omitempty"`
+	PollInterval     string               `json:"poll_interval,omitempty"`
 	Error            *evalError           `json:"error,omitempty"`
 }
 
@@ -452,26 +455,30 @@ func (a *app) newAssertDisabledCommand() *cobra.Command {
 
 func (a *app) newAssertEditableCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var poll time.Duration
 	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{Use: "editable <selector-or-locator>", Short: "Assert an element is editable by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		return a.runAssertEditableCommand(cmd, args[0], "editable", locatorOpts, targetID, urlContains, titleContains)
+		return a.runAssertEditableCommand(cmd, args[0], "editable", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
 
 func (a *app) newAssertReadonlyCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var poll time.Duration
 	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{Use: "readonly <selector-or-locator>", Aliases: []string{"read-only"}, Short: "Assert an element is read-only by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		return a.runAssertEditableCommand(cmd, args[0], "readonly", locatorOpts, targetID, urlContains, titleContains)
+		return a.runAssertEditableCommand(cmd, args[0], "readonly", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
@@ -630,11 +637,14 @@ func waitForNextAssertionPoll(ctx context.Context, poll time.Duration) (bool, er
 	}
 }
 
-func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
+func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert editable 'Search' --by label --poll 250ms --json"})
+	}
 	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 		return err
 	}
-	ctx, cancel := a.browserCommandContext(cmd)
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
 	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 	if err != nil {
@@ -642,31 +652,104 @@ func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected strin
 	}
 	defer session.Close(ctx)
 
-	selector, locator, err := resolveActionSelector(ctx, session, query, locatorOpts, "assert "+expected)
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, locator, selector, err := waitForEditableAssertion(assertionCtx, session, query, expected, locatorOpts, poll, start)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		if strings.TrimSpace(selector) != "" {
+			report["resolved_selector"] = selector
+		}
+	}
 	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("%s assertion for %q did not pass before timeout: %v", expected, query, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, editableAssertionRemediations(query, selector, locatorOpts), report)
+		}
 		return err
 	}
-	var got assertEditableResult
-	if err := evaluateJSONValue(ctx, session, assertEditableExpression(selector, 20), "assert "+expected, &got); err != nil {
-		return err
+	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForEditableAssertion(ctx context.Context, session *cdp.PageSession, query, expected string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertEditableResult, *locatorFindResult, string, error) {
+	attempts := 0
+	last := assertEditableResult{Selector: query, Expected: expected, PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		selector := query
+		var locator *locatorFindResult
+		if opts.By != "css" {
+			var result locatorFindResult
+			if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert "+expected+" locator", &result); err != nil {
+				return last, lastLocator, lastSelector, err
+			}
+			locator = &result
+			lastLocator = locator
+			if result.Error != nil {
+				return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert %s locator %s %q: %s", expected, opts.By, query, result.Error.Message), ExitUsage, locatorActionRemediations("assert "+expected, query, opts))
+			}
+			if result.Count != 1 || len(result.Matches) != 1 || strings.TrimSpace(result.Matches[0].SelectorHint) == "" || result.Matches[0].SelectorAmbiguous {
+				last = editableAssertionPendingResult(query, expected, result.Count, attempts, start, poll)
+				lastSelector = ""
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+			selector = strings.TrimSpace(result.Matches[0].SelectorHint)
+			lastSelector = selector
+		}
+
+		var got assertEditableResult
+		if err := evaluateJSONValue(ctx, session, assertEditableExpression(selector, 20), "assert "+expected, &got); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		if got.Error != nil {
+			return got, locator, selector, invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'input[name=q]' --json")
+		}
+		finishEditableAssertionResult(&got, expected, attempts, start, poll)
+		last = got
+		lastLocator = locator
+		lastSelector = selector
+		if got.Passed {
+			return got, locator, selector, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
 	}
-	if got.Error != nil {
-		return invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'input[name=q]' --json")
-	}
+}
+
+func finishEditableAssertionResult(got *assertEditableResult, expected string, attempts int, start time.Time, poll time.Duration) {
 	got.Expected = expected
 	got.Passed = got.Editable
 	if expected == "readonly" {
 		got.Passed = got.ReadOnly
 	}
-	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
-	if locator != nil {
-		report["locator"] = locator
-		report["resolved_selector"] = selector
+	got.Attempts = attempts
+	got.ElapsedMS = time.Since(start).Milliseconds()
+	got.PollInterval = poll.String()
+}
+
+func editableAssertionPendingResult(query, expected string, count, attempts int, start time.Time, poll time.Duration) assertEditableResult {
+	return assertEditableResult{
+		Selector:         query,
+		Expected:         expected,
+		Editable:         false,
+		ReadOnly:         false,
+		Passed:           false,
+		Count:            count,
+		EditableCount:    0,
+		ReadOnlyCount:    0,
+		DisabledCount:    0,
+		UnsupportedCount: 0,
+		Attempts:         attempts,
+		ElapsedMS:        time.Since(start).Milliseconds(),
+		PollInterval:     poll.String(),
 	}
-	if !got.Passed {
-		return commandErrorWithData("assertion_failed", "check_failed", editableAssertionFailureMessage(expected, selector, got), ExitCheckFailed, []string{locatorActionFindCommand(query, locatorOpts), "cdp dom query " + shellQuote(selector) + " --json"}, report)
-	}
-	return a.render(ctx, "assertion passed", report)
 }
 
 func (a *app) runAssertEnabledCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
@@ -982,6 +1065,13 @@ func enabledAssertionRemediations(query, selector string, opts locatorActionOpti
 
 func editableAssertionFailureMessage(expected, selector string, got assertEditableResult) string {
 	return fmt.Sprintf("%s assertion failed for %q: %d editable, %d read-only, %d disabled, and %d unsupported of %d matched", expected, selector, got.EditableCount, got.ReadOnlyCount, got.DisabledCount, got.UnsupportedCount, got.Count)
+}
+
+func editableAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
+	if selector == "" {
+		selector = query
+	}
+	return []string{locatorActionFindCommand(query, opts), "cdp dom query " + shellQuote(selector) + " --json"}
 }
 
 func checkedAssertionFailureMessage(expected, selector string, got assertCheckedResult) string {

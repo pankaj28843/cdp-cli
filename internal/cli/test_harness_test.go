@@ -26,6 +26,8 @@ var fakeDelayedAssertVisibleAttempts atomic.Int64
 var fakeDelayedAssertHiddenAttempts atomic.Int64
 var fakeDelayedAssertEnabledAttempts atomic.Int64
 var fakeDelayedAssertDisabledAttempts atomic.Int64
+var fakeDelayedAssertEditableAttempts atomic.Int64
+var fakeDelayedAssertReadonlyAttempts atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -703,6 +705,23 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			placeholder = ""
 			readOnly = true
 		}
+		if query == "Delayed editable" {
+			selector = "input#delayed-editable"
+			tag = "input"
+			elementType = "text"
+			role = "textbox"
+			name = "Delayed editable"
+			placeholder = ""
+			readOnly = true
+		}
+		if query == "Delayed readonly" {
+			selector = "textarea#delayed-readonly"
+			tag = "textarea"
+			elementType = ""
+			role = "textbox"
+			name = "Delayed readonly"
+			placeholder = ""
+		}
 		if query == "Gone" {
 			return map[string]any{
 				"result": map[string]any{
@@ -1120,6 +1139,27 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			readOnly = true
 			readOnlyReason = []string{"native_readonly"}
 			nativeReadOnly = true
+		}
+		if selector == "input#delayed-editable" {
+			name = "Delayed editable"
+			editable = fakeDelayedAssertEditableAttempts.Add(1) >= 3
+			readOnly = !editable
+			if readOnly {
+				readOnlyReason = []string{"native_readonly"}
+				nativeReadOnly = true
+			}
+		}
+		if selector == "textarea#delayed-readonly" {
+			tag = "textarea"
+			elementType = ""
+			role = "textbox"
+			name = "Delayed readonly"
+			readOnly = fakeDelayedAssertReadonlyAttempts.Add(1) >= 3
+			editable = !readOnly
+			if readOnly {
+				readOnlyReason = []string{"native_readonly"}
+				nativeReadOnly = true
+			}
 		}
 		if selector == "button#submit" {
 			tag = "button"

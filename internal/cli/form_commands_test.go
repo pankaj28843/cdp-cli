@@ -942,15 +942,83 @@ func TestAssertReadonlyByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
-func TestAssertEditableFailureJSON(t *testing.T) {
+func TestAssertEditableRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertEditableAttempts.Store(0)
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "editable", "Read-only notes", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitCheckFailed {
-		t.Fatalf("assert editable readonly locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	code := cli.Execute(context.Background(), []string{"assert", "editable", "Delayed editable", "--by", "label", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert editable retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Editable     bool   `json:"editable"`
+			ReadOnly     bool   `json:"read_only"`
+			Passed       bool   `json:"passed"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert editable retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#delayed-editable" || got.Assertion.Selector != "input#delayed-editable" || got.Assertion.Expected != "editable" || !got.Assertion.Editable || got.Assertion.ReadOnly || !got.Assertion.Passed || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert editable retry = %+v, want retried editable assertion with timing evidence", got)
+	}
+}
+
+func TestAssertReadonlyRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertReadonlyAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "readonly", "Delayed readonly", "--by", "label", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert readonly retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Editable     bool   `json:"editable"`
+			ReadOnly     bool   `json:"read_only"`
+			Passed       bool   `json:"passed"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert readonly retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "textarea#delayed-readonly" || got.Assertion.Selector != "textarea#delayed-readonly" || got.Assertion.Expected != "readonly" || got.Assertion.Editable || !got.Assertion.ReadOnly || !got.Assertion.Passed || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert readonly retry = %+v, want retried read-only assertion with timing evidence", got)
+	}
+}
+
+func TestAssertEditableTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "editable", "Read-only notes", "--by", "label", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert editable readonly locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -966,14 +1034,55 @@ func TestAssertEditableFailureJSON(t *testing.T) {
 				Passed        bool   `json:"passed"`
 				EditableCount int    `json:"editable_count"`
 				ReadOnlyCount int    `json:"read_only_count"`
+				Attempts      int    `json:"attempts"`
+				ElapsedMS     int64  `json:"elapsed_ms"`
+				PollInterval  string `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("assert editable failure output is invalid JSON: %v", err)
+		t.Fatalf("assert editable timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "textarea#readonly-notes" || got.Data.Assertion.Selector != "textarea#readonly-notes" || got.Data.Assertion.Expected != "editable" || got.Data.Assertion.Editable || !got.Data.Assertion.ReadOnly || got.Data.Assertion.Passed || got.Data.Assertion.EditableCount != 0 || got.Data.Assertion.ReadOnlyCount != 1 {
-		t.Fatalf("assert editable failure = %+v, want failed editable assertion with read-only diagnostics", got)
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "textarea#readonly-notes" || got.Data.Assertion.Selector != "textarea#readonly-notes" || got.Data.Assertion.Expected != "editable" || got.Data.Assertion.Editable || !got.Data.Assertion.ReadOnly || got.Data.Assertion.Passed || got.Data.Assertion.EditableCount != 0 || got.Data.Assertion.ReadOnlyCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert editable timeout = %+v, want timeout with read-only diagnostics", got)
+	}
+}
+
+func TestAssertReadonlyTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "readonly", "Search", "--by", "label", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert readonly editable locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Selector      string `json:"selector"`
+				Expected      string `json:"expected"`
+				Editable      bool   `json:"editable"`
+				ReadOnly      bool   `json:"read_only"`
+				Passed        bool   `json:"passed"`
+				EditableCount int    `json:"editable_count"`
+				ReadOnlyCount int    `json:"read_only_count"`
+				Attempts      int    `json:"attempts"`
+				ElapsedMS     int64  `json:"elapsed_ms"`
+				PollInterval  string `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert readonly timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#q" || got.Data.Assertion.Selector != "input#q" || got.Data.Assertion.Expected != "readonly" || !got.Data.Assertion.Editable || got.Data.Assertion.ReadOnly || got.Data.Assertion.Passed || got.Data.Assertion.EditableCount != 1 || got.Data.Assertion.ReadOnlyCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert readonly timeout = %+v, want timeout with editable diagnostics", got)
 	}
 }
 
