@@ -334,6 +334,14 @@ func commandExamples(path string) []string {
 			"cdp wait eval 'window.__rendered === true' --timeout 10s --json",
 			"cdp wait eval 'document.readyState === \"complete\"' --poll 500ms --json",
 		},
+		"cdp wait request": {
+			"cdp wait request --match-url /api/search --method POST --timeout 10s --json",
+			"cdp wait request --url https://example.com/api --resource-type Fetch --json",
+		},
+		"cdp wait response": {
+			"cdp wait response --match-url /api/search --status 200 --timeout 10s --json",
+			"cdp wait response --method GET --status-min 200 --status-max 399 --json",
+		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",

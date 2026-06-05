@@ -478,12 +478,14 @@ func (a *app) newLayoutOverflowCommand() *cobra.Command {
 func (a *app) newWaitCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "wait",
-		Short: "Wait for page conditions",
+		Short: "Wait for page or network conditions",
 	}
 	cmd.AddCommand(a.newWaitTextCommand())
 	cmd.AddCommand(a.newWaitSelectorCommand())
 	cmd.AddCommand(a.newWaitLocatorCommand())
 	cmd.AddCommand(a.newWaitEvalCommand())
+	cmd.AddCommand(a.newWaitRequestCommand())
+	cmd.AddCommand(a.newWaitResponseCommand())
 	return cmd
 }
 

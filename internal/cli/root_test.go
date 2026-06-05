@@ -186,6 +186,166 @@ func TestNetworkJSON(t *testing.T) {
 	}
 }
 
+func TestWaitRequestJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "request", "--match-url", "/api", "--method", "POST", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait request exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				URLContains string `json:"url_contains"`
+				Method      string `json:"method"`
+			} `json:"criteria"`
+		} `json:"wait"`
+		Event struct {
+			Kind      string `json:"kind"`
+			CDPMethod string `json:"cdp_method"`
+			RequestID string `json:"request_id"`
+			URL       string `json:"url"`
+			Method    string `json:"method"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait request output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "request" || !got.Wait.Matched || got.Wait.Criteria.URLContains != "/api" || got.Wait.Criteria.Method != "POST" || got.Event.CDPMethod != "Network.requestWillBeSent" || got.Event.RequestID != "request-failed" || got.Event.Method != "POST" || got.Event.URL != "https://example.test/api" || got.Wait.ObservedCount < 2 {
+		t.Fatalf("wait request output = %+v, want matched POST /api request", got)
+	}
+}
+
+func TestWaitResponseJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "response", "--match-url", "/app", "--method", "GET", "--status", "200", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait response exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind     string `json:"kind"`
+			Matched  bool   `json:"matched"`
+			Criteria struct {
+				URLContains string `json:"url_contains"`
+				Method      string `json:"method"`
+				Status      int    `json:"status"`
+			} `json:"criteria"`
+			Evidence struct {
+				Headers bool `json:"headers"`
+				Bodies  bool `json:"bodies"`
+				Bounded bool `json:"bounded"`
+			} `json:"evidence"`
+		} `json:"wait"`
+		Event struct {
+			Kind      string `json:"kind"`
+			CDPMethod string `json:"cdp_method"`
+			RequestID string `json:"request_id"`
+			URL       string `json:"url"`
+			Method    string `json:"method"`
+			Status    int    `json:"status"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait response output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "response" || !got.Wait.Matched || got.Wait.Criteria.URLContains != "/app" || got.Wait.Criteria.Method != "GET" || got.Wait.Criteria.Status != 200 || got.Event.CDPMethod != "Network.responseReceived" || got.Event.RequestID != "request-ok" || got.Event.Method != "GET" || got.Event.Status != 200 {
+		t.Fatalf("wait response output = %+v, want matched GET 200 response", got)
+	}
+	if got.Wait.Evidence.Headers || got.Wait.Evidence.Bodies || !got.Wait.Evidence.Bounded {
+		t.Fatalf("wait response evidence = %+v, want bounded evidence without headers or bodies", got.Wait.Evidence)
+	}
+	if strings.Contains(got.Event.URL, "token=abc") {
+		t.Fatalf("wait response URL was not redacted: %q", got.Event.URL)
+	}
+}
+
+func TestWaitResponseTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--timeout", "20ms", "wait", "response", "--match-url", "does-not-exist", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait response timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Wait struct {
+				Kind          string `json:"kind"`
+				Matched       bool   `json:"matched"`
+				EventCount    int    `json:"event_count"`
+				ObservedCount int    `json:"observed_count"`
+				Criteria      struct {
+					URLContains string `json:"url_contains"`
+				} `json:"criteria"`
+			} `json:"wait"`
+			LastEvent struct {
+				Kind   string `json:"kind"`
+				Status int    `json:"status"`
+				URL    string `json:"url"`
+			} `json:"last_event"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait response timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "response" || got.Data.Wait.Matched || got.Data.Wait.Criteria.URLContains != "does-not-exist" || got.Data.Wait.EventCount == 0 || got.Data.Wait.ObservedCount == 0 || got.Data.LastEvent.Kind != "response" || got.Data.LastEvent.Status != 200 {
+		t.Fatalf("wait response timeout = %+v, want timeout with bounded wait evidence", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp network --wait 5s --json") {
+		t.Fatalf("wait response remediation commands = %+v, want network diagnostic command", got.RemediationCommands)
+	}
+	if strings.Contains(got.Data.LastEvent.URL, "token=abc") {
+		t.Fatalf("wait response timeout last URL was not redacted: %q", got.Data.LastEvent.URL)
+	}
+}
+
+func TestWaitNetworkUnsupportedRedactionJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "response", "--redact", "headers", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("wait response unsupported redaction exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait response unsupported redaction output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "--redact must be safe or none") {
+		t.Fatalf("wait response unsupported redaction = %+v, want usage error", got)
+	}
+}
+
 func TestNetworkFailedFilterJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
