@@ -194,6 +194,14 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 					} `json:"artifact"`
 				} `json:"console"`
 			} `json:"events"`
+			Manifest struct {
+				ReferencedArtifactCount int `json:"referenced_artifact_count"`
+				CollectorErrorCount     int `json:"collector_error_count"`
+				Artifact                struct {
+					Type string `json:"type"`
+					Path string `json:"path"`
+				} `json:"artifact"`
+			} `json:"manifest"`
 		} `json:"evidence"`
 		Artifacts []struct {
 			Type string `json:"type"`
@@ -222,6 +230,7 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		"workflow-action-capture-action-network":    filepath.Join(evidenceDir, "action-capture.action.network.json"),
 		"workflow-action-capture-action-websockets": filepath.Join(evidenceDir, "action-capture.action.websockets.json"),
 		"workflow-action-capture-action-console":    filepath.Join(evidenceDir, "action-capture.action.console.json"),
+		"workflow-action-capture-manifest":          filepath.Join(evidenceDir, "action-capture.manifest.json"),
 	}
 	if got.Evidence.ArtifactCount != len(wantEvidence) ||
 		got.Evidence.Before.Text.Count == 0 ||
@@ -232,7 +241,8 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		got.Evidence.After.A11y.Count == 0 ||
 		got.Evidence.Events.Network.Count == 0 ||
 		got.Evidence.Events.WebSockets.Count == 0 ||
-		got.Evidence.Events.Console.Count == 0 {
+		got.Evidence.Events.Console.Count == 0 ||
+		got.Evidence.Manifest.ReferencedArtifactCount != len(wantEvidence)+1 {
 		t.Fatalf("workflow action-capture evidence = %+v, want before/after and event evidence", got.Evidence)
 	}
 	if got.Evidence.Before.Text.Artifact.Path != wantEvidence["workflow-action-capture-before-text"] ||
@@ -240,7 +250,8 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		got.Evidence.Before.A11y.Artifact.Path != wantEvidence["workflow-action-capture-before-a11y"] ||
 		got.Evidence.After.A11y.Artifact.Path != wantEvidence["workflow-action-capture-after-a11y"] ||
 		got.Evidence.Events.Network.Artifact.Path != wantEvidence["workflow-action-capture-action-network"] ||
-		got.Evidence.Events.Console.Artifact.Path != wantEvidence["workflow-action-capture-action-console"] {
+		got.Evidence.Events.Console.Artifact.Path != wantEvidence["workflow-action-capture-action-console"] ||
+		got.Evidence.Manifest.Artifact.Path != wantEvidence["workflow-action-capture-manifest"] {
 		t.Fatalf("workflow action-capture evidence paths = %+v, want stable before/after artifact paths", got.Evidence)
 	}
 	seenEvidence := map[string]string{}
@@ -256,6 +267,15 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("evidence artifact %s was not written: %v", path, err)
+		}
+		if typ == "workflow-action-capture-manifest" {
+			if !bytes.Contains(raw, []byte(`"workflow"`)) ||
+				!bytes.Contains(raw, []byte(`"evidence"`)) ||
+				!bytes.Contains(raw, []byte(`"artifacts"`)) ||
+				bytes.Contains(raw, []byte(`"hello"`)) {
+				t.Fatalf("manifest artifact %s = %s, want manifest metadata without typed text payload", path, string(raw))
+			}
+			continue
 		}
 		if !bytes.Contains(raw, []byte(`"phase"`)) || !bytes.Contains(raw, []byte(`"collector"`)) {
 			t.Fatalf("evidence artifact %s = %s, want phase and collector metadata", path, string(raw))

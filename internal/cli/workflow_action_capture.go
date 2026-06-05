@@ -242,6 +242,23 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 				}
 			}
 			workflowReport["collector_errors"] = collectorErrors
+			if evidenceOutDir != "" {
+				manifestArtifact, err := writeActionCaptureManifestArtifact(evidenceOutDir, parsedAction, report, artifacts, collectorErrors)
+				if err != nil {
+					collectorErrors = append(collectorErrors, collectorError("manifest_artifact", err))
+					workflowReport["collector_errors"] = collectorErrors
+				} else {
+					evidenceReport["manifest"] = map[string]any{
+						"artifact":                  manifestArtifact,
+						"referenced_artifact_count": len(artifacts),
+						"collector_error_count":     len(collectorErrors),
+					}
+					artifacts = append(artifacts, manifestArtifact)
+					evidenceReport["artifact_count"] = len(actionCaptureEvidenceArtifacts(evidenceReport))
+					report["evidence"] = evidenceReport
+					report["artifacts"] = artifacts
+				}
+			}
 			if strings.TrimSpace(outPath) != "" {
 				report["local_artifact_warning"] = "action capture artifacts may include local page content, headers, tokens, and message data; keep these artifacts local"
 				b, err := json.MarshalIndent(report, "", "  ")
@@ -263,14 +280,14 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
-	cmd.Flags().StringVar(&include, "include", "network,websocket,console,dom,text", "comma-separated collectors: network,websocket,console,dom,text,all")
+	cmd.Flags().StringVar(&include, "include", "network,websocket,console,dom,text", "comma-separated collectors: network,websocket,console,dom,text,a11y,all")
 	cmd.Flags().StringVar(&action, "action", "", "action shorthand: click:<selector>, type:<text>, insert-text:<text>, or press:<key>")
 	cmd.Flags().StringVar(&actionJSON, "action-json", "", "JSON action object with type, selector, text/value, or key")
 	cmd.Flags().StringVar(&selector, "selector", "", "selector for click/type/insert-text or optional press focus target")
 	cmd.Flags().DurationVar(&waitBefore, "wait-before", time.Second, "delay after arming collectors and before action")
 	cmd.Flags().DurationVar(&waitAfter, "wait-after", 5*time.Second, "delay after action before collecting evidence")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the unified JSON artifact")
-	cmd.Flags().StringVar(&evidenceOutDir, "evidence-out-dir", "", "optional directory for before/after text, DOM, accessibility, and action event evidence artifacts")
+	cmd.Flags().StringVar(&evidenceOutDir, "evidence-out-dir", "", "optional directory for before/after text, DOM, accessibility, action event, and manifest artifacts")
 	cmd.Flags().StringVar(&beforeScreenshot, "before-screenshot", "", "optional before-action screenshot path")
 	cmd.Flags().StringVar(&afterScreenshot, "after-screenshot", "", "optional after-action screenshot path")
 	cmd.Flags().IntVar(&limit, "limit", 500, "maximum events per collector; use 0 for no limit")
@@ -483,6 +500,79 @@ func writeActionCaptureEvidenceArtifact(outDir, phase, collector string, payload
 	}, nil
 }
 
+func writeActionCaptureManifestArtifact(outDir string, action actionCaptureAction, report map[string]any, artifacts []map[string]any, collectorErrors []map[string]string) (map[string]any, error) {
+	payload := map[string]any{
+		"captured_at":      time.Now().UTC().Format(time.RFC3339Nano),
+		"workflow":         report["workflow"],
+		"target":           report["target"],
+		"action":           actionCaptureManifestAction(action),
+		"evidence":         report["evidence"],
+		"artifacts":        artifacts,
+		"collector_errors": collectorErrors,
+		"counts":           actionCaptureManifestCounts(report, artifacts, collectorErrors),
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, commandError("internal", "internal", fmt.Sprintf("marshal action capture manifest: %v", err), ExitInternal, []string{"cdp workflow action-capture --json"})
+	}
+	path := filepath.Join(outDir, "action-capture.manifest.json")
+	writtenPath, err := writeArtifactFile(path, append(raw, '\n'))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"type":      "workflow-action-capture-manifest",
+		"path":      writtenPath,
+		"bytes":     len(raw) + 1,
+		"collector": "manifest",
+	}, nil
+}
+
+func actionCaptureManifestAction(action actionCaptureAction) map[string]any {
+	summary := map[string]any{"type": action.Type}
+	if strings.TrimSpace(action.Selector) != "" {
+		summary["selector"] = action.Selector
+	}
+	if strings.TrimSpace(action.Key) != "" {
+		summary["key"] = action.Key
+	}
+	if action.Text != "" {
+		summary["text_length"] = len([]rune(action.Text))
+	}
+	return summary
+}
+
+func actionCaptureManifestCounts(report map[string]any, artifacts []map[string]any, collectorErrors []map[string]string) map[string]any {
+	counts := map[string]any{
+		"referenced_artifacts": len(artifacts),
+		"collector_errors":     len(collectorErrors),
+	}
+	if count := actionCaptureSliceLen(report["requests"]); count >= 0 {
+		counts["requests"] = count
+	}
+	if count := actionCaptureSliceLen(report["websockets"]); count >= 0 {
+		counts["websockets"] = count
+	}
+	if count := actionCaptureSliceLen(report["messages"]); count >= 0 {
+		counts["messages"] = count
+	}
+	counts["has_storage_diff"] = report["storage_diff"] != nil
+	return counts
+}
+
+func actionCaptureSliceLen(value any) int {
+	switch v := value.(type) {
+	case []networkCaptureRecord:
+		return len(v)
+	case []consoleMessage:
+		return len(v)
+	case []map[string]any:
+		return len(v)
+	default:
+		return -1
+	}
+}
+
 func collectActionCaptureEventEvidence(outDir, actionStarted, actionFinished string, includeSet map[string]bool, limit int, requests, websockets []networkCaptureRecord, messages []consoleMessage) (map[string]any, []map[string]any, []map[string]string) {
 	capturedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	window := map[string]any{
@@ -570,17 +660,23 @@ func actionCaptureEvidenceArtifacts(evidence map[string]any) []map[string]any {
 		}
 	}
 	eventsEvidence, ok := evidence["events"].(map[string]any)
-	if !ok {
-		return artifacts
-	}
-	for _, collector := range []string{"network", "websockets", "console"} {
-		collectorEvidence, ok := eventsEvidence[collector].(map[string]any)
-		if !ok {
-			continue
+	if ok {
+		for _, collector := range []string{"network", "websockets", "console"} {
+			collectorEvidence, ok := eventsEvidence[collector].(map[string]any)
+			if !ok {
+				continue
+			}
+			artifact, ok := collectorEvidence["artifact"].(map[string]any)
+			if !ok {
+				continue
+			}
+			artifacts = append(artifacts, artifact)
 		}
-		artifact, ok := collectorEvidence["artifact"].(map[string]any)
+	}
+	if manifestEvidence, ok := evidence["manifest"].(map[string]any); ok {
+		artifact, ok := manifestEvidence["artifact"].(map[string]any)
 		if !ok {
-			continue
+			return artifacts
 		}
 		artifacts = append(artifacts, artifact)
 	}
