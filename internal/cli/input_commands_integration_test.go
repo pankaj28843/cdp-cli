@@ -186,6 +186,67 @@ func TestClickActionabilityFailureJSON(t *testing.T) {
 	}
 }
 
+func TestClickAutoScrollsOffscreenTargetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "scroll-target", "--by", "test-id", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("offscreen click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Click            struct {
+			Selector string `json:"selector"`
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+		} `json:"click"`
+		AutoScroll struct {
+			Selector string `json:"selector"`
+			Scrolled bool   `json:"scrolled"`
+			Changed  bool   `json:"changed"`
+			Block    string `json:"block"`
+			Inline   string `json:"inline"`
+			Before   struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"before"`
+			After struct {
+				InViewport bool `json:"in_viewport"`
+			} `json:"after"`
+		} `json:"auto_scroll"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Checks     struct {
+				ReceivesEvents struct {
+					Passed bool `json:"passed"`
+				} `json:"receives_events"`
+				InViewport struct {
+					Passed bool `json:"passed"`
+				} `json:"in_viewport"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("offscreen click output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "clicked" || got.ResolvedSelector != "div#scroll-target" || got.Click.Selector != "div#scroll-target" || !got.Click.Clicked || got.Click.Strategy != "dom" {
+		t.Fatalf("offscreen click action = %+v, want clicked resolved target", got)
+	}
+	if got.AutoScroll.Selector != "div#scroll-target" || !got.AutoScroll.Scrolled || !got.AutoScroll.Changed || got.AutoScroll.Block != "center" || got.AutoScroll.Inline != "nearest" || got.AutoScroll.Before.InViewport || !got.AutoScroll.After.InViewport {
+		t.Fatalf("offscreen click auto_scroll = %+v, want before/after scroll evidence", got.AutoScroll)
+	}
+	if !got.Actionability.Actionable || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.InViewport.Passed {
+		t.Fatalf("offscreen click actionability = %+v, want rechecked actionability after auto-scroll", got.Actionability)
+	}
+}
+
 func TestClickForceSkipsReceivesEventsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

@@ -402,6 +402,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "page_state", Type: "action_page_state", Required: true, Description: "Before/after/final page metadata and URL/title change booleans."},
 				{Name: "click", Type: "click_result", Required: true, Description: "Selector, matched count, strategy, coordinates for raw-input or trial checks, verification status, trial/force flags, and final URL/title."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective actionability evidence for attached, visible, stable, receives-events, enabled, editable, in-viewport, force, and skipped-check state."},
+				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal click auto-scrolled an offscreen target before rechecking actionability."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before clicking."},
 				{Name: "verification", Type: "wait_result", Required: false, Description: "Post-click wait condition result when --wait-text or --wait-selector is used."},

@@ -281,6 +281,10 @@ printf 'synthetic upload\n' >"$upload_file"
   | jq -e '.ok == true and .action == "file_set" and .file.file_set == true and .actionability.actionable == true and .actionability.checks.visible.required == false and .actionability.checks.visible.skipped == true' >/dev/null
 "$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true' >/dev/null
+"$binary" click "scroll-target" --by test-id --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "clicked" and .resolved_selector == "button#scroll-target" and .click.clicked == true and .auto_scroll.before.in_viewport == false and .auto_scroll.after.in_viewport == true and .auto_scroll.changed == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
 "$binary" scroll "scroll-target" --by test-id --trial --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "trial" and .scroll.trial == true and .scroll.scrolled == false and .scroll.changed == false and .scroll.before.in_viewport == false and .scroll.after.in_viewport == false and .locator.strict == true and .resolved_selector == "button#scroll-target" and .actionability.actionable == true and .actionability.required_checks == ["attached","stable"] and .actionability.checks.stable.passed == true and .actionability.checks.visible.required == false and .actionability.checks.in_viewport.required == false' >/dev/null
 "$binary" scroll "scroll-target" --by test-id --block center --state-dir "$state_dir/cdp-state" --json \

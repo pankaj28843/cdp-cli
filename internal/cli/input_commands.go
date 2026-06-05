@@ -207,6 +207,24 @@ func (a *app) newClickCommand() *cobra.Command {
 				return invalidSelectorError(selector, actionability.Error, "cdp click main --trial --json")
 			}
 			prepareActionability(&actionability, "click", trial, force)
+			var autoScroll *scrollResult
+			if !trial && shouldAutoScrollBeforePointerAction("click", actionability) {
+				scrolled, err := autoScrollPointerTarget(ctx, session, selector)
+				if err != nil {
+					return err
+				}
+				autoScroll = &scrolled
+				if scrolled.Error == nil && scrolled.After.InViewport {
+					actionability, err = evaluateActionability(ctx, session, selector, "click")
+					if err != nil {
+						return err
+					}
+					if actionability.Error != nil {
+						return invalidSelectorError(selector, actionability.Error, "cdp click main --trial --json")
+					}
+					prepareActionability(&actionability, "click", trial, force)
+				}
+			}
 			if trial {
 				result := clickResult{
 					URL:      actionability.URL,
@@ -268,6 +286,9 @@ func (a *app) newClickCommand() *cobra.Command {
 				if locator != nil {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
+				}
+				if autoScroll != nil {
+					report["auto_scroll"] = autoScroll
 				}
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("click", selector, actionability), ExitCheckFailed, actionabilityRemediations("click", args[0], selector, locatorOpts), report)
 			}
@@ -338,6 +359,9 @@ func (a *app) newClickCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			if autoScroll != nil {
+				report["auto_scroll"] = autoScroll
+			}
 			if refreshErr != nil {
 				report["target_refresh"] = map[string]any{
 					"ok":        false,
@@ -351,6 +375,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			if strings.TrimSpace(diagnosticsOut) != "" {
 				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
+				if autoScroll != nil {
+					diagnostics["auto_scroll"] = autoScroll
+				}
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
 				if err != nil {

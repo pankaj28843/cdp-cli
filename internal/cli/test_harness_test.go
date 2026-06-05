@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -144,6 +145,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	var server *httptest.Server
 	targetInfos := append([]map[string]any(nil), targets...)
 	var createdTargets atomic.Int64
+	var scrolledSelectors sync.Map
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		if server == nil {
 			http.Error(w, "test server was not initialized", http.StatusInternalServerError)
@@ -615,7 +617,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					}
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
 				} else {
-					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID])
+					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
 					applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 				}
 			} else if req.Method == "Page.captureScreenshot" {
@@ -689,7 +691,7 @@ func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, p
 	}
 }
 
-func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool) map[string]any {
+func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool, scrolledSelectors *sync.Map) map[string]any {
 	var req struct {
 		Expression string `json:"expression"`
 	}
@@ -1790,8 +1792,15 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			tag = "div"
 			name = "Scroll target"
 			inViewport = false
+			receivesEvents = false
 			rect = map[string]any{"x": 20, "y": 1800, "width": 180, "height": 80}
-			point = map[string]any{"x": 110, "y": 1840, "hit_tag": "div", "hit_id": "scroll-target", "hit_role": "", "target_matches": true}
+			point = map[string]any{"x": 110, "y": 1840, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
+			if _, ok := scrolledSelectors.Load(selector); ok {
+				inViewport = true
+				receivesEvents = true
+				rect = map[string]any{"x": 20, "y": 260, "width": 180, "height": 80}
+				point = map[string]any{"x": 110, "y": 300, "hit_tag": "div", "hit_id": "scroll-target", "hit_role": "", "target_matches": true}
+			}
 		}
 		if selector == "#moving-target" {
 			tag = "div"
@@ -2575,6 +2584,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		changed := false
 		scrolled := false
 		if mutate {
+			scrolledSelectors.Store(selector, true)
 			after = map[string]any{
 				"rect":              map[string]any{"x": 20, "y": 260, "width": 180, "height": 80},
 				"in_viewport":       true,

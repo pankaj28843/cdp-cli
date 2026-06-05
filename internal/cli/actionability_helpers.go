@@ -148,6 +148,34 @@ func actionabilityFailureMessage(action, selector string, result actionabilityRe
 	return fmt.Sprintf("%s actionability failed for %q: %s", action, selector, strings.Join(failed, ", "))
 }
 
+func shouldAutoScrollBeforePointerAction(action string, result actionabilityResult) bool {
+	if action != "click" || result.Actionable || result.Checks == nil {
+		return false
+	}
+	inViewport, ok := result.Checks["in_viewport"]
+	if !ok || inViewport.Passed {
+		return false
+	}
+	for _, name := range []string{"attached", "visible", "stable", "enabled"} {
+		check, ok := result.Checks[name]
+		if !ok || !check.Passed {
+			return false
+		}
+	}
+	receives, ok := result.Checks["receives_events"]
+	return ok && !receives.Passed
+}
+
+func autoScrollPointerTarget(ctx context.Context, session *cdp.PageSession, selector string) (scrollResult, error) {
+	var result scrollResult
+	if err := evaluateJSONValue(ctx, session, scrollExpression(selector, "center", "nearest", true), "auto-scroll", &result); err != nil {
+		return scrollResult{}, err
+	}
+	result.Block = "center"
+	result.Inline = "nearest"
+	return result, nil
+}
+
 func failedActionabilityChecks(result actionabilityResult) []string {
 	failed := make([]string, 0, len(result.RequiredChecks))
 	for _, name := range result.RequiredChecks {
