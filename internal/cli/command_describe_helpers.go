@@ -574,6 +574,8 @@ func commandExamples(path string) []string {
 	examples["cdp assert attribute"] = []string{"cdp assert attribute 'button[type=submit]' data-state ready --mode exact --timeout 5s --json", "cdp assert attribute Checkout aria-expanded true --by role --role button --poll 100ms --json"}
 	examples["cdp assert focused"] = []string{"cdp assert focused 'input[name=q]' --timeout 5s --json", "cdp assert focused 'Search' --by label --poll 100ms --json"}
 	examples["cdp assert css"] = []string{"cdp assert css 'button[type=submit]' background-color 'rgb(20, 92, 160)' --mode exact --timeout 5s --json", "cdp assert css Checkout color 'rgb(255, 255, 255)' --by role --role button --poll 100ms --json"}
+	examples["cdp assert role"] = []string{"cdp assert role 'button[type=submit]' button --timeout 5s --json", "cdp assert role Checkout button --by role --role button --poll 100ms --json"}
+	examples["cdp assert name"] = []string{"cdp assert name 'button[type=submit]' Submit --mode exact --timeout 5s --json", "cdp assert name Checkout Checkout --by role --role button --poll 100ms --json"}
 	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
 	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}
@@ -582,6 +584,7 @@ func commandExamples(path string) []string {
 	examples["cdp assert readonly"] = []string{"cdp assert readonly 'textarea[readonly]' --timeout 5s --json", "cdp assert readonly 'Read-only notes' --by label --poll 100ms --json"}
 	examples["cdp assert checked"] = []string{"cdp assert checked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert checked Subscribe --by role --role checkbox --poll 100ms --json"}
 	examples["cdp assert unchecked"] = []string{"cdp assert unchecked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert unchecked '#subscribe' --poll 100ms --json"}
+	examples["cdp assert indeterminate"] = []string{"cdp assert indeterminate '#partial-selection' --timeout 5s --json", "cdp assert indeterminate 'Partial selection' --by role --role checkbox --poll 100ms --json"}
 
 	return examples[path]
 }

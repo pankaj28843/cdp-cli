@@ -173,6 +173,34 @@ type assertCSSResult struct {
 	Error        *evalError `json:"error,omitempty"`
 }
 
+type assertAccessibleResult struct {
+	Query        string                 `json:"query,omitempty"`
+	Selector     string                 `json:"selector,omitempty"`
+	Field        string                 `json:"field"`
+	Expected     string                 `json:"expected"`
+	Actual       string                 `json:"actual"`
+	Mode         string                 `json:"mode"`
+	Passed       bool                   `json:"passed"`
+	Count        int                    `json:"count"`
+	Items        []assertAccessibleItem `json:"items,omitempty"`
+	Attempts     int                    `json:"attempts,omitempty"`
+	ElapsedMS    int64                  `json:"elapsed_ms,omitempty"`
+	PollInterval string                 `json:"poll_interval,omitempty"`
+	Error        *evalError             `json:"error,omitempty"`
+}
+
+type assertAccessibleItem struct {
+	Index        int          `json:"index"`
+	SelectorHint string       `json:"selector_hint,omitempty"`
+	Tag          string       `json:"tag"`
+	ID           string       `json:"id,omitempty"`
+	Type         string       `json:"type,omitempty"`
+	Role         string       `json:"role,omitempty"`
+	Name         string       `json:"name,omitempty"`
+	Visible      bool         `json:"visible"`
+	Rect         snapshotRect `json:"rect"`
+}
+
 type assertVisibilityResult struct {
 	Selector     string                 `json:"selector"`
 	Expected     string                 `json:"expected"`
@@ -277,20 +305,22 @@ type assertEditableItem struct {
 }
 
 type assertCheckedResult struct {
-	Selector         string              `json:"selector"`
-	Expected         string              `json:"expected"`
-	Checked          bool                `json:"checked"`
-	Unchecked        bool                `json:"unchecked"`
-	Passed           bool                `json:"passed"`
-	Count            int                 `json:"count"`
-	CheckedCount     int                 `json:"checked_count"`
-	UncheckedCount   int                 `json:"unchecked_count"`
-	UnsupportedCount int                 `json:"unsupported_count"`
-	Items            []assertCheckedItem `json:"items,omitempty"`
-	Attempts         int                 `json:"attempts,omitempty"`
-	ElapsedMS        int64               `json:"elapsed_ms,omitempty"`
-	PollInterval     string              `json:"poll_interval,omitempty"`
-	Error            *evalError          `json:"error,omitempty"`
+	Selector           string              `json:"selector"`
+	Expected           string              `json:"expected"`
+	Checked            bool                `json:"checked"`
+	Unchecked          bool                `json:"unchecked"`
+	Indeterminate      bool                `json:"indeterminate"`
+	Passed             bool                `json:"passed"`
+	Count              int                 `json:"count"`
+	CheckedCount       int                 `json:"checked_count"`
+	UncheckedCount     int                 `json:"unchecked_count"`
+	IndeterminateCount int                 `json:"indeterminate_count"`
+	UnsupportedCount   int                 `json:"unsupported_count"`
+	Items              []assertCheckedItem `json:"items,omitempty"`
+	Attempts           int                 `json:"attempts,omitempty"`
+	ElapsedMS          int64               `json:"elapsed_ms,omitempty"`
+	PollInterval       string              `json:"poll_interval,omitempty"`
+	Error              *evalError          `json:"error,omitempty"`
 }
 
 type assertCheckedItem struct {
@@ -301,6 +331,7 @@ type assertCheckedItem struct {
 	Role            string       `json:"role,omitempty"`
 	Name            string       `json:"name,omitempty"`
 	Checked         bool         `json:"checked"`
+	Indeterminate   bool         `json:"indeterminate"`
 	SupportsChecked bool         `json:"supports_checked"`
 	AriaChecked     string       `json:"aria_checked,omitempty"`
 	Visible         bool         `json:"visible"`
@@ -379,6 +410,8 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertAttributeCommand())
 	cmd.AddCommand(a.newAssertFocusedCommand())
 	cmd.AddCommand(a.newAssertCSSCommand())
+	cmd.AddCommand(a.newAssertRoleCommand())
+	cmd.AddCommand(a.newAssertNameCommand())
 	cmd.AddCommand(a.newAssertVisibleCommand())
 	cmd.AddCommand(a.newAssertHiddenCommand())
 	cmd.AddCommand(a.newAssertEnabledCommand())
@@ -387,6 +420,7 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertReadonlyCommand())
 	cmd.AddCommand(a.newAssertCheckedCommand())
 	cmd.AddCommand(a.newAssertUncheckedCommand())
+	cmd.AddCommand(a.newAssertIndeterminateCommand())
 	return cmd
 }
 
@@ -860,6 +894,46 @@ func (a *app) newAssertCSSCommand() *cobra.Command {
 			return commandError("usage", "usage", "<property> must be a simple CSS property name", ExitUsage, []string{"cdp assert css button background-color 'rgb(20, 92, 160)' --json"})
 		}
 		return a.runAssertCSSCommand(cmd, args[0], property, args[2], mode, locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) newAssertRoleCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, mode string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "role <selector-or-locator> <expected-role>", Short: "Assert an element accessible role by CSS selector or strict locator", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		expected := strings.TrimSpace(args[1])
+		if expected == "" {
+			return commandError("usage", "usage", "<expected-role> must not be empty", ExitUsage, []string{"cdp assert role button button --json"})
+		}
+		return a.runAssertAccessibleCommand(cmd, "role", args[0], expected, mode, locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
+func (a *app) newAssertNameCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, mode string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "name <selector-or-locator> <expected-name>", Aliases: []string{"accessible-name"}, Short: "Assert an element accessible name by CSS selector or strict locator", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		expected := strings.TrimSpace(args[1])
+		if expected == "" {
+			return commandError("usage", "usage", "<expected-name> must not be empty", ExitUsage, []string{"cdp assert name button Submit --json"})
+		}
+		return a.runAssertAccessibleCommand(cmd, "name", args[0], expected, mode, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
@@ -1378,6 +1452,146 @@ func cssAssertionPendingResult(query, property, expected, mode string, count, at
 	}
 }
 
+func (a *app) runAssertAccessibleCommand(cmd *cobra.Command, field, query, expected, mode string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert name Submit Submit --by role --role button --poll 250ms --json"})
+	}
+	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+		return err
+	}
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, locator, selector, err := waitForAccessibleAssertion(assertionCtx, session, field, query, expected, mode, locatorOpts, poll, start)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil && locatorOpts.By != "css" {
+		report["locator"] = locator
+	}
+	if strings.TrimSpace(selector) != "" {
+		report["resolved_selector"] = selector
+	}
+	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("accessible %s assertion for %q did not pass before timeout: %v", field, query, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, accessibleAssertionRemediations(field, query, expected, mode, selector, locatorOpts), report)
+		}
+		return err
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForAccessibleAssertion(ctx context.Context, session *cdp.PageSession, field, query, expected, mode string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertAccessibleResult, *locatorFindResult, string, error) {
+	attempts := 0
+	normalizedMode := normalizeAssertMode(mode)
+	last := assertAccessibleResult{Query: query, Selector: query, Field: field, Expected: expected, Mode: normalizedMode, PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		var got locatorFindResult
+		if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert accessible "+field, &got); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		locator := &got
+		lastLocator = locator
+		if got.Error != nil {
+			if opts.By == "css" {
+				result := accessibleAssertionResultFromLocator(field, query, expected, normalizedMode, got, attempts, start, poll)
+				return result, nil, query, invalidSelectorError(query, got.Error, "cdp assert "+field+" button "+shellQuote(expected)+" --json")
+			}
+			return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert %s locator %s %q: %s", field, opts.By, query, got.Error.Message), ExitUsage, accessibleAssertionRemediations(field, query, expected, normalizedMode, "", opts))
+		}
+		result := accessibleAssertionResultFromLocator(field, query, expected, normalizedMode, got, attempts, start, poll)
+		if got.Count == 1 && len(got.Matches) == 1 {
+			match := got.Matches[0]
+			selector := strings.TrimSpace(match.SelectorHint)
+			if selector != "" && !match.SelectorAmbiguous {
+				result.Selector = selector
+				result.Actual = accessibleFieldValue(match, field)
+				passed, err := assertionMatch(result.Actual, expected, normalizedMode)
+				if err != nil {
+					return last, lastLocator, lastSelector, err
+				}
+				result.Passed = passed
+				last = result
+				lastSelector = selector
+				if result.Passed {
+					return result, locator, selector, nil
+				}
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+		}
+		last = result
+		lastSelector = ""
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
+	}
+}
+
+func accessibleAssertionResultFromLocator(field, query, expected, mode string, got locatorFindResult, attempts int, start time.Time, poll time.Duration) assertAccessibleResult {
+	result := assertAccessibleResult{
+		Query:        query,
+		Selector:     query,
+		Field:        field,
+		Expected:     expected,
+		Mode:         normalizeAssertMode(mode),
+		Passed:       false,
+		Count:        got.Count,
+		Items:        accessibleAssertionItemsFromLocator(got.Matches),
+		Error:        got.Error,
+		Attempts:     attempts,
+		ElapsedMS:    time.Since(start).Milliseconds(),
+		PollInterval: poll.String(),
+	}
+	if got.Count == 1 && len(got.Matches) == 1 {
+		result.Actual = accessibleFieldValue(got.Matches[0], field)
+	}
+	return result
+}
+
+func accessibleAssertionItemsFromLocator(matches []locatorMatch) []assertAccessibleItem {
+	if len(matches) == 0 {
+		return nil
+	}
+	items := make([]assertAccessibleItem, 0, len(matches))
+	for _, match := range matches {
+		items = append(items, assertAccessibleItem{
+			Index:        match.Index,
+			SelectorHint: match.SelectorHint,
+			Tag:          match.Tag,
+			ID:           locatorMatchID(match.SelectorHint),
+			Type:         match.Type,
+			Role:         match.Role,
+			Name:         match.Name,
+			Visible:      match.Visible,
+			Rect:         match.Rect,
+		})
+	}
+	return items
+}
+
+func accessibleFieldValue(match locatorMatch, field string) string {
+	switch field {
+	case "role":
+		return strings.TrimSpace(match.Role)
+	case "name":
+		return strings.TrimSpace(match.Name)
+	default:
+		return ""
+	}
+}
+
 func (a *app) newAssertVisibleCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	var poll time.Duration
@@ -1498,6 +1712,21 @@ func (a *app) newAssertUncheckedCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newAssertIndeterminateCommand() *cobra.Command {
+	var targetID, urlContains, titleContains string
+	var poll time.Duration
+	var locatorOpts locatorActionOptions
+	cmd := &cobra.Command{Use: "indeterminate <selector-or-locator>", Short: "Assert a checkbox or aria-checked element is indeterminate by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertCheckedCommand(cmd, args[0], "indeterminate", locatorOpts, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	return cmd
+}
+
 func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert checked 'Subscribe to newsletter' --by label --poll 250ms --json"})
@@ -1589,6 +1818,8 @@ func finishCheckedAssertionResult(got *assertCheckedResult, expected string, att
 	got.Passed = got.Checked
 	if expected == "unchecked" {
 		got.Passed = got.Unchecked
+	} else if expected == "indeterminate" {
+		got.Passed = got.Indeterminate
 	}
 	got.Attempts = attempts
 	got.ElapsedMS = time.Since(start).Milliseconds()
@@ -1597,17 +1828,19 @@ func finishCheckedAssertionResult(got *assertCheckedResult, expected string, att
 
 func checkedAssertionPendingResult(query, expected string, count, attempts int, start time.Time, poll time.Duration) assertCheckedResult {
 	return assertCheckedResult{
-		Selector:       query,
-		Expected:       expected,
-		Checked:        false,
-		Unchecked:      false,
-		Passed:         false,
-		Count:          count,
-		Attempts:       attempts,
-		ElapsedMS:      time.Since(start).Milliseconds(),
-		PollInterval:   poll.String(),
-		CheckedCount:   0,
-		UncheckedCount: 0,
+		Selector:           query,
+		Expected:           expected,
+		Checked:            false,
+		Unchecked:          false,
+		Indeterminate:      false,
+		Passed:             false,
+		Count:              count,
+		Attempts:           attempts,
+		ElapsedMS:          time.Since(start).Milliseconds(),
+		PollInterval:       poll.String(),
+		CheckedCount:       0,
+		UncheckedCount:     0,
+		IndeterminateCount: 0,
 	}
 }
 
@@ -2084,7 +2317,7 @@ func editableAssertionRemediations(query, selector string, opts locatorActionOpt
 }
 
 func checkedAssertionFailureMessage(expected, selector string, got assertCheckedResult) string {
-	return fmt.Sprintf("%s assertion failed for %q: %d checked, %d unchecked, and %d unsupported of %d matched", expected, selector, got.CheckedCount, got.UncheckedCount, got.UnsupportedCount, got.Count)
+	return fmt.Sprintf("%s assertion failed for %q: %d checked, %d unchecked, %d indeterminate, and %d unsupported of %d matched", expected, selector, got.CheckedCount, got.UncheckedCount, got.IndeterminateCount, got.UnsupportedCount, got.Count)
 }
 
 func checkedAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
@@ -2160,6 +2393,24 @@ func cssAssertionRemediations(query, property, expected, mode, selector string, 
 
 func cssAssertionCommand(query, property, expected, mode string, opts locatorActionOptions) string {
 	command := "cdp assert css " + shellQuote(query) + " " + shellQuote(property) + " " + shellQuote(expected) + " --mode " + shellQuote(normalizeAssertMode(mode))
+	return command + locatorAssertionFlagSuffix(opts) + " --json"
+}
+
+func accessibleAssertionRemediations(field, query, expected, mode, selector string, opts locatorActionOptions) []string {
+	commands := []string{}
+	if opts.By != "css" {
+		commands = append(commands, locatorActionFindCommand(query, opts))
+	}
+	if strings.TrimSpace(selector) == "" {
+		selector = query
+	}
+	commands = append(commands, "cdp a11y node "+shellQuote(selector)+" --json")
+	commands = append(commands, accessibleAssertionCommand(field, query, expected, mode, opts))
+	return commands
+}
+
+func accessibleAssertionCommand(field, query, expected, mode string, opts locatorActionOptions) string {
+	command := "cdp assert " + field + " " + shellQuote(query) + " " + shellQuote(expected) + " --mode " + shellQuote(normalizeAssertMode(mode))
 	return command + locatorAssertionFlagSuffix(opts) + " --json"
 }
 
@@ -2679,10 +2930,11 @@ func assertCheckedExpression(selector string, limit int) string {
     const aria = !native && (role === "checkbox" || role === "switch" || role === "radio");
     const ariaChecked = String(el.getAttribute("aria-checked") || "").toLowerCase();
     if (!native && !aria) {
-      return { supportsChecked: false, tag, type, role, checked: false, ariaChecked: ariaChecked || "" };
+      return { supportsChecked: false, tag, type, role, checked: false, indeterminate: false, ariaChecked: ariaChecked || "" };
     }
+    const indeterminate = native ? (type === "checkbox" && Boolean(el.indeterminate)) : ariaChecked === "mixed";
     const checked = native ? Boolean(el.checked) : ariaChecked === "true";
-    return { supportsChecked: true, tag, type, role, checked, ariaChecked: aria ? ariaChecked : "" };
+    return { supportsChecked: true, tag, type, role, checked, indeterminate, ariaChecked: aria ? ariaChecked : "" };
   };
   const itemFor = (el, index) => {
     const state = stateOf(el);
@@ -2695,6 +2947,7 @@ func assertCheckedExpression(selector string, limit int) string {
       role: state.role,
       name: nameOf(el).slice(0, 240),
       checked: state.checked,
+      indeterminate: state.indeterminate,
       supports_checked: state.supportsChecked,
       aria_checked: state.ariaChecked,
       visible: visibility.visible,
@@ -2705,12 +2958,13 @@ func assertCheckedExpression(selector string, limit int) string {
   try {
     elements = Array.from(document.querySelectorAll(selector));
   } catch (error) {
-    return { url: location.href, title: document.title, selector, expected: "checked", checked: false, unchecked: false, passed: false, count: 0, checked_count: 0, unchecked_count: 0, unsupported_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
+    return { url: location.href, title: document.title, selector, expected: "checked", checked: false, unchecked: false, indeterminate: false, passed: false, count: 0, checked_count: 0, unchecked_count: 0, indeterminate_count: 0, unsupported_count: 0, items: [], error: { name: error.name, message: error.message }, marker };
   }
   const allItems = elements.map(itemFor);
   const supported = allItems.filter((item) => item.supports_checked);
-  const checkedCount = supported.filter((item) => item.checked).length;
-  const uncheckedCount = supported.length - checkedCount;
+  const checkedCount = supported.filter((item) => item.checked && !item.indeterminate).length;
+  const indeterminateCount = supported.filter((item) => item.indeterminate).length;
+  const uncheckedCount = supported.length - checkedCount - indeterminateCount;
   const unsupportedCount = allItems.length - supported.length;
   return {
     url: location.href,
@@ -2718,11 +2972,13 @@ func assertCheckedExpression(selector string, limit int) string {
     selector,
     expected: "checked",
     checked: checkedCount > 0,
-    unchecked: supported.length > 0 && checkedCount === 0,
+    unchecked: supported.length > 0 && checkedCount === 0 && indeterminateCount === 0,
+    indeterminate: indeterminateCount > 0,
     passed: checkedCount > 0,
     count: allItems.length,
     checked_count: checkedCount,
     unchecked_count: uncheckedCount,
+    indeterminate_count: indeterminateCount,
     unsupported_count: unsupportedCount,
     items: allItems.slice(0, limit),
     marker

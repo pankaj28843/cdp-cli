@@ -36,6 +36,8 @@ var fakeDelayedAssertCountAttempts atomic.Int64
 var fakeDelayedAssertAttributeAttempts atomic.Int64
 var fakeDelayedAssertFocusedAttempts atomic.Int64
 var fakeDelayedAssertCSSAttempts atomic.Int64
+var fakeDelayedAssertRoleAttempts atomic.Int64
+var fakeDelayedAssertNameAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
@@ -754,6 +756,36 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			elementType = "button"
 			role = "button"
 			name = "Checkout"
+			placeholder = ""
+		}
+		if query == "Delayed role" {
+			selector = "button#delayed-role"
+			tag = "button"
+			elementType = "button"
+			role = "status"
+			name = "Delayed role"
+			placeholder = ""
+			if fakeDelayedAssertRoleAttempts.Add(1) >= 3 {
+				role = "button"
+			}
+		}
+		if query == "Delayed name" {
+			selector = "button#delayed-name"
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Pending name"
+			placeholder = ""
+			if fakeDelayedAssertNameAttempts.Add(1) >= 3 {
+				name = "Ready name"
+			}
+		}
+		if query == "Partial selection" {
+			selector = "input#partial-selection"
+			tag = "input"
+			elementType = "checkbox"
+			role = "checkbox"
+			name = "Partial selection"
 			placeholder = ""
 		}
 		if query == "Cart item" {
@@ -1888,10 +1920,16 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			selector = "input#subscribe"
 		}
 		checked := true
+		indeterminate := false
 		name := "Subscribe to newsletter"
 		if selector == "input#optional-updates" {
 			checked = false
 			name = "Optional updates"
+		}
+		if selector == "input#partial-selection" {
+			checked = false
+			indeterminate = true
+			name = "Partial selection"
 		}
 		if selector == "input#delayed-check" {
 			checked = fakeDelayedAssertCheckedAttempts.Add(1) >= 3
@@ -1906,35 +1944,45 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			"role":             "checkbox",
 			"name":             name,
 			"checked":          checked,
+			"indeterminate":    indeterminate,
 			"supports_checked": true,
 			"visible":          true,
 			"rect":             map[string]any{"x": 10, "y": 170, "width": 20, "height": 20},
 		}}
 		checkedCount := 0
 		uncheckedCount := 1
+		indeterminateCount := 0
+		if indeterminate {
+			indeterminateCount = 1
+			uncheckedCount = 0
+		}
 		if checked {
 			checkedCount = 1
 			uncheckedCount = 0
+			indeterminateCount = 0
 		}
 		if selector == "#missing" {
 			count = 0
 			checkedCount = 0
 			uncheckedCount = 0
+			indeterminateCount = 0
 			items = nil
 		}
 		out := map[string]any{
-			"url":               "https://example.test/app",
-			"title":             "Example App",
-			"selector":          selector,
-			"expected":          "checked",
-			"checked":           checkedCount > 0,
-			"unchecked":         count > 0 && checkedCount == 0,
-			"passed":            checkedCount > 0,
-			"count":             count,
-			"checked_count":     checkedCount,
-			"unchecked_count":   uncheckedCount,
-			"unsupported_count": 0,
-			"items":             items,
+			"url":                 "https://example.test/app",
+			"title":               "Example App",
+			"selector":            selector,
+			"expected":            "checked",
+			"checked":             checkedCount > 0,
+			"unchecked":           count > 0 && checkedCount == 0 && indeterminateCount == 0,
+			"indeterminate":       indeterminateCount > 0,
+			"passed":              checkedCount > 0,
+			"count":               count,
+			"checked_count":       checkedCount,
+			"unchecked_count":     uncheckedCount,
+			"indeterminate_count": indeterminateCount,
+			"unsupported_count":   0,
+			"items":               items,
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "value": out}}
 	}

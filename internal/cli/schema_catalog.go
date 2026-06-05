@@ -630,6 +630,28 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
+		"assert-role": {
+			Name:        "assert-role",
+			Description: "Auto-retrying accessible-role assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the accessible role assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_accessible_result", Required: true, Description: "Selector or locator query, field name, expected role, actual role, match mode, matched count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
+		"assert-name": {
+			Name:        "assert-name",
+			Description: "Auto-retrying accessible-name assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the accessible name assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_accessible_result", Required: true, Description: "Selector or locator query, field name, expected accessible name, actual accessible name, match mode, matched count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
 		"assert-visible": {
 			Name:        "assert-visible",
 			Description: "Auto-retrying element visibility assertion result for CSS selector or strict locator.",
@@ -702,7 +724,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected checked-capable element is checked."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked booleans, pass/fail status, matched count, checked/unchecked counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
@@ -713,7 +735,18 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected checked-capable elements are present and none are checked."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked booleans, pass/fail status, matched count, checked/unchecked counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
+		"assert-indeterminate": {
+			Name:        "assert-indeterminate",
+			Description: "Auto-retrying indeterminate checked-state assertion result for native checkbox indeterminate state or aria-checked mixed.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected checked-capable element is indeterminate."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked/indeterminate booleans, pass/fail status, matched count, checked/unchecked/indeterminate counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},

@@ -793,6 +793,196 @@ func TestAssertCSSTimeoutJSON(t *testing.T) {
 	}
 }
 
+func TestAssertRoleByTextRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertRoleAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "role", "Delayed role", "button", "--by", "text", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert role retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+				Name         string `json:"name"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Assertion struct {
+			Query        string `json:"query"`
+			Selector     string `json:"selector"`
+			Field        string `json:"field"`
+			Expected     string `json:"expected"`
+			Actual       string `json:"actual"`
+			Mode         string `json:"mode"`
+			Passed       bool   `json:"passed"`
+			Count        int    `json:"count"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert role retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#delayed-role" || got.Locator.By != "text" || got.Locator.Query != "Delayed role" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].Role != "button" || got.Assertion.Query != "Delayed role" || got.Assertion.Selector != "button#delayed-role" || got.Assertion.Field != "role" || got.Assertion.Expected != "button" || got.Assertion.Actual != "button" || got.Assertion.Mode != "exact" || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert role retry = %+v, want retried accessible role assertion", got)
+	}
+}
+
+func TestAssertNameByRoleRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertNameAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "name", "Delayed name", "Ready name", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert name retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Role    string `json:"role"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+				Name         string `json:"name"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Assertion struct {
+			Query        string `json:"query"`
+			Selector     string `json:"selector"`
+			Field        string `json:"field"`
+			Expected     string `json:"expected"`
+			Actual       string `json:"actual"`
+			Mode         string `json:"mode"`
+			Passed       bool   `json:"passed"`
+			Count        int    `json:"count"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert name retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#delayed-name" || got.Locator.By != "role" || got.Locator.Query != "Delayed name" || got.Locator.Role != "button" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].Name != "Ready name" || got.Assertion.Query != "Delayed name" || got.Assertion.Selector != "button#delayed-name" || got.Assertion.Field != "name" || got.Assertion.Expected != "Ready name" || got.Assertion.Actual != "Ready name" || got.Assertion.Mode != "exact" || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert name retry = %+v, want retried accessible name assertion", got)
+	}
+}
+
+func TestAssertRoleTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "role", "Checkout", "link", "--by", "role", "--role", "button", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert role timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Query        string `json:"query"`
+				Selector     string `json:"selector"`
+				Field        string `json:"field"`
+				Expected     string `json:"expected"`
+				Actual       string `json:"actual"`
+				Mode         string `json:"mode"`
+				Passed       bool   `json:"passed"`
+				Count        int    `json:"count"`
+				Attempts     int    `json:"attempts"`
+				ElapsedMS    int64  `json:"elapsed_ms"`
+				PollInterval string `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert role timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#checkout" || got.Data.Assertion.Query != "Checkout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Field != "role" || got.Data.Assertion.Expected != "link" || got.Data.Assertion.Actual != "button" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp locator find Checkout --by role --role button --json") || !containsString(got.RemediationCommands, "cdp a11y node 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert role Checkout link --mode exact --by role --role button --json") {
+		t.Fatalf("assert role timeout = %+v, want timeout with last accessible role diagnostics", got)
+	}
+}
+
+func TestAssertIndeterminateByLabelJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "indeterminate", "Partial selection", "--by", "label", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert indeterminate by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+				Name         string `json:"name"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector           string `json:"selector"`
+			Expected           string `json:"expected"`
+			Checked            bool   `json:"checked"`
+			Unchecked          bool   `json:"unchecked"`
+			Indeterminate      bool   `json:"indeterminate"`
+			Passed             bool   `json:"passed"`
+			Count              int    `json:"count"`
+			CheckedCount       int    `json:"checked_count"`
+			UncheckedCount     int    `json:"unchecked_count"`
+			IndeterminateCount int    `json:"indeterminate_count"`
+			UnsupportedCount   int    `json:"unsupported_count"`
+			Attempts           int    `json:"attempts"`
+			ElapsedMS          int64  `json:"elapsed_ms"`
+			PollInterval       string `json:"poll_interval"`
+			Items              []struct {
+				Role          string `json:"role"`
+				Name          string `json:"name"`
+				Checked       bool   `json:"checked"`
+				Indeterminate bool   `json:"indeterminate"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert indeterminate output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#partial-selection" || got.Locator.By != "label" || got.Locator.Query != "Partial selection" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Assertion.Selector != "input#partial-selection" || got.Assertion.Expected != "indeterminate" || got.Assertion.Checked || got.Assertion.Unchecked || !got.Assertion.Indeterminate || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.CheckedCount != 0 || got.Assertion.UncheckedCount != 0 || got.Assertion.IndeterminateCount != 1 || got.Assertion.UnsupportedCount != 0 || got.Assertion.Attempts != 1 || got.Assertion.PollInterval != "10ms" || len(got.Assertion.Items) != 1 || !got.Assertion.Items[0].Indeterminate || got.Assertion.Items[0].Checked {
+		t.Fatalf("assert indeterminate = %+v, want indeterminate checkbox diagnostics", got)
+	}
+}
+
 func TestAssertVisibleByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()

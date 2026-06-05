@@ -92,6 +92,10 @@ DEMO_HTML = """<!doctype html>
         <input id="subscribe" name="subscribe" type="checkbox">
         Subscribe to newsletter
       </label>
+      <label class="agent-form checkbox-row" for="partial-selection">
+        <input id="partial-selection" name="partial_selection" type="checkbox">
+        Partial selection
+      </label>
       <span class="covered-wrap">
         <input id="covered-checkbox" type="checkbox" aria-label="Covered checkbox">
         <span id="checkbox-cover" class="cover-overlay" aria-hidden="true"></span>
@@ -148,6 +152,7 @@ DEMO_HTML = """<!doctype html>
       : Promise.resolve();
     console.log('demo app booted');
     console.error('synthetic demo error');
+    document.querySelector('#partial-selection').indeterminate = true;
     fetch('/api/ok').then(() => fetch('/api/fail'));
     Promise.all([cacheReady, serviceWorkerReady, indexedDBReady]).finally(() => {
       setTimeout(() => {
