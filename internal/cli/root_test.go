@@ -602,6 +602,130 @@ func TestWaitDialogInvalidOptionsJSON(t *testing.T) {
 	}
 }
 
+func TestWaitFileChooserJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "file-chooser-page", "type": "page", "title": "Upload App", "url": "https://example.test/upload", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "file-chooser", "--mode", "single", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait file-chooser exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Wait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			CDPMethod     string `json:"cdp_method"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Intercepted   bool   `json:"intercepted"`
+			Criteria      struct {
+				Mode string `json:"mode"`
+			} `json:"criteria"`
+			Evidence struct {
+				Headers bool `json:"headers"`
+				Bodies  bool `json:"bodies"`
+				Bounded bool `json:"bounded"`
+			} `json:"evidence"`
+			Warnings []string `json:"warnings"`
+		} `json:"wait"`
+		FileChooser struct {
+			FrameID       string `json:"frame_id"`
+			Mode          string `json:"mode"`
+			Multiple      bool   `json:"multiple"`
+			BackendNodeID int    `json:"backend_node_id"`
+			CDPMethod     string `json:"cdp_method"`
+		} `json:"file_chooser"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait file-chooser output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "file-chooser-page" || got.Wait.Kind != "file-chooser" || !got.Wait.Matched || got.Wait.CDPMethod != "Page.fileChooserOpened" || got.Wait.EventCount != 1 || got.Wait.ObservedCount != 1 || got.Wait.Criteria.Mode != "selectSingle" || !got.Wait.Intercepted {
+		t.Fatalf("wait file-chooser output = %+v, want matched chooser wait evidence", got)
+	}
+	if got.FileChooser.FrameID != "frame-upload" || got.FileChooser.Mode != "selectSingle" || got.FileChooser.Multiple || got.FileChooser.BackendNodeID != 42 || got.FileChooser.CDPMethod != "Page.fileChooserOpened" {
+		t.Fatalf("wait file-chooser event = %+v, want single chooser metadata", got.FileChooser)
+	}
+	if got.Wait.Evidence.Headers || got.Wait.Evidence.Bodies || !got.Wait.Evidence.Bounded {
+		t.Fatalf("wait file-chooser evidence = %+v, want bounded evidence without headers or bodies", got.Wait.Evidence)
+	}
+	if len(got.Wait.Warnings) == 0 || !strings.Contains(got.Wait.Warnings[0], "native dialog") {
+		t.Fatalf("wait file-chooser warnings = %+v, want interception warning", got.Wait.Warnings)
+	}
+	if !containsString(got.NextCommands, "cdp file input[type=file] tmp/upload.txt --json") {
+		t.Fatalf("wait file-chooser next commands = %+v, want cdp file follow-up", got.NextCommands)
+	}
+}
+
+func TestWaitFileChooserTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "file-chooser", "--mode", "multiple", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait file-chooser timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Wait struct {
+				Kind          string `json:"kind"`
+				Matched       bool   `json:"matched"`
+				EventCount    int    `json:"event_count"`
+				ObservedCount int    `json:"observed_count"`
+				Intercepted   bool   `json:"intercepted"`
+				Criteria      struct {
+					Mode string `json:"mode"`
+				} `json:"criteria"`
+			} `json:"wait"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait file-chooser timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "file-chooser" || got.Data.Wait.Matched || got.Data.Wait.EventCount != 0 || got.Data.Wait.ObservedCount != 0 || got.Data.Wait.Criteria.Mode != "selectMultiple" || !got.Data.Wait.Intercepted {
+		t.Fatalf("wait file-chooser timeout = %+v, want timeout envelope with wait criteria", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp events tap --enable page --match Page.fileChooserOpened --duration 5s --json") {
+		t.Fatalf("wait file-chooser remediation commands = %+v, want events tap command", got.RemediationCommands)
+	}
+}
+
+func TestWaitFileChooserInvalidModeJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "file-chooser", "--mode", "directory", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("wait file-chooser invalid exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait file-chooser invalid output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "--mode must be") {
+		t.Fatalf("wait file-chooser invalid output = %+v, want usage error", got)
+	}
+}
+
 func TestWaitNetworkUnsupportedRedactionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"wait", "response", "--redact", "headers", "--json"}, &out, &errOut, cli.BuildInfo{})

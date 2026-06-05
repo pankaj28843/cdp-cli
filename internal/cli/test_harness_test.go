@@ -300,6 +300,23 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						},
 					})
 				}
+			} else if req.Method == "Page.setInterceptFileChooserDialog" {
+				resp["result"] = map[string]any{}
+				var params struct {
+					Enabled bool `json:"enabled"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				if params.Enabled && strings.Contains(req.SessionID, "file-chooser") {
+					events = append(events, map[string]any{
+						"sessionId": req.SessionID,
+						"method":    "Page.fileChooserOpened",
+						"params": map[string]any{
+							"frameId":       "frame-upload",
+							"mode":          "selectSingle",
+							"backendNodeId": 42,
+						},
+					})
+				}
 			} else if req.Method == "Page.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.handleJavaScriptDialog" {

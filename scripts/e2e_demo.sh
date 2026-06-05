@@ -365,6 +365,15 @@ sleep 0.05
 wait "$wait_idle_pid"
 require_artifact "$wait_idle_output"
 jq -e '.ok == true and .wait.kind == "network-idle" and .wait.matched == true and .wait.idle == "500ms" and .wait.in_flight_count == 0 and .wait.request_count >= 1 and .wait.completed_count >= 1 and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and (.wait.warnings[] | contains("quiescence signal"))' "$wait_idle_output" >/dev/null
+wait_file_chooser_output="$state_dir/wait-file-chooser.json"
+"$binary" wait file-chooser --mode single --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_file_chooser_output" &
+wait_file_chooser_pid=$!
+sleep 0.2
+"$binary" click "Upload file" --by label --strategy raw-input --state-dir "$state_dir/cdp-state" --force --json \
+  | jq -e '.ok == true and .action == "clicked" and .click.strategy == "raw-input"' >/dev/null
+wait "$wait_file_chooser_pid"
+require_artifact "$wait_file_chooser_output"
+jq -e '.ok == true and .wait.kind == "file-chooser" and .wait.matched == true and .wait.criteria.mode == "selectSingle" and .wait.intercepted == true and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and .file_chooser.cdp_method == "Page.fileChooserOpened" and .file_chooser.mode == "selectSingle" and .file_chooser.multiple == false and (.next_commands | any(contains("cdp file")))' "$wait_file_chooser_output" >/dev/null
 capture_output="$state_dir/network-capture.json"
 "$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$state_dir/network-capture.local.json" --json >"$capture_output"
 require_artifact "$capture_output"

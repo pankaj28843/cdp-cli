@@ -364,6 +364,10 @@ func commandExamples(path string) []string {
 			"cdp wait dialog --type confirm --action dismiss --timeout 10s --json",
 			"cdp wait dialog --message-contains 'Delete item?' --action accept --json",
 		},
+		"cdp wait file-chooser": {
+			"cdp wait file-chooser --mode single --timeout 10s --json",
+			"cdp wait file-chooser --mode multiple --json",
+		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",
