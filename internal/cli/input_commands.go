@@ -77,6 +77,7 @@ type pressResult struct {
 	Key        string     `json:"key"`
 	Count      int        `json:"count"`
 	Dispatched bool       `json:"dispatched"`
+	Trial      bool       `json:"trial,omitempty"`
 	Error      *evalError `json:"error,omitempty"`
 }
 
@@ -492,6 +493,8 @@ func resolveActionSelector(ctx context.Context, session *cdp.PageSession, query 
 func locatorActionRemediations(action, query string, opts locatorActionOptions) []string {
 	example := "cdp " + action + " " + shellQuote(query)
 	switch action {
+	case "press":
+		example = "cdp press Enter " + shellQuote(query)
 	case "fill", "type":
 		example += " <value>"
 	case "select":
@@ -971,11 +974,33 @@ func (a *app) newPressCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
 	var selector string
+	var locatorOpts locatorActionOptions
+	var trial bool
 	cmd := &cobra.Command{
-		Use:   "press <key>",
-		Short: "Press a key on the focused element or an optional selector",
-		Args:  cobra.ExactArgs(1),
+		Use:   "press <key> [selector-or-locator]",
+		Short: "Press a key on the focused element or a resolved selector/locator",
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
+			if selector != "" && len(args) == 2 {
+				return commandError("conflicting_selector", "usage", "use either positional selector-or-locator or --selector, not both", ExitUsage, []string{"cdp press Enter 'Search' --by label --json", "cdp press Enter --selector 'input[name=\"q\"]' --json"})
+			}
+			if selector != "" && locatorOpts.By != "css" {
+				return commandError("conflicting_selector", "usage", "--selector is CSS-only; pass the locator query positionally when using --by", ExitUsage, []string{"cdp press Enter 'Search' --by label --json"})
+			}
+			query := strings.TrimSpace(selector)
+			if len(args) == 2 {
+				query = strings.TrimSpace(args[1])
+			}
+			if locatorOpts.By != "css" && query == "" {
+				return commandError("missing_locator_query", "usage", "press with --by requires a selector-or-locator argument after the key", ExitUsage, []string{"cdp press Enter 'Search' --by label --json"})
+			}
+			if trial && query == "" {
+				return commandError("missing_selector", "usage", "press --trial requires a selector or locator query", ExitUsage, []string{"cdp press Enter 'Search' --by label --trial --json"})
+			}
+
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -985,8 +1010,76 @@ func (a *app) newPressCommand() *cobra.Command {
 			}
 			defer session.Close(ctx)
 
+			resolvedSelector := query
+			var locator *locatorFindResult
+			if query != "" {
+				resolvedSelector, locator, err = resolveActionSelector(ctx, session, query, locatorOpts, "press")
+				if err != nil {
+					return err
+				}
+			}
+
+			var actionability *actionabilityResult
+			if resolvedSelector != "" {
+				checks, err := evaluateActionability(ctx, session, resolvedSelector, "press")
+				if err != nil {
+					return err
+				}
+				prepareActionability(&checks, "press", trial, false)
+				actionability = &checks
+				if !checks.Actionable {
+					result := pressResult{
+						URL:        checks.URL,
+						Title:      checks.Title,
+						Selector:   resolvedSelector,
+						Key:        args[0],
+						Count:      checks.Count,
+						Dispatched: false,
+						Trial:      trial,
+					}
+					report := map[string]any{
+						"ok":                false,
+						"action":            "trial",
+						"target":            pageRow(target),
+						"press":             result,
+						"actionability":     checks,
+						"resolved_selector": resolvedSelector,
+					}
+					if locator != nil {
+						report["locator"] = locator
+					}
+					if !trial {
+						report["action"] = "blocked"
+					}
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("press", resolvedSelector, checks), ExitCheckFailed, actionabilityRemediations("press", query, resolvedSelector, locatorOpts), report)
+				}
+				if trial {
+					result := pressResult{
+						URL:        checks.URL,
+						Title:      checks.Title,
+						Selector:   resolvedSelector,
+						Key:        args[0],
+						Count:      checks.Count,
+						Dispatched: false,
+						Trial:      true,
+					}
+					report := map[string]any{
+						"ok":                true,
+						"action":            "trial",
+						"target":            pageRow(target),
+						"press":             result,
+						"actionability":     checks,
+						"resolved_selector": resolvedSelector,
+					}
+					if locator != nil {
+						report["locator"] = locator
+					}
+					return a.render(ctx, fmt.Sprintf("press-trial\t%s\t%q", target.TargetID, result.Key), report)
+				}
+			}
+
 			var result pressResult
-			if err := evaluateJSONValue(ctx, session, pressExpression(args[0], selector), "press", &result); err != nil {
+			if err := evaluateJSONValue(ctx, session, pressExpression(args[0], resolvedSelector), "press", &result); err != nil {
 				return err
 			}
 			if result.Error != nil {
@@ -1007,18 +1100,28 @@ func (a *app) newPressCommand() *cobra.Command {
 					[]string{"cdp press Enter --selector 'body' --json"},
 				)
 			}
-			return a.render(ctx, fmt.Sprintf("pressed\t%s\t%q", target.TargetID, result.Key), map[string]any{
+			report := map[string]any{
 				"ok":     true,
 				"action": "pressed",
 				"target": pageRow(target),
 				"press":  result,
-			})
+			}
+			if actionability != nil {
+				report["actionability"] = actionability
+				report["resolved_selector"] = resolvedSelector
+			}
+			if locator != nil {
+				report["locator"] = locator
+			}
+			return a.render(ctx, fmt.Sprintf("pressed\t%s\t%q", target.TargetID, result.Key), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&selector, "selector", "", "optional selector to focus before pressing the key")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "resolve selector/locator and report press target evidence without dispatching keyboard events")
 	return cmd
 }
 

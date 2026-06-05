@@ -1496,6 +1496,7 @@ func pressExpression(key string, selector string) string {
   const key = String(%s);
   const selector = %s;
   let target;
+  let count = 0;
   if (selector) {
     let elements;
     try {
@@ -1503,7 +1504,8 @@ func pressExpression(key string, selector string) string {
     } catch (error) {
       return { url: location.href, title: document.title, selector, key, count: 0, dispatched: false, error: { name: error.name, message: error.message }, marker };
     }
-    if (elements.length === 0) {
+    count = elements.length;
+    if (count === 0) {
       return { url: location.href, title: document.title, selector, key, count: 0, dispatched: false, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
     }
     target = elements[0];
@@ -1528,7 +1530,7 @@ func pressExpression(key string, selector string) string {
   target.dispatchEvent(new KeyboardEvent("keydown", init));
   target.dispatchEvent(new KeyboardEvent("keypress", init));
   target.dispatchEvent(new KeyboardEvent("keyup", init));
-  return { url: location.href, title: document.title, selector, key: safeKey, count: selector ? 1 : 0, dispatched: true, marker };
+  return { url: location.href, title: document.title, selector, key: safeKey, count: selector ? count : 0, dispatched: true, marker };
 })()`, jsStringLiteral(key), jsStringLiteral(selector))
 }
 

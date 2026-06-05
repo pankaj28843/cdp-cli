@@ -1773,6 +1773,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 		required := []string{"attached", "visible", "stable", "receives_events", "enabled"}
 		switch action {
+		case "press":
+			required = []string{"attached"}
 		case "fill", "type":
 			required = []string{"attached", "visible", "enabled", "editable"}
 		case "select":
@@ -2182,6 +2184,27 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 					"kind":     kind,
 					"strategy": chosenStrategy,
 					"typing":   true,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_press__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		key := expressionStringArg(req.Expression, "const key = String(")
+		count := 1
+		if selector == "#missing" {
+			count = 0
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":        "https://example.test/app",
+					"title":      "Example App",
+					"selector":   selector,
+					"key":        key,
+					"count":      count,
+					"dispatched": count > 0 || selector == "",
 				},
 			},
 		}

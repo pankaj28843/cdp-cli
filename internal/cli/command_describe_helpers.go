@@ -294,6 +294,8 @@ func commandExamples(path string) []string {
 		"cdp press": {
 			"cdp press Enter --json",
 			"cdp press Tab --selector 'input[name=\"q\"]' --json",
+			"cdp press Enter 'Search Wikipedia' --by label --json",
+			"cdp press Enter 'Search Wikipedia' --by label --trial --json",
 		},
 		"cdp hover": {
 			"cdp hover button.primary --json",

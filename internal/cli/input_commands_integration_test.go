@@ -1599,6 +1599,118 @@ func TestTypeContentEditableUsesInsertTextJSON(t *testing.T) {
 	}
 }
 
+func TestPressByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"press", "Enter", "Search", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("press by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+			} `json:"matches"`
+		} `json:"locator"`
+		Press struct {
+			Selector   string `json:"selector"`
+			Key        string `json:"key"`
+			Dispatched bool   `json:"dispatched"`
+			Trial      bool   `json:"trial"`
+			Count      int    `json:"count"`
+		} `json:"press"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Trial      bool     `json:"trial"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Attached struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"attached"`
+				Visible struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"visible"`
+				Enabled struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("press by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "pressed" || got.ResolvedSelector != "input#q" || got.Locator.By != "label" || got.Locator.Query != "Search" || !got.Locator.Strict || len(got.Locator.Matches) != 1 || got.Locator.Matches[0].SelectorHint != "input#q" {
+		t.Fatalf("press by label locator = %+v, want strict label locator", got)
+	}
+	if got.Press.Selector != "input#q" || got.Press.Key != "Enter" || !got.Press.Dispatched || got.Press.Trial || got.Press.Count != 1 {
+		t.Fatalf("press by label action = %+v, want dispatched Enter on resolved selector", got.Press)
+	}
+	if !got.Actionability.Actionable || got.Actionability.Trial || len(got.Actionability.Required) != 1 || !containsString(got.Actionability.Required, "attached") || !got.Actionability.Checks.Attached.Required || !got.Actionability.Checks.Attached.Passed || got.Actionability.Checks.Visible.Required || !got.Actionability.Checks.Visible.Skipped || got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Skipped {
+		t.Fatalf("press actionability = %+v, want locator attached evidence only", got.Actionability)
+	}
+}
+
+func TestPressTrialByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"press", "Enter", "Search", "--by", "label", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("press trial by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Press  struct {
+			Selector   string `json:"selector"`
+			Key        string `json:"key"`
+			Dispatched bool   `json:"dispatched"`
+			Trial      bool   `json:"trial"`
+		} `json:"press"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Trial      bool `json:"trial"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("press trial by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.Press.Selector != "input#q" || got.Press.Key != "Enter" || got.Press.Dispatched || !got.Press.Trial || !got.Actionability.Actionable || !got.Actionability.Trial {
+		t.Fatalf("press trial = %+v, want non-dispatching locator press trial", got)
+	}
+}
+
+func TestPressByLabelRequiresLocatorQuery(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"press", "Enter", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("press missing locator query exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "requires a selector-or-locator argument") {
+		t.Fatalf("press missing locator query output = %s, want usage guidance", out.String())
+	}
+}
+
 func TestInsertTextCommandJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
