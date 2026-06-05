@@ -53,7 +53,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "name", Type: "string", Required: true, Description: "Doctor check name: scheduled-tasks."},
 				{Name: "status", Type: "string", Required: true, Description: "Check status: pass, warn, pending, or fail."},
 				{Name: "message", Type: "string", Required: true, Description: "Human-readable readiness summary."},
-				{Name: "details", Type: "scheduled_tasks_details", Required: true, Description: "Crontab availability, cdp entry counts, mode-explicit keepalive, flock, and cleanup ambiguity flags."},
+				{Name: "details", Type: "scheduled_tasks_details", Required: true, Description: "Crontab availability, cdp entry counts, mode-explicit keepalive, legacy pages polling, flock, and cleanup ambiguity flags."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe crontab inspection and install commands with explicit browser modes and flock locks."},
 			},
 		},

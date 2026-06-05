@@ -83,6 +83,26 @@ func TestCronInstallHeadedOnlyDryRunDoesNotMutateCrontab(t *testing.T) {
 	}
 }
 
+func TestCronInstallWarnsWhenPreservingPagesPollingHack(t *testing.T) {
+	initial := "SHELL=/bin/sh\n* * * * * $HOME/.local/bin/cdp pages --browser-mode headed >/dev/null 2>&1\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var got struct {
+		OK       bool     `json:"ok"`
+		DryRun   bool     `json:"dry_run"`
+		Warnings []string `json:"warnings"`
+	}
+	executeCronJSON(t, []string{"cron", "install", "--dry-run", "--state-dir", stateDir, "--json"}, &got)
+	if !got.OK || !got.DryRun || !containsString(got.Warnings, "current crontab contains unmanaged cdp pages polling; cron install preserves unmanaged lines, so remove the manual pages loop after managed keepalive is verified") {
+		t.Fatalf("cron install dry-run = %+v, want pages polling preservation warning", got)
+	}
+	if after := readFileString(t, crontabPath); after != initial {
+		t.Fatalf("dry-run mutated crontab:\n%s", after)
+	}
+}
+
 func TestCronRemoveOnlyRemovesManagedBlock(t *testing.T) {
 	initial := strings.Join([]string{
 		"SHELL=/bin/sh",

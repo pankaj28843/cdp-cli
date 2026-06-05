@@ -16,6 +16,21 @@ func TestSummarizeCrontabDetectsUserLevelCDPTasks(t *testing.T) {
 	}
 }
 
+func TestSummarizeCrontabDetectsPagesPollingKeepaliveHack(t *testing.T) {
+	got := summarizeCrontab(`
+* * * * * /bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do nohup $HOME/.local/bin/cdp pages --browser-mode headed >/dev/null 2>&1 & sleep 5; done'
+*/5 * * * * $HOME/.local/bin/cdp --browser-mode headless pages --json >/dev/null 2>&1
+`)
+	if got.EntryCount != 2 ||
+		!got.HasPagesPollingKeepalive ||
+		!got.HasHeadedPagesPolling ||
+		!got.HasHeadlessPagesPolling ||
+		got.PagesPollingCount != 2 ||
+		!got.HasUnflockedCDPTask {
+		t.Fatalf("summarizeCrontab = %+v, want headed/headless pages polling hack detection", got)
+	}
+}
+
 func TestScheduledTasksDoctorCheckReportsCleanupTask(t *testing.T) {
 	check := scheduledTasksStatusForSummary(true, nil, crontabSummary{EntryCount: 2, HasDaemonKeepalive: true, HasHeadlessDaemonKeepalive: true, HasPageCleanup: true, HasModeExplicitPageCleanup: true})
 	if check["status"] != "pass" || check["message"] != "user crontab includes flocked cdp daemon keepalive and mode-explicit page cleanup" {
@@ -24,6 +39,20 @@ func TestScheduledTasksDoctorCheckReportsCleanupTask(t *testing.T) {
 	next, ok := check["next_commands"].([]string)
 	if !ok || !testContainsString(next, "cdp cron status --json") || !testContainsString(next, "cdp cron install --profile agent --json") {
 		t.Fatalf("scheduled task next_commands = %+v, want built-in cdp cron management commands", check["next_commands"])
+	}
+}
+
+func TestScheduledTasksDoctorCheckWarnsForPagesPollingKeepalive(t *testing.T) {
+	check := scheduledTasksStatusForSummary(true, nil, crontabSummary{EntryCount: 1, HasPagesPollingKeepalive: true, HasHeadedPagesPolling: true, PagesPollingCount: 1})
+	if check["status"] != "warn" || check["message"] != "current user crontab uses cdp pages polling; install managed daemon keepalive instead" {
+		t.Fatalf("scheduled task check = %+v, want pages polling warning", check)
+	}
+	details, ok := check["details"].(map[string]any)
+	if !ok ||
+		details["has_pages_polling_keepalive"] != true ||
+		details["has_headed_pages_polling"] != true ||
+		details["pages_polling_count"] != 1 {
+		t.Fatalf("scheduled task details = %+v, want pages polling details", check["details"])
 	}
 }
 

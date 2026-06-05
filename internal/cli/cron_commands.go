@@ -160,6 +160,7 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 			if err != nil && !isEmptyCrontab(err) {
 				return cronCommandError("read crontab", err)
 			}
+			summary := summarizeCrontab(current)
 			block := managedCronBlock(opts)
 			next := appendCronManagedBlock(withoutCronManagedBlock(current), block)
 			changed := current != next
@@ -182,7 +183,7 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 				"matches_intended": true,
 				"managed_block":    installed,
 				"intended_block":   extractCronManagedBlock(block),
-				"warnings":         cronInstallWarnings(opts),
+				"warnings":         cronInstallWarnings(opts, summary),
 				"next_commands":    []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"},
 			}
 			if dryRun {
@@ -568,13 +569,16 @@ func cronDiffActions(current, wanted string, installed bool) []map[string]any {
 	return []map[string]any{{"action": "append_managed_block", "reason": "no managed block is installed"}}
 }
 
-func cronInstallWarnings(opts cronRenderOptions) []string {
+func cronInstallWarnings(opts cronRenderOptions, summary crontabSummary) []string {
 	var warnings []string
 	if strings.TrimSpace(opts.Profile) != "agent" {
 		warnings = append(warnings, "only the agent profile is currently rendered; generated entries still use agent defaults")
 	}
 	if strings.TrimSpace(opts.CDPBin) == "" {
 		warnings = append(warnings, "cdp binary path is empty")
+	}
+	if summary.HasPagesPollingKeepalive {
+		warnings = append(warnings, "current crontab contains unmanaged cdp pages polling; cron install preserves unmanaged lines, so remove the manual pages loop after managed keepalive is verified")
 	}
 	return warnings
 }

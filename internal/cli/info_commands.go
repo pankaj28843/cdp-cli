@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -339,6 +338,10 @@ type crontabSummary struct {
 	HasDaemonKeepalive         bool
 	HasHeadedDaemonKeepalive   bool
 	HasHeadlessDaemonKeepalive bool
+	HasPagesPollingKeepalive   bool
+	HasHeadedPagesPolling      bool
+	HasHeadlessPagesPolling    bool
+	PagesPollingCount          int
 	HasPageCleanup             bool
 	HasModeExplicitPageCleanup bool
 	HasAmbiguousPageCleanup    bool
@@ -346,8 +349,8 @@ type crontabSummary struct {
 }
 
 func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
-	output, err := exec.CommandContext(ctx, "crontab", "-l").CombinedOutput()
-	available := !errors.Is(err, exec.ErrNotFound)
+	output, err := exec.CommandContext(ctx, crontabBinary(), "-l").CombinedOutput()
+	available := !isCrontabMissing(err)
 	summary := summarizeCrontab(string(output))
 	return scheduledTasksStatusForSummary(available, err, summary)
 }
@@ -361,6 +364,9 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 	} else if err != nil && summary.EntryCount == 0 {
 		status = "pending"
 		message = "current user crontab has no cdp entries"
+	} else if summary.HasPagesPollingKeepalive {
+		status = "warn"
+		message = "current user crontab uses cdp pages polling; install managed daemon keepalive instead"
 	} else if !summary.HasDaemonKeepalive {
 		if summary.EntryCount == 0 {
 			status = "pending"
@@ -393,6 +399,10 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 			"has_daemon_keepalive":           summary.HasDaemonKeepalive,
 			"has_headed_daemon_keepalive":    summary.HasHeadedDaemonKeepalive,
 			"has_headless_daemon_keepalive":  summary.HasHeadlessDaemonKeepalive,
+			"has_pages_polling_keepalive":    summary.HasPagesPollingKeepalive,
+			"has_headed_pages_polling":       summary.HasHeadedPagesPolling,
+			"has_headless_pages_polling":     summary.HasHeadlessPagesPolling,
+			"pages_polling_count":            summary.PagesPollingCount,
 			"has_page_cleanup":               summary.HasPageCleanup,
 			"has_mode_explicit_page_cleanup": summary.HasModeExplicitPageCleanup,
 			"has_ambiguous_page_cleanup":     summary.HasAmbiguousPageCleanup,
@@ -437,6 +447,19 @@ func summarizeCrontab(text string) crontabSummary {
 				summary.HasHeadedDaemonKeepalive = true
 			case "headless":
 				summary.HasHeadlessDaemonKeepalive = true
+			}
+		}
+		if scheduledTaskContainsCDPCommand(line, "pages") {
+			summary.HasPagesPollingKeepalive = true
+			summary.PagesPollingCount++
+			if !scheduledTaskUsesFlock(line) {
+				summary.HasUnflockedCDPTask = true
+			}
+			switch mode {
+			case "headed":
+				summary.HasHeadedPagesPolling = true
+			case "headless":
+				summary.HasHeadlessPagesPolling = true
 			}
 		}
 		if scheduledTaskContainsCDPCommand(line, "page", "cleanup") {
