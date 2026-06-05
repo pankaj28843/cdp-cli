@@ -73,6 +73,24 @@ type assertTextResult struct {
 	Error        *evalError `json:"error,omitempty"`
 }
 
+type assertPageResult struct {
+	Field        string `json:"field"`
+	Expected     string `json:"expected"`
+	Actual       string `json:"actual"`
+	Mode         string `json:"mode"`
+	Passed       bool   `json:"passed"`
+	URL          string `json:"url"`
+	Title        string `json:"title"`
+	Attempts     int    `json:"attempts,omitempty"`
+	ElapsedMS    int64  `json:"elapsed_ms,omitempty"`
+	PollInterval string `json:"poll_interval,omitempty"`
+}
+
+type assertPageInfo struct {
+	URL   string `json:"url"`
+	Title string `json:"title"`
+}
+
 type assertVisibilityResult struct {
 	Selector     string                 `json:"selector"`
 	Expected     string                 `json:"expected"`
@@ -273,6 +291,8 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "assert", Short: "Assert browser state with JSON diagnostics"}
 	cmd.AddCommand(a.newAssertValueCommand())
 	cmd.AddCommand(a.newAssertTextCommand())
+	cmd.AddCommand(a.newAssertURLCommand())
+	cmd.AddCommand(a.newAssertTitleCommand())
 	cmd.AddCommand(a.newAssertVisibleCommand())
 	cmd.AddCommand(a.newAssertHiddenCommand())
 	cmd.AddCommand(a.newAssertEnabledCommand())
@@ -577,6 +597,117 @@ func textAssertionPendingResult(query, expected, mode string, count, attempts in
 		Attempts:     attempts,
 		ElapsedMS:    time.Since(start).Milliseconds(),
 		PollInterval: poll.String(),
+	}
+}
+
+func (a *app) newAssertURLCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, mode string
+	var poll time.Duration
+	cmd := &cobra.Command{Use: "url <expected>", Short: "Assert the current page URL with auto-retry", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertPageCommand(cmd, "url", args[0], mode, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&mode, "mode", "contains", "match mode: exact, contains, or regex")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	return cmd
+}
+
+func (a *app) newAssertTitleCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, mode string
+	var poll time.Duration
+	cmd := &cobra.Command{Use: "title <expected>", Short: "Assert the current page title with auto-retry", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return a.runAssertPageCommand(cmd, "title", args[0], mode, targetID, urlContains, titleContains, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&mode, "mode", "contains", "match mode: exact, contains, or regex")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	return cmd
+}
+
+func (a *app) runAssertPageCommand(cmd *cobra.Command, field, expected, mode, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert " + field + " expected --poll 250ms --json"})
+	}
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, err := waitForPageAssertion(assertionCtx, session, field, expected, mode, poll, start)
+	finalTarget := targetWithPageAssertion(target, got)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(finalTarget), "assertion": got}
+	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("%s assertion for %q did not pass before timeout: %v", field, expected, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, pageAssertionRemediations(field, expected, mode), report)
+		}
+		return err
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForPageAssertion(ctx context.Context, session *cdp.PageSession, field, expected, mode string, poll time.Duration, start time.Time) (assertPageResult, error) {
+	attempts := 0
+	normalizedMode := normalizeAssertMode(mode)
+	last := assertPageResult{Field: field, Expected: expected, Mode: normalizedMode, PollInterval: poll.String()}
+	for {
+		attempts++
+		var info assertPageInfo
+		if err := evaluateJSONValue(ctx, session, pageInfoExpression(), "assert "+field, &info); err != nil {
+			return last, err
+		}
+		actual := info.URL
+		if field == "title" {
+			actual = info.Title
+		}
+		passed, err := assertionMatch(actual, expected, normalizedMode)
+		if err != nil {
+			return last, err
+		}
+		last = assertPageResult{
+			Field:        field,
+			Expected:     expected,
+			Actual:       actual,
+			Mode:         normalizedMode,
+			Passed:       passed,
+			URL:          info.URL,
+			Title:        info.Title,
+			Attempts:     attempts,
+			ElapsedMS:    time.Since(start).Milliseconds(),
+			PollInterval: poll.String(),
+		}
+		if passed {
+			return last, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, err
+		}
+	}
+}
+
+func targetWithPageAssertion(target cdp.TargetInfo, result assertPageResult) cdp.TargetInfo {
+	if result.URL != "" {
+		target.URL = result.URL
+	}
+	if result.Attempts > 0 {
+		target.Title = result.Title
+	}
+	return target
+}
+
+func pageAssertionRemediations(field, expected, mode string) []string {
+	return []string{
+		"cdp pages --json",
+		"cdp assert " + field + " " + shellQuote(expected) + " --mode " + shellQuote(normalizeAssertMode(mode)) + " --json",
 	}
 }
 
@@ -1322,6 +1453,13 @@ func normalizeAssertMode(mode string) string {
 		return "exact"
 	}
 	return m
+}
+
+func pageInfoExpression() string {
+	return `(() => {
+  const marker = "__cdp_cli_page_assertion__";
+  return { url: String(location.href || ""), title: String(document.title || ""), marker };
+})()`
 }
 
 func formValuesExpression(includeHidden bool) string {

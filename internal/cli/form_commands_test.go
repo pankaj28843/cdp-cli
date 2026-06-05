@@ -299,6 +299,170 @@ func TestAssertTextTimeoutJSON(t *testing.T) {
 	}
 }
 
+func TestAssertURLRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertPageAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/loading", "title": "Loading"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "url", "ready", "--mode", "contains", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert url retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		Assertion struct {
+			Field        string `json:"field"`
+			Expected     string `json:"expected"`
+			Actual       string `json:"actual"`
+			Mode         string `json:"mode"`
+			Passed       bool   `json:"passed"`
+			URL          string `json:"url"`
+			Title        string `json:"title"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert url retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.URL != "https://example.test/ready" || got.Target.Title != "Ready Page" || got.Assertion.Field != "url" || got.Assertion.Expected != "ready" || got.Assertion.Actual != "https://example.test/ready" || got.Assertion.Mode != "contains" || !got.Assertion.Passed || got.Assertion.URL != "https://example.test/ready" || got.Assertion.Title != "Ready Page" || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert url retry = %+v, want retried URL assertion with final page evidence", got)
+	}
+}
+
+func TestAssertTitleRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertPageAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/loading", "title": "Loading"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "title", "Ready Page", "--mode", "exact", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert title retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		Assertion struct {
+			Field        string `json:"field"`
+			Expected     string `json:"expected"`
+			Actual       string `json:"actual"`
+			Mode         string `json:"mode"`
+			Passed       bool   `json:"passed"`
+			URL          string `json:"url"`
+			Title        string `json:"title"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert title retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.URL != "https://example.test/ready" || got.Target.Title != "Ready Page" || got.Assertion.Field != "title" || got.Assertion.Expected != "Ready Page" || got.Assertion.Actual != "Ready Page" || got.Assertion.Mode != "exact" || !got.Assertion.Passed || got.Assertion.URL != "https://example.test/ready" || got.Assertion.Title != "Ready Page" || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert title retry = %+v, want retried title assertion with final page evidence", got)
+	}
+}
+
+func TestAssertURLTimeoutJSON(t *testing.T) {
+	fakeDelayedAssertPageAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/loading", "title": "Loading"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "url", "missing", "--mode", "contains", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert url timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Target struct {
+				URL   string `json:"url"`
+				Title string `json:"title"`
+			} `json:"target"`
+			Assertion struct {
+				Field        string `json:"field"`
+				Expected     string `json:"expected"`
+				Actual       string `json:"actual"`
+				Mode         string `json:"mode"`
+				Passed       bool   `json:"passed"`
+				URL          string `json:"url"`
+				Title        string `json:"title"`
+				Attempts     int    `json:"attempts"`
+				ElapsedMS    int64  `json:"elapsed_ms"`
+				PollInterval string `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert url timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Target.URL != "https://example.test/ready" || got.Data.Target.Title != "Ready Page" || got.Data.Assertion.Field != "url" || got.Data.Assertion.Expected != "missing" || got.Data.Assertion.Actual != "https://example.test/ready" || got.Data.Assertion.Mode != "contains" || got.Data.Assertion.Passed || got.Data.Assertion.URL != "https://example.test/ready" || got.Data.Assertion.Title != "Ready Page" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp pages --json") || !containsString(got.RemediationCommands, "cdp assert url missing --mode contains --json") {
+		t.Fatalf("assert url timeout = %+v, want timeout with last page diagnostics", got)
+	}
+}
+
+func TestAssertTitleTimeoutJSON(t *testing.T) {
+	fakeDelayedAssertPageAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/loading", "title": "Loading"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "title", "Never Ready", "--mode", "exact", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert title timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Target struct {
+				URL   string `json:"url"`
+				Title string `json:"title"`
+			} `json:"target"`
+			Assertion struct {
+				Field        string `json:"field"`
+				Expected     string `json:"expected"`
+				Actual       string `json:"actual"`
+				Mode         string `json:"mode"`
+				Passed       bool   `json:"passed"`
+				URL          string `json:"url"`
+				Title        string `json:"title"`
+				Attempts     int    `json:"attempts"`
+				ElapsedMS    int64  `json:"elapsed_ms"`
+				PollInterval string `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert title timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Target.URL != "https://example.test/ready" || got.Data.Target.Title != "Ready Page" || got.Data.Assertion.Field != "title" || got.Data.Assertion.Expected != "Never Ready" || got.Data.Assertion.Actual != "Ready Page" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.URL != "https://example.test/ready" || got.Data.Assertion.Title != "Ready Page" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp pages --json") || !containsString(got.RemediationCommands, "cdp assert title 'Never Ready' --mode exact --json") {
+		t.Fatalf("assert title timeout = %+v, want timeout with last page diagnostics", got)
+	}
+}
+
 func TestAssertVisibleByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()

@@ -569,6 +569,24 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
+		"assert-url": {
+			Name:        "assert-url",
+			Description: "Auto-retrying current-page URL assertion result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata updated with the final observed URL and title."},
+				{Name: "assertion", Type: "assert_page_result", Required: true, Description: "Field name, expected URL, actual URL, match mode, pass/fail status, final URL/title evidence, attempts, elapsed_ms, and poll_interval."},
+			},
+		},
+		"assert-title": {
+			Name:        "assert-title",
+			Description: "Auto-retrying current-page title assertion result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata updated with the final observed URL and title."},
+				{Name: "assertion", Type: "assert_page_result", Required: true, Description: "Field name, expected title, actual title, match mode, pass/fail status, final URL/title evidence, attempts, elapsed_ms, and poll_interval."},
+			},
+		},
 		"assert-visible": {
 			Name:        "assert-visible",
 			Description: "Auto-retrying element visibility assertion result for CSS selector or strict locator.",

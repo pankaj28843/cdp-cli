@@ -30,6 +30,7 @@ var fakeDelayedAssertEditableAttempts atomic.Int64
 var fakeDelayedAssertReadonlyAttempts atomic.Int64
 var fakeDelayedAssertTextAttempts atomic.Int64
 var fakeDelayedAssertValueAttempts atomic.Int64
+var fakeDelayedAssertPageAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
@@ -888,6 +889,24 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 						"date_text":   "22 Apr 2026",
 						"type":        "web",
 					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_page_assertion__") {
+		attempts := fakeDelayedAssertPageAttempts.Add(1)
+		pageURL := "https://example.test/loading"
+		title := "Loading"
+		if attempts >= 3 {
+			pageURL = "https://example.test/ready"
+			title = "Ready Page"
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":   pageURL,
+					"title": title,
 				},
 			},
 		}
