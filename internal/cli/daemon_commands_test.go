@@ -248,6 +248,10 @@ func TestManagedHeadlessRuntimeOverridesSelectedAutoConnect(t *testing.T) {
 				BrowserMode    string `json:"browser_mode"`
 				ConnectionMode string `json:"connection_mode"`
 			} `json:"runtime"`
+			BrowserProbe struct {
+				State          string `json:"state"`
+				ConnectionMode string `json:"connection_mode"`
+			} `json:"browser_probe"`
 		} `json:"daemon"`
 		Health struct {
 			State          string `json:"state"`
@@ -259,6 +263,40 @@ func TestManagedHeadlessRuntimeOverridesSelectedAutoConnect(t *testing.T) {
 	}
 	if health.Daemon.State != "running" || health.Daemon.ConnectionMode != "browser_url" || health.Daemon.Runtime.BrowserMode != "headless" || health.Health.State != "healthy" || health.Health.ConnectionMode != "browser_url" {
 		t.Fatalf("daemon health = %+v, want healthy managed headless browser-url runtime despite selected auto_connect", health)
+	}
+	if health.Daemon.BrowserProbe.State != "cdp_available" || health.Daemon.BrowserProbe.ConnectionMode != "browser_url" {
+		t.Fatalf("daemon health browser probe = %+v, want mode-runtime browser_url probe", health.Daemon.BrowserProbe)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "status", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon status exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var status struct {
+		Daemon struct {
+			State          string `json:"state"`
+			ConnectionMode string `json:"connection_mode"`
+			Runtime        struct {
+				BrowserMode    string `json:"browser_mode"`
+				ConnectionMode string `json:"connection_mode"`
+			} `json:"runtime"`
+			BrowserProbe struct {
+				State          string `json:"state"`
+				ConnectionMode string `json:"connection_mode"`
+			} `json:"browser_probe"`
+			Health struct {
+				State          string `json:"state"`
+				ConnectionMode string `json:"connection_mode"`
+			} `json:"health"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &status); err != nil {
+		t.Fatalf("daemon status output is invalid JSON: %v", err)
+	}
+	if status.Daemon.State != "running" || status.Daemon.ConnectionMode != "browser_url" || status.Daemon.Runtime.BrowserMode != "headless" || status.Daemon.Runtime.ConnectionMode != "browser_url" || status.Daemon.BrowserProbe.State != "cdp_available" || status.Daemon.BrowserProbe.ConnectionMode != "browser_url" || status.Daemon.Health.State != "healthy" {
+		t.Fatalf("daemon status = %+v, want reconciled managed headless runtime without selected auto_connect contradiction", status.Daemon)
 	}
 
 	out.Reset()

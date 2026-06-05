@@ -271,27 +271,58 @@ func (a *app) connectionMode() string {
 func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemon.Status {
 	browserMode := a.browserModeName()
 	status := daemon.SnapshotForMode(browserMode, a.connectionMode(), a.opts.autoConnect, probe)
+	status = a.statusWithModeRuntime(ctx, status, probe)
+	status.Health = a.browserHealthSnapshot(ctx, status, false)
+	return status
+}
+
+func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, probe browser.ProbeResult) daemon.Status {
 	store, err := a.stateStore()
 	if err != nil {
-		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
 	}
-	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, store.Dir, browserMode)
-	if err != nil || !ok {
-		status.Health = a.browserHealthSnapshot(ctx, status, false)
+	browserMode := status.BrowserMode
+	attempts := 1
+	if browserMode == string(config.BrowserModeHeadless) && status.State != "running" {
+		attempts = 4
+	}
+	var runtime daemon.Runtime
+	var ok bool
+	var loadErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		runtime, ok, loadErr = daemon.LoadRuntimeForMode(ctx, store.Dir, browserMode)
+		if loadErr == nil && ok && daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime) {
+			break
+		}
+		if attempt+1 < attempts {
+			timer := time.NewTimer(75 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return status
+			case <-timer.C:
+			}
+		}
+	}
+	if loadErr != nil || !ok {
 		return status
 	}
 	if !a.runtimeMatchesConnection(runtime) {
-		status.Health = a.browserHealthSnapshot(ctx, status, false)
 		return status
 	}
+	running := daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime)
 	if a.runtimeOverridesSelectedConnection(runtime) {
+		probe = browser.ProbeResult{
+			State:                "cdp_available",
+			Message:              "mode-specific managed headless daemon runtime is ready",
+			ConnectionMode:       runtime.ConnectionMode,
+			WebSocketDebuggerURL: true,
+		}
 		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
 	} else if !a.hasExplicitConnectionOptions() && runtime.ConnectionMode != status.ConnectionMode {
 		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
 	}
-	status = daemon.WithRuntime(status, runtime, daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime))
-	status.Health = a.browserHealthSnapshot(ctx, status, false)
+	status = daemon.WithRuntime(status, runtime, running)
 	return status
 }
 
