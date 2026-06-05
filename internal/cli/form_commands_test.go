@@ -510,6 +510,39 @@ func TestAssertCheckedByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestAssertCheckedRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertCheckedAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "checked", "Delayed checkbox", "--by", "label", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert checked retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Checked      bool   `json:"checked"`
+			Passed       bool   `json:"passed"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert checked retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "input#delayed-check" || got.Assertion.Selector != "input#delayed-check" || got.Assertion.Expected != "checked" || !got.Assertion.Checked || !got.Assertion.Passed || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert checked retry = %+v, want retried checked assertion with timing evidence", got)
+	}
+}
+
 func TestAssertUncheckedByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
@@ -550,15 +583,15 @@ func TestAssertUncheckedByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
-func TestAssertCheckedFailureJSON(t *testing.T) {
+func TestAssertCheckedTimeoutJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "checked", "Optional updates", "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitCheckFailed {
-		t.Fatalf("assert checked failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	code := cli.Execute(context.Background(), []string{"assert", "checked", "Optional updates", "--by", "label", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert checked timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -574,6 +607,9 @@ func TestAssertCheckedFailureJSON(t *testing.T) {
 				Passed         bool   `json:"passed"`
 				CheckedCount   int    `json:"checked_count"`
 				UncheckedCount int    `json:"unchecked_count"`
+				Attempts       int    `json:"attempts"`
+				ElapsedMS      int64  `json:"elapsed_ms"`
+				PollInterval   string `json:"poll_interval"`
 				Items          []struct {
 					Checked bool `json:"checked"`
 				} `json:"items"`
@@ -582,10 +618,10 @@ func TestAssertCheckedFailureJSON(t *testing.T) {
 		RemediationCommands []string `json:"remediation_commands"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("assert checked failure output is invalid JSON: %v", err)
+		t.Fatalf("assert checked timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "input#optional-updates" || got.Data.Assertion.Selector != "input#optional-updates" || got.Data.Assertion.Expected != "checked" || got.Data.Assertion.Checked || !got.Data.Assertion.Unchecked || got.Data.Assertion.Passed || got.Data.Assertion.CheckedCount != 0 || got.Data.Assertion.UncheckedCount != 1 || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Checked || !containsString(got.RemediationCommands, "cdp form get 'input#optional-updates' --json") {
-		t.Fatalf("assert checked failure = %+v, want failed checked assertion with unchecked diagnostics", got)
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#optional-updates" || got.Data.Assertion.Selector != "input#optional-updates" || got.Data.Assertion.Expected != "checked" || got.Data.Assertion.Checked || !got.Data.Assertion.Unchecked || got.Data.Assertion.Passed || got.Data.Assertion.CheckedCount != 0 || got.Data.Assertion.UncheckedCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Checked || !containsString(got.RemediationCommands, "cdp form get 'input#optional-updates' --json") {
+		t.Fatalf("assert checked timeout = %+v, want timeout with last unchecked diagnostics", got)
 	}
 }
 

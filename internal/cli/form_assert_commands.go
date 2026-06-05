@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
@@ -170,6 +171,9 @@ type assertCheckedResult struct {
 	UncheckedCount   int                 `json:"unchecked_count"`
 	UnsupportedCount int                 `json:"unsupported_count"`
 	Items            []assertCheckedItem `json:"items,omitempty"`
+	Attempts         int                 `json:"attempts,omitempty"`
+	ElapsedMS        int64               `json:"elapsed_ms,omitempty"`
+	PollInterval     string              `json:"poll_interval,omitempty"`
 	Error            *evalError          `json:"error,omitempty"`
 }
 
@@ -459,35 +463,42 @@ func (a *app) newAssertReadonlyCommand() *cobra.Command {
 
 func (a *app) newAssertCheckedCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var poll time.Duration
 	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{Use: "checked <selector-or-locator>", Short: "Assert a checkbox, radio, or switch is checked by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		return a.runAssertCheckedCommand(cmd, args[0], "checked", locatorOpts, targetID, urlContains, titleContains)
+		return a.runAssertCheckedCommand(cmd, args[0], "checked", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
 
 func (a *app) newAssertUncheckedCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var poll time.Duration
 	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{Use: "unchecked <selector-or-locator>", Short: "Assert a checkbox, radio, or switch is unchecked by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		return a.runAssertCheckedCommand(cmd, args[0], "unchecked", locatorOpts, targetID, urlContains, titleContains)
+		return a.runAssertCheckedCommand(cmd, args[0], "unchecked", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
 
-func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
+func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert checked 'Subscribe to newsletter' --by label --poll 250ms --json"})
+	}
 	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 		return err
 	}
-	ctx, cancel := a.browserCommandContext(cmd)
+	ctx, cancel := a.commandContextWithDefault(cmd, 5*time.Second)
 	defer cancel()
 	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 	if err != nil {
@@ -495,31 +506,111 @@ func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string
 	}
 	defer session.Close(ctx)
 
-	selector, locator, err := resolveActionSelector(ctx, session, query, locatorOpts, "assert "+expected)
+	start := time.Now()
+	got, locator, selector, err := waitForCheckedAssertion(ctx, session, query, expected, locatorOpts, poll, start)
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	if locator != nil {
+		report["locator"] = locator
+		if strings.TrimSpace(selector) != "" {
+			report["resolved_selector"] = selector
+		}
+	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("%s assertion for %q did not pass before timeout: %v", expected, query, ctx.Err()), ExitTimeout, checkedAssertionRemediations(query, selector, locatorOpts), report)
+		}
 		return err
 	}
-	var got assertCheckedResult
-	if err := evaluateJSONValue(ctx, session, assertCheckedExpression(selector, 20), "assert "+expected, &got); err != nil {
-		return err
+	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForCheckedAssertion(ctx context.Context, session *cdp.PageSession, query, expected string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertCheckedResult, *locatorFindResult, string, error) {
+	attempts := 0
+	last := assertCheckedResult{Selector: query, Expected: expected, PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		selector := query
+		var locator *locatorFindResult
+		if opts.By != "css" {
+			var result locatorFindResult
+			if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert "+expected+" locator", &result); err != nil {
+				return last, lastLocator, lastSelector, err
+			}
+			locator = &result
+			lastLocator = locator
+			if result.Error != nil {
+				return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert %s locator %s %q: %s", expected, opts.By, query, result.Error.Message), ExitUsage, locatorActionRemediations("assert "+expected, query, opts))
+			}
+			if result.Count != 1 || len(result.Matches) != 1 || strings.TrimSpace(result.Matches[0].SelectorHint) == "" || result.Matches[0].SelectorAmbiguous {
+				last = checkedAssertionPendingResult(query, expected, result.Count, attempts, start, poll)
+				lastSelector = ""
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+			selector = strings.TrimSpace(result.Matches[0].SelectorHint)
+			lastSelector = selector
+		}
+
+		var got assertCheckedResult
+		if err := evaluateJSONValue(ctx, session, assertCheckedExpression(selector, 20), "assert "+expected, &got); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		if got.Error != nil {
+			return got, locator, selector, invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'input[type=checkbox]' --json")
+		}
+		finishCheckedAssertionResult(&got, expected, attempts, start, poll)
+		last = got
+		lastLocator = locator
+		lastSelector = selector
+		if got.Passed {
+			return got, locator, selector, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
 	}
-	if got.Error != nil {
-		return invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'input[type=checkbox]' --json")
-	}
+}
+
+func finishCheckedAssertionResult(got *assertCheckedResult, expected string, attempts int, start time.Time, poll time.Duration) {
 	got.Expected = expected
 	got.Passed = got.Checked
 	if expected == "unchecked" {
 		got.Passed = got.Unchecked
 	}
-	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
-	if locator != nil {
-		report["locator"] = locator
-		report["resolved_selector"] = selector
+	got.Attempts = attempts
+	got.ElapsedMS = time.Since(start).Milliseconds()
+	got.PollInterval = poll.String()
+}
+
+func checkedAssertionPendingResult(query, expected string, count, attempts int, start time.Time, poll time.Duration) assertCheckedResult {
+	return assertCheckedResult{
+		Selector:       query,
+		Expected:       expected,
+		Checked:        false,
+		Unchecked:      false,
+		Passed:         false,
+		Count:          count,
+		Attempts:       attempts,
+		ElapsedMS:      time.Since(start).Milliseconds(),
+		PollInterval:   poll.String(),
+		CheckedCount:   0,
+		UncheckedCount: 0,
 	}
-	if !got.Passed {
-		return commandErrorWithData("assertion_failed", "check_failed", checkedAssertionFailureMessage(expected, selector, got), ExitCheckFailed, checkedAssertionRemediations(query, selector, locatorOpts), report)
+}
+
+func waitForNextAssertionPoll(ctx context.Context, poll time.Duration) (bool, error) {
+	timer := time.NewTimer(poll)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return true, ctx.Err()
+	case <-timer.C:
+		return false, nil
 	}
-	return a.render(ctx, "assertion passed", report)
 }
 
 func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
@@ -709,7 +800,13 @@ func checkedAssertionFailureMessage(expected, selector string, got assertChecked
 }
 
 func checkedAssertionRemediations(query, selector string, opts locatorActionOptions) []string {
-	return []string{locatorActionFindCommand(query, opts), "cdp form get " + shellQuote(selector) + " --json"}
+	commands := []string{locatorActionFindCommand(query, opts)}
+	if strings.TrimSpace(selector) != "" {
+		commands = append(commands, "cdp form get "+shellQuote(selector)+" --json")
+	} else {
+		commands = append(commands, "cdp form values --json")
+	}
+	return commands
 }
 
 func assertionMatch(actual, expected, mode string) (bool, error) {

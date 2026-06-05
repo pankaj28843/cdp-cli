@@ -635,22 +635,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"assert-checked": {
 			Name:        "assert-checked",
-			Description: "Checked-state assertion result for checkbox, radio, switch, or strict locator.",
+			Description: "Auto-retrying checked-state assertion result for checkbox, radio, switch, or strict locator.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected checked-capable element is checked."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked booleans, pass/fail status, matched count, checked/unchecked counts, unsupported count, and bounded item diagnostics."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked booleans, pass/fail status, matched count, checked/unchecked counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
 		"assert-unchecked": {
 			Name:        "assert-unchecked",
-			Description: "Unchecked-state assertion result for checkbox, radio, switch, or strict locator.",
+			Description: "Auto-retrying unchecked-state assertion result for checkbox, radio, switch, or strict locator.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when selected checked-capable elements are present and none are checked."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked booleans, pass/fail status, matched count, checked/unchecked counts, unsupported count, and bounded item diagnostics."},
+				{Name: "assertion", Type: "assert_checked_result", Required: true, Description: "Selector, expected state, checked/unchecked booleans, pass/fail status, matched count, checked/unchecked counts, unsupported count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},

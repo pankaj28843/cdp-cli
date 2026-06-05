@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
+
+var fakeDelayedAssertCheckedAttempts atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -640,6 +643,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			elementType = "checkbox"
 			role = "checkbox"
 			name = "Optional updates"
+			placeholder = ""
+		}
+		if query == "Delayed checkbox" {
+			selector = "input#delayed-check"
+			tag = "input"
+			elementType = "checkbox"
+			role = "checkbox"
+			name = "Delayed checkbox"
 			placeholder = ""
 		}
 		disabled := false
@@ -1518,6 +1529,10 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 		if selector == "input#optional-updates" {
 			checked = false
 			name = "Optional updates"
+		}
+		if selector == "input#delayed-check" {
+			checked = fakeDelayedAssertCheckedAttempts.Add(1) >= 3
+			name = "Delayed checkbox"
 		}
 		count := 1
 		items := []map[string]any{{
