@@ -153,6 +153,29 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 					} `json:"artifact"`
 				} `json:"dom"`
 			} `json:"after"`
+			Events struct {
+				Network struct {
+					Count    int `json:"count"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"network"`
+				WebSockets struct {
+					Count    int `json:"count"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"websockets"`
+				Console struct {
+					Count    int `json:"count"`
+					Artifact struct {
+						Type string `json:"type"`
+						Path string `json:"path"`
+					} `json:"artifact"`
+				} `json:"console"`
+			} `json:"events"`
 		} `json:"evidence"`
 		Artifacts []struct {
 			Type string `json:"type"`
@@ -172,15 +195,28 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 		t.Fatalf("workflow action-capture collectors = %+v, want network, websocket, console, and artifact", got)
 	}
 	wantEvidence := map[string]string{
-		"workflow-action-capture-before-text": filepath.Join(evidenceDir, "action-capture.before.text.json"),
-		"workflow-action-capture-before-dom":  filepath.Join(evidenceDir, "action-capture.before.dom.json"),
-		"workflow-action-capture-after-text":  filepath.Join(evidenceDir, "action-capture.after.text.json"),
-		"workflow-action-capture-after-dom":   filepath.Join(evidenceDir, "action-capture.after.dom.json"),
+		"workflow-action-capture-before-text":       filepath.Join(evidenceDir, "action-capture.before.text.json"),
+		"workflow-action-capture-before-dom":        filepath.Join(evidenceDir, "action-capture.before.dom.json"),
+		"workflow-action-capture-after-text":        filepath.Join(evidenceDir, "action-capture.after.text.json"),
+		"workflow-action-capture-after-dom":         filepath.Join(evidenceDir, "action-capture.after.dom.json"),
+		"workflow-action-capture-action-network":    filepath.Join(evidenceDir, "action-capture.action.network.json"),
+		"workflow-action-capture-action-websockets": filepath.Join(evidenceDir, "action-capture.action.websockets.json"),
+		"workflow-action-capture-action-console":    filepath.Join(evidenceDir, "action-capture.action.console.json"),
 	}
-	if got.Evidence.ArtifactCount != len(wantEvidence) || got.Evidence.Before.Text.Count == 0 || got.Evidence.Before.DOM.Count == 0 || got.Evidence.After.Text.Count == 0 || got.Evidence.After.DOM.Count == 0 {
-		t.Fatalf("workflow action-capture evidence = %+v, want before/after text and DOM evidence", got.Evidence)
+	if got.Evidence.ArtifactCount != len(wantEvidence) ||
+		got.Evidence.Before.Text.Count == 0 ||
+		got.Evidence.Before.DOM.Count == 0 ||
+		got.Evidence.After.Text.Count == 0 ||
+		got.Evidence.After.DOM.Count == 0 ||
+		got.Evidence.Events.Network.Count == 0 ||
+		got.Evidence.Events.WebSockets.Count == 0 ||
+		got.Evidence.Events.Console.Count == 0 {
+		t.Fatalf("workflow action-capture evidence = %+v, want before/after and event evidence", got.Evidence)
 	}
-	if got.Evidence.Before.Text.Artifact.Path != wantEvidence["workflow-action-capture-before-text"] || got.Evidence.After.DOM.Artifact.Path != wantEvidence["workflow-action-capture-after-dom"] {
+	if got.Evidence.Before.Text.Artifact.Path != wantEvidence["workflow-action-capture-before-text"] ||
+		got.Evidence.After.DOM.Artifact.Path != wantEvidence["workflow-action-capture-after-dom"] ||
+		got.Evidence.Events.Network.Artifact.Path != wantEvidence["workflow-action-capture-action-network"] ||
+		got.Evidence.Events.Console.Artifact.Path != wantEvidence["workflow-action-capture-action-console"] {
 		t.Fatalf("workflow action-capture evidence paths = %+v, want stable before/after artifact paths", got.Evidence)
 	}
 	seenEvidence := map[string]string{}

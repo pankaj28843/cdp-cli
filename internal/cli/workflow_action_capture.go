@@ -154,7 +154,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 				evidenceReport["after"] = afterEvidence
 				artifacts = append(artifacts, afterArtifacts...)
 				collectorErrors = append(collectorErrors, afterErrors...)
-				evidenceReport["artifact_count"] = len(beforeAfterEvidenceArtifacts(evidenceReport))
+				evidenceReport["artifact_count"] = len(actionCaptureEvidenceArtifacts(evidenceReport))
 			}
 
 			workflowReport := map[string]any{
@@ -194,6 +194,19 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 					}
 					if includeSet["console"] {
 						report["messages"] = messages
+					}
+					if evidenceOutDir != "" {
+						eventEvidence, eventArtifacts, eventErrors := collectActionCaptureEventEvidence(evidenceOutDir, actionStarted, actionFinished, includeSet, limit, requests, websockets, messages)
+						if len(eventEvidence) > 0 {
+							evidenceReport["events"] = eventEvidence
+						}
+						artifacts = append(artifacts, eventArtifacts...)
+						collectorErrors = append(collectorErrors, eventErrors...)
+						evidenceReport["artifact_count"] = len(actionCaptureEvidenceArtifacts(evidenceReport))
+						report["evidence"] = evidenceReport
+						if len(artifacts) > 0 {
+							report["artifacts"] = artifacts
+						}
 					}
 				}
 			}
@@ -252,7 +265,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&waitBefore, "wait-before", time.Second, "delay after arming collectors and before action")
 	cmd.Flags().DurationVar(&waitAfter, "wait-after", 5*time.Second, "delay after action before collecting evidence")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the unified JSON artifact")
-	cmd.Flags().StringVar(&evidenceOutDir, "evidence-out-dir", "", "optional directory for before/after text and DOM evidence artifacts")
+	cmd.Flags().StringVar(&evidenceOutDir, "evidence-out-dir", "", "optional directory for before/after text, DOM, and action event evidence artifacts")
 	cmd.Flags().StringVar(&beforeScreenshot, "before-screenshot", "", "optional before-action screenshot path")
 	cmd.Flags().StringVar(&afterScreenshot, "after-screenshot", "", "optional after-action screenshot path")
 	cmd.Flags().IntVar(&limit, "limit", 500, "maximum events per collector; use 0 for no limit")
@@ -434,7 +447,74 @@ func writeActionCaptureEvidenceArtifact(outDir, phase, collector string, payload
 	}, nil
 }
 
-func beforeAfterEvidenceArtifacts(evidence map[string]any) []map[string]any {
+func collectActionCaptureEventEvidence(outDir, actionStarted, actionFinished string, includeSet map[string]bool, limit int, requests, websockets []networkCaptureRecord, messages []consoleMessage) (map[string]any, []map[string]any, []map[string]string) {
+	capturedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	window := map[string]any{
+		"action_started_at":  actionStarted,
+		"action_finished_at": actionFinished,
+	}
+	evidence := map[string]any{
+		"at":      capturedAt,
+		"out_dir": outDir,
+		"window":  window,
+	}
+	artifacts := []map[string]any{}
+	collectorErrors := []map[string]string{}
+	if includeSet["network"] {
+		artifact, err := writeActionCaptureEvidenceArtifact(outDir, "action", "network", map[string]any{
+			"phase":       "action",
+			"captured_at": capturedAt,
+			"collector":   "network",
+			"window":      window,
+			"limit":       limit,
+			"count":       len(requests),
+			"requests":    requests,
+		})
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("action_network_artifact", err))
+		} else {
+			evidence["network"] = map[string]any{"count": len(requests), "artifact": artifact}
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	if includeSet["websocket"] {
+		artifact, err := writeActionCaptureEvidenceArtifact(outDir, "action", "websockets", map[string]any{
+			"phase":       "action",
+			"captured_at": capturedAt,
+			"collector":   "websockets",
+			"window":      window,
+			"limit":       limit,
+			"count":       len(websockets),
+			"websockets":  websockets,
+		})
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("action_websockets_artifact", err))
+		} else {
+			evidence["websockets"] = map[string]any{"count": len(websockets), "artifact": artifact}
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	if includeSet["console"] {
+		artifact, err := writeActionCaptureEvidenceArtifact(outDir, "action", "console", map[string]any{
+			"phase":       "action",
+			"captured_at": capturedAt,
+			"collector":   "console",
+			"window":      window,
+			"limit":       limit,
+			"count":       len(messages),
+			"messages":    messages,
+		})
+		if err != nil {
+			collectorErrors = append(collectorErrors, collectorError("action_console_artifact", err))
+		} else {
+			evidence["console"] = map[string]any{"count": len(messages), "artifact": artifact}
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	return evidence, artifacts, collectorErrors
+}
+
+func actionCaptureEvidenceArtifacts(evidence map[string]any) []map[string]any {
 	artifacts := []map[string]any{}
 	for _, phase := range []string{"before", "after"} {
 		phaseEvidence, ok := evidence[phase].(map[string]any)
@@ -452,6 +532,21 @@ func beforeAfterEvidenceArtifacts(evidence map[string]any) []map[string]any {
 			}
 			artifacts = append(artifacts, artifact)
 		}
+	}
+	eventsEvidence, ok := evidence["events"].(map[string]any)
+	if !ok {
+		return artifacts
+	}
+	for _, collector := range []string{"network", "websockets", "console"} {
+		collectorEvidence, ok := eventsEvidence[collector].(map[string]any)
+		if !ok {
+			continue
+		}
+		artifact, ok := collectorEvidence["artifact"].(map[string]any)
+		if !ok {
+			continue
+		}
+		artifacts = append(artifacts, artifact)
 	}
 	return artifacts
 }
