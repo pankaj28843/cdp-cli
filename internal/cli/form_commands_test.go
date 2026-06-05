@@ -200,15 +200,48 @@ func TestAssertVisibleByRoleLocatorJSON(t *testing.T) {
 	}
 }
 
-func TestAssertVisibleFailureJSON(t *testing.T) {
+func TestAssertVisibleRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertVisibleAttempts.Store(0)
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "visible", "#hidden-button", "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitCheckFailed {
-		t.Fatalf("assert visible hidden exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	code := cli.Execute(context.Background(), []string{"assert", "visible", "Delayed visible", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert visible retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Assertion        struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Visible      bool   `json:"visible"`
+			Passed       bool   `json:"passed"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert visible retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#delayed-visible" || got.Assertion.Selector != "button#delayed-visible" || got.Assertion.Expected != "visible" || !got.Assertion.Visible || !got.Assertion.Passed || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert visible retry = %+v, want retried visible assertion with timing evidence", got)
+	}
+}
+
+func TestAssertVisibleTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "visible", "#hidden-button", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert visible hidden exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -222,6 +255,9 @@ func TestAssertVisibleFailureJSON(t *testing.T) {
 				Count        int    `json:"count"`
 				VisibleCount int    `json:"visible_count"`
 				HiddenCount  int    `json:"hidden_count"`
+				Attempts     int    `json:"attempts"`
+				ElapsedMS    int64  `json:"elapsed_ms"`
+				PollInterval string `json:"poll_interval"`
 				Items        []struct {
 					Visible bool   `json:"visible"`
 					Display string `json:"display"`
@@ -232,8 +268,8 @@ func TestAssertVisibleFailureJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert visible hidden output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "assertion_failed" || got.Data.Assertion.Selector != "#hidden-button" || got.Data.Assertion.Visible || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 0 || got.Data.Assertion.HiddenCount != 1 || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Visible || got.Data.Assertion.Items[0].Display != "none" {
-		t.Fatalf("assert visible hidden = %+v, want failed visibility assertion with diagnostics", got)
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "#hidden-button" || got.Data.Assertion.Visible || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 0 || got.Data.Assertion.HiddenCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].Visible || got.Data.Assertion.Items[0].Display != "none" {
+		t.Fatalf("assert visible hidden = %+v, want timeout with last visibility diagnostics", got)
 	}
 }
 
@@ -271,6 +307,39 @@ func TestAssertHiddenCSSJSON(t *testing.T) {
 	}
 	if !got.OK || got.Assertion.Selector != "#hidden-button" || got.Assertion.Expected != "hidden" || got.Assertion.Visible || !got.Assertion.Hidden || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.VisibleCount != 0 || got.Assertion.HiddenCount != 1 || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Visible || !got.Assertion.Items[0].Hidden || got.Assertion.Items[0].Display != "none" {
 		t.Fatalf("assert hidden css = %+v, want passing hidden assertion with item diagnostics", got)
+	}
+}
+
+func TestAssertHiddenRetriesUntilPassJSON(t *testing.T) {
+	fakeDelayedAssertHiddenAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "hidden", "#delayed-hidden", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert hidden retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Assertion struct {
+			Selector     string `json:"selector"`
+			Expected     string `json:"expected"`
+			Visible      bool   `json:"visible"`
+			Hidden       bool   `json:"hidden"`
+			Passed       bool   `json:"passed"`
+			Attempts     int    `json:"attempts"`
+			ElapsedMS    int64  `json:"elapsed_ms"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert hidden retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Assertion.Selector != "#delayed-hidden" || got.Assertion.Expected != "hidden" || got.Assertion.Visible || !got.Assertion.Hidden || !got.Assertion.Passed || got.Assertion.Attempts < 3 || got.Assertion.ElapsedMS <= 0 || got.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert hidden retry = %+v, want retried hidden assertion with timing evidence", got)
 	}
 }
 
@@ -321,9 +390,9 @@ func TestAssertHiddenFailureJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "hidden", "Search", "--by", "role", "--role", "button", "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitCheckFailed {
-		t.Fatalf("assert hidden visible locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	code := cli.Execute(context.Background(), []string{"assert", "hidden", "Search", "--by", "role", "--role", "button", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert hidden visible locator exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
 
 	var got struct {
@@ -346,14 +415,17 @@ func TestAssertHiddenFailureJSON(t *testing.T) {
 				Count        int    `json:"count"`
 				VisibleCount int    `json:"visible_count"`
 				HiddenCount  int    `json:"hidden_count"`
+				Attempts     int    `json:"attempts"`
+				ElapsedMS    int64  `json:"elapsed_ms"`
+				PollInterval string `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert hidden failure output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "assertion_failed" || got.Data.ResolvedSelector != "button#submit" || got.Data.Locator.By != "role" || got.Data.Locator.Query != "Search" || got.Data.Locator.Role != "button" || !got.Data.Locator.Strict || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "hidden" || !got.Data.Assertion.Visible || got.Data.Assertion.Hidden || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 1 || got.Data.Assertion.HiddenCount != 0 {
-		t.Fatalf("assert hidden failure = %+v, want failed hidden assertion with locator diagnostics", got)
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Locator.By != "role" || got.Data.Locator.Query != "Search" || got.Data.Locator.Role != "button" || !got.Data.Locator.Strict || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "hidden" || !got.Data.Assertion.Visible || got.Data.Assertion.Hidden || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.VisibleCount != 1 || got.Data.Assertion.HiddenCount != 0 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" {
+		t.Fatalf("assert hidden failure = %+v, want timeout hidden assertion with locator diagnostics", got)
 	}
 }
 

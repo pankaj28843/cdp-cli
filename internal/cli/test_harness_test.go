@@ -22,6 +22,8 @@ import (
 )
 
 var fakeDelayedAssertCheckedAttempts atomic.Int64
+var fakeDelayedAssertVisibleAttempts atomic.Int64
+var fakeDelayedAssertHiddenAttempts atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -653,6 +655,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Delayed checkbox"
 			placeholder = ""
 		}
+		if query == "Delayed visible" {
+			selector = "button#delayed-visible"
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Delayed visible"
+			placeholder = ""
+		}
 		disabled := false
 		readOnly := false
 		contentEditable := false
@@ -907,6 +917,35 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			hidden = true
 			display = "none"
 			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+		}
+		if selector == "button#delayed-visible" {
+			tag = "button"
+			role = "button"
+			name = "Delayed visible"
+			visible = fakeDelayedAssertVisibleAttempts.Add(1) >= 3
+			hidden = !visible
+			if visible {
+				display = "block"
+				rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			} else {
+				display = "none"
+				rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+			}
+		}
+		if selector == "#delayed-hidden" {
+			tag = "button"
+			role = "button"
+			name = "Delayed hidden"
+			hiddenNow := fakeDelayedAssertHiddenAttempts.Add(1) >= 3
+			visible = !hiddenNow
+			hidden = hiddenNow
+			if hiddenNow {
+				display = "none"
+				rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+			} else {
+				display = "block"
+				rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			}
 		}
 		count := 1
 		visibleCount := 1

@@ -76,6 +76,9 @@ type assertVisibilityResult struct {
 	VisibleCount int                    `json:"visible_count"`
 	HiddenCount  int                    `json:"hidden_count"`
 	Items        []assertVisibilityItem `json:"items,omitempty"`
+	Attempts     int                    `json:"attempts,omitempty"`
+	ElapsedMS    int64                  `json:"elapsed_ms,omitempty"`
+	PollInterval string                 `json:"poll_interval,omitempty"`
 	Error        *evalError             `json:"error,omitempty"`
 }
 
@@ -385,26 +388,30 @@ func locatorOptionsNeedQuery(opts locatorActionOptions) bool {
 
 func (a *app) newAssertVisibleCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var poll time.Duration
 	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{Use: "visible <selector-or-locator>", Short: "Assert an element is visible by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		return a.runAssertVisibilityCommand(cmd, args[0], "visible", locatorOpts, targetID, urlContains, titleContains)
+		return a.runAssertVisibilityCommand(cmd, args[0], "visible", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
 
 func (a *app) newAssertHiddenCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var poll time.Duration
 	var locatorOpts locatorActionOptions
 	cmd := &cobra.Command{Use: "hidden <selector-or-locator>", Short: "Assert an element is hidden or absent by CSS selector or strict locator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		return a.runAssertVisibilityCommand(cmd, args[0], "hidden", locatorOpts, targetID, urlContains, titleContains)
+		return a.runAssertVisibilityCommand(cmd, args[0], "hidden", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
 }
@@ -691,11 +698,14 @@ func (a *app) runAssertEnabledCommand(cmd *cobra.Command, query, expected string
 	return a.render(ctx, "assertion passed", report)
 }
 
-func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string) error {
+func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert visible 'Search' --by role --role button --poll 250ms --json"})
+	}
 	if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 		return err
 	}
-	ctx, cancel := a.browserCommandContext(cmd)
+	ctx, cancel := a.commandContextWithDefault(cmd, 5*time.Second)
 	defer cancel()
 	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 	if err != nil {
@@ -707,37 +717,9 @@ func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected str
 	if resolveOpts.By != "css" {
 		resolveOpts.IncludeHidden = true
 	}
-	selector := query
-	var locator *locatorFindResult
-	if resolveOpts.By != "css" {
-		if expected == "hidden" {
-			selector, locator, err = resolveOptionalHiddenAssertionSelector(ctx, session, query, resolveOpts)
-		} else {
-			selector, locator, err = resolveActionSelector(ctx, session, query, resolveOpts, "assert "+expected)
-		}
-		if err != nil {
-			return err
-		}
-	}
 
-	var got assertVisibilityResult
-	if selector == "" && expected == "hidden" && locator != nil && locator.Count == 0 {
-		got = assertVisibilityResult{Selector: query, Expected: "hidden", Visible: false, Hidden: true, Passed: true, Count: 0, VisibleCount: 0, HiddenCount: 0}
-	} else {
-		if err := evaluateJSONValue(ctx, session, assertVisibilityExpression(selector, 20), "assert "+expected, &got); err != nil {
-			return err
-		}
-		if got.Error != nil {
-			return invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'button[type=submit]' --json")
-		}
-		got.Expected = expected
-		got.Hidden = got.VisibleCount == 0
-		got.Passed = got.Visible
-		if expected == "hidden" {
-			got.Passed = got.Hidden
-		}
-	}
-
+	start := time.Now()
+	got, locator, selector, err := waitForVisibilityAssertion(ctx, session, query, expected, resolveOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
 	if locator != nil {
 		report["locator"] = locator
@@ -745,10 +727,100 @@ func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected str
 			report["resolved_selector"] = selector
 		}
 	}
-	if !got.Passed {
-		return commandErrorWithData("assertion_failed", "check_failed", visibilityAssertionFailureMessage(expected, selector, got), ExitCheckFailed, visibilityAssertionRemediations(query, selector, resolveOpts), report)
+	if err != nil {
+		if ctx.Err() != nil {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("%s assertion for %q did not pass before timeout: %v", expected, query, ctx.Err()), ExitTimeout, visibilityAssertionRemediations(query, selector, resolveOpts), report)
+		}
+		return err
 	}
 	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForVisibilityAssertion(ctx context.Context, session *cdp.PageSession, query, expected string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertVisibilityResult, *locatorFindResult, string, error) {
+	attempts := 0
+	last := assertVisibilityResult{Selector: query, Expected: expected, PollInterval: poll.String()}
+	var lastLocator *locatorFindResult
+	lastSelector := query
+	for {
+		attempts++
+		selector := query
+		var locator *locatorFindResult
+		if opts.By != "css" {
+			var result locatorFindResult
+			if err := evaluateJSONValue(ctx, session, locatorFindExpression(opts.By, query, opts.Role, opts.Exact, opts.IncludeHidden, opts.TestIDAttr, opts.Limit), "assert "+expected+" locator", &result); err != nil {
+				return last, lastLocator, lastSelector, err
+			}
+			locator = &result
+			lastLocator = locator
+			if result.Error != nil {
+				return last, locator, "", commandError("invalid_locator", "usage", fmt.Sprintf("assert %s locator %s %q: %s", expected, opts.By, query, result.Error.Message), ExitUsage, locatorActionRemediations("assert "+expected, query, opts))
+			}
+			if expected == "hidden" && result.Count == 0 {
+				got := assertVisibilityResult{Selector: query, Expected: "hidden", Visible: false, Hidden: true, Passed: true, Count: 0, VisibleCount: 0, HiddenCount: 0}
+				finishVisibilityAssertionResult(&got, expected, attempts, start, poll)
+				return got, locator, "", nil
+			}
+			if result.Count != 1 || len(result.Matches) != 1 || strings.TrimSpace(result.Matches[0].SelectorHint) == "" || result.Matches[0].SelectorAmbiguous {
+				if result.Count > 1 || (result.Count == 1 && len(result.Matches) == 1 && result.Matches[0].SelectorAmbiguous) {
+					return last, locator, "", commandError("ambiguous_locator", "usage", fmt.Sprintf("assert %s locator %s %q matched %d elements; refine the locator before asserting", expected, opts.By, query, result.Count), ExitUsage, locatorActionRemediations("assert "+expected, query, opts))
+				}
+				last = visibilityAssertionPendingResult(query, expected, result.Count, attempts, start, poll)
+				lastSelector = ""
+				if done, err := waitForNextAssertionPoll(ctx, poll); done {
+					return last, lastLocator, lastSelector, err
+				}
+				continue
+			}
+			selector = strings.TrimSpace(result.Matches[0].SelectorHint)
+			lastSelector = selector
+		}
+
+		var got assertVisibilityResult
+		if err := evaluateJSONValue(ctx, session, assertVisibilityExpression(selector, 20), "assert "+expected, &got); err != nil {
+			return last, lastLocator, lastSelector, err
+		}
+		if got.Error != nil {
+			return got, locator, selector, invalidSelectorError(selector, got.Error, "cdp assert "+expected+" 'button[type=submit]' --json")
+		}
+		finishVisibilityAssertionResult(&got, expected, attempts, start, poll)
+		last = got
+		lastLocator = locator
+		lastSelector = selector
+		if got.Passed {
+			return got, locator, selector, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, lastLocator, lastSelector, err
+		}
+	}
+}
+
+func finishVisibilityAssertionResult(got *assertVisibilityResult, expected string, attempts int, start time.Time, poll time.Duration) {
+	got.Expected = expected
+	got.Hidden = got.VisibleCount == 0
+	got.Passed = got.Visible
+	if expected == "hidden" {
+		got.Passed = got.Hidden
+	}
+	got.Attempts = attempts
+	got.ElapsedMS = time.Since(start).Milliseconds()
+	got.PollInterval = poll.String()
+}
+
+func visibilityAssertionPendingResult(query, expected string, count, attempts int, start time.Time, poll time.Duration) assertVisibilityResult {
+	return assertVisibilityResult{
+		Selector:     query,
+		Expected:     expected,
+		Visible:      false,
+		Hidden:       count == 0,
+		Passed:       false,
+		Count:        count,
+		VisibleCount: 0,
+		HiddenCount:  0,
+		Attempts:     attempts,
+		ElapsedMS:    time.Since(start).Milliseconds(),
+		PollInterval: poll.String(),
+	}
 }
 
 func resolveOptionalHiddenAssertionSelector(ctx context.Context, session *cdp.PageSession, query string, opts locatorActionOptions) (string, *locatorFindResult, error) {
