@@ -335,6 +335,36 @@ sleep 0.2
 wait "$network_pid"
 require_artifact "$network_output"
 jq -e --arg probe "$probe_id" '.ok == true and (.requests[] | select((.url | contains($probe)) and .status == 503))' "$network_output" >/dev/null
+request_probe="$(date +%s%N)"
+wait_request_output="$state_dir/wait-request.json"
+"$binary" wait request --match-url "$request_probe" --method GET --resource-type Fetch --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_request_output" &
+wait_request_pid=$!
+sleep 0.2
+"$binary" eval "fetch('$app_url/api/ok?wait_request=$request_probe').then(r => r.status)" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value == 200' >/dev/null
+wait "$wait_request_pid"
+require_artifact "$wait_request_output"
+jq -e --arg probe "$request_probe" '.ok == true and .wait.kind == "request" and .wait.matched == true and .wait.criteria.url_contains == $probe and .wait.criteria.method == "GET" and .event.cdp_method == "Network.requestWillBeSent" and .event.method == "GET" and (.event.url | contains($probe)) and .event.resource_type == "Fetch" and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false' "$wait_request_output" >/dev/null
+response_probe="$(date +%s%N)"
+wait_response_output="$state_dir/wait-response.json"
+"$binary" wait response --match-url "$response_probe" --method GET --status 200 --resource-type Fetch --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_response_output" &
+wait_response_pid=$!
+sleep 0.2
+"$binary" eval "fetch('$app_url/api/ok?wait_response=$response_probe').then(r => r.status)" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value == 200' >/dev/null
+wait "$wait_response_pid"
+require_artifact "$wait_response_output"
+jq -e --arg probe "$response_probe" '.ok == true and .wait.kind == "response" and .wait.matched == true and .wait.criteria.url_contains == $probe and .wait.criteria.method == "GET" and .wait.criteria.status == 200 and .event.cdp_method == "Network.responseReceived" and .event.method == "GET" and .event.status == 200 and (.event.url | contains($probe)) and .event.resource_type == "Fetch" and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false' "$wait_response_output" >/dev/null
+idle_probe="$(date +%s%N)"
+wait_idle_output="$state_dir/wait-network-idle.json"
+"$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &
+wait_idle_pid=$!
+sleep 0.05
+"$binary" eval "fetch('$app_url/api/ok?wait_idle=$idle_probe').then(r => r.status)" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value == 200' >/dev/null
+wait "$wait_idle_pid"
+require_artifact "$wait_idle_output"
+jq -e '.ok == true and .wait.kind == "network-idle" and .wait.matched == true and .wait.idle == "500ms" and .wait.in_flight_count == 0 and .wait.request_count >= 1 and .wait.completed_count >= 1 and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and (.wait.warnings[] | contains("quiescence signal"))' "$wait_idle_output" >/dev/null
 capture_output="$state_dir/network-capture.json"
 "$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$state_dir/network-capture.local.json" --json >"$capture_output"
 require_artifact "$capture_output"
