@@ -26,6 +26,7 @@ type cronRenderOptions struct {
 	Display       string
 	XDGRuntimeDir string
 	Reconnect     time.Duration
+	BrowserMode   string
 }
 
 type cronBlockState struct {
@@ -57,6 +58,9 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
+			if err := a.applyCronBrowserMode(cmd, &opts); err != nil {
+				return err
+			}
 			current, err := readUserCrontab(ctx)
 			available := !isCrontabMissing(err)
 			if err != nil && !isEmptyCrontab(err) && !isCrontabMissing(err) {
@@ -74,6 +78,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 			}
 			data := map[string]any{
 				"ok":                 true,
+				"browser_mode":       opts.BrowserMode,
 				"available":          available,
 				"installed":          state.Installed,
 				"matches_intended":   normalizeCronBlock(state.Text) == normalizeCronBlock(intended),
@@ -105,6 +110,9 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
+			if err := a.applyCronBrowserMode(cmd, &opts); err != nil {
+				return err
+			}
 			current, err := readUserCrontab(ctx)
 			if err != nil && !isEmptyCrontab(err) {
 				return cronCommandError("read crontab", err)
@@ -116,6 +124,7 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 			wanted := appendCronManagedBlock(without, intendedText)
 			data := map[string]any{
 				"ok":               true,
+				"browser_mode":     opts.BrowserMode,
 				"installed":        installed.Installed,
 				"matches_intended": normalizeCronBlock(installed.Text) == normalizeCronBlock(intendedText),
 				"current_block":    installed,
@@ -136,6 +145,7 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 
 func (a *app) newCronInstallCommand() *cobra.Command {
 	opts := defaultCronRenderOptions()
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install or repair the cdp-managed user crontab block",
@@ -143,6 +153,9 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
+			if err := a.applyCronBrowserMode(cmd, &opts); err != nil {
+				return err
+			}
 			current, err := readUserCrontab(ctx)
 			if err != nil && !isEmptyCrontab(err) {
 				return cronCommandError("read crontab", err)
@@ -150,26 +163,37 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 			block := managedCronBlock(opts)
 			next := appendCronManagedBlock(withoutCronManagedBlock(current), block)
 			changed := current != next
-			if changed {
+			if changed && !dryRun {
 				if err := writeUserCrontab(ctx, next); err != nil {
 					return cronCommandError("write crontab", err)
 				}
 			}
 			installed := extractCronManagedBlock(next)
+			if dryRun {
+				installed = extractCronManagedBlock(block)
+			}
 			data := map[string]any{
 				"ok":               true,
+				"browser_mode":     opts.BrowserMode,
 				"action":           actionString(changed, "installed", "unchanged"),
 				"changed":          changed,
-				"installed":        true,
+				"dry_run":          dryRun,
+				"installed":        !dryRun,
 				"matches_intended": true,
 				"managed_block":    installed,
+				"intended_block":   extractCronManagedBlock(block),
 				"warnings":         cronInstallWarnings(opts),
 				"next_commands":    []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"},
+			}
+			if dryRun {
+				data["action"] = actionString(changed, "would_install", "unchanged")
+				data["next_commands"] = []string{"cdp cron install --profile agent --json", "cdp cron diff --json"}
 			}
 			return a.render(ctx, fmt.Sprintf("cdp cron block %s", data["action"]), data)
 		},
 	}
 	addCronRenderFlags(cmd, &opts)
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "render the managed crontab block without installing it")
 	return cmd
 }
 
@@ -343,7 +367,30 @@ func defaultCronRenderOptions() cronRenderOptions {
 		Display:       envDefault("DISPLAY", ":0"),
 		XDGRuntimeDir: envDefault("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", os.Getuid())),
 		Reconnect:     30 * time.Second,
+		BrowserMode:   "all",
 	}
+}
+
+func (a *app) applyCronBrowserMode(cmd *cobra.Command, opts *cronRenderOptions) error {
+	if opts == nil {
+		return nil
+	}
+	if root := cmd.Root(); root != nil {
+		flags := root.PersistentFlags()
+		if flags.Changed("browser-mode") || flags.Changed("browserMode") {
+			mode := strings.TrimSpace(strings.ToLower(a.opts.browserMode))
+			switch mode {
+			case "headed", "headless":
+				opts.BrowserMode = mode
+			default:
+				return commandError("invalid_browser_mode", "usage", "--browser-mode must be headed or headless for cron rendering", ExitUsage, []string{"cdp --browser-mode headless cron install --dry-run --json", "cdp --browser-mode headed cron install --dry-run --json"})
+			}
+		}
+	}
+	if opts.BrowserMode == "" {
+		opts.BrowserMode = "all"
+	}
+	return nil
 }
 
 func managedCronBlock(opts cronRenderOptions) string {
@@ -355,15 +402,19 @@ func managedCronBlock(opts cronRenderOptions) string {
 	if opts.Reconnect <= 0 {
 		reconnect = "30s"
 	}
-	lines := []string{
-		cronManagedBlockStart,
-		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/cron-headed-heal.lock", logDir), fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed cron heal headed --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir))),
-		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
-		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
-		fmt.Sprintf("0 */6 * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy managed --if-older-than 6h --json >> %s/profile-seed-headless.log 2>&1", cdpBin, logDir))),
-		fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 10 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
-		cronManagedBlockEnd,
+	lines := []string{cronManagedBlockStart}
+	if opts.BrowserMode == "all" || opts.BrowserMode == "headed" {
+		lines = append(lines, fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headed.lock", logDir), fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed daemon keepalive --auto-connect --repair --probe auto --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir))))
 	}
+	if opts.BrowserMode == "all" || opts.BrowserMode == "headless" {
+		lines = append(lines,
+			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
+			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
+			fmt.Sprintf("0 */6 * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy managed --if-older-than 6h --json >> %s/profile-seed-headless.log 2>&1", cdpBin, logDir))),
+			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 10 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
+		)
+	}
+	lines = append(lines, cronManagedBlockEnd)
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -530,7 +581,7 @@ func cronInstallWarnings(opts cronRenderOptions) []string {
 
 func cronLockStates(stateDir string) map[string]any {
 	locks := map[string]any{}
-	for _, name := range []string{"cron-headed-heal", "keepalive-headless", "headless-health", "headless-profile-seed", "page-cleanup-headless"} {
+	for _, name := range []string{"keepalive-headed", "cron-headed-heal", "keepalive-headless", "headless-health", "headless-profile-seed", "page-cleanup-headless"} {
 		path := filepath.Join(stateDir, "locks", name+".lock")
 		info, err := os.Stat(path)
 		locks[name] = map[string]any{

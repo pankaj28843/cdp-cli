@@ -109,6 +109,35 @@ func webResearchSERPList() string {
 	return strings.Join(webResearchSupportedSERPs(), ", ")
 }
 
+func parseWebResearchSERPs(value string) ([]string, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return []string{"google"}, nil
+	}
+	if value == "all" {
+		return webResearchSupportedSERPs(), nil
+	}
+	seen := map[string]bool{}
+	var engines []string
+	for _, part := range strings.Split(value, ",") {
+		engine := strings.TrimSpace(strings.ToLower(part))
+		if engine == "" {
+			continue
+		}
+		if !isWebResearchSupportedSERP(engine) {
+			return nil, fmt.Errorf("unsupported SERP %q", engine)
+		}
+		if !seen[engine] {
+			seen[engine] = true
+			engines = append(engines, engine)
+		}
+	}
+	if len(engines) == 0 {
+		return []string{"google"}, nil
+	}
+	return engines, nil
+}
+
 func webResearchSearchURL(serp, query, timeFilter string, page int) string {
 	if page < 1 {
 		page = 1

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -670,6 +671,54 @@ func TestWorkflowWebResearchSERPSupportsMultipleEngines(t *testing.T) {
 				t.Fatalf("workflow web-research serp engine metadata = %+v", got)
 			}
 		})
+	}
+}
+
+func TestWorkflowWebResearchSERPRunsMultipleEnginesInOneCommand(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("agentic engineering\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	outDir := filepath.Join(tmpDir, "research")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", "google,bing", "--fallback-serp", "none", "--result-pages", "1", "--parallel", "3", "--out-dir", outDir, "--wait", "1s", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK    bool `json:"ok"`
+		SERPs []struct {
+			Serp string `json:"serp"`
+		} `json:"serps"`
+		Workflow struct {
+			Serp                 string   `json:"serp"`
+			Serps                []string `json:"serps"`
+			EngineCount          int      `json:"engine_count"`
+			ParallelEngines      bool     `json:"parallel_engines"`
+			ParallelEngineCount  int      `json:"parallel_engine_count"`
+			PerEngineParallel    int      `json:"per_engine_parallel"`
+			ScheduledResultPages int      `json:"scheduled_result_pages"`
+			CompletedResultPages int      `json:"completed_result_pages"`
+			FallbackSerp         string   `json:"fallback_serp"`
+			ResolvedFallbackSerp string   `json:"resolved_fallback_serp"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research serp output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Serp != "google,bing" || !reflect.DeepEqual(got.Workflow.Serps, []string{"google", "bing"}) || got.Workflow.EngineCount != 2 || !got.Workflow.ParallelEngines || got.Workflow.ParallelEngineCount != 2 || got.Workflow.PerEngineParallel != 1 {
+		t.Fatalf("workflow multi-engine metadata = %+v", got.Workflow)
+	}
+	if got.Workflow.ScheduledResultPages != 2 || got.Workflow.CompletedResultPages != 2 || got.Workflow.FallbackSerp != "none" || got.Workflow.ResolvedFallbackSerp != "none" {
+		t.Fatalf("workflow multi-engine counts/fallback = %+v", got.Workflow)
+	}
+	if len(got.SERPs) != 2 || got.SERPs[0].Serp != "google" || got.SERPs[1].Serp != "bing" {
+		t.Fatalf("serp reports = %+v, want deterministic google then bing order", got.SERPs)
 	}
 }
 

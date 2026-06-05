@@ -42,6 +42,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	var progress string
 	var fastFailBlocked bool
 	var blockedFailureThreshold int
+	var parallelEngines bool
 	cmd := &cobra.Command{
 		Use:   "serp",
 		Short: "Collect rendered SERP artifacts and deduped research candidates",
@@ -76,37 +77,47 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			if resultPages > 3 {
 				resultPages = 3
 			}
-			serp = strings.TrimSpace(strings.ToLower(serp))
-			if serp == "" {
-				serp = "google"
+			primarySerps, err := parseWebResearchSERPs(serp)
+			if err != nil {
+				return commandError("usage", "usage", "--serp must be one of, all, or a comma-separated list from: "+webResearchSERPList(), ExitUsage, []string{"cdp workflow web-research serp --serp google --json", "cdp workflow web-research serp --serp google,bing --json", "cdp workflow web-research serp --serp all --json"})
 			}
-			if !isWebResearchSupportedSERP(serp) {
-				return commandError("usage", "usage", "--serp must be one of: "+webResearchSERPList(), ExitUsage, []string{"cdp workflow web-research serp --serp google --json", "cdp workflow web-research serp --serp duckduckgo --json"})
-			}
+			serp = strings.Join(primarySerps, ",")
 			fallbackSerp = strings.TrimSpace(strings.ToLower(fallbackSerp))
 			if fallbackSerp == "" {
 				fallbackSerp = "auto"
 			}
 			resolvedFallbackSerp := fallbackSerp
 			if fallbackSerp == "auto" {
-				if serp == "google" {
+				if len(primarySerps) != 1 || primarySerps[0] == "google" {
 					resolvedFallbackSerp = "none"
 				} else {
 					resolvedFallbackSerp = "google"
 				}
 			}
 			if resolvedFallbackSerp != "none" {
+				if len(primarySerps) != 1 {
+					return commandError("usage", "usage", "--fallback-serp other than none requires a single primary --serp engine", ExitUsage, []string{"cdp workflow web-research serp --serp duckduckgo --fallback-serp google --json", "cdp workflow web-research serp --serp google,bing --fallback-serp none --json"})
+				}
 				if !isWebResearchSupportedSERP(resolvedFallbackSerp) {
 					return commandError("usage", "usage", "--fallback-serp must be auto, none, or one of: "+webResearchSERPList(), ExitUsage, []string{"cdp workflow web-research serp --serp duckduckgo --fallback-serp google --json"})
 				}
-				if resolvedFallbackSerp == serp {
+				if resolvedFallbackSerp == primarySerps[0] {
 					return commandError("usage", "usage", "--fallback-serp must differ from --serp", ExitUsage, []string{"cdp workflow web-research serp --serp duckduckgo --fallback-serp google --json"})
 				}
 			}
 
 			ctx := cmd.Context()
 			queriesPath := filepath.Join(outDir, "queries.json")
-			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "fallback_serp": fallbackSerp, "resolved_fallback_serp": resolvedFallbackSerp, "result_pages": resultPages}, "", "  ")
+			effectiveParallelEngines := parallelEngines && len(primarySerps) > 1
+			perEngineParallel := parallel
+			if effectiveParallelEngines {
+				perEngineParallel = 1
+			}
+			parallelEngineCount := 1
+			if effectiveParallelEngines {
+				parallelEngineCount = len(primarySerps)
+			}
+			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "serps": primarySerps, "fallback_serp": fallbackSerp, "resolved_fallback_serp": resolvedFallbackSerp, "result_pages": resultPages, "parallel_engines": effectiveParallelEngines, "per_engine_parallel": perEngineParallel}, "", "  ")
 			if err != nil {
 				return commandError("internal", "internal", fmt.Sprintf("marshal web research queries: %v", err), ExitInternal, []string{"cdp workflow web-research serp --json"})
 			}
@@ -133,6 +144,12 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				Blocked   int
 				FastFail  bool
 			}
+			type serpBatchResult struct {
+				Index   int
+				Serp    string
+				Results []serpResult
+				Stats   serpRunStats
+			}
 			runJob := func(activeSerp, artifactRoot string, job serpJob) serpResult {
 				query := queries[job.QueryIndex]
 				queryURL := webResearchSearchURL(activeSerp, query.Text, query.TimeFilter, job.SerpPage)
@@ -158,12 +175,15 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			if blockedFailureLimit == 0 {
 				blockedFailureLimit = 3
 			}
-			runBatch := func(activeSerp, artifactRoot string) ([]serpResult, serpRunStats) {
+			runBatch := func(activeSerp, artifactRoot string, batchParallel int) ([]serpResult, serpRunStats) {
 				jobs := make(chan serpJob)
 				resultCount := len(queries) * resultPages
 				results := make(chan serpResult, resultCount)
 				var wg sync.WaitGroup
-				for i := 0; i < parallel; i++ {
+				if batchParallel <= 0 {
+					batchParallel = 1
+				}
+				for i := 0; i < batchParallel; i++ {
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
@@ -231,7 +251,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 					activeJobs++
 					return true
 				}
-				if fastFailBlocked && parallel == 1 {
+				if fastFailBlocked && batchParallel == 1 {
 					for {
 						job, ok := nextJob()
 						if !ok {
@@ -248,7 +268,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 						}
 					}
 				} else {
-					for activeJobs < parallel && scheduleNext() {
+					for activeJobs < batchParallel && scheduleNext() {
 					}
 					for activeJobs > 0 {
 						result := <-results
@@ -259,7 +279,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 							recordFastFailSignal(result)
 						}
 						emitProgress(result)
-						for activeJobs < parallel && scheduleNext() {
+						for activeJobs < batchParallel && scheduleNext() {
 						}
 					}
 				}
@@ -275,8 +295,42 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				return serpResults, serpRunStats{Scheduled: scheduledJobs, Completed: completedJobs, Blocked: blockedFailures, FastFail: fastFailTriggered}
 			}
 
-			primaryResults, primaryStats := runBatch(serp, filepath.Join(outDir, "serps"))
-			stats := []serpRunStats{primaryStats}
+			primaryArtifactRoot := func(activeSerp string) string {
+				if len(primarySerps) == 1 {
+					return filepath.Join(outDir, "serps")
+				}
+				return filepath.Join(outDir, "serps", activeSerp)
+			}
+			runPrimaryBatches := func() []serpBatchResult {
+				batches := make([]serpBatchResult, len(primarySerps))
+				if effectiveParallelEngines {
+					var wg sync.WaitGroup
+					for index, activeSerp := range primarySerps {
+						index := index
+						activeSerp := activeSerp
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							results, batchStats := runBatch(activeSerp, primaryArtifactRoot(activeSerp), perEngineParallel)
+							batches[index] = serpBatchResult{Index: index, Serp: activeSerp, Results: results, Stats: batchStats}
+						}()
+					}
+					wg.Wait()
+					return batches
+				}
+				for index, activeSerp := range primarySerps {
+					results, batchStats := runBatch(activeSerp, primaryArtifactRoot(activeSerp), perEngineParallel)
+					batches[index] = serpBatchResult{Index: index, Serp: activeSerp, Results: results, Stats: batchStats}
+				}
+				return batches
+			}
+			primaryBatches := runPrimaryBatches()
+			stats := make([]serpRunStats, 0, len(primaryBatches)+1)
+			primaryResults := make([]serpResult, 0, len(primarySerps)*len(queries)*resultPages)
+			for _, batch := range primaryBatches {
+				stats = append(stats, batch.Stats)
+				primaryResults = append(primaryResults, batch.Results...)
+			}
 			fallbackTriggered := false
 			fallbackReason := ""
 
@@ -321,14 +375,16 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			primaryFailureCount := len(failures)
 			primaryBlockedFailures := countSERPFailures(failures, "serp_blocked")
 			primaryCandidateCount := len(candidates)
-			if primaryStats.FastFail {
-				warnings = append(warnings, fmt.Sprintf("%s SERP sampling stopped early after %d consecutive blocked pages", serp, primaryStats.Blocked))
+			for _, batch := range primaryBatches {
+				if batch.Stats.FastFail {
+					warnings = append(warnings, fmt.Sprintf("%s SERP sampling stopped early after %d consecutive blocked pages", batch.Serp, batch.Stats.Blocked))
+				}
 			}
 			if resolvedFallbackSerp != "none" && primaryCandidateCount == 0 && primaryFailureCount > 0 && primaryBlockedFailures == primaryFailureCount {
 				fallbackTriggered = true
-				fallbackReason = fmt.Sprintf("%s produced zero candidates after %d blocked SERP pages", serp, primaryBlockedFailures)
+				fallbackReason = fmt.Sprintf("%s produced zero candidates after %d blocked SERP pages", primarySerps[0], primaryBlockedFailures)
 				warnings = append(warnings, fmt.Sprintf("%s; running fallback SERP %s", fallbackReason, resolvedFallbackSerp))
-				fallbackResults, fallbackStats := runBatch(resolvedFallbackSerp, filepath.Join(outDir, "fallback-serps", resolvedFallbackSerp))
+				fallbackResults, fallbackStats := runBatch(resolvedFallbackSerp, filepath.Join(outDir, "fallback-serps", resolvedFallbackSerp), parallel)
 				stats = append(stats, fallbackStats)
 				serpReports, failures, warnings, candidates = processResults(fallbackResults, serpReports, failures, warnings, candidates, seen)
 				if fallbackStats.FastFail {
@@ -339,8 +395,18 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				warnings = append(warnings, "SERP sampling produced zero candidates because one or more pages were blocked or failed")
 			}
 
+			engineOrder := map[string]int{}
+			for index, engine := range primarySerps {
+				engineOrder[engine] = index
+			}
+			if fallbackTriggered {
+				engineOrder[resolvedFallbackSerp] = len(engineOrder)
+			}
 			sort.SliceStable(candidates, func(i, j int) bool {
 				if candidates[i].Query == candidates[j].Query {
+					if engineOrder[candidates[i].Serp] != engineOrder[candidates[j].Serp] {
+						return engineOrder[candidates[i].Serp] < engineOrder[candidates[j].Serp]
+					}
 					return candidates[i].Rank < candidates[j].Rank
 				}
 				return candidates[i].Query < candidates[j].Query
@@ -384,6 +450,11 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 				"workflow": map[string]any{
 					"name":                      "web-research-serp",
 					"serp":                      serp,
+					"serps":                     primarySerps,
+					"engine_count":              len(primarySerps),
+					"parallel_engines":          effectiveParallelEngines,
+					"parallel_engine_count":     parallelEngineCount,
+					"per_engine_parallel":       perEngineParallel,
 					"fallback_serp":             fallbackSerp,
 					"resolved_fallback_serp":    resolvedFallbackSerp,
 					"fallback_triggered":        fallbackTriggered,
@@ -412,7 +483,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&queryFile, "query-file", "", "newline-delimited search queries to sample")
-	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google, bing, brave, duckduckgo, or kagi")
+	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google, bing, brave, duckduckgo, kagi, all, or a comma-separated engine list")
 	cmd.Flags().StringVar(&fallbackSerp, "fallback-serp", "auto", "fallback SERP after blocked zero-candidate primary runs: auto, none, google, bing, brave, duckduckgo, or kagi")
 	cmd.Flags().IntVar(&maxCandidates, "max-candidates", 100, "maximum deduped candidates to emit; use 0 for no limit")
 	cmd.Flags().StringVar(&candidateOut, "candidate-out", "", "path for deduped candidates JSON")
@@ -427,6 +498,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	cmd.Flags().StringVar(&progress, "progress", "none", "progress event stream: none or stderr")
 	cmd.Flags().BoolVar(&fastFailBlocked, "fast-fail-blocked", false, "stop SERP sampling early after repeated consent, CAPTCHA, auth, or bot-check pages")
 	cmd.Flags().IntVar(&blockedFailureThreshold, "blocked-failure-threshold", 3, "consecutive blocked SERP pages required before --fast-fail-blocked stops scheduling")
+	cmd.Flags().BoolVar(&parallelEngines, "parallel-engines", true, "run comma-separated or all SERP engines concurrently with one scheduled page lane per engine")
 	return cmd
 }
 

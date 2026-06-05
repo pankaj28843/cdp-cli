@@ -62,6 +62,8 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Managed user-crontab block for cdp browser runtime keepalive, health, profile seed, and cleanup tasks.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when cron metadata or mutation completed."},
+				{Name: "browser_mode", Type: "string", Required: false, Description: "Rendered cron browser mode: all, headed, or headless."},
+				{Name: "dry_run", Type: "boolean", Required: false, Description: "True when install rendered the intended block without writing the user crontab."},
 				{Name: "installed", Type: "boolean", Required: false, Description: "True when the cdp-managed block exists in the current user crontab."},
 				{Name: "matches_intended", Type: "boolean", Required: false, Description: "True when the installed block exactly matches the rendered agent profile block."},
 				{Name: "managed_block", Type: "cron_block", Required: false, Description: "Installed cdp-managed block entries."},
@@ -934,12 +936,12 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when every SERP was sampled without extraction failures or block-page failures."},
 				{Name: "queries", Type: "array<object>", Required: true, Description: "Input queries with optional time filters."},
-				{Name: "serps", Type: "array<object>", Required: true, Description: "Per-query rendered extraction summaries and artifact references."},
+				{Name: "serps", Type: "array<object>", Required: true, Description: "Per-engine, per-query rendered extraction summaries and artifact references."},
 				{Name: "candidates", Type: "array<web_research_candidate>", Required: true, Description: "Deduped candidates with engine, query, SERP page, rank on page, global rank, title, source, preview, URL, and type."},
 				{Name: "warnings", Type: "array<string>", Required: true, Description: "Workflow-level warnings, including zero-candidate blocked SERP runs."},
 				{Name: "failures", Type: "array<object>", Required: true, Description: "Per-query failures surfaced for agent judgment, including engine-specific serp_blocked and auth-required pages."},
 				{Name: "artifacts", Type: "object", Required: true, Description: "queries.json, candidates.json, and candidates.tsv paths."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "SERP, fallback SERP metadata, primary/fallback counts, scheduled result pages, progress mode, fast-fail settings, parallelism, output directory, and next commands."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Selected SERP engines, parallel engine lanes, fallback SERP metadata, primary/fallback counts, scheduled result pages, progress mode, fast-fail settings, parallelism, output directory, and next commands."},
 			},
 		},
 		"workflow-web-research-extract": {

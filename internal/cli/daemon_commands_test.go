@@ -391,10 +391,11 @@ func TestDaemonKeepaliveStartsBrowserURLJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK     bool   `json:"ok"`
-		State  string `json:"state"`
-		Action string `json:"action"`
-		Daemon struct {
+		OK          bool   `json:"ok"`
+		BrowserMode string `json:"browser_mode"`
+		State       string `json:"state"`
+		Action      string `json:"action"`
+		Daemon      struct {
 			State string `json:"state"`
 		} `json:"daemon"`
 		Start struct {
@@ -404,7 +405,7 @@ func TestDaemonKeepaliveStartsBrowserURLJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.State != "started" || got.Action != "started" || got.Daemon.State != "running" || !got.Start.Keepalive {
+	if !got.OK || got.BrowserMode != "headed" || got.State != "started" || got.Action != "started" || got.Daemon.State != "running" || !got.Start.Keepalive {
 		t.Fatalf("daemon keepalive = %+v, want started running daemon", got)
 	}
 }
@@ -420,17 +421,18 @@ func TestDaemonKeepaliveHealthyJSON(t *testing.T) {
 		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
 	var got struct {
-		OK     bool   `json:"ok"`
-		State  string `json:"state"`
-		Action string `json:"action"`
-		Daemon struct {
+		OK          bool   `json:"ok"`
+		BrowserMode string `json:"browser_mode"`
+		State       string `json:"state"`
+		Action      string `json:"action"`
+		Daemon      struct {
 			State string `json:"state"`
 		} `json:"daemon"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.State != "healthy" || got.Action != "none" || got.Daemon.State != "running" {
+	if !got.OK || got.BrowserMode != "headed" || got.State != "healthy" || got.Action != "none" || got.Daemon.State != "running" {
 		t.Fatalf("daemon keepalive = %+v, want healthy running daemon", got)
 	}
 }
@@ -447,18 +449,19 @@ func TestDaemonKeepaliveLockedJSON(t *testing.T) {
 		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
 	var got struct {
-		OK     bool   `json:"ok"`
-		State  string `json:"state"`
-		Action string `json:"action"`
-		Locked bool   `json:"locked"`
-		Lock   struct {
+		OK          bool   `json:"ok"`
+		BrowserMode string `json:"browser_mode"`
+		State       string `json:"state"`
+		Action      string `json:"action"`
+		Locked      bool   `json:"locked"`
+		Lock        struct {
 			Phase string `json:"phase"`
 		} `json:"lock"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon keepalive output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.State != "locked" || got.Action != "skipped" || !got.Locked || got.Lock.Phase != "active_probe" {
+	if !got.OK || got.BrowserMode != "headed" || got.State != "locked" || got.Action != "skipped" || !got.Locked || got.Lock.Phase != "active_probe" {
 		t.Fatalf("daemon keepalive = %+v, want locked skip", got)
 	}
 }

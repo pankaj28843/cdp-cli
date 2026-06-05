@@ -653,13 +653,14 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 			}
 			if !acquired {
 				return a.render(ctx, fmt.Sprintf("keepalive\t%s\tlocked", connectionName), map[string]any{
-					"ok":         true,
-					"connection": connectionName,
-					"mode":       mode,
-					"state":      "locked",
-					"action":     "skipped",
-					"locked":     true,
-					"lock":       existingLock,
+					"ok":           true,
+					"browser_mode": browserMode,
+					"connection":   connectionName,
+					"mode":         mode,
+					"state":        "locked",
+					"action":       "skipped",
+					"locked":       true,
+					"lock":         existingLock,
 				})
 			}
 			defer lock.Release()
@@ -696,16 +697,17 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 			}
 			if status.State == "running" && runtimeHealthy {
 				return a.render(ctx, fmt.Sprintf("keepalive\t%s\thealthy", connectionName), map[string]any{
-					"ok":         true,
-					"connection": connectionName,
-					"mode":       mode,
-					"state":      "healthy",
-					"action":     "none",
-					"locked":     false,
-					"daemon":     status,
-					"probe":      probeResult,
-					"health":     runtimeCheck,
-					"lock":       map[string]any{"name": lock.Metadata.Name, "acquired": true},
+					"ok":           true,
+					"browser_mode": browserMode,
+					"connection":   connectionName,
+					"mode":         mode,
+					"state":        "healthy",
+					"action":       "none",
+					"locked":       false,
+					"daemon":       status,
+					"probe":        probeResult,
+					"health":       runtimeCheck,
+					"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
 				})
 			}
 			if status.State == "running" {
@@ -724,15 +726,16 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 			}
 			if a.opts.autoConnect && probeMode == "passive" {
 				return a.render(ctx, fmt.Sprintf("keepalive\t%s\tpassive", connectionName), map[string]any{
-					"ok":         true,
-					"connection": connectionName,
-					"mode":       mode,
-					"state":      "passive",
-					"action":     "skipped",
-					"locked":     false,
-					"daemon":     status,
-					"probe":      probeResult,
-					"lock":       map[string]any{"name": lock.Metadata.Name, "acquired": true},
+					"ok":           true,
+					"browser_mode": browserMode,
+					"connection":   connectionName,
+					"mode":         mode,
+					"state":        "passive",
+					"action":       "skipped",
+					"locked":       false,
+					"daemon":       status,
+					"probe":        probeResult,
+					"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
 				})
 			}
 
@@ -806,19 +809,20 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				return err
 			}
 			data := map[string]any{
-				"ok":         true,
-				"connection": connectionName,
-				"mode":       mode,
-				"state":      state,
-				"action":     action,
-				"locked":     false,
-				"daemon":     result.data["daemon"],
-				"start":      result.data["start"],
-				"chrome":     chrome,
-				"probe":      probeResult,
-				"previous":   status,
-				"health":     runtimeCheck,
-				"lock":       map[string]any{"name": lock.Metadata.Name, "acquired": true},
+				"ok":           true,
+				"browser_mode": browserMode,
+				"connection":   connectionName,
+				"mode":         mode,
+				"state":        state,
+				"action":       action,
+				"locked":       false,
+				"daemon":       result.data["daemon"],
+				"start":        result.data["start"],
+				"chrome":       chrome,
+				"probe":        probeResult,
+				"previous":     status,
+				"health":       runtimeCheck,
+				"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
 			}
 			if conn, ok := result.data["connection"]; ok {
 				data["connection_detail"] = conn

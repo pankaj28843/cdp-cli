@@ -45,6 +45,7 @@ cdp storage cache get app-cache http://localhost:5173/api/me --json
 cdp storage service-workers list --url-contains localhost --json
 cdp workflow visible-posts 'https://x.com/<handle>' --limit 5 --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json
+cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --out-dir tmp/research-all --json
 cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json
 cdp protocol search screenshot --json
 cdp protocol examples Page.captureScreenshot --json
@@ -117,9 +118,16 @@ cdp cron heal headed --json
 ```
 
 `cdp cron install --profile agent --json` renders and installs the full managed
-block, including mode-explicit headed healing, headless keepalive, health, profile
-seeding, and page cleanup entries. Use `cdp cron diff --json` before installing to
-inspect the intended block without mutating the current crontab.
+block, including mode-explicit headed daemon keepalive, headless keepalive, health,
+profile seeding, and page cleanup entries. Use `cdp cron diff --json` or
+`cdp cron install --dry-run --json` before installing to inspect the intended
+block without mutating the current crontab. Add an explicit browser mode to render
+only one side:
+
+```bash
+cdp --browser-mode headed cron install --dry-run --json
+cdp --browser-mode headless cron install --dry-run --json
+```
 
 Use explicit `--browser-mode` for scheduled cleanup so headed and headless page
 records cannot be confused. Verify the current Linux user's scheduled tasks with:

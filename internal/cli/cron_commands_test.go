@@ -29,10 +29,13 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	for _, want := range []string{"cron heal headed", "command -v flock", "--strategy managed"} {
+	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe auto", "--browser-mode headless daemon keepalive --repair", "command -v flock", "--strategy managed"} {
 		if !strings.Contains(afterFirst, want) {
 			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
 		}
+	}
+	if strings.Contains(afterFirst, "cron heal headed") {
+		t.Fatalf("crontab after install still uses headed cron heal instead of daemon keepalive:\n%s", afterFirst)
 	}
 	if strings.Contains(afterFirst, "--strategy copy-default") || strings.Contains(afterFirst, "/usr/bin/flock") {
 		t.Fatalf("crontab after install used non-portable or unsafe defaults:\n%s", afterFirst)
@@ -46,6 +49,34 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	afterSecond := readFileString(t, crontabPath)
 	if afterSecond != afterFirst {
 		t.Fatalf("idempotent install changed crontab:\nfirst:\n%s\nsecond:\n%s", afterFirst, afterSecond)
+	}
+}
+
+func TestCronInstallHeadedOnlyDryRunDoesNotMutateCrontab(t *testing.T) {
+	initial := "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var got struct {
+		OK            bool `json:"ok"`
+		Changed       bool `json:"changed"`
+		Installed     bool `json:"installed"`
+		DryRun        bool `json:"dry_run"`
+		IntendedBlock struct {
+			Entries []string `json:"entries"`
+		} `json:"intended_block"`
+	}
+	executeCronJSON(t, []string{"--browser-mode", "headed", "cron", "install", "--dry-run", "--state-dir", stateDir, "--json"}, &got)
+	if !got.OK || !got.Changed || got.Installed || !got.DryRun || len(got.IntendedBlock.Entries) != 1 {
+		t.Fatalf("cron install headed dry-run = %+v, want one intended headed entry without install", got)
+	}
+	entry := got.IntendedBlock.Entries[0]
+	if !strings.Contains(entry, "--browser-mode headed daemon keepalive --auto-connect --repair --probe auto") || strings.Contains(entry, "--browser-mode headless") || strings.Contains(entry, "cron heal headed") {
+		t.Fatalf("headed dry-run entry = %q, want headed daemon keepalive only", entry)
+	}
+	if after := readFileString(t, crontabPath); after != initial {
+		t.Fatalf("dry-run mutated crontab:\n%s", after)
 	}
 }
 
