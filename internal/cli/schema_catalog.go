@@ -740,6 +740,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
+		"assert-in-viewport": {
+			Name:        "assert-in-viewport",
+			Description: "Auto-retrying viewport-intersection assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when at least one selected element intersects the viewport."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_viewport_result", Required: true, Description: "Selector, expected state, optional diff for failed state matches, pass/fail status, matched count, in-viewport/out-of-viewport counts, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
 		"assert-hidden": {
 			Name:        "assert-hidden",
 			Description: "Auto-retrying element hidden-or-absent assertion result for CSS selector or strict locator.",

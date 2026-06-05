@@ -622,6 +622,7 @@ func commandExamples(path string) []string {
 	examples["cdp assert name"] = []string{"cdp assert name 'button[type=submit]' Submit --mode exact --timeout 5s --json", "cdp assert name Checkout Checkout --by role --role button --poll 100ms --json"}
 	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
+	examples["cdp assert in-viewport"] = []string{"cdp assert in-viewport '#footer' --timeout 5s --json", "cdp assert in-viewport 'Load more' --by role --role button --poll 100ms --json"}
 	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --timeout 5s --json", "cdp assert disabled 'Submit' --by role --role button --poll 100ms --json"}
 	examples["cdp assert editable"] = []string{"cdp assert editable 'input[name=email]' --timeout 5s --json", "cdp assert editable 'Search' --by label --poll 100ms --json"}

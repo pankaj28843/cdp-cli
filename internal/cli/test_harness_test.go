@@ -38,6 +38,7 @@ var fakeDelayedAssertFocusedAttempts atomic.Int64
 var fakeDelayedAssertCSSAttempts atomic.Int64
 var fakeDelayedAssertRoleAttempts atomic.Int64
 var fakeDelayedAssertNameAttempts atomic.Int64
+var fakeDelayedAssertViewportAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
@@ -1404,6 +1405,87 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 					"visible_count": visibleCount,
 					"hidden_count":  hiddenCount,
 					"items":         items,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_viewport__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "main"
+		}
+		tag := "main"
+		role := ""
+		name := "Synthetic main text"
+		rect := map[string]any{"x": 0, "y": 0, "width": 600, "height": 200}
+		inViewport := true
+		fullyInViewport := true
+		if selector == "button#submit" {
+			tag = "button"
+			role = "button"
+			name = "Search"
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+		}
+		if selector == "button#delayed-viewport" {
+			tag = "button"
+			role = "button"
+			name = "Delayed viewport"
+			inViewport = fakeDelayedAssertViewportAttempts.Add(1) >= 3
+			fullyInViewport = inViewport
+			if inViewport {
+				rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			} else {
+				rect = map[string]any{"x": 10, "y": 1200, "width": 300, "height": 40}
+			}
+		}
+		if selector == "#below-fold" {
+			tag = "button"
+			role = "button"
+			name = "Below fold"
+			inViewport = false
+			fullyInViewport = false
+			rect = map[string]any{"x": 10, "y": 1200, "width": 300, "height": 40}
+		}
+		count := 1
+		inViewportCount := 1
+		if !inViewport {
+			inViewportCount = 0
+		}
+		if selector == "#missing" {
+			count = 0
+			inViewportCount = 0
+			fullyInViewport = false
+		}
+		outOfViewportCount := count - inViewportCount
+		items := []map[string]any{}
+		if count > 0 {
+			items = append(items, map[string]any{
+				"index":             0,
+				"tag":               tag,
+				"id":                strings.TrimPrefix(selector, "#"),
+				"role":              role,
+				"name":              name,
+				"visible":           true,
+				"in_viewport":       inViewport,
+				"fully_in_viewport": fullyInViewport,
+				"rect":              rect,
+			})
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":                   "https://example.test/app",
+					"title":                 "Example App",
+					"selector":              selector,
+					"expected":              "in-viewport",
+					"in_viewport":           inViewportCount > 0,
+					"fully_in_viewport":     fullyInViewport,
+					"passed":                inViewportCount > 0,
+					"count":                 count,
+					"in_viewport_count":     inViewportCount,
+					"out_of_viewport_count": outOfViewportCount,
+					"items":                 items,
 				},
 			},
 		}

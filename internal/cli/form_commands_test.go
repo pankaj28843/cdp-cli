@@ -1225,6 +1225,101 @@ func TestAssertVisibleTimeoutJSON(t *testing.T) {
 	}
 }
 
+func TestAssertInViewportByRoleLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "in-viewport", "Search", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("assert in-viewport by role exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By     string `json:"by"`
+			Query  string `json:"query"`
+			Role   string `json:"role"`
+			Strict bool   `json:"strict"`
+		} `json:"locator"`
+		Assertion struct {
+			Selector           string `json:"selector"`
+			Expected           string `json:"expected"`
+			InViewport         bool   `json:"in_viewport"`
+			FullyInViewport    bool   `json:"fully_in_viewport"`
+			Passed             bool   `json:"passed"`
+			Count              int    `json:"count"`
+			InViewportCount    int    `json:"in_viewport_count"`
+			OutOfViewportCount int    `json:"out_of_viewport_count"`
+			Attempts           int    `json:"attempts"`
+			ElapsedMS          int64  `json:"elapsed_ms"`
+			PollInterval       string `json:"poll_interval"`
+			Items              []struct {
+				Tag             string `json:"tag"`
+				Role            string `json:"role"`
+				InViewport      bool   `json:"in_viewport"`
+				FullyInViewport bool   `json:"fully_in_viewport"`
+			} `json:"items"`
+		} `json:"assertion"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert in-viewport by role output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.ResolvedSelector != "button#submit" || got.Locator.By != "role" || got.Locator.Query != "Search" || got.Locator.Role != "button" || !got.Locator.Strict {
+		t.Fatalf("assert in-viewport locator = %+v, want strict role locator", got)
+	}
+	if got.Assertion.Selector != "button#submit" || got.Assertion.Expected != "in-viewport" || !got.Assertion.InViewport || !got.Assertion.FullyInViewport || !got.Assertion.Passed || got.Assertion.Count != 1 || got.Assertion.InViewportCount != 1 || got.Assertion.OutOfViewportCount != 0 || got.Assertion.Attempts != 1 || got.Assertion.PollInterval != "10ms" || len(got.Assertion.Items) != 1 || got.Assertion.Items[0].Tag != "button" || got.Assertion.Items[0].Role != "button" || !got.Assertion.Items[0].InViewport || !got.Assertion.Items[0].FullyInViewport {
+		t.Fatalf("assert in-viewport assertion = %+v, want in-viewport resolved button", got.Assertion)
+	}
+}
+
+func TestAssertInViewportTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "in-viewport", "#below-fold", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert in-viewport timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Assertion struct {
+				Selector           string                  `json:"selector"`
+				Expected           string                  `json:"expected"`
+				InViewport         bool                    `json:"in_viewport"`
+				FullyInViewport    bool                    `json:"fully_in_viewport"`
+				Diff               *assertionStateDiffJSON `json:"diff"`
+				Passed             bool                    `json:"passed"`
+				Count              int                     `json:"count"`
+				InViewportCount    int                     `json:"in_viewport_count"`
+				OutOfViewportCount int                     `json:"out_of_viewport_count"`
+				Attempts           int                     `json:"attempts"`
+				ElapsedMS          int64                   `json:"elapsed_ms"`
+				PollInterval       string                  `json:"poll_interval"`
+				Items              []struct {
+					InViewport      bool `json:"in_viewport"`
+					FullyInViewport bool `json:"fully_in_viewport"`
+				} `json:"items"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert in-viewport timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "#below-fold" || got.Data.Assertion.Expected != "in-viewport" || got.Data.Assertion.InViewport || got.Data.Assertion.FullyInViewport || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Reason != "state_mismatch" || got.Data.Assertion.Diff.Expected != "in-viewport" || got.Data.Assertion.Diff.Actual != "out-of-viewport" || got.Data.Assertion.Diff.Count != 1 || got.Data.Assertion.Diff.MatchingCount != 0 || got.Data.Assertion.Diff.FailingCount != 1 || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.InViewportCount != 0 || got.Data.Assertion.OutOfViewportCount != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || len(got.Data.Assertion.Items) != 1 || got.Data.Assertion.Items[0].InViewport || got.Data.Assertion.Items[0].FullyInViewport || !containsString(got.RemediationCommands, "cdp scroll '#below-fold' --json") || !containsString(got.RemediationCommands, "cdp dom query '#below-fold' --json") {
+		t.Fatalf("assert in-viewport timeout = %+v, want timeout with last viewport diagnostics", got)
+	}
+}
+
 func TestAssertHiddenCSSJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
