@@ -99,16 +99,8 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 			if err != nil {
 				return dialogWaitError(ctx, session.TargetID, opts, report, err)
 			}
-			if opts.Action != "none" {
-				accept := opts.Action == "accept"
-				params := map[string]any{"accept": accept}
-				if accept && opts.PromptText != "" {
-					params["promptText"] = opts.PromptText
-				}
-				if err := client.CallSession(ctx, session.SessionID, "Page.handleJavaScriptDialog", params, nil); err != nil {
-					return commandErrorWithData("connection_failed", "connection", fmt.Sprintf("handle dialog target %s: %v", session.TargetID, err), ExitConnection, dialogWaitRemediations(opts), report)
-				}
-				markDialogHandled(report, opts.Action, accept, opts.PromptText != "")
+			if err := handleDialogWaitAction(ctx, client, session.SessionID, session.TargetID, opts, report); err != nil {
+				return err
 			}
 			return a.render(ctx, fmt.Sprintf("matched dialog\t%s", observation.Event.Type), report)
 		},
@@ -154,9 +146,20 @@ func normalizeDialogWaitOptions(opts *dialogWaitOptions) error {
 }
 
 func waitForDialogEvent(ctx context.Context, client browserEventClient, sessionID string, criteria dialogWaitCriteria) (dialogWaitObservation, error) {
-	if err := client.CallSession(ctx, sessionID, "Page.enable", map[string]any{}, nil); err != nil {
+	if err := setupDialogWait(ctx, client, sessionID); err != nil {
 		return dialogWaitObservation{}, err
 	}
+	return collectDialogEvent(ctx, client, sessionID, criteria)
+}
+
+func setupDialogWait(ctx context.Context, client browserEventClient, sessionID string) error {
+	if err := client.CallSession(ctx, sessionID, "Page.enable", map[string]any{}, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func collectDialogEvent(ctx context.Context, client browserEventClient, sessionID string, criteria dialogWaitCriteria) (dialogWaitObservation, error) {
 	observation := dialogWaitObservation{}
 	observe := func(event cdp.Event) {
 		if event.SessionID != "" && event.SessionID != sessionID {
@@ -195,6 +198,22 @@ func waitForDialogEvent(ctx context.Context, client browserEventClient, sessionI
 			return observation, nil
 		}
 	}
+}
+
+func handleDialogWaitAction(ctx context.Context, client cdp.CommandClient, sessionID, targetID string, opts dialogWaitOptions, report map[string]any) error {
+	if opts.Action == "none" {
+		return nil
+	}
+	accept := opts.Action == "accept"
+	params := map[string]any{"accept": accept}
+	if accept && opts.PromptText != "" {
+		params["promptText"] = opts.PromptText
+	}
+	if err := client.CallSession(ctx, sessionID, "Page.handleJavaScriptDialog", params, nil); err != nil {
+		return commandErrorWithData("connection_failed", "connection", fmt.Sprintf("handle dialog target %s: %v", targetID, err), ExitConnection, dialogWaitRemediations(opts), report)
+	}
+	markDialogHandled(report, opts.Action, accept, opts.PromptText != "")
+	return nil
 }
 
 func dialogWaitEventFromCDP(event cdp.Event) (dialogWaitEvent, bool) {

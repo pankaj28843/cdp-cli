@@ -688,6 +688,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
+					events = append(events, syntheticDialogEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 				}
 			} else if req.Method == "Page.captureScreenshot" {
@@ -831,6 +832,38 @@ func syntheticDownloadEventsForClick(sessionID string, params json.RawMessage, t
 			},
 		},
 	}
+}
+
+func syntheticDialogEventsForClick(sessionID string, params json.RawMessage, targetInfos []map[string]any) []map[string]any {
+	expression := string(params)
+	if !strings.Contains(expression, "__cdp_cli_click__") && !strings.Contains(expression, "__cdp_cli_click_point__") {
+		return nil
+	}
+	targetID := strings.TrimPrefix(sessionID, "session-")
+	if targetID == "" || targetID == sessionID {
+		return nil
+	}
+	var target map[string]any
+	for _, candidate := range targetInfos {
+		if candidate["targetId"] == targetID {
+			target = candidate
+			break
+		}
+	}
+	if target == nil || target["dialogOnClick"] != true {
+		return nil
+	}
+	return []map[string]any{{
+		"sessionId": sessionID,
+		"method":    "Page.javascriptDialogOpening",
+		"params": map[string]any{
+			"url":               syntheticStringValue(target, "dialogURL", "https://example.test/dialog?token=abc"),
+			"frameId":           syntheticStringValue(target, "dialogFrameID", "frame-dialog"),
+			"message":           syntheticStringValue(target, "dialogMessage", "Delete item?"),
+			"type":              syntheticStringValue(target, "dialogType", "confirm"),
+			"hasBrowserHandler": false,
+		},
+	}}
 }
 
 func syntheticStringValue(values map[string]any, key, fallback string) string {

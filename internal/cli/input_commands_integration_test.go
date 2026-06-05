@@ -185,6 +185,65 @@ func TestClickWaitDownloadJSON(t *testing.T) {
 	}
 }
 
+func TestClickWaitDialogJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "dialog-page", "type": "page", "title": "Dialog App", "url": "https://example.test/dialog", "attached": false, "dialogOnClick": true, "dialogMessage": "Delete item?", "dialogType": "confirm", "dialogURL": "https://example.test/dialog?token=abc"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#delete", "--target", "dialog-page", "--wait-dialog", "--wait-dialog-type", "confirm", "--wait-dialog-message-contains", "Delete", "--wait-dialog-action", "dismiss", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click wait dialog exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Click struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+			Verified *bool  `json:"verified"`
+		} `json:"click"`
+		DialogWait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				Type            string `json:"type"`
+				MessageContains string `json:"message_contains"`
+			} `json:"criteria"`
+		} `json:"dialog_wait"`
+		Dialog struct {
+			Type        string `json:"type"`
+			Message     string `json:"message"`
+			URL         string `json:"url"`
+			CDPMethod   string `json:"cdp_method"`
+			Action      string `json:"action"`
+			Handled     bool   `json:"handled"`
+			Accepted    bool   `json:"accepted"`
+			PromptGiven bool   `json:"prompt_text_supplied"`
+		} `json:"dialog"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click wait dialog output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.Verified == nil || !*got.Click.Verified {
+		t.Fatalf("click wait dialog action = %+v, want raw-input clicked and verified", got)
+	}
+	if got.DialogWait.Kind != "dialog" || !got.DialogWait.Matched || got.DialogWait.EventCount == 0 || got.DialogWait.ObservedCount != 1 || got.DialogWait.Criteria.Type != "confirm" || got.DialogWait.Criteria.MessageContains != "Delete" {
+		t.Fatalf("click wait dialog wait = %+v, want matched dialog evidence", got.DialogWait)
+	}
+	if got.Dialog.Type != "confirm" || got.Dialog.Message != "Delete item?" || got.Dialog.CDPMethod != "Page.javascriptDialogOpening" || got.Dialog.Action != "dismiss" || !got.Dialog.Handled || got.Dialog.Accepted || got.Dialog.PromptGiven || strings.Contains(got.Dialog.URL, "token=abc") {
+		t.Fatalf("click wait dialog event = %+v, want dismissed redacted confirm dialog", got.Dialog)
+	}
+	if !containsString(got.NextCommands, "cdp snapshot --json") {
+		t.Fatalf("click wait dialog next commands = %+v, want snapshot follow-up", got.NextCommands)
+	}
+}
+
 func TestClickByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
