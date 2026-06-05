@@ -582,7 +582,7 @@ func commandExamples(path string) []string {
 	examples["cdp select"] = []string{"cdp select select[name=plan] pro --json", "cdp select Plan pro --by label --trial --json", "cdp select '#hidden-plan' pro --force --json"}
 	examples["cdp check"] = []string{"cdp check 'Subscribe to newsletter' --by label --json", "cdp check Subscribe --by role --role checkbox --trial --json", "cdp check '#covered-checkbox' --force --json"}
 	examples["cdp uncheck"] = []string{"cdp uncheck 'Subscribe to newsletter' --by label --json", "cdp uncheck Subscribe --by role --role checkbox --trial --json", "cdp uncheck '#covered-checkbox' --force --json"}
-	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json"}
+	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json", "cdp file 'Upload file' tmp/upload.txt --by label --trial --json"}
 	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --json"}
 	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}
 	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json"}

@@ -1205,7 +1205,27 @@ func checkExpression(selector string, desired bool, mutate bool) string {
 }
 
 func fileInputExpression(selector, basename string) string {
-	return fmt.Sprintf(`(() => { const selector = %s; const el = document.querySelector(selector); if (!el) return {selector, accepted:false, error:{name:"NotFoundError", message:"selector matched no elements"}}; return {selector, accepted: el.tagName === "INPUT" && el.type === "file", tag: el.tagName.toLowerCase(), type: el.type || "", file_name: %s}; })()`, jsStringLiteral(selector), jsStringLiteral(basename))
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_file_input__";
+  const selector = %s;
+  const fileName = %s;
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    return { url: location.href, title: document.title, selector, count: 0, accepted: false, file_set: false, file_name: fileName, content_omitted: true, error: { name: error.name, message: error.message }, marker };
+  }
+  if (elements.length === 0) {
+    return { url: location.href, title: document.title, selector, count: 0, accepted: false, file_set: false, file_name: fileName, content_omitted: true, error: { name: "NotFoundError", message: "selector matched no elements" }, marker };
+  }
+  const el = elements[0];
+  const tag = el.tagName.toLowerCase();
+  const type = String(el.getAttribute("type") || "").toLowerCase();
+  const accepted = tag === "input" && type === "file";
+  const out = { url: location.href, title: document.title, selector, count: elements.length, accepted, file_set: false, tag, type, file_name: fileName, content_omitted: true, marker };
+  if (!accepted) out.error = { name: "InvalidTargetError", message: "target element is not input[type=file]" };
+  return out;
+})()`, jsStringLiteral(selector), jsStringLiteral(basename))
 }
 
 func a11yNodeExpression(selector string) string {

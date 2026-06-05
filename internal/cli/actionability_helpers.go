@@ -167,6 +167,8 @@ func actionabilityRemediations(action, query, selector string, opts locatorActio
 		commands = append(commands, "cdp assert visible "+shellQuote(selector)+" --json", "cdp layout overflow --json")
 	} else if action == "press" {
 		commands = append(commands, "cdp assert count "+shellQuote(selector)+" 1 --json")
+	} else if action == "file" {
+		commands = append(commands, "cdp form values --json")
 	} else {
 		commands = append(commands, "cdp assert visible "+shellQuote(selector)+" --json", "cdp assert enabled "+shellQuote(selector)+" --json")
 	}
@@ -240,6 +242,7 @@ func actionabilityExpression(selector, action string) string {
   };
   const requiredChecksFor = () => {
     if (action === "press") return ["attached"];
+    if (action === "file") return ["attached"];
     if (action === "fill" || action === "type") return ["attached", "visible", "enabled", "editable"];
     if (action === "select") return ["attached", "visible", "enabled"];
     if (action === "hover" || action === "drag") return ["attached", "visible", "stable", "receives_events"];

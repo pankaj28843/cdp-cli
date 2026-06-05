@@ -96,6 +96,11 @@ DEMO_HTML = """<!doctype html>
         <input id="partial-selection" name="partial_selection" type="checkbox">
         Partial selection
       </label>
+      <label class="agent-form">
+        Upload file
+        <input id="upload-file" name="upload_file" type="file">
+      </label>
+      <input id="hidden-upload" class="hidden-fixture" type="file" aria-label="Hidden upload">
       <span class="covered-wrap">
         <input id="covered-checkbox" type="checkbox" aria-label="Covered checkbox">
         <span id="checkbox-cover" class="cover-overlay" aria-hidden="true"></span>

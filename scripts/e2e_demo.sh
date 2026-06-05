@@ -211,6 +211,8 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "input#agent-input" and .assertion.selector == "input#agent-input" and .assertion.editable == true and .assertion.editable_count == 1 and .assertion.read_only_count == 0 and .assertion.disabled_count == 0' >/dev/null
 "$binary" assert readonly "Read-only notes" --by label --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "textarea#readonly-notes" and .assertion.selector == "textarea#readonly-notes" and .assertion.read_only == true and .assertion.editable_count == 0 and .assertion.read_only_count == 1 and (.assertion.items[0].read_only_reason | index("native_readonly"))' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
 "$binary" click "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "clicked" and .locator.strict == true and .resolved_selector == "button#action" and .click.selector == "button#action" and .page_state.same_target == true and .actionability.actionable == true and .actionability.checks.receives_events.passed == true' >/dev/null
 "$binary" click "Click target" --by role --role button --trial --state-dir "$state_dir/cdp-state" --json \
@@ -261,12 +263,22 @@ require_artifact "$action_capture_dir/action-capture.manifest.json"
   | jq -e '.ok == true and .action == "hovered" and .resolved_selector == "button#action" and .hover.hovered == true and .hover.count >= 1 and .actionability.actionable == true' >/dev/null
 "$binary" hover "#covered-action" --force --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "hovered" and .hover.hovered == true and .hover.force == true and .actionability.force == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.skipped == true' >/dev/null
+"$binary" eval 'document.querySelector("#drag-target").scrollIntoView({block:"center"})' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
 "$binary" drag "drag-target" 8 12 --by test-id --trial --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "trial" and .resolved_selector == "div#drag-target" and .drag.trial == true and .drag.dragged == false and .drag.delta_x == 8 and .drag.delta_y == 12 and .actionability.actionable == true and ((.actionability.required_checks | index("enabled")) == null)' >/dev/null
 "$binary" drag "drag-target" 8 12 --by test-id --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "dragged" and .resolved_selector == "div#drag-target" and .drag.dragged == true and .drag.delta_x == 8 and .drag.delta_y == 12 and .actionability.actionable == true' >/dev/null
 "$binary" drag "#covered-action" 8 12 --force --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "dragged" and .drag.dragged == true and .drag.force == true and .actionability.force == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.skipped == true' >/dev/null
+upload_file="$state_dir/upload.txt"
+printf 'synthetic upload\n' >"$upload_file"
+"$binary" file "Upload file" "$upload_file" --by label --trial --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "trial" and .file.accepted == true and .file.file_set == false and .file.trial == true and .file.file_name == "upload.txt" and .file.content_omitted == true and .locator.strict == true and .resolved_selector == "input#upload-file" and .actionability.trial == true and .actionability.actionable == true and .actionability.required_checks == ["attached"] and .actionability.checks.attached.passed == true and .actionability.checks.visible.required == false' >/dev/null
+"$binary" file "Upload file" "$upload_file" --by label --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "file_set" and .file.accepted == true and .file.file_set == true and ((.file.trial // false) == false) and .file.file_name == "upload.txt" and .file.content_omitted == true and .locator.strict == true and .resolved_selector == "input#upload-file" and .actionability.actionable == true and .actionability.required_checks == ["attached"]' >/dev/null
+"$binary" file "#hidden-upload" "$upload_file" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "file_set" and .file.file_set == true and .actionability.actionable == true and .actionability.checks.visible.required == false and .actionability.checks.visible.skipped == true' >/dev/null
 "$binary" frames --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.frames | length >= 1)' >/dev/null
 "$binary" dom query button --state-dir "$state_dir/cdp-state" --json \

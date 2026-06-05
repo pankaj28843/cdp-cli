@@ -524,6 +524,19 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector resolved from a locator before actionability checks."},
 			},
 		},
+		"file": {
+			Name:        "file",
+			Description: "Resolve a CSS selector or strict locator to input[type=file], optionally run a non-mutating trial, then assign the local file path through CDP without printing file contents.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when file assignment completed or --trial target checks passed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name: file_set for assignment or trial for non-mutating validation."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "file", Type: "file_result", Required: true, Description: "Selector, matched count, accepted input[type=file] state, file_set/trial flags, local path metadata, basename, and content omission marker."},
+				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Attached-only target evidence for file inputs. Playwright set_input_files does not require visible/stable/receives-events/enabled/editable checks."},
+				{Name: "locator", Type: "locator_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector resolved from a locator before file-input validation."},
+			},
+		},
 		"frames": {
 			Name:        "frames",
 			Description: "List the frame tree for the selected target.",

@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +44,22 @@ type checkResult struct {
 	Role            string     `json:"role,omitempty"`
 	Name            string     `json:"name,omitempty"`
 	Error           *evalError `json:"error,omitempty"`
+}
+
+type fileResult struct {
+	URL            string     `json:"url,omitempty"`
+	Title          string     `json:"title,omitempty"`
+	Selector       string     `json:"selector"`
+	Count          int        `json:"count"`
+	Accepted       bool       `json:"accepted"`
+	FileSet        bool       `json:"file_set"`
+	Trial          bool       `json:"trial,omitempty"`
+	Path           string     `json:"path,omitempty"`
+	FileName       string     `json:"file_name,omitempty"`
+	ContentOmitted bool       `json:"content_omitted"`
+	Tag            string     `json:"tag,omitempty"`
+	Type           string     `json:"type,omitempty"`
+	Error          *evalError `json:"error,omitempty"`
 }
 
 func (a *app) newFocusCommand() *cobra.Command {
@@ -350,13 +368,22 @@ func (a *app) newSelectCommand() *cobra.Command {
 
 func (a *app) newFileCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var locatorOpts locatorActionOptions
+	var trial bool
 	cmd := &cobra.Command{
-		Use:   "file <selector> <path>",
-		Short: "Set a file input to a local file path without printing file contents",
+		Use:   "file <selector-or-locator> <path>",
+		Short: "Set a file input by CSS selector or strict locator without printing file contents",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, err := os.Stat(args[1]); err != nil {
 				return commandError("usage", "usage", fmt.Sprintf("file path is not readable: %v", err), ExitUsage, []string{"cdp file input[type=file] tmp/upload.txt --json"})
+			}
+			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
+				return err
+			}
+			absPath, err := filepath.Abs(args[1])
+			if err != nil {
+				return commandError("usage", "usage", fmt.Sprintf("resolve file path %s: %v", args[1], err), ExitUsage, []string{"cdp file input[type=file] tmp/upload.txt --json"})
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -365,19 +392,124 @@ func (a *app) newFileCommand() *cobra.Command {
 				return err
 			}
 			defer session.Close(ctx)
-			var result map[string]any
-			if err := evaluateJSONValue(ctx, session, fileInputExpression(args[0], filepath.Base(args[1])), "file", &result); err != nil {
+
+			selector, locator, err := resolveActionSelector(ctx, session, args[0], locatorOpts, "file")
+			if err != nil {
 				return err
 			}
-			result["path"] = args[1]
-			result["content_omitted"] = true
-			return a.render(ctx, fmt.Sprintf("file\t%s\t%s", args[0], args[1]), map[string]any{"ok": true, "target": pageRow(target), "file": result})
+			actionability, err := evaluateActionability(ctx, session, selector, "file")
+			if err != nil {
+				return err
+			}
+			if actionability.Error != nil {
+				return invalidSelectorError(selector, actionability.Error, "cdp file input[type=file] tmp/upload.txt --trial --json")
+			}
+			prepareActionability(&actionability, "file", trial, false)
+			result := fileResult{
+				URL:            actionability.URL,
+				Title:          actionability.Title,
+				Selector:       selector,
+				Count:          actionability.Count,
+				Trial:          trial,
+				Path:           args[1],
+				FileName:       filepath.Base(args[1]),
+				ContentOmitted: true,
+			}
+			if !actionability.Actionable {
+				report := map[string]any{
+					"ok":            false,
+					"action":        map[bool]string{true: "trial", false: "blocked"}[trial],
+					"target":        pageRow(target),
+					"file":          result,
+					"actionability": actionability,
+				}
+				if locator != nil {
+					report["locator"] = locator
+					report["resolved_selector"] = selector
+				}
+				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("file", selector, actionability), ExitCheckFailed, actionabilityRemediations("file", args[0], selector, locatorOpts), report)
+			}
+			if err := evaluateJSONValue(ctx, session, fileInputExpression(selector, filepath.Base(args[1])), "file", &result); err != nil {
+				return err
+			}
+			result.Trial = trial
+			result.Path = args[1]
+			result.FileName = filepath.Base(args[1])
+			result.ContentOmitted = true
+			if result.Error != nil {
+				return fileCommandResultError(selector, result.Error)
+			}
+			if !result.Accepted {
+				return commandError("invalid_target", "usage", fmt.Sprintf("file %q did not resolve to an input[type=file]", selector), ExitUsage, []string{"cdp locator find 'Upload file' --by label --json", "cdp file input[type=file] tmp/upload.txt --json"})
+			}
+			report := map[string]any{
+				"ok":            true,
+				"action":        "file_set",
+				"target":        pageRow(target),
+				"file":          result,
+				"actionability": actionability,
+			}
+			if locator != nil {
+				report["locator"] = locator
+				report["resolved_selector"] = selector
+			}
+			if trial {
+				report["action"] = "trial"
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
+			}
+			if err := setFileInputFiles(ctx, session, selector, absPath); err != nil {
+				return err
+			}
+			result.FileSet = true
+			report["file"] = result
+			return a.render(ctx, fmt.Sprintf("file\t%s\t%s", selector, filepath.Base(args[1])), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().BoolVar(&trial, "trial", false, "resolve and validate the file input without assigning the local file")
 	return cmd
+}
+
+func fileCommandResultError(selector string, err *evalError) error {
+	if err == nil {
+		return nil
+	}
+	switch err.Name {
+	case "InvalidTargetError":
+		return commandError("invalid_target", "usage", fmt.Sprintf("file %q: %s", selector, err.Message), ExitUsage, []string{"cdp form values --json", "cdp locator find 'Upload file' --by label --json"})
+	default:
+		return commandError("invalid_selector", "usage", fmt.Sprintf("file %q: %s", selector, err.Message), ExitUsage, []string{"cdp file input[type=file] tmp/upload.txt --json"})
+	}
+}
+
+func setFileInputFiles(ctx context.Context, session *cdp.PageSession, selector, path string) error {
+	var doc struct {
+		Root struct {
+			NodeID int `json:"nodeId"`
+		} `json:"root"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.getDocument", map[string]any{"depth": 0, "pierce": true}, &doc); err != nil {
+		return commandError("connection_failed", "connection", fmt.Sprintf("inspect DOM for file input: %v", err), ExitConnection, []string{"cdp protocol describe DOM.getDocument --json"})
+	}
+	if doc.Root.NodeID == 0 {
+		return commandError("dom_unavailable", "connection", "DOM.getDocument did not return a root node", ExitConnection, []string{"cdp daemon health --json"})
+	}
+	var query struct {
+		NodeID int `json:"nodeId"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.querySelector", map[string]any{"nodeId": doc.Root.NodeID, "selector": selector}, &query); err != nil {
+		return commandError("invalid_selector", "usage", fmt.Sprintf("query file input %q: %v", selector, err), ExitUsage, []string{"cdp dom query " + shellQuote(selector) + " --json"})
+	}
+	if query.NodeID == 0 {
+		return commandError("invalid_selector", "usage", fmt.Sprintf("selector %q matched no DOM node for file assignment", selector), ExitUsage, []string{"cdp dom query " + shellQuote(selector) + " --json"})
+	}
+	if err := execSessionJSON(ctx, session, "DOM.setFileInputFiles", map[string]any{"nodeId": query.NodeID, "files": []string{path}}, nil); err != nil {
+		return commandError("file_set_failed", "connection", fmt.Sprintf("set file input %q: %v", selector, err), ExitConnection, []string{"cdp protocol describe DOM.setFileInputFiles --json"})
+	}
+	return nil
 }
 
 func (a *app) newDialogCommand() *cobra.Command {

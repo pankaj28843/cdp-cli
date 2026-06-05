@@ -837,6 +837,192 @@ func TestSelectForceSkipsVisibleJSON(t *testing.T) {
 	}
 }
 
+func TestFileByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	uploadPath := filepath.Join(t.TempDir(), "upload.txt")
+	if err := os.WriteFile(uploadPath, []byte("synthetic upload"), 0o600); err != nil {
+		t.Fatalf("WriteFile upload returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "Upload file", uploadPath, "--by", "label", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("file by label exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Locator          struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Tag          string `json:"tag"`
+				Type         string `json:"type"`
+			} `json:"matches"`
+		} `json:"locator"`
+		File struct {
+			Selector       string `json:"selector"`
+			Accepted       bool   `json:"accepted"`
+			FileSet        bool   `json:"file_set"`
+			Trial          bool   `json:"trial"`
+			Path           string `json:"path"`
+			FileName       string `json:"file_name"`
+			ContentOmitted bool   `json:"content_omitted"`
+			Tag            string `json:"tag"`
+			Type           string `json:"type"`
+		} `json:"file"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Required   []string `json:"required_checks"`
+			Checks     struct {
+				Attached struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+				} `json:"attached"`
+				Visible struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"visible"`
+				Enabled struct {
+					Required bool `json:"required"`
+					Skipped  bool `json:"skipped"`
+				} `json:"enabled"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("file by label output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "file_set" || got.ResolvedSelector != "input#upload" || got.Locator.By != "label" || got.Locator.Query != "Upload file" || !got.Locator.Strict || len(got.Locator.Matches) != 1 {
+		t.Fatalf("file by label locator = %+v, want strict upload label locator", got)
+	}
+	if got.Locator.Matches[0].SelectorHint != "input#upload" || got.Locator.Matches[0].Tag != "input" || got.Locator.Matches[0].Type != "file" || got.File.Selector != "input#upload" || !got.File.Accepted || !got.File.FileSet || got.File.Trial || got.File.Path != uploadPath || got.File.FileName != "upload.txt" || !got.File.ContentOmitted || got.File.Tag != "input" || got.File.Type != "file" {
+		t.Fatalf("file result = %+v, want accepted file input without content", got.File)
+	}
+	if !got.Actionability.Actionable || len(got.Actionability.Required) != 1 || got.Actionability.Required[0] != "attached" || !got.Actionability.Checks.Attached.Required || !got.Actionability.Checks.Attached.Passed || got.Actionability.Checks.Visible.Required || !got.Actionability.Checks.Visible.Skipped || got.Actionability.Checks.Enabled.Required || !got.Actionability.Checks.Enabled.Skipped {
+		t.Fatalf("file actionability = %+v, want attached-only evidence", got.Actionability)
+	}
+}
+
+func TestFileTrialByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	uploadPath := filepath.Join(t.TempDir(), "upload.txt")
+	if err := os.WriteFile(uploadPath, []byte("synthetic upload"), 0o600); err != nil {
+		t.Fatalf("WriteFile upload returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "Upload file", uploadPath, "--by", "label", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("file trial exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		File   struct {
+			Selector string `json:"selector"`
+			Accepted bool   `json:"accepted"`
+			FileSet  bool   `json:"file_set"`
+			Trial    bool   `json:"trial"`
+		} `json:"file"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Trial      bool `json:"trial"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("file trial output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.File.Selector != "input#upload" || !got.File.Accepted || got.File.FileSet || !got.File.Trial || !got.Actionability.Actionable || !got.Actionability.Trial {
+		t.Fatalf("file trial = %+v, want non-mutating file-input evidence", got)
+	}
+}
+
+func TestFileInvalidTargetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	uploadPath := filepath.Join(t.TempDir(), "upload.txt")
+	if err := os.WriteFile(uploadPath, []byte("synthetic upload"), 0o600); err != nil {
+		t.Fatalf("WriteFile upload returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "button#submit", uploadPath, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("invalid file target exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool   `json:"ok"`
+		Code  string `json:"code"`
+		Class string `json:"err_class"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid file target output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "invalid_target" || got.Class != "usage" {
+		t.Fatalf("invalid file target = %+v, want invalid_target usage", got)
+	}
+}
+
+func TestFileHiddenInputUsesAttachedOnlyActionability(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	uploadPath := filepath.Join(t.TempDir(), "upload.txt")
+	if err := os.WriteFile(uploadPath, []byte("synthetic upload"), 0o600); err != nil {
+		t.Fatalf("WriteFile upload returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "#hidden-upload", uploadPath, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("hidden file input exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		File   struct {
+			FileSet bool `json:"file_set"`
+		} `json:"file"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+			Checks     struct {
+				Visible struct {
+					Required bool `json:"required"`
+					Passed   bool `json:"passed"`
+					Skipped  bool `json:"skipped"`
+				} `json:"visible"`
+			} `json:"checks"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("hidden file input output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "file_set" || !got.File.FileSet || !got.Actionability.Actionable || got.Actionability.Checks.Visible.Required || got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Visible.Skipped {
+		t.Fatalf("hidden file input = %+v, want attached-only file actionability", got)
+	}
+}
+
 func TestCheckByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

@@ -314,6 +314,20 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Page.navigateToHistoryEntry" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "DOM.getDocument" {
+				resp["result"] = map[string]any{"root": map[string]any{"nodeId": 1}}
+			} else if req.Method == "DOM.querySelector" {
+				var params struct {
+					Selector string `json:"selector"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				nodeID := 2
+				if params.Selector == "#missing" {
+					nodeID = 0
+				}
+				resp["result"] = map[string]any{"nodeId": nodeID}
+			} else if req.Method == "DOM.setFileInputFiles" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setCPUThrottlingRate" || req.Method == "Network.emulateNetworkConditions" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.disable" {
@@ -720,6 +734,14 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			elementType = ""
 			role = "combobox"
 			name = "Plan"
+			placeholder = ""
+		}
+		if query == "Upload file" {
+			selector = "input#upload"
+			tag = "input"
+			elementType = "file"
+			role = "textbox"
+			name = "Upload file"
 			placeholder = ""
 		}
 		if query == "Subscribe to newsletter" || query == "Subscribe" || (by == "role" && roleQuery == "checkbox") {
@@ -1689,6 +1711,20 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
 			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
 		}
+		if selector == "input#upload" || selector == "#hidden-upload" {
+			tag = "input"
+			elementType = "file"
+			role = "textbox"
+			name = "Upload file"
+			rect = map[string]any{"x": 10, "y": 120, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 140, "hit_tag": "input", "hit_id": strings.TrimPrefix(selector, "input#"), "hit_role": "textbox", "target_matches": true}
+		}
+		if selector == "#hidden-upload" {
+			visible = false
+			receivesEvents = false
+			rect = map[string]any{"x": 0, "y": 0, "width": 0, "height": 0}
+			point = map[string]any{"x": 0, "y": 0, "hit_tag": "", "hit_id": "", "hit_role": "", "target_matches": false}
+		}
 		if selector == "input#subscribe" || selector == "input#disabled-checkbox" || selector == "input#covered-checkbox" {
 			tag = "input"
 			elementType = "checkbox"
@@ -1774,6 +1810,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		required := []string{"attached", "visible", "stable", "receives_events", "enabled"}
 		switch action {
 		case "press":
+			required = []string{"attached"}
+		case "file":
 			required = []string{"attached"}
 		case "fill", "type":
 			required = []string{"attached", "visible", "enabled", "editable"}
@@ -1919,6 +1957,47 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 		if count == 0 {
 			value["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_file_input__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		fileName := expressionStringArg(req.Expression, "const fileName = ")
+		if selector == "" {
+			selector = "input#upload"
+		}
+		if fileName == "" {
+			fileName = "upload.txt"
+		}
+		count := 1
+		tag := "input"
+		elementType := "file"
+		accepted := true
+		if selector == "#missing" {
+			count = 0
+			accepted = false
+		}
+		if selector == "button#submit" {
+			tag = "button"
+			elementType = "submit"
+			accepted = false
+		}
+		value := map[string]any{
+			"url":             "https://example.test/app",
+			"title":           "Example App",
+			"selector":        selector,
+			"count":           count,
+			"accepted":        accepted,
+			"file_set":        false,
+			"tag":             tag,
+			"type":            elementType,
+			"file_name":       fileName,
+			"content_omitted": true,
+		}
+		if count == 0 {
+			value["error"] = map[string]any{"name": "NotFoundError", "message": "selector matched no elements"}
+		} else if !accepted {
+			value["error"] = map[string]any{"name": "InvalidTargetError", "message": "target element is not input[type=file]"}
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
 	}
