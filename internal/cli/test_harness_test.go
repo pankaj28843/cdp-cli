@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -31,6 +32,8 @@ var fakeDelayedAssertReadonlyAttempts atomic.Int64
 var fakeDelayedAssertTextAttempts atomic.Int64
 var fakeDelayedAssertValueAttempts atomic.Int64
 var fakeDelayedAssertPageAttempts atomic.Int64
+var fakeDelayedAssertCountAttempts atomic.Int64
+var fakeDelayedAssertAttributeAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
@@ -743,6 +746,57 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 			name = "Delayed value"
 			placeholder = ""
 		}
+		if query == "Checkout" {
+			selector = "button#checkout"
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Checkout"
+			placeholder = ""
+		}
+		if query == "Cart item" {
+			count := 1
+			if fakeDelayedAssertCountAttempts.Add(1) >= 3 {
+				count = 3
+			}
+			matches := make([]map[string]any, 0, count)
+			for index := 0; index < count; index++ {
+				matches = append(matches, map[string]any{
+					"index":              index,
+					"selector_hint":      fmt.Sprintf("li#cart-item-%d", index+1),
+					"selector_ambiguous": false,
+					"tag":                "li",
+					"type":               "",
+					"role":               "listitem",
+					"name":               "Cart item",
+					"text":               "Cart item",
+					"visible":            true,
+					"disabled":           false,
+					"read_only":          false,
+					"content_editable":   false,
+					"rect":               map[string]any{"x": 10, "y": 20 + index*30, "width": 300, "height": 24},
+				})
+			}
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":            "https://example.test/app",
+						"title":          "Example App",
+						"by":             by,
+						"query":          query,
+						"role":           roleQuery,
+						"exact":          false,
+						"include_hidden": includeHidden,
+						"test_id_attr":   "data-testid",
+						"count":          count,
+						"returned":       count,
+						"strict":         count == 1,
+						"matches":        matches,
+					},
+				},
+			}
+		}
 		if query == "Gone" {
 			return map[string]any{
 				"result": map[string]any{
@@ -907,6 +961,57 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 				"value": map[string]any{
 					"url":   pageURL,
 					"title": title,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_count__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		count := 1
+		if selector == ".cart-item" && fakeDelayedAssertCountAttempts.Add(1) >= 3 {
+			count = 3
+		}
+		items := make([]map[string]any, 0, count)
+		for index := 0; index < count; index++ {
+			items = append(items, map[string]any{
+				"index": index,
+				"tag":   "li",
+				"id":    fmt.Sprintf("cart-item-%d", index+1),
+				"role":  "listitem",
+				"name":  "Cart item",
+			})
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":      "https://example.test/app",
+					"title":    "Example App",
+					"selector": selector,
+					"count":    count,
+					"items":    items,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_assert_attribute__") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		attributeName := expressionStringArg(req.Expression, "const attributeName = ")
+		value := "pending"
+		if selector == "button#checkout" && attributeName == "data-state" && fakeDelayedAssertAttributeAttempts.Add(1) >= 3 {
+			value = "ready"
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":               "https://example.test/app",
+					"title":             "Example App",
+					"selector":          selector,
+					"attribute":         attributeName,
+					"attribute_present": true,
+					"value":             value,
+					"count":             1,
 				},
 			},
 		}

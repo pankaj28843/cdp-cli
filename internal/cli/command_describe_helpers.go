@@ -570,6 +570,8 @@ func commandExamples(path string) []string {
 	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --timeout 5s --json", "cdp assert text 'Search' 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert url"] = []string{"cdp assert url example.com --mode contains --timeout 5s --json", "cdp assert url '^https://example\\.com/' --mode regex --poll 100ms --json"}
 	examples["cdp assert title"] = []string{"cdp assert title 'Example Domain' --mode exact --timeout 5s --json", "cdp assert title Checkout --mode contains --poll 100ms --json"}
+	examples["cdp assert count"] = []string{"cdp assert count '.result-item' 10 --timeout 5s --json", "cdp assert count 'Search result' 3 --by role --role listitem --poll 100ms --json"}
+	examples["cdp assert attribute"] = []string{"cdp assert attribute 'button[type=submit]' data-state ready --mode exact --timeout 5s --json", "cdp assert attribute Checkout aria-expanded true --by role --role button --poll 100ms --json"}
 	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
 	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}

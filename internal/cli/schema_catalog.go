@@ -587,6 +587,27 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "assertion", Type: "assert_page_result", Required: true, Description: "Field name, expected title, actual title, match mode, pass/fail status, final URL/title evidence, attempts, elapsed_ms, and poll_interval."},
 			},
 		},
+		"assert-count": {
+			Name:        "assert-count",
+			Description: "Auto-retrying exact element-count assertion result for CSS selector or locator matches.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the exact count assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_count_result", Required: true, Description: "Selector or locator query, expected count, actual count, bounded item diagnostics, attempts, elapsed_ms, and poll_interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator resolution details when --by is not css; multiple matches are allowed for count assertions."},
+			},
+		},
+		"assert-attribute": {
+			Name:        "assert-attribute",
+			Description: "Auto-retrying DOM attribute assertion result for CSS selector or strict locator.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the attribute assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_attribute_result", Required: true, Description: "Selector, attribute name, attribute presence, expected value, actual value, match mode, matched count, attempts, elapsed_ms, and poll_interval."},
+				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
+				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
+			},
+		},
 		"assert-visible": {
 			Name:        "assert-visible",
 			Description: "Auto-retrying element visibility assertion result for CSS selector or strict locator.",
