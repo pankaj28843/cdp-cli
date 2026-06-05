@@ -629,6 +629,50 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands, especially for unhandled dialogs."},
 			},
 		},
+		"wait-request": {
+			Name:        "wait-request",
+			Description: "Network request event wait result for Network.requestWillBeSent.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching request event was observed before timeout."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "wait", Type: "network_wait_result", Required: true, Description: "Kind, criteria, match status, observed_count, elapsed_ms, timeout, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
+				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched Network.requestWillBeSent event metadata with request_id, URL, method, resource type, and safe URL redaction by default."},
+				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed candidate request event on timeout."},
+			},
+		},
+		"wait-response": {
+			Name:        "wait-response",
+			Description: "Network response event wait result for Network.responseReceived.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching response event was observed before timeout."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "wait", Type: "network_wait_result", Required: true, Description: "Kind, criteria including status/status range, match status, observed_count, elapsed_ms, timeout, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
+				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched Network.responseReceived event metadata with request_id, URL, method, status, resource type, and safe URL redaction by default."},
+				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed candidate response event on timeout."},
+			},
+		},
+		"wait-network-idle": {
+			Name:        "wait-network-idle",
+			Description: "Network quiet-window wait result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the observed network traffic stayed within max_inflight for the configured idle window."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "wait", Type: "network_idle_wait_result", Required: true, Description: "Kind, idle window, max_inflight, observed event/request/completion/failure counts, ignored_count, in_flight evidence, elapsed_ms, timeout, warnings, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
+				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed request/response/loading lifecycle event."},
+			},
+		},
+		"wait-dialog": {
+			Name:        "wait-dialog",
+			Description: "JavaScript dialog event wait result for Page.javascriptDialogOpening.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching JavaScript dialog was observed before timeout."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "wait", Type: "dialog_wait_result", Required: true, Description: "Kind, dialog criteria, match status, observed_count, elapsed_ms, timeout, optional handling action, warnings for unhandled dialogs, and bounded evidence."},
+				{Name: "dialog", Type: "dialog_wait_event", Required: false, Description: "Matched JavaScript dialog metadata, safe URL redaction, and optional accept/dismiss handling evidence."},
+				{Name: "last_event", Type: "dialog_wait_event", Required: false, Description: "Last observed dialog event on timeout."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands, including dialog accept/dismiss or events tap."},
+			},
+		},
 		"assert-value": {
 			Name:        "assert-value",
 			Description: "Auto-retrying form-control value assertion result.",
