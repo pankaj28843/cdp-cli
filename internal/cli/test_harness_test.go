@@ -687,6 +687,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				} else {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
+					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 				}
 			} else if req.Method == "Page.captureScreenshot" {
@@ -784,6 +785,52 @@ func syntheticPopupEventsForClick(targetInfos *[]map[string]any, sessionID strin
 			},
 		},
 	}}
+}
+
+func syntheticDownloadEventsForClick(sessionID string, params json.RawMessage, targetInfos []map[string]any) []map[string]any {
+	expression := string(params)
+	if !strings.Contains(expression, "__cdp_cli_click__") && !strings.Contains(expression, "__cdp_cli_click_point__") {
+		return nil
+	}
+	targetID := strings.TrimPrefix(sessionID, "session-")
+	if targetID == "" || targetID == sessionID {
+		return nil
+	}
+	var target map[string]any
+	for _, candidate := range targetInfos {
+		if candidate["targetId"] == targetID {
+			target = candidate
+			break
+		}
+	}
+	if target == nil || target["downloadOnClick"] != true {
+		return nil
+	}
+	guid := syntheticStringValue(target, "downloadGUID", "click-download-1")
+	url := syntheticStringValue(target, "downloadURL", "https://example.test/download/click-report.csv")
+	filename := syntheticStringValue(target, "downloadFilename", "click-report.csv")
+	filePath := syntheticStringValue(target, "downloadFilePath", "/tmp/cdp-downloads/click-download-1")
+	return []map[string]any{
+		{
+			"method": "Browser.downloadWillBegin",
+			"params": map[string]any{
+				"frameId":           "frame-download",
+				"guid":              guid,
+				"url":               url,
+				"suggestedFilename": filename,
+			},
+		},
+		{
+			"method": "Browser.downloadProgress",
+			"params": map[string]any{
+				"guid":          guid,
+				"totalBytes":    24,
+				"receivedBytes": 24,
+				"state":         "completed",
+				"filePath":      filePath,
+			},
+		},
+	}
 }
 
 func syntheticStringValue(values map[string]any, key, fallback string) string {

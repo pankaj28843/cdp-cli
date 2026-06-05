@@ -107,6 +107,84 @@ func TestClickWaitPopupJSON(t *testing.T) {
 	}
 }
 
+func TestClickWaitDownloadJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "download-page", "type": "page", "title": "Download App", "url": "https://example.test/downloads", "attached": false, "downloadOnClick": true, "downloadURL": "https://example.test/download/click-report.csv?token=abc", "downloadFilename": "click-report.csv", "downloadFilePath": "/tmp/cdp-downloads/click-download-1"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	downloadDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "a#download", "--target", "download-page", "--wait-download", "--wait-download-url", "/download/click-report.csv", "--wait-download-filename", "click-report", "--download-dir", downloadDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click wait download exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Click struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+			Verified *bool  `json:"verified"`
+		} `json:"click"`
+		DownloadWait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			DownloadDir   string `json:"download_dir"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				URLContains      string `json:"url_contains"`
+				FilenameContains string `json:"filename_contains"`
+				State            string `json:"state"`
+			} `json:"criteria"`
+		} `json:"download_wait"`
+		DownloadEvent struct {
+			Kind              string `json:"kind"`
+			GUID              string `json:"guid"`
+			URL               string `json:"url"`
+			SuggestedFilename string `json:"suggested_filename"`
+		} `json:"download_event"`
+		DownloadProgress struct {
+			State         string  `json:"state"`
+			TotalBytes    float64 `json:"total_bytes"`
+			ReceivedBytes float64 `json:"received_bytes"`
+			FilePath      string  `json:"file_path"`
+		} `json:"download_progress"`
+		Download struct {
+			GUID              string  `json:"guid"`
+			URL               string  `json:"url"`
+			SuggestedFilename string  `json:"suggested_filename"`
+			State             string  `json:"state"`
+			Completed         bool    `json:"completed"`
+			ReceivedBytes     float64 `json:"received_bytes"`
+		} `json:"download"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click wait download output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.Verified == nil || !*got.Click.Verified {
+		t.Fatalf("click wait download action = %+v, want raw-input clicked and verified", got)
+	}
+	if got.DownloadWait.Kind != "download" || !got.DownloadWait.Matched || got.DownloadWait.DownloadDir != downloadDir || got.DownloadWait.EventCount == 0 || got.DownloadWait.ObservedCount != 1 || got.DownloadWait.Criteria.URLContains != "/download/click-report.csv" || got.DownloadWait.Criteria.FilenameContains != "click-report" || got.DownloadWait.Criteria.State != "completed" {
+		t.Fatalf("click wait download wait = %+v, want matched download evidence", got.DownloadWait)
+	}
+	if got.DownloadEvent.Kind != "will-begin" || got.DownloadEvent.GUID != "click-download-1" || got.DownloadEvent.SuggestedFilename != "click-report.csv" || strings.Contains(got.DownloadEvent.URL, "token=abc") {
+		t.Fatalf("click wait download event = %+v, want redacted will-begin event", got.DownloadEvent)
+	}
+	if got.DownloadProgress.State != "completed" || got.DownloadProgress.TotalBytes != 24 || got.DownloadProgress.ReceivedBytes != 24 || got.DownloadProgress.FilePath != "/tmp/cdp-downloads/click-download-1" {
+		t.Fatalf("click wait download progress = %+v, want completed progress", got.DownloadProgress)
+	}
+	if got.Download.GUID != "click-download-1" || got.Download.SuggestedFilename != "click-report.csv" || got.Download.State != "completed" || !got.Download.Completed || got.Download.ReceivedBytes != 24 || strings.Contains(got.Download.URL, "token=abc") {
+		t.Fatalf("click wait download summary = %+v, want completed redacted download", got.Download)
+	}
+	if len(got.NextCommands) == 0 || !strings.HasPrefix(got.NextCommands[0], "ls -lah ") {
+		t.Fatalf("click wait download next commands = %+v, want download directory listing", got.NextCommands)
+	}
+}
+
 func TestClickByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

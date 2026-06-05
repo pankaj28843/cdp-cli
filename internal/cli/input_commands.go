@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -150,6 +151,12 @@ func (a *app) newClickCommand() *cobra.Command {
 	var waitPopup bool
 	var waitPopupURL string
 	var waitPopupTitle string
+	var waitDownload bool
+	var waitDownloadURL string
+	var waitDownloadFilename string
+	var waitDownloadState string
+	var waitDownloadDir string
+	var waitDownloadRedact string
 	var diagnosticsOut string
 	var poll time.Duration
 	var trial bool
@@ -170,8 +177,19 @@ func (a *app) newClickCommand() *cobra.Command {
 				return commandError("usage", "usage", "use only one of --wait-text or --wait-selector", ExitUsage, []string{"cdp click button --wait-text Done --json"})
 			}
 			waitPopup = waitPopup || strings.TrimSpace(waitPopupURL) != "" || strings.TrimSpace(waitPopupTitle) != ""
-			if waitPopup && (strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "") {
-				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
+			waitDownload = waitDownload || cmd.Flags().Changed("wait-download-url") || cmd.Flags().Changed("wait-download-filename") || cmd.Flags().Changed("wait-download-state") || cmd.Flags().Changed("download-dir") || cmd.Flags().Changed("wait-download-redact")
+			waitModeCount := 0
+			if strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "" {
+				waitModeCount++
+			}
+			if waitPopup {
+				waitModeCount++
+			}
+			if waitDownload {
+				waitModeCount++
+			}
+			if waitModeCount > 1 {
+				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-download, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
@@ -181,6 +199,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if trial && waitPopup {
 				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-popup", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
+			}
+			if trial && waitDownload {
+				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-download", ExitUsage, []string{"cdp click 'Download' --by role --role link --wait-download --json"})
 			}
 			if trial && strings.TrimSpace(diagnosticsOut) != "" {
 				return commandError("usage", "usage", "--trial returns actionability diagnostics inline; omit --diagnostics-out", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
@@ -307,6 +328,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			var popupBaseline []popupWaitTarget
 			var popupReport map[string]any
 			var popupErr error
+			var downloadOpts downloadWaitOptions
+			var downloadReport map[string]any
+			var downloadErr error
 			if waitPopup {
 				popupCriteria = popupWaitCriteria{
 					OpenerID:    target.TargetID,
@@ -330,12 +354,44 @@ func (a *app) newClickCommand() *cobra.Command {
 					return popupWaitConnectionError(target.TargetID, err)
 				}
 			}
+			if waitDownload {
+				downloadOpts = downloadWaitOptions{
+					Criteria: downloadWaitCriteria{
+						URLContains:      strings.TrimSpace(waitDownloadURL),
+						FilenameContains: strings.TrimSpace(waitDownloadFilename),
+						State:            strings.TrimSpace(waitDownloadState),
+					},
+					DownloadDir: strings.TrimSpace(waitDownloadDir),
+					Redact:      waitDownloadRedact,
+				}
+				if err := a.normalizeDownloadWaitOptions(&downloadOpts); err != nil {
+					return err
+				}
+				if _, err := networkWaitRedactor(downloadOpts.Redact); err != nil {
+					return err
+				}
+				if err := os.MkdirAll(downloadOpts.DownloadDir, 0o700); err != nil {
+					return commandError("download_dir_unavailable", "usage", fmt.Sprintf("create download dir %s: %v", downloadOpts.DownloadDir, err), ExitUsage, []string{"cdp click 'Download' --wait-download --download-dir tmp/downloads --json"})
+				}
+				teardown, err := setupDownloadWait(ctx, client, downloadOpts)
+				if err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("click download wait target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+				defer func() {
+					teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer teardownCancel()
+					_ = teardown(teardownCtx)
+				}()
+				if _, err := client.DrainEvents(ctx); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("click download wait target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+			}
 
 			clickStrategy := strategy
-			if waitPopup && clickStrategy == "auto" {
+			if (waitPopup || waitDownload) && clickStrategy == "auto" {
 				clickStrategy = "raw-input"
 			}
-			popupStart := time.Now()
+			eventWaitStart := time.Now()
 			result, err := performClick(ctx, session, selector, clickStrategy)
 			if err != nil {
 				return err
@@ -383,11 +439,24 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if waitPopup {
 				observation, err := collectPopupEvent(ctx, client, popupBaseline, popupCriteria)
-				popupReport = popupWaitReport(observation, popupCriteria, target, time.Since(popupStart), a.effectiveNetworkWaitTimeout(), len(popupBaseline))
+				popupReport = popupWaitReport(observation, popupCriteria, target, time.Since(eventWaitStart), a.effectiveNetworkWaitTimeout(), len(popupBaseline))
 				verified = observation.Matched
 				result.Verified = &verified
 				if err != nil {
 					popupErr = err
+				}
+			}
+			if waitDownload {
+				redactor, err := networkWaitRedactor(downloadOpts.Redact)
+				if err != nil {
+					return err
+				}
+				observation, err := collectDownloadEvent(ctx, client, downloadOpts)
+				downloadReport = downloadWaitReport(observation, downloadOpts, target, time.Since(eventWaitStart), a.effectiveNetworkWaitTimeout(), redactor)
+				verified = observation.Matched
+				result.Verified = &verified
+				if err != nil {
+					downloadErr = err
 				}
 			}
 
@@ -427,6 +496,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			if popupReport != nil {
 				addPopupWaitToClickReport(report, popupReport)
 			}
+			if downloadReport != nil {
+				addDownloadWaitToClickReport(report, downloadReport)
+			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
 				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
@@ -435,6 +507,9 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 				if popupReport != nil {
 					addPopupWaitToClickReport(diagnostics, popupReport)
+				}
+				if downloadReport != nil {
+					addDownloadWaitToClickReport(diagnostics, downloadReport)
 				}
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
@@ -451,9 +526,15 @@ func (a *app) newClickCommand() *cobra.Command {
 			if popupErr != nil {
 				return popupWaitError(ctx, target.TargetID, popupCriteria, report, popupErr)
 			}
+			if downloadErr != nil {
+				return downloadWaitError(ctx, target.TargetID, downloadOpts, report, downloadErr)
+			}
 			human := fmt.Sprintf("clicked\t%s\t%s", target.TargetID, result.Selector)
 			if waitPopup {
 				human = fmt.Sprintf("clicked-popup\t%s\t%s", target.TargetID, result.Selector)
+			}
+			if waitDownload {
+				human = fmt.Sprintf("clicked-download\t%s\t%s", target.TargetID, result.Selector)
 			}
 			if !verified {
 				human = fmt.Sprintf("click-unverified\t%s\t%s", target.TargetID, result.Selector)
@@ -472,6 +553,12 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&waitPopup, "wait-popup", false, "wait for a popup or new tab opened by this click")
 	cmd.Flags().StringVar(&waitPopupURL, "wait-popup-url", "", "substring that the popup URL must contain; implies --wait-popup")
 	cmd.Flags().StringVar(&waitPopupTitle, "wait-popup-title", "", "substring that the popup title must contain; implies --wait-popup")
+	cmd.Flags().BoolVar(&waitDownload, "wait-download", false, "wait for a browser download started by this click")
+	cmd.Flags().StringVar(&waitDownloadURL, "wait-download-url", "", "substring that the download URL must contain; implies --wait-download")
+	cmd.Flags().StringVar(&waitDownloadFilename, "wait-download-filename", "", "substring that the suggested filename must contain; implies --wait-download")
+	cmd.Flags().StringVar(&waitDownloadState, "wait-download-state", "completed", "download wait state when --wait-download is used: started or completed")
+	cmd.Flags().StringVar(&waitDownloadDir, "download-dir", "", "directory where Chrome should save downloaded files; implies --wait-download")
+	cmd.Flags().StringVar(&waitDownloadRedact, "wait-download-redact", "safe", "redaction preset for returned download URL: safe or none")
 	cmd.Flags().StringVar(&diagnosticsOut, "diagnostics-out", "", "optional path for privacy-preserving click diagnostics JSON")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching the click")
@@ -737,6 +824,30 @@ func addPopupWaitToClickReport(report map[string]any, popupReport map[string]any
 		report["last_popup_event"] = lastEvent
 	}
 	if nextCommands, ok := popupReport["next_commands"]; ok {
+		report["next_commands"] = nextCommands
+	}
+}
+
+func addDownloadWaitToClickReport(report map[string]any, downloadReport map[string]any) {
+	if report == nil || downloadReport == nil {
+		return
+	}
+	if wait, ok := downloadReport["wait"]; ok {
+		report["download_wait"] = wait
+	}
+	if event, ok := downloadReport["event"]; ok {
+		report["download_event"] = event
+	}
+	if progress, ok := downloadReport["progress"]; ok {
+		report["download_progress"] = progress
+	}
+	if download, ok := downloadReport["download"]; ok {
+		report["download"] = download
+	}
+	if lastEvent, ok := downloadReport["last_event"]; ok {
+		report["last_download_event"] = lastEvent
+	}
+	if nextCommands, ok := downloadReport["next_commands"]; ok {
 		report["next_commands"] = nextCommands
 	}
 }

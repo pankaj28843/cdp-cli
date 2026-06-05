@@ -167,8 +167,17 @@ func (a *app) normalizeDownloadWaitOptions(opts *downloadWaitOptions) error {
 }
 
 func waitForDownloadEvent(ctx context.Context, client browserEventClient, opts downloadWaitOptions) (downloadWaitObservation, func(context.Context) error, error) {
-	if _, err := client.DrainEvents(ctx); err != nil {
+	teardown, err := setupDownloadWait(ctx, client, opts)
+	if err != nil {
 		return downloadWaitObservation{}, nil, err
+	}
+	observation, err := collectDownloadEvent(ctx, client, opts)
+	return observation, teardown, err
+}
+
+func setupDownloadWait(ctx context.Context, client browserEventClient, opts downloadWaitOptions) (func(context.Context) error, error) {
+	if _, err := client.DrainEvents(ctx); err != nil {
+		return nil, err
 	}
 	params := map[string]any{
 		"behavior":      "allowAndName",
@@ -176,12 +185,15 @@ func waitForDownloadEvent(ctx context.Context, client browserEventClient, opts d
 		"eventsEnabled": true,
 	}
 	if err := client.Call(ctx, "Browser.setDownloadBehavior", params, nil); err != nil {
-		return downloadWaitObservation{}, nil, err
+		return nil, err
 	}
 	teardown := func(teardownCtx context.Context) error {
 		return client.Call(teardownCtx, "Browser.setDownloadBehavior", map[string]any{"behavior": "default", "eventsEnabled": false}, nil)
 	}
+	return teardown, nil
+}
 
+func collectDownloadEvent(ctx context.Context, client browserEventClient, opts downloadWaitOptions) (downloadWaitObservation, error) {
 	observation := downloadWaitObservation{}
 	observe := func(event cdp.Event) (bool, error) {
 		downloadEvent, ok := downloadWaitEventFromCDP(event)
@@ -218,11 +230,11 @@ func waitForDownloadEvent(ctx context.Context, client browserEventClient, opts d
 	for {
 		event, err := client.ReadEvent(ctx)
 		if err != nil {
-			return observation, teardown, err
+			return observation, err
 		}
 		matched, err := observe(event)
 		if matched || err != nil {
-			return observation, teardown, err
+			return observation, err
 		}
 	}
 }
