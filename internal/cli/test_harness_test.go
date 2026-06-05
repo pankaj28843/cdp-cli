@@ -217,6 +217,22 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			}
 			if req.Method == "Target.getTargets" {
 				resp["result"] = map[string]any{"targetInfos": targetInfos}
+			} else if req.Method == "Target.setDiscoverTargets" {
+				resp["result"] = map[string]any{}
+				events = append(events, map[string]any{
+					"method": "Target.targetCreated",
+					"params": map[string]any{
+						"targetInfo": map[string]any{
+							"targetId":        "popup-page",
+							"type":            "page",
+							"title":           "OAuth Popup",
+							"url":             "https://example.test/oauth/callback",
+							"attached":        false,
+							"openerId":        "opener-page",
+							"canAccessOpener": true,
+						},
+					},
+				})
 			} else if req.Method == "Target.getTargetInfo" {
 				var params struct {
 					TargetID string `json:"targetId"`

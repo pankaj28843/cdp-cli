@@ -374,6 +374,18 @@ sleep 0.2
 wait "$wait_file_chooser_pid"
 require_artifact "$wait_file_chooser_output"
 jq -e '.ok == true and .wait.kind == "file-chooser" and .wait.matched == true and .wait.criteria.mode == "selectSingle" and .wait.intercepted == true and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and .file_chooser.cdp_method == "Page.fileChooserOpened" and .file_chooser.mode == "selectSingle" and .file_chooser.multiple == false and (.next_commands | any(contains("cdp file")))' "$wait_file_chooser_output" >/dev/null
+wait_popup_output="$state_dir/wait-popup.json"
+"$binary" wait popup --match-url /popup --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_popup_output" &
+wait_popup_pid=$!
+sleep 0.2
+"$binary" click "Open popup" --by role --role button --strategy raw-input --state-dir "$state_dir/cdp-state" --force --json \
+  | jq -e '.ok == true and .action == "clicked" and .click.strategy == "raw-input"' >/dev/null
+wait "$wait_popup_pid"
+require_artifact "$wait_popup_output"
+jq -e '.ok == true and .wait.kind == "popup" and .wait.matched == true and .wait.criteria.url_contains == "/popup" and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and (.popup.target.url | contains("/popup")) and (.popup.cdp_method == "Target.targetCreated" or .popup.cdp_method == "Target.targetInfoChanged") and (.next_commands | any(contains("cdp page select --target")))' "$wait_popup_output" >/dev/null
+popup_target="$(jq -r '.popup.target.id' "$wait_popup_output")"
+"$binary" page close --target "$popup_target" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "closed"' >/dev/null
 capture_output="$state_dir/network-capture.json"
 "$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$state_dir/network-capture.local.json" --json >"$capture_output"
 require_artifact "$capture_output"

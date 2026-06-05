@@ -368,6 +368,10 @@ func commandExamples(path string) []string {
 			"cdp wait file-chooser --mode single --timeout 10s --json",
 			"cdp wait file-chooser --mode multiple --json",
 		},
+		"cdp wait popup": {
+			"cdp wait popup --match-url /oauth/callback --timeout 10s --json",
+			"cdp wait popup --title-contains Checkout --match-title Receipt --json",
+		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",

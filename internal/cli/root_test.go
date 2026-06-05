@@ -726,6 +726,123 @@ func TestWaitFileChooserInvalidModeJSON(t *testing.T) {
 	}
 }
 
+func TestWaitPopupJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "opener-page", "type": "page", "title": "Login App", "url": "https://example.test/login", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "popup", "--match-url", "/oauth/callback", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait popup exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		Opener struct {
+			ID string `json:"id"`
+		} `json:"opener"`
+		Wait struct {
+			Kind          string   `json:"kind"`
+			Matched       bool     `json:"matched"`
+			CDPMethods    []string `json:"cdp_methods"`
+			BaselineCount int      `json:"baseline_count"`
+			EventCount    int      `json:"event_count"`
+			ObservedCount int      `json:"observed_count"`
+			Criteria      struct {
+				OpenerID    string `json:"opener_id"`
+				URLContains string `json:"url_contains"`
+			} `json:"criteria"`
+			Evidence struct {
+				Headers bool `json:"headers"`
+				Bodies  bool `json:"bodies"`
+				Bounded bool `json:"bounded"`
+			} `json:"evidence"`
+		} `json:"wait"`
+		Popup struct {
+			CDPMethod     string `json:"cdp_method"`
+			NewTarget     bool   `json:"new_target"`
+			OpenerMatched bool   `json:"opener_matched"`
+			Target        struct {
+				ID              string `json:"id"`
+				Title           string `json:"title"`
+				URL             string `json:"url"`
+				OpenerID        string `json:"opener_id"`
+				CanAccessOpener bool   `json:"can_access_opener"`
+			} `json:"target"`
+		} `json:"popup"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait popup output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "opener-page" || got.Opener.ID != "opener-page" || got.Wait.Kind != "popup" || !got.Wait.Matched || got.Wait.BaselineCount != 1 || got.Wait.EventCount != 1 || got.Wait.ObservedCount != 1 || got.Wait.Criteria.OpenerID != "opener-page" || got.Wait.Criteria.URLContains != "/oauth/callback" {
+		t.Fatalf("wait popup output = %+v, want matched popup wait evidence", got)
+	}
+	if !containsString(got.Wait.CDPMethods, "Target.targetCreated") || !containsString(got.Wait.CDPMethods, "Target.targetInfoChanged") {
+		t.Fatalf("wait popup CDP methods = %+v, want Target discovery methods", got.Wait.CDPMethods)
+	}
+	if got.Popup.Target.ID != "popup-page" || got.Popup.Target.Title != "OAuth Popup" || got.Popup.Target.URL != "https://example.test/oauth/callback" || got.Popup.Target.OpenerID != "opener-page" || !got.Popup.Target.CanAccessOpener || got.Popup.CDPMethod != "Target.targetCreated" || !got.Popup.NewTarget || !got.Popup.OpenerMatched {
+		t.Fatalf("wait popup popup = %+v, want target discovery metadata", got.Popup)
+	}
+	if got.Wait.Evidence.Headers || got.Wait.Evidence.Bodies || !got.Wait.Evidence.Bounded {
+		t.Fatalf("wait popup evidence = %+v, want bounded evidence without headers or bodies", got.Wait.Evidence)
+	}
+	if !containsString(got.NextCommands, "cdp page select --target popup-page --json") {
+		t.Fatalf("wait popup next commands = %+v, want page select follow-up", got.NextCommands)
+	}
+}
+
+func TestWaitPopupTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "opener-page", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "popup", "--match-url", "/missing", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait popup timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Wait struct {
+				Kind          string `json:"kind"`
+				Matched       bool   `json:"matched"`
+				EventCount    int    `json:"event_count"`
+				ObservedCount int    `json:"observed_count"`
+				Criteria      struct {
+					URLContains string `json:"url_contains"`
+				} `json:"criteria"`
+			} `json:"wait"`
+			LastEvent struct {
+				Target struct {
+					ID string `json:"id"`
+				} `json:"target"`
+			} `json:"last_event"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait popup timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "popup" || got.Data.Wait.Matched || got.Data.Wait.EventCount != 1 || got.Data.Wait.ObservedCount != 1 || got.Data.Wait.Criteria.URLContains != "/missing" || got.Data.LastEvent.Target.ID != "popup-page" {
+		t.Fatalf("wait popup timeout = %+v, want timeout envelope with last popup target", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp protocol exec Target.getTargets --json") {
+		t.Fatalf("wait popup remediation commands = %+v, want Target.getTargets command", got.RemediationCommands)
+	}
+}
+
 func TestWaitNetworkUnsupportedRedactionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"wait", "response", "--redact", "headers", "--json"}, &out, &errOut, cli.BuildInfo{})

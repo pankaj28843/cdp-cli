@@ -13,7 +13,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(SERVICE_WORKER_JS.encode())
             return
-        if self.path == "/api/ok":
+        if self.path.startswith("/api/ok"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -28,6 +28,9 @@ class DemoHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
+        if self.path.startswith("/popup"):
+            self.wfile.write(POPUP_HTML.encode())
+            return
         self.wfile.write(DEMO_HTML.encode())
 
     def log_message(self, format, *args):
@@ -69,6 +72,7 @@ DEMO_HTML = """<!doctype html>
         <span id="covered-overlay" class="cover-overlay" aria-hidden="true"></span>
       </span>
       <button id="disabled-action" disabled>Disabled target</button>
+      <button id="popup-action">Open popup</button>
       <button id="dismiss" class="hidden-fixture">Dismiss</button>
       <input id="hidden-agent-input" class="hidden-fixture" value="hidden initial">
       <label class="agent-form">
@@ -165,6 +169,9 @@ DEMO_HTML = """<!doctype html>
       : Promise.resolve();
     console.log('demo app booted');
     console.error('synthetic demo error');
+    document.querySelector('#popup-action').addEventListener('click', () => {
+      window.open('/popup', '_blank');
+    });
     document.querySelector('#partial-selection').indeterminate = true;
     fetch('/api/ok').then(() => fetch('/api/fail'));
     Promise.all([cacheReady, serviceWorkerReady, indexedDBReady]).finally(() => {
@@ -174,6 +181,20 @@ DEMO_HTML = """<!doctype html>
       }, 100);
     });
   </script>
+</body>
+</html>
+"""
+
+POPUP_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cdp-cli popup target</title>
+</head>
+<body>
+  <main>
+    <h1>Popup target ready</h1>
+  </main>
 </body>
 </html>
 """
