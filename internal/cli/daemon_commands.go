@@ -1000,6 +1000,14 @@ func keepaliveRuntimeCheck(ctx context.Context, status daemon.Status) (bool, map
 		check["result"] = "not_running"
 		return false, check
 	}
+	if ok, managed := managedRuntimeProcessCheck(status.Runtime); managed != nil {
+		check["managed_browser_health"] = managed
+		if !ok {
+			check["ok"] = false
+			check["result"] = "managed_chrome_process_not_running"
+			return false, check
+		}
+	}
 	var result struct {
 		TargetInfos []cdp.TargetInfo `json:"targetInfos"`
 	}

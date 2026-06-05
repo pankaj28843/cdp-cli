@@ -147,6 +147,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		health[key] = value
 	}
 	if status.Runtime == nil || !status.ProcessRunning {
+		a.applyManagedBrowserHealth(health, status.Runtime)
 		health["reasons"] = appendStringReasons(health["reasons"], daemonHealthState(status))
 		return health
 	}
@@ -163,6 +164,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	}
 	health["daemon_rpc_ready"] = true
 	applyBudgetToHealth(health, budget)
+	a.applyManagedBrowserHealth(health, status.Runtime)
 	if includeProcessInfo {
 		processInfo, err := collectProcessInfo(ctx, client)
 		if err != nil {
@@ -175,6 +177,53 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		health["state"] = "degraded"
 	}
 	return health
+}
+
+func (a *app) applyManagedBrowserHealth(health map[string]any, runtime *daemon.Runtime) {
+	ok, detail := managedRuntimeProcessCheck(runtime)
+	if detail == nil {
+		return
+	}
+	health["managed_browser_health"] = detail
+	if ok {
+		return
+	}
+	health["state"] = "degraded"
+	health["reasons"] = appendStringReasons(health["reasons"], "managed_chrome_process_not_running")
+	health["next_commands"] = uniqueCommands(toStringSlice(health["next_commands"]), a.connectionRemediationCommands(), []string{modeScopedCommand(a.browserModeName(), "daemon logs --tail 50 --json")})
+}
+
+func managedRuntimeProcessCheck(runtime *daemon.Runtime) (bool, map[string]any) {
+	if runtime == nil || !strings.EqualFold(strings.TrimSpace(runtime.BrowserMode), string(config.BrowserModeHeadless)) {
+		return true, nil
+	}
+	if runtime.ManagedBrowser == nil && strings.TrimSpace(runtime.ManagedProfilePath) == "" && strings.TrimSpace(runtime.ProfileSeedStrategy) != "managed" && strings.TrimSpace(runtime.ChromePort) == "" && runtime.ChromePID <= 0 {
+		return true, nil
+	}
+	chromePID := runtime.ChromePID
+	if chromePID <= 0 && runtime.ManagedBrowser != nil {
+		chromePID = runtime.ManagedBrowser.ChromePID
+	}
+	detail := map[string]any{
+		"expected": true,
+		"state":    "unknown",
+		"running":  false,
+	}
+	if runtime.ManagedBrowser != nil {
+		detail["managed_browser"] = runtime.ManagedBrowser
+	}
+	if chromePID <= 0 {
+		detail["state"] = "missing_pid"
+		return true, detail
+	}
+	detail["chrome_pid"] = chromePID
+	if !daemon.ProcessRunning(chromePID) {
+		detail["state"] = "process_not_running"
+		return false, detail
+	}
+	detail["state"] = "running"
+	detail["running"] = true
+	return true, detail
 }
 
 func (a *app) daemonProcessesByMode(ctx context.Context) map[string]any {

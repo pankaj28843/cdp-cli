@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,6 +86,20 @@ func TestRuntimeOperationsAreModeAware(t *testing.T) {
 	}
 	if _, ok, err := daemon.LoadRuntime(context.Background(), stateDir); err != nil || !ok {
 		t.Fatalf("headed runtime was affected by clearing headless: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestProcessRunningReportsExitedProcess(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait helper process: %v", err)
+	}
+	if daemon.ProcessRunning(pid) {
+		t.Fatalf("ProcessRunning(%d) = true, want false for exited helper process", pid)
 	}
 }
 

@@ -316,10 +316,14 @@ func ClearRuntimeForMode(ctx context.Context, stateDir, browserMode string, pid 
 }
 
 func RuntimeRunning(runtime Runtime) bool {
-	if runtime.PID <= 0 {
+	return ProcessRunning(runtime.PID)
+}
+
+func ProcessRunning(pid int) bool {
+	if pid <= 0 {
 		return false
 	}
-	process, err := os.FindProcess(runtime.PID)
+	process, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
