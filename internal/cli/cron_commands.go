@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,6 +74,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 			}
 			state := extractCronManagedBlock(current)
 			intended := managedCronBlock(opts)
+			matchesIntended := normalizeCronBlock(state.Text) == normalizeCronBlock(intended)
 			status := scheduledTasksStatusForSummary(available, err, summarizeCrontab(current))
 			store, storeErr := a.stateStore()
 			locks := map[string]any{}
@@ -83,13 +85,16 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 				daemonLocks = cronDaemonLockStates(store.Dir)
 				artifacts = cronLastRunArtifacts(store.Dir)
 			}
+			health := cronStatusHealth(available, state.Installed, matchesIntended, locks, daemonLocks)
 			data := map[string]any{
 				"ok":                 true,
+				"state":              health["state"],
 				"browser_mode":       opts.BrowserMode,
 				"profile_seed":       cronProfileSeedMetadata(opts),
 				"available":          available,
 				"installed":          state.Installed,
-				"matches_intended":   normalizeCronBlock(state.Text) == normalizeCronBlock(intended),
+				"matches_intended":   matchesIntended,
+				"health":             health,
 				"managed_block":      state,
 				"intended_block":     extractCronManagedBlock(intended),
 				"scheduled_tasks":    status,
@@ -97,7 +102,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 				"daemon_locks":       daemonLocks,
 				"last_run_artifacts": artifacts,
 				"processes_by_mode":  a.daemonProcessesByMode(ctx),
-				"next_commands":      []string{"cdp cron diff --json", "cdp cron install --profile agent --json", "cdp doctor --check scheduled-tasks --json"},
+				"next_commands":      health["next_commands"],
 			}
 			human := "cdp cron block not installed"
 			if state.Installed {
@@ -779,6 +784,128 @@ func cronInstallWarnings(opts cronRenderOptions, summary crontabSummary) []strin
 		warnings = append(warnings, "current crontab contains unmanaged cdp pages polling; cron install preserves unmanaged lines, so remove the manual pages loop after managed keepalive is verified")
 	}
 	return warnings
+}
+
+func cronStatusHealth(available, installed, matchesIntended bool, locks, daemonLocks map[string]any) map[string]any {
+	staleLocks := cronStaleLockNames(locks)
+	staleDaemonLocks := cronStaleLockNames(daemonLocks)
+	staleLockCount := len(staleLocks) + len(staleDaemonLocks)
+	issues := make([]map[string]any, 0, 3)
+	state := "healthy"
+	status := "pass"
+	message := "cdp cron managed block is installed, current, and has no stale lock markers"
+	recommendedCommand := "cdp doctor --check scheduled-tasks --json"
+	nextCommands := []string{"cdp doctor --check scheduled-tasks --json", "cdp cron diff --json"}
+
+	if !available {
+		state = "crontab_unavailable"
+		status = "warn"
+		message = "user crontab command is unavailable; install or inspect crontab support before relying on managed cdp cron tasks"
+		recommendedCommand = "cdp doctor --check scheduled-tasks --json"
+		nextCommands = []string{recommendedCommand}
+		issues = append(issues, map[string]any{
+			"state":               "crontab_unavailable",
+			"message":             "user crontab command is unavailable",
+			"recommended_command": recommendedCommand,
+		})
+	} else if !installed {
+		state = "not_installed"
+		status = "warn"
+		message = "cdp cron managed block is not installed"
+		recommendedCommand = "cdp cron install --profile agent --json"
+		nextCommands = []string{recommendedCommand, "cdp cron diff --json", "cdp doctor --check scheduled-tasks --json"}
+		issues = append(issues, map[string]any{
+			"state":               "not_installed",
+			"message":             "managed cron block is missing",
+			"recommended_command": recommendedCommand,
+		})
+	} else if !matchesIntended {
+		state = "needs_update"
+		status = "warn"
+		message = "installed cdp cron managed block differs from the current intended block"
+		recommendedCommand = "cdp cron install --profile agent --json"
+		nextCommands = []string{recommendedCommand, "cdp cron diff --json", "cdp doctor --check scheduled-tasks --json"}
+		issues = append(issues, map[string]any{
+			"state":               "needs_update",
+			"message":             "installed managed cron block differs from intended entries",
+			"recommended_command": recommendedCommand,
+		})
+	}
+
+	if staleLockCount > 0 {
+		if state == "healthy" {
+			state = "stale_locks"
+			status = "warn"
+			message = "cdp cron has stale lock markers that may block future scheduled ticks"
+			recommendedCommand = cronRecommendedStaleLockCommand(locks, daemonLocks)
+			nextCommands = []string{recommendedCommand, "cdp cron status --json", "cdp doctor --check scheduled-tasks --json"}
+		}
+		issues = append(issues, map[string]any{
+			"state":                   "stale_locks",
+			"message":                 "stale cron or daemon keepalive lock markers are present",
+			"stale_lock_count":        len(staleLocks),
+			"stale_locks":             staleLocks,
+			"stale_daemon_lock_count": len(staleDaemonLocks),
+			"stale_daemon_locks":      staleDaemonLocks,
+			"recommended_command":     cronRecommendedStaleLockCommand(locks, daemonLocks),
+		})
+	}
+
+	return map[string]any{
+		"state":                   state,
+		"status":                  status,
+		"message":                 message,
+		"installed":               installed,
+		"matches_intended":        matchesIntended,
+		"stale_lock_count":        len(staleLocks),
+		"stale_locks":             staleLocks,
+		"stale_daemon_lock_count": len(staleDaemonLocks),
+		"stale_daemon_locks":      staleDaemonLocks,
+		"issue_count":             len(issues),
+		"issues":                  issues,
+		"recommended_command":     recommendedCommand,
+		"next_commands":           nextCommands,
+	}
+}
+
+func cronStaleLockNames(locks map[string]any) []string {
+	names := make([]string, 0)
+	for name, raw := range locks {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		stale, _ := entry["stale"].(bool)
+		if stale {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func cronRecommendedStaleLockCommand(locks, daemonLocks map[string]any) string {
+	for _, lockSet := range []map[string]any{locks, daemonLocks} {
+		for _, name := range cronStaleLockNames(lockSet) {
+			entry, ok := lockSet[name].(map[string]any)
+			if !ok {
+				continue
+			}
+			commands, ok := entry["next_commands"].([]string)
+			if ok && len(commands) > 0 {
+				return commands[0]
+			}
+			if commandsAny, ok := entry["next_commands"].([]any); ok {
+				for _, command := range commandsAny {
+					if text, ok := command.(string); ok && strings.TrimSpace(text) != "" {
+						return text
+					}
+				}
+			}
+			return cronLockRepairCommands(name)[0]
+		}
+	}
+	return "cdp cron status --json"
 }
 
 func cronPagesPollingMigrationWarnings(changed, dryRun, managedKeepaliveInstalled bool) []string {

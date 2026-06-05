@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 )
@@ -296,12 +297,24 @@ func TestCronStatusAndDiffUseFakeCrontab(t *testing.T) {
 	stateDir := shortCLIStateDir(t)
 
 	var status struct {
-		OK        bool `json:"ok"`
-		Installed bool `json:"installed"`
+		OK        bool   `json:"ok"`
+		State     string `json:"state"`
+		Installed bool   `json:"installed"`
+		Health    struct {
+			State              string   `json:"state"`
+			Status             string   `json:"status"`
+			IssueCount         int      `json:"issue_count"`
+			RecommendedCommand string   `json:"recommended_command"`
+			NextCommands       []string `json:"next_commands"`
+		} `json:"health"`
+		NextCommands []string `json:"next_commands"`
 	}
 	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
-	if !status.OK || status.Installed {
-		t.Fatalf("cron status = %+v, want ok not installed", status)
+	if !status.OK || status.Installed || status.State != "not_installed" || status.Health.State != "not_installed" || status.Health.Status != "warn" || status.Health.IssueCount != 1 {
+		t.Fatalf("cron status = %+v, want ok not_installed warning", status)
+	}
+	if status.Health.RecommendedCommand != "cdp cron install --profile agent --json" || !containsString(status.NextCommands, "cdp cron install --profile agent --json") {
+		t.Fatalf("cron status next commands = %+v health=%+v, want install guidance", status.NextCommands, status.Health)
 	}
 
 	var diff struct {
@@ -314,6 +327,67 @@ func TestCronStatusAndDiffUseFakeCrontab(t *testing.T) {
 	executeCronJSON(t, []string{"cron", "diff", "--state-dir", stateDir, "--json"}, &diff)
 	if !diff.OK || diff.Installed || len(diff.Actions) != 1 || diff.Actions[0].Action != "append_managed_block" {
 		t.Fatalf("cron diff = %+v, want append action", diff)
+	}
+}
+
+func TestCronStatusSummarizesManagedBlockMismatchAndStaleLocks(t *testing.T) {
+	oldBlock := strings.Join([]string{
+		"SHELL=/bin/sh",
+		"# cdp-cli managed browser runtime tasks",
+		"* * * * * $HOME/.local/bin/cdp --browser-mode headed cron heal headed --json",
+		"# End cdp-cli managed browser runtime tasks",
+		"",
+	}, "\n")
+	_, crontabBin := fakeCrontab(t, oldBlock)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+	writeStaleCronLock(t, stateDir, "keepalive-headless")
+
+	var status struct {
+		OK              bool   `json:"ok"`
+		State           string `json:"state"`
+		Installed       bool   `json:"installed"`
+		MatchesIntended bool   `json:"matches_intended"`
+		Health          struct {
+			State                   string   `json:"state"`
+			Status                  string   `json:"status"`
+			IssueCount              int      `json:"issue_count"`
+			StaleLockCount          int      `json:"stale_lock_count"`
+			StaleLocks              []string `json:"stale_locks"`
+			RecommendedCommand      string   `json:"recommended_command"`
+			StaleDaemonLockCount    int      `json:"stale_daemon_lock_count"`
+			StaleDaemonLocks        []string `json:"stale_daemon_locks"`
+			NextCommands            []string `json:"next_commands"`
+			ManagedBlockIssueStates []struct {
+				State              string   `json:"state"`
+				StaleLocks         []string `json:"stale_locks"`
+				RecommendedCommand string   `json:"recommended_command"`
+			} `json:"issues"`
+		} `json:"health"`
+		NextCommands []string `json:"next_commands"`
+	}
+	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	if !status.OK || !status.Installed || status.MatchesIntended || status.State != "needs_update" || status.Health.State != "needs_update" || status.Health.Status != "warn" {
+		t.Fatalf("cron status = %+v, want installed needs_update warning", status)
+	}
+	if status.Health.IssueCount != 2 || status.Health.StaleLockCount != 1 || !containsString(status.Health.StaleLocks, "keepalive-headless") || status.Health.StaleDaemonLockCount != 0 || len(status.Health.StaleDaemonLocks) != 0 {
+		t.Fatalf("cron status health = %+v, want one stale wrapper lock plus needs_update issue", status.Health)
+	}
+	if status.Health.RecommendedCommand != "cdp cron install --profile agent --json" || status.NextCommands[0] != "cdp cron install --profile agent --json" {
+		t.Fatalf("cron status recommended command = %q next=%+v, want install first for stale managed block", status.Health.RecommendedCommand, status.NextCommands)
+	}
+	var staleIssue struct {
+		Found              bool
+		RecommendedCommand string
+	}
+	for _, issue := range status.Health.ManagedBlockIssueStates {
+		if issue.State == "stale_locks" {
+			staleIssue.Found = true
+			staleIssue.RecommendedCommand = issue.RecommendedCommand
+		}
+	}
+	if !staleIssue.Found || staleIssue.RecommendedCommand != "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json" {
+		t.Fatalf("stale lock issue = %+v, want headless repair guidance", staleIssue)
 	}
 }
 
@@ -335,11 +409,18 @@ func TestCronStatusClassifiesDeadDaemonKeepaliveLock(t *testing.T) {
 			Phase        string   `json:"phase"`
 			NextCommands []string `json:"next_commands"`
 		} `json:"daemon_locks"`
+		Health struct {
+			StaleDaemonLockCount int      `json:"stale_daemon_lock_count"`
+			StaleDaemonLocks     []string `json:"stale_daemon_locks"`
+		} `json:"health"`
 	}
 	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
 	lock, ok := status.DaemonLocks[lockName]
 	if !status.OK || !ok || !lock.Exists || !lock.Stale || lock.StaleReason != "owner_process_not_running" || lock.OwnerRunning || lock.PID == 0 || lock.Phase != "checking" {
 		t.Fatalf("cron status daemon lock = %+v ok=%v statusOK=%v, want dead-owner stale classification", lock, ok, status.OK)
+	}
+	if status.Health.StaleDaemonLockCount != 1 || !containsString(status.Health.StaleDaemonLocks, lockName) {
+		t.Fatalf("cron status health = %+v, want stale daemon lock summary", status.Health)
 	}
 	if !containsString(lock.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json") {
 		t.Fatalf("next commands = %+v, want safe headless stale-lock repair", lock.NextCommands)
@@ -391,6 +472,21 @@ exit 2
 	}
 	t.Setenv("CDP_FAKE_CRONTAB", store)
 	return store, bin
+}
+
+func writeStaleCronLock(t *testing.T, stateDir, name string) {
+	t.Helper()
+	path := filepath.Join(stateDir, "locks", name+".lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+		t.Fatalf("write stale cron lock: %v", err)
+	}
+	old := time.Now().Add(-20 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("age stale cron lock: %v", err)
+	}
 }
 
 func readFileString(t *testing.T, path string) string {

@@ -64,7 +64,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities")) and (.schema.fields | map(.name) | index("bootstrap_path"))' >/dev/null
 "$binary" schema scheduled-tasks --json | jq -e '.ok == true and .schema.name == "scheduled-tasks" and (.schema.fields | map(.name) | index("details")) and (.schema.fields[] | select(.name == "details").description | contains("legacy pages polling")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
-"$binary" schema cron --json | jq -e '.ok == true and .schema.name == "cron" and (.schema.fields | map(.name) | index("next_commands")) and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("profile_seed")) and (.schema.fields | map(.name) | index("dry_run"))' >/dev/null
+"$binary" schema cron --json | jq -e '.ok == true and .schema.name == "cron" and (.schema.fields | map(.name) | index("next_commands")) and (.schema.fields | map(.name) | index("state")) and (.schema.fields | map(.name) | index("health")) and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("profile_seed")) and (.schema.fields | map(.name) | index("dry_run"))' >/dev/null
 "$binary" schema cron-migrate-pages-polling --json | jq -e '.ok == true and .schema.name == "cron-migrate-pages-polling" and (.schema.fields | map(.name) | index("candidate_count")) and (.schema.fields | map(.name) | index("managed_keepalive_installed")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema headless-security --json | jq -e '.ok == true and .schema.name == "headless-security" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
@@ -148,8 +148,23 @@ cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup
 EOF_CRONTAB
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and (.intended_block.entries | length == 5) and (.locks | type == "object") and (.daemon_locks | type == "object")' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "not_installed" and .health.state == "not_installed" and .health.status == "warn" and .health.recommended_command == "cdp cron install --profile agent --json" and .installed == false and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and (.intended_block.entries | length == 5) and (.locks | type == "object") and (.daemon_locks | type == "object")' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron diff --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and .actions[0].action == "append_managed_block"' >/dev/null
+cat >"$fake_crontab_store" <<'EOF_CRONTAB'
+SHELL=/bin/sh
+# cdp-cli managed browser runtime tasks
+* * * * * $HOME/.local/bin/cdp --browser-mode headed cron heal headed --json
+# End cdp-cli managed browser runtime tasks
+EOF_CRONTAB
+mkdir -p "$state_dir/locks"
+: >"$state_dir/locks/keepalive-headless.lock"
+touch -d '20 minutes ago' "$state_dir/locks/keepalive-headless.lock" 2>/dev/null || touch -t 202001010000 "$state_dir/locks/keepalive-headless.lock"
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "needs_update" and .health.state == "needs_update" and .health.status == "warn" and .health.recommended_command == "cdp cron install --profile agent --json" and .matches_intended == false and .health.stale_lock_count == 1 and (.health.stale_locks | index("keepalive-headless")) and (.health.issues | any(.state == "stale_locks" and .recommended_command == "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json"))' >/dev/null
+rm -f "$state_dir/locks/keepalive-headless.lock"
+cat >"$fake_crontab_store" <<'EOF_CRONTAB'
+SHELL=/bin/sh
+0 0 * * * /usr/local/bin/backup
+EOF_CRONTAB
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --profile agent --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 1) and (.intended_block.entries[0] | contains("daemon keepalive --auto-connect --repair --probe passive"))' >/dev/null
 cron_seed_config="$state_dir/cron-seed-config.json"
 cat >"$cron_seed_config" <<'EOF_CRON_SEED_CONFIG'
