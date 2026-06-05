@@ -99,16 +99,28 @@ func normalizeFileChooserWaitCriteria(criteria *fileChooserWaitCriteria) error {
 }
 
 func waitForFileChooserEvent(ctx context.Context, client browserEventClient, sessionID string, criteria fileChooserWaitCriteria) (fileChooserWaitObservation, func(context.Context) error, error) {
-	if err := client.CallSession(ctx, sessionID, "Page.enable", map[string]any{"enableFileChooserOpenedEvent": true}, nil); err != nil {
+	teardown, err := setupFileChooserWait(ctx, client, sessionID)
+	if err != nil {
 		return fileChooserWaitObservation{}, nil, err
 	}
+	observation, err := collectFileChooserEvent(ctx, client, sessionID, criteria)
+	return observation, teardown, err
+}
+
+func setupFileChooserWait(ctx context.Context, client browserEventClient, sessionID string) (func(context.Context) error, error) {
+	if err := client.CallSession(ctx, sessionID, "Page.enable", map[string]any{"enableFileChooserOpenedEvent": true}, nil); err != nil {
+		return nil, err
+	}
 	if err := client.CallSession(ctx, sessionID, "Page.setInterceptFileChooserDialog", map[string]any{"enabled": true}, nil); err != nil {
-		return fileChooserWaitObservation{}, nil, err
+		return nil, err
 	}
 	teardown := func(teardownCtx context.Context) error {
 		return client.CallSession(teardownCtx, sessionID, "Page.setInterceptFileChooserDialog", map[string]any{"enabled": false}, nil)
 	}
+	return teardown, nil
+}
 
+func collectFileChooserEvent(ctx context.Context, client browserEventClient, sessionID string, criteria fileChooserWaitCriteria) (fileChooserWaitObservation, error) {
 	observation := fileChooserWaitObservation{}
 	observe := func(event cdp.Event) {
 		if event.SessionID != "" && event.SessionID != sessionID {
@@ -129,22 +141,22 @@ func waitForFileChooserEvent(ctx context.Context, client browserEventClient, ses
 	}
 	events, err := client.DrainEvents(ctx)
 	if err != nil {
-		return observation, teardown, err
+		return observation, err
 	}
 	for _, event := range events {
 		observe(event)
 		if observation.Matched {
-			return observation, teardown, nil
+			return observation, nil
 		}
 	}
 	for {
 		event, err := client.ReadEvent(ctx)
 		if err != nil {
-			return observation, teardown, err
+			return observation, err
 		}
 		observe(event)
 		if observation.Matched {
-			return observation, teardown, nil
+			return observation, nil
 		}
 	}
 }

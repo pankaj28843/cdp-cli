@@ -689,6 +689,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticDialogEventsForClick(req.SessionID, req.Params, targetInfos)...)
+					events = append(events, syntheticFileChooserEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 				}
 			} else if req.Method == "Page.captureScreenshot" {
@@ -862,6 +863,41 @@ func syntheticDialogEventsForClick(sessionID string, params json.RawMessage, tar
 			"message":           syntheticStringValue(target, "dialogMessage", "Delete item?"),
 			"type":              syntheticStringValue(target, "dialogType", "confirm"),
 			"hasBrowserHandler": false,
+		},
+	}}
+}
+
+func syntheticFileChooserEventsForClick(sessionID string, params json.RawMessage, targetInfos []map[string]any) []map[string]any {
+	expression := string(params)
+	if !strings.Contains(expression, "__cdp_cli_click__") && !strings.Contains(expression, "__cdp_cli_click_point__") {
+		return nil
+	}
+	targetID := strings.TrimPrefix(sessionID, "session-")
+	if targetID == "" || targetID == sessionID {
+		return nil
+	}
+	var target map[string]any
+	for _, candidate := range targetInfos {
+		if candidate["targetId"] == targetID {
+			target = candidate
+			break
+		}
+	}
+	if target == nil || target["fileChooserOnClick"] != true {
+		return nil
+	}
+	mode := syntheticStringValue(target, "fileChooserMode", "selectSingle")
+	backendNodeID := 42
+	if value, ok := target["fileChooserBackendNodeID"].(int); ok && value > 0 {
+		backendNodeID = value
+	}
+	return []map[string]any{{
+		"sessionId": sessionID,
+		"method":    "Page.fileChooserOpened",
+		"params": map[string]any{
+			"frameId":       syntheticStringValue(target, "fileChooserFrameID", "frame-upload"),
+			"mode":          mode,
+			"backendNodeId": backendNodeID,
 		},
 	}}
 }

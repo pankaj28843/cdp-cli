@@ -391,7 +391,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"click": {
 			Name:        "click",
-			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action verification, popup/download/dialog waits, and final target evidence.",
+			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action verification, popup/download/dialog/file-chooser waits, and final target evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the click completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: clicked for dispatched clicks, trial for --trial checks, or blocked inside actionability_failed error data."},
@@ -417,7 +417,10 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "dialog_wait", Type: "dialog_wait_result", Required: false, Description: "Post-click JavaScript dialog wait result when --wait-dialog is used, including criteria, handling action, event counts, warnings, and bounded evidence."},
 				{Name: "dialog", Type: "dialog_wait_event", Required: false, Description: "Matched JavaScript dialog metadata, safe URL redaction, and optional accept/dismiss handling evidence."},
 				{Name: "last_dialog_event", Type: "dialog_wait_event", Required: false, Description: "Last observed dialog event when --wait-dialog times out or criteria do not match."},
-				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands for selecting/snapshotting popup targets, listing/retrying download directories, or handling dialogs."},
+				{Name: "file_chooser_wait", Type: "file_chooser_wait_result", Required: false, Description: "Post-click file chooser wait result when --wait-file-chooser is used, including mode criteria, interception state, event counts, warnings, and bounded evidence."},
+				{Name: "file_chooser", Type: "file_chooser_wait_event", Required: false, Description: "Matched Page.fileChooserOpened metadata with mode, multiple flag, frame id, and backend node id."},
+				{Name: "last_file_chooser_event", Type: "file_chooser_wait_event", Required: false, Description: "Last observed file chooser event when --wait-file-chooser times out or criteria do not match."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands for selecting/snapshotting popup targets, listing/retrying download directories, handling dialogs, or assigning files."},
 				{Name: "target_refresh", Type: "object", Required: false, Description: "Target metadata refresh failure details when final target evidence could not be refreshed."},
 				{Name: "diagnostics", Type: "object", Required: false, Description: "Privacy-preserving click diagnostics when --diagnostics-out is used."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "Diagnostics artifact metadata when --diagnostics-out is used."},

@@ -244,6 +244,62 @@ func TestClickWaitDialogJSON(t *testing.T) {
 	}
 }
 
+func TestClickWaitFileChooserJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "upload-page", "type": "page", "title": "Upload App", "url": "https://example.test/upload", "attached": false, "fileChooserOnClick": true, "fileChooserMode": "selectMultiple", "fileChooserBackendNodeID": 77},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "label#upload", "--target", "upload-page", "--wait-file-chooser", "--wait-file-chooser-mode", "multiple", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click wait file chooser exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Click struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+			Verified *bool  `json:"verified"`
+		} `json:"click"`
+		FileChooserWait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Intercepted   bool   `json:"intercepted"`
+			Criteria      struct {
+				Mode string `json:"mode"`
+			} `json:"criteria"`
+		} `json:"file_chooser_wait"`
+		FileChooser struct {
+			FrameID       string `json:"frame_id"`
+			Mode          string `json:"mode"`
+			Multiple      bool   `json:"multiple"`
+			BackendNodeID int    `json:"backend_node_id"`
+			CDPMethod     string `json:"cdp_method"`
+		} `json:"file_chooser"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click wait file chooser output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.Verified == nil || !*got.Click.Verified {
+		t.Fatalf("click wait file chooser action = %+v, want raw-input clicked and verified", got)
+	}
+	if got.FileChooserWait.Kind != "file-chooser" || !got.FileChooserWait.Matched || got.FileChooserWait.EventCount == 0 || got.FileChooserWait.ObservedCount != 1 || got.FileChooserWait.Criteria.Mode != "selectMultiple" || !got.FileChooserWait.Intercepted {
+		t.Fatalf("click wait file chooser wait = %+v, want matched intercepted chooser evidence", got.FileChooserWait)
+	}
+	if got.FileChooser.FrameID != "frame-upload" || got.FileChooser.Mode != "selectMultiple" || !got.FileChooser.Multiple || got.FileChooser.BackendNodeID != 77 || got.FileChooser.CDPMethod != "Page.fileChooserOpened" {
+		t.Fatalf("click wait file chooser event = %+v, want multiple chooser metadata", got.FileChooser)
+	}
+	if !containsString(got.NextCommands, "cdp file input[type=file] tmp/upload.txt --json") {
+		t.Fatalf("click wait file chooser next commands = %+v, want cdp file follow-up", got.NextCommands)
+	}
+}
+
 func TestClickByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

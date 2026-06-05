@@ -164,6 +164,8 @@ func (a *app) newClickCommand() *cobra.Command {
 	var waitDialogAction string
 	var waitDialogPromptText string
 	var waitDialogRedact string
+	var waitFileChooser bool
+	var waitFileChooserMode string
 	var diagnosticsOut string
 	var poll time.Duration
 	var trial bool
@@ -186,6 +188,7 @@ func (a *app) newClickCommand() *cobra.Command {
 			waitPopup = waitPopup || strings.TrimSpace(waitPopupURL) != "" || strings.TrimSpace(waitPopupTitle) != ""
 			waitDownload = waitDownload || cmd.Flags().Changed("wait-download-url") || cmd.Flags().Changed("wait-download-filename") || cmd.Flags().Changed("wait-download-state") || cmd.Flags().Changed("download-dir") || cmd.Flags().Changed("wait-download-redact")
 			waitDialog = waitDialog || cmd.Flags().Changed("wait-dialog-type") || cmd.Flags().Changed("wait-dialog-message") || cmd.Flags().Changed("wait-dialog-message-contains") || cmd.Flags().Changed("wait-dialog-action") || cmd.Flags().Changed("wait-dialog-prompt-text") || cmd.Flags().Changed("wait-dialog-redact")
+			waitFileChooser = waitFileChooser || cmd.Flags().Changed("wait-file-chooser-mode")
 			waitModeCount := 0
 			if strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "" {
 				waitModeCount++
@@ -199,8 +202,11 @@ func (a *app) newClickCommand() *cobra.Command {
 			if waitDialog {
 				waitModeCount++
 			}
+			if waitFileChooser {
+				waitModeCount++
+			}
 			if waitModeCount > 1 {
-				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-download, --wait-dialog, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
+				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-download, --wait-dialog, --wait-file-chooser, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
@@ -216,6 +222,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if trial && waitDialog {
 				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-dialog", ExitUsage, []string{"cdp click 'Delete' --by role --role button --wait-dialog --json"})
+			}
+			if trial && waitFileChooser {
+				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-file-chooser", ExitUsage, []string{"cdp click 'Upload' --by label --wait-file-chooser --json"})
 			}
 			if trial && strings.TrimSpace(diagnosticsOut) != "" {
 				return commandError("usage", "usage", "--trial returns actionability diagnostics inline; omit --diagnostics-out", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
@@ -348,6 +357,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			var dialogOpts dialogWaitOptions
 			var dialogReport map[string]any
 			var dialogErr error
+			var fileChooserCriteria fileChooserWaitCriteria
+			var fileChooserReport map[string]any
+			var fileChooserErr error
 			if waitPopup {
 				popupCriteria = popupWaitCriteria{
 					OpenerID:    target.TargetID,
@@ -424,9 +436,27 @@ func (a *app) newClickCommand() *cobra.Command {
 					return commandError("connection_failed", "connection", fmt.Sprintf("click dialog wait target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 				}
 			}
+			if waitFileChooser {
+				fileChooserCriteria = fileChooserWaitCriteria{Mode: waitFileChooserMode}
+				if err := normalizeFileChooserWaitCriteria(&fileChooserCriteria); err != nil {
+					return err
+				}
+				teardown, err := setupFileChooserWait(ctx, client, session.SessionID)
+				if err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("click file chooser wait target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+				defer func() {
+					teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer teardownCancel()
+					_ = teardown(teardownCtx)
+				}()
+				if _, err := client.DrainEvents(ctx); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("click file chooser wait target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+			}
 
 			clickStrategy := strategy
-			if (waitPopup || waitDownload || waitDialog) && clickStrategy == "auto" {
+			if (waitPopup || waitDownload || waitDialog || waitFileChooser) && clickStrategy == "auto" {
 				clickStrategy = "raw-input"
 			}
 			eventWaitStart := time.Now()
@@ -516,6 +546,16 @@ func (a *app) newClickCommand() *cobra.Command {
 					}
 				}
 			}
+			if waitFileChooser {
+				observation, err := collectFileChooserEvent(ctx, client, session.SessionID, fileChooserCriteria)
+				fileChooserReport = fileChooserWaitReport(observation, fileChooserCriteria, time.Since(eventWaitStart), a.effectiveNetworkWaitTimeout())
+				fileChooserReport["target"] = pageRow(target)
+				verified = observation.Matched
+				result.Verified = &verified
+				if err != nil {
+					fileChooserErr = err
+				}
+			}
 
 			finalTarget, refreshErr := refreshedClickTarget(ctx, client, target)
 			result.TargetID = finalTarget.TargetID
@@ -559,6 +599,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			if dialogReport != nil {
 				addDialogWaitToClickReport(report, dialogReport)
 			}
+			if fileChooserReport != nil {
+				addFileChooserWaitToClickReport(report, fileChooserReport)
+			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
 				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
@@ -573,6 +616,9 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 				if dialogReport != nil {
 					addDialogWaitToClickReport(diagnostics, dialogReport)
+				}
+				if fileChooserReport != nil {
+					addFileChooserWaitToClickReport(diagnostics, fileChooserReport)
 				}
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
@@ -595,6 +641,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			if dialogErr != nil {
 				return dialogWaitError(ctx, target.TargetID, dialogOpts, report, dialogErr)
 			}
+			if fileChooserErr != nil {
+				return fileChooserWaitError(ctx, target.TargetID, fileChooserCriteria, report, fileChooserErr)
+			}
 			human := fmt.Sprintf("clicked\t%s\t%s", target.TargetID, result.Selector)
 			if waitPopup {
 				human = fmt.Sprintf("clicked-popup\t%s\t%s", target.TargetID, result.Selector)
@@ -604,6 +653,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if waitDialog {
 				human = fmt.Sprintf("clicked-dialog\t%s\t%s", target.TargetID, result.Selector)
+			}
+			if waitFileChooser {
+				human = fmt.Sprintf("clicked-file-chooser\t%s\t%s", target.TargetID, result.Selector)
 			}
 			if !verified {
 				human = fmt.Sprintf("click-unverified\t%s\t%s", target.TargetID, result.Selector)
@@ -635,6 +687,8 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().StringVar(&waitDialogAction, "wait-dialog-action", "none", "handle the matched dialog when --wait-dialog is used: none, accept, or dismiss")
 	cmd.Flags().StringVar(&waitDialogPromptText, "wait-dialog-prompt-text", "", "prompt text to send when --wait-dialog-action accept handles a prompt dialog")
 	cmd.Flags().StringVar(&waitDialogRedact, "wait-dialog-redact", "safe", "redaction preset for returned dialog URL: safe or none")
+	cmd.Flags().BoolVar(&waitFileChooser, "wait-file-chooser", false, "wait for a file chooser opened by this click")
+	cmd.Flags().StringVar(&waitFileChooserMode, "wait-file-chooser-mode", "", "file chooser mode to match: selectSingle/single or selectMultiple/multiple; implies --wait-file-chooser")
 	cmd.Flags().StringVar(&diagnosticsOut, "diagnostics-out", "", "optional path for privacy-preserving click diagnostics JSON")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching the click")
@@ -942,6 +996,24 @@ func addDialogWaitToClickReport(report map[string]any, dialogReport map[string]a
 		report["last_dialog_event"] = lastEvent
 	}
 	if nextCommands, ok := dialogReport["next_commands"]; ok {
+		report["next_commands"] = nextCommands
+	}
+}
+
+func addFileChooserWaitToClickReport(report map[string]any, fileChooserReport map[string]any) {
+	if report == nil || fileChooserReport == nil {
+		return
+	}
+	if wait, ok := fileChooserReport["wait"]; ok {
+		report["file_chooser_wait"] = wait
+	}
+	if chooser, ok := fileChooserReport["file_chooser"]; ok {
+		report["file_chooser"] = chooser
+	}
+	if lastEvent, ok := fileChooserReport["last_event"]; ok {
+		report["last_file_chooser_event"] = lastEvent
+	}
+	if nextCommands, ok := fileChooserReport["next_commands"]; ok {
 		report["next_commands"] = nextCommands
 	}
 }
