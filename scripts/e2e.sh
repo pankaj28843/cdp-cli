@@ -554,6 +554,15 @@ cat > "$socket_unready_dir/headless/daemon.json" <<JSON
 JSON
 "$binary" --browser-mode headless daemon health --state-dir "$socket_unready_dir" --json | jq -e '.ok == true and .daemon.state == "runtime_socket_unready" and .daemon.process_running == true and .daemon.runtime_socket_ready == false and .health.state == "daemon_socket_unready" and .health.daemon_rpc_ready == false and (.health.reasons | index("daemon_socket_unready")) and (.health.next_commands | index("cdp --browser-mode headless daemon keepalive --repair --json"))' >/dev/null
 
+crash_log_dir="$state_dir/crash-log"
+mkdir -p "$crash_log_dir/headless"
+cat > "$crash_log_dir/headless/daemon.log" <<'JSONL'
+{"time":"2026-06-05T00:00:00Z","level":"info","event":"runtime_saved","message":"daemon runtime state saved","pid":101}
+{"time":"2026-06-05T00:00:01Z","level":"warn","event":"hold_connection_ended","message":"failed to get reader: failed to read frame header: EOF","pid":101}
+{"time":"2026-06-05T00:00:02Z","level":"error","event":"rpc_listen_failed","message":"listen daemon rpc socket: bind failed","pid":102}
+JSONL
+"$binary" --browser-mode headless daemon health --state-dir "$crash_log_dir" --json | jq -e '.ok == true and .health.crash_capture == "daemon_logs" and .health.recent_log_warnings == 1 and .health.recent_log_errors == 1 and (.health.recent_crashes | length == 2) and .health.recent_crashes[0].type == "browser_connection_ended" and .health.recent_crashes[1].type == "daemon_rpc_listen_failed" and (.health.last_browser_keepalive_error | contains("hold_connection_ended"))' >/dev/null
+
 set +e
 snapshot_output="$("$binary" snapshot --state-dir "$state_dir" --json 2>/tmp/cdp-cli-snapshot.err)"
 snapshot_code=$?

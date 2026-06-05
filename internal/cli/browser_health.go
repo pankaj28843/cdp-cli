@@ -325,6 +325,7 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 	warns := 0
 	errs := 0
 	lastDisconnect := ""
+	recentCrashes := []map[string]any{}
 	for _, entry := range entries {
 		level := strings.ToLower(strings.TrimSpace(entry.Level))
 		if level == "warn" || level == "warning" {
@@ -339,13 +340,73 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 				lastDisconnect = strings.TrimSpace(entry.Time + " " + entry.Event + " " + entry.Message)
 			}
 		}
+		if crash, ok := daemonCrashLogEntry(entry); ok {
+			recentCrashes = append(recentCrashes, crash)
+			if len(recentCrashes) > 5 {
+				recentCrashes = recentCrashes[1:]
+			}
+		}
 	}
 	out["recent_log_warnings"] = warns
 	out["recent_log_errors"] = errs
 	if lastDisconnect != "" {
 		out["last_browser_keepalive_error"] = lastDisconnect
 	}
+	if len(recentCrashes) > 0 {
+		out["crash_capture"] = "daemon_logs"
+		out["recent_crashes"] = recentCrashes
+	}
 	return out
+}
+
+func daemonCrashLogEntry(entry daemon.LogEntry) (map[string]any, bool) {
+	event := strings.TrimSpace(entry.Event)
+	level := strings.ToLower(strings.TrimSpace(entry.Level))
+	message := strings.TrimSpace(entry.Message)
+	crashType := daemonCrashLogType(event, level, message)
+	if crashType == "" {
+		return nil, false
+	}
+	out := map[string]any{
+		"type":  crashType,
+		"event": event,
+		"level": level,
+	}
+	if strings.TrimSpace(entry.Time) != "" {
+		out["time"] = strings.TrimSpace(entry.Time)
+	}
+	if message != "" {
+		out["message"] = message
+	}
+	if entry.PID > 0 {
+		out["pid"] = entry.PID
+	}
+	return out, true
+}
+
+func daemonCrashLogType(event, level, message string) string {
+	event = strings.ToLower(strings.TrimSpace(event))
+	level = strings.ToLower(strings.TrimSpace(level))
+	message = strings.ToLower(strings.TrimSpace(message))
+	switch event {
+	case "hold_connection_ended":
+		return "browser_connection_ended"
+	case "browser_dial_failed":
+		return "browser_dial_failed"
+	case "rpc_listen_failed":
+		return "daemon_rpc_listen_failed"
+	case "runtime_write_failed":
+		return "daemon_runtime_write_failed"
+	}
+	if level != "warn" && level != "warning" && level != "error" {
+		return ""
+	}
+	for _, needle := range []string{"failed to get reader", "failed to read frame", "broken pipe", "connection is closed", "use of closed network connection", "websocket"} {
+		if strings.Contains(message, needle) {
+			return "daemon_connection_error"
+		}
+	}
+	return ""
 }
 
 func applyBudgetToHealth(health map[string]any, budget cdp.BrowserResourceBudget) {

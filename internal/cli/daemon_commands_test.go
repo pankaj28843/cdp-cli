@@ -132,6 +132,58 @@ func TestDaemonHealthClassifiesRuntimeSocketUnreadyJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonHealthReportsRecentCrashLogsJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	logPath := daemon.RuntimeLogPathForMode(stateDir, "headless")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll log dir returned error: %v", err)
+	}
+	entries := []string{
+		`{"time":"2026-06-05T00:00:00Z","level":"info","event":"runtime_saved","message":"daemon runtime state saved","pid":101}`,
+		`{"time":"2026-06-05T00:00:01Z","level":"warn","event":"hold_connection_ended","message":"failed to get reader: failed to read frame header: EOF","pid":101}`,
+		`{"time":"2026-06-05T00:00:02Z","level":"error","event":"rpc_listen_failed","message":"listen daemon rpc socket: bind failed","pid":102}`,
+	}
+	if err := os.WriteFile(logPath, []byte(strings.Join(entries, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile log returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Health struct {
+			CrashCapture              string `json:"crash_capture"`
+			RecentLogWarnings         int    `json:"recent_log_warnings"`
+			RecentLogErrors           int    `json:"recent_log_errors"`
+			LastBrowserKeepaliveError string `json:"last_browser_keepalive_error"`
+			RecentCrashes             []struct {
+				Type    string `json:"type"`
+				Event   string `json:"event"`
+				Level   string `json:"level"`
+				Message string `json:"message"`
+				PID     int    `json:"pid"`
+			} `json:"recent_crashes"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon health output is invalid JSON: %v", err)
+	}
+	if got.Health.CrashCapture != "daemon_logs" || got.Health.RecentLogWarnings != 1 || got.Health.RecentLogErrors != 1 || len(got.Health.RecentCrashes) != 2 {
+		t.Fatalf("health log summary = %+v, want daemon_logs capture with warning/error crash entries", got.Health)
+	}
+	if got.Health.RecentCrashes[0].Type != "browser_connection_ended" || got.Health.RecentCrashes[0].Event != "hold_connection_ended" || got.Health.RecentCrashes[0].PID != 101 {
+		t.Fatalf("first recent crash = %+v, want hold connection ended classification", got.Health.RecentCrashes[0])
+	}
+	if got.Health.RecentCrashes[1].Type != "daemon_rpc_listen_failed" || got.Health.RecentCrashes[1].Event != "rpc_listen_failed" || got.Health.RecentCrashes[1].PID != 102 {
+		t.Fatalf("second recent crash = %+v, want rpc listen failed classification", got.Health.RecentCrashes[1])
+	}
+	if !strings.Contains(got.Health.LastBrowserKeepaliveError, "hold_connection_ended") {
+		t.Fatalf("last_browser_keepalive_error = %q, want hold_connection_ended summary", got.Health.LastBrowserKeepaliveError)
+	}
+}
+
 func TestDaemonStatusUsesSelectedBrowserModeRuntime(t *testing.T) {
 	stateDir := filepath.Join(os.TempDir(), "cdp-cli-mode-runtime-test")
 	if err := os.RemoveAll(stateDir); err != nil {
