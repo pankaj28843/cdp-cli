@@ -277,6 +277,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "state", Type: "string", Required: true, Description: "Health-check state: healthy, failed, or locked."},
 				{Name: "action", Type: "string", Required: true, Description: "Action taken: validated, diagnosed, or skipped."},
 				{Name: "health", Type: "browser_health", Required: false, Description: "Daemon/browser health after any requested repair."},
+				{Name: "repair", Type: "object", Required: false, Description: "Keepalive-backed repair metadata when --repair starts or repairs managed headless before validation."},
 				{Name: "steps", Type: "array<health_check_step>", Required: false, Description: "Ordered health, optional repair, open, JavaScript, DOM text, and screenshot validation steps."},
 				{Name: "artifacts", Type: "object", Required: false, Description: "Local run directory, latest summary JSON, and screenshot artifact paths."},
 				{Name: "failure_count", Type: "number", Required: false, Description: "Consecutive failure count stored next to health-check artifacts."},

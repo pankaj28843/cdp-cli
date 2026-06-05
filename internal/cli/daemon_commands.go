@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -614,7 +615,7 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 		if err := lock.Update(ctx, "repairing"); err != nil {
 			return err
 		}
-		repair, err := a.repairManagedHeadlessForHealthCheck(ctx, store.Dir, opts)
+		repair, err := a.repairManagedHeadlessForHealthCheck(ctx, store.Dir, opts, lock, status, health)
 		addStep("repair", err == nil, map[string]any{"repair": repair})
 		if err != nil {
 			return fail("repair_failed", err)
@@ -642,15 +643,12 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	report["target"] = pageRow(target)
 	addStep("open", true, map[string]any{"target_id": target.TargetID})
 
-	var js struct {
-		OK   bool   `json:"ok"`
-		Text string `json:"text"`
-	}
-	if err := evaluateJSONValue(ctx, session, headlessHealthCheckExpression(), "headless health-check javascript", &js); err != nil {
+	js, jsAttempts, err := evaluateHeadlessHealthCheckJavaScript(ctx, session)
+	if err != nil {
 		addStep("javascript", false, map[string]any{"error": err.Error()})
 		return fail("javascript_failed", err)
 	}
-	addStep("javascript", js.OK, map[string]any{"text": js.Text})
+	addStep("javascript", js.OK, map[string]any{"text": js.Text, "attempts": jsAttempts})
 	if !js.OK {
 		return fail("javascript_unexpected_result", nil)
 	}
@@ -711,39 +709,52 @@ func (a *app) selectedDaemonHealth(ctx context.Context) (daemon.Status, map[stri
 	return status, health, nil
 }
 
-func (a *app) repairManagedHeadlessForHealthCheck(ctx context.Context, storeDir string, opts daemonHealthCheckOptions) (map[string]any, error) {
-	repair := map[string]any{"previous_state": "unknown"}
-	stop, err := a.stopSelectedRuntime(ctx)
-	if err != nil {
-		return repair, err
+func (a *app) repairManagedHeadlessForHealthCheck(ctx context.Context, storeDir string, opts daemonHealthCheckOptions, lock daemon.LockHandle, status daemon.Status, health map[string]any) (map[string]any, error) {
+	probeResult := map[string]any{
+		"mode":             "health-check",
+		"result":           healthState(health),
+		"repair_requested": true,
 	}
-	repair["stop"] = stop
-	if stop.DaemonStopped {
-		repair["previous_state"] = "runtime_stopped"
-	} else {
-		repair["previous_state"] = "not_running"
+	connectionName := a.connectionStateName(ctx)
+	mode := strings.TrimSpace(status.ConnectionMode)
+	if mode == "" {
+		mode = a.connectionMode()
 	}
-	managed, chrome, err := a.ensureManagedChromeForKeepalive(ctx, storeDir, opts.ChromeCommand)
-	if err != nil {
-		return repair, err
-	}
-	a.opts.browserURL = managedHTTPURL(managed.Endpoint)
-	a.opts.autoConnect = false
-	a.opts.userDataDir = managed.Metadata.UserDataDir
-	result, err := a.runDaemonStart(ctx, daemonStartConfig{
-		reconnect:         opts.Reconnect,
-		connectionName:    a.connectionStateName(ctx),
-		remember:          true,
-		managedKeepAlive:  managed,
-		skipSelectedApply: true,
+	human, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, status, probeResult, map[string]any{
+		"ok":            false,
+		"result":        healthState(health),
+		"runtime_state": status.State,
 	})
+	repair := map[string]any{
+		"repair_source":  "daemon_keepalive",
+		"previous_state": status.State,
+		"classification": keepaliveRepairClassification(keepalive, err),
+		"keepalive":      keepalive,
+	}
+	if human != "" {
+		repair["human"] = human
+	}
+	if state, ok := stringMapField(keepalive, "state"); ok {
+		repair["state"] = state
+	}
+	if action, ok := stringMapField(keepalive, "action"); ok {
+		repair["action"] = action
+	}
 	if err != nil {
 		return repair, err
 	}
-	repair["chrome"] = chrome
-	repair["daemon"] = result.data["daemon"]
-	repair["start"] = result.data["start"]
-	return repair, nil
+	state, _ := stringMapField(keepalive, "state")
+	switch state {
+	case "healthy", "started", "repaired":
+		return repair, nil
+	case "locked":
+		return repair, fmt.Errorf("headless keepalive repair is locked")
+	default:
+		if state == "" {
+			state = "unknown"
+		}
+		return repair, fmt.Errorf("headless keepalive repair ended in state %s", state)
+	}
 }
 
 func (a *app) openHealthCheckTarget(ctx context.Context, rawURL string) (cdp.TargetInfo, *cdp.PageSession, func(), error) {
@@ -781,6 +792,48 @@ func headlessHealthCheckExpression() string {
   const text = String(document.querySelector("[data-cdp-health]")?.textContent || "");
   return { ok: text === "cdp-headless-health", text, marker };
 })()`
+}
+
+type headlessHealthCheckJSResult struct {
+	OK   bool   `json:"ok"`
+	Text string `json:"text"`
+}
+
+func evaluateHeadlessHealthCheckJavaScript(ctx context.Context, session *cdp.PageSession) (headlessHealthCheckJSResult, int, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	var last headlessHealthCheckJSResult
+	var lastErr error
+	attempts := 0
+	for {
+		attempts++
+		var current headlessHealthCheckJSResult
+		err := evaluateJSONValue(ctx, session, headlessHealthCheckExpression(), "headless health-check javascript", &current)
+		if err == nil {
+			last = current
+			lastErr = nil
+			if current.OK {
+				return current, attempts, nil
+			}
+		} else {
+			lastErr = err
+		}
+		if !time.Now().Before(deadline) {
+			if lastErr != nil {
+				return last, attempts, lastErr
+			}
+			return last, attempts, nil
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return last, attempts, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func headlessHealthCheckNextCommands() []string {
@@ -1147,6 +1200,13 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 					"lock":     map[string]any{"name": lock.Metadata.Name, "acquired": true},
 				})
 			}
+			if browserMode == "headless" {
+				human, data, err := a.runHeadlessKeepaliveStartOrRepair(ctx, store.Dir, lock, connectionName, mode, reconnect, chromeCommand, status, probeResult, runtimeCheck)
+				if err != nil {
+					return err
+				}
+				return a.render(ctx, human, data)
+			}
 			if status.State == "running" {
 				if err := lock.Update(ctx, "repairing_daemon"); err != nil {
 					return err
@@ -1178,24 +1238,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 
 			chrome := keepaliveChromeStatus{Skipped: true, Reason: "not required for browser_url mode"}
 			var managed *managedKeepAlive
-			if browserMode == "headless" {
-				if err := lock.Update(ctx, "launching_managed_chrome"); err != nil {
-					return err
-				}
-				managed, chrome, err = a.ensureManagedChromeForKeepalive(ctx, store.Dir, chromeCommand)
-				if err != nil {
-					return commandError(
-						"chrome_start_failed",
-						"connection",
-						fmt.Sprintf("start managed headless Chrome: %v", err),
-						ExitConnection,
-						[]string{"cdp --browser-mode headless browser profile status --json", "cdp --browser-mode headless daemon keepalive --repair --json"},
-					)
-				}
-				a.opts.browserURL = managedHTTPURL(managed.Endpoint)
-				a.opts.autoConnect = false
-				a.opts.userDataDir = managed.Metadata.UserDataDir
-			} else if a.opts.autoConnect {
+			if a.opts.autoConnect {
 				if err := lock.Update(ctx, "launching_chrome"); err != nil {
 					return err
 				}
@@ -1276,6 +1319,137 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&chromeArgs, "chrome-args", nil, "extra Chrome argument; repeat for multiple arguments")
 	cmd.Flags().BoolVar(&repair, "repair", false, "human-managed repair mode: remove stale runtime state and restart the daemon when safe")
 	return cmd
+}
+
+func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir string, lock daemon.LockHandle, connectionName, mode string, reconnect time.Duration, chromeCommand string, status daemon.Status, probeResult map[string]any, runtimeCheck map[string]any) (string, map[string]any, error) {
+	if status.State == "running" {
+		if err := lock.Update(ctx, "repairing_daemon"); err != nil {
+			return "", nil, err
+		}
+		if _, _, err := daemon.StopRuntimeForMode(ctx, storeDir, a.browserModeName()); err != nil {
+			return "", nil, commandError(
+				"connection_failed",
+				"connection",
+				fmt.Sprintf("stop unhealthy daemon before repair: %v", err),
+				ExitConnection,
+				[]string{"cdp daemon stop --json", "cdp daemon keepalive --json"},
+			)
+		}
+	}
+	if err := lock.Update(ctx, "launching_managed_chrome"); err != nil {
+		return "", nil, err
+	}
+	managed, chrome, err := a.ensureManagedChromeForKeepalive(ctx, storeDir, chromeCommand)
+	if err != nil {
+		return "", nil, commandError(
+			"chrome_start_failed",
+			"connection",
+			fmt.Sprintf("start managed headless Chrome: %v", err),
+			ExitConnection,
+			[]string{"cdp --browser-mode headless browser profile status --json", "cdp --browser-mode headless daemon keepalive --repair --json"},
+		)
+	}
+	a.opts.browserURL = managedHTTPURL(managed.Endpoint)
+	a.opts.autoConnect = false
+	a.opts.userDataDir = managed.Metadata.UserDataDir
+
+	if err := lock.Update(ctx, "starting_daemon"); err != nil {
+		return "", nil, err
+	}
+	result, err := a.runDaemonStart(ctx, daemonStartConfig{
+		reconnect:         reconnect,
+		connectionName:    connectionName,
+		remember:          true,
+		managedKeepAlive:  managed,
+		skipSelectedApply: true,
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	action := "started"
+	state := "started"
+	if status.Runtime != nil {
+		action = "repaired"
+		state = "repaired"
+	}
+	if start, ok := result.data["start"].(map[string]any); ok {
+		if already, ok := start["already_running"].(bool); ok && already {
+			action = "none"
+			state = "healthy"
+		}
+	}
+	if err := lock.Update(ctx, state); err != nil {
+		return "", nil, err
+	}
+	data := map[string]any{
+		"ok":           true,
+		"browser_mode": "headless",
+		"connection":   connectionName,
+		"mode":         mode,
+		"state":        state,
+		"action":       action,
+		"locked":       false,
+		"daemon":       result.data["daemon"],
+		"start":        result.data["start"],
+		"chrome":       chrome,
+		"probe":        probeResult,
+		"previous":     status,
+		"health":       runtimeCheck,
+		"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
+	}
+	if conn, ok := result.data["connection"]; ok {
+		data["connection_detail"] = conn
+	}
+	return fmt.Sprintf("keepalive\t%s\t%s", connectionName, state), data, nil
+}
+
+func keepaliveRepairClassification(keepalive map[string]any, err error) string {
+	if err != nil {
+		if code, ok := commandErrorCode(err); ok {
+			return code
+		}
+		return "repair_failed"
+	}
+	if keepalive == nil {
+		return "missing_keepalive_result"
+	}
+	if locked, ok := keepalive["locked"].(bool); ok && locked {
+		return "keepalive_locked"
+	}
+	if health, ok := keepalive["health"].(map[string]any); ok {
+		if result, ok := stringMapField(health, "result"); ok && result != "" {
+			return result
+		}
+	}
+	if chrome, ok := keepalive["chrome"].(keepaliveChromeStatus); ok {
+		if chrome.Launched {
+			return "managed_chrome_launched"
+		}
+		if chrome.Running {
+			return "managed_chrome_reused"
+		}
+	}
+	if state, ok := stringMapField(keepalive, "state"); ok && state != "" {
+		return state
+	}
+	return "unknown"
+}
+
+func commandErrorCode(err error) (string, bool) {
+	var cmdErr *CommandError
+	if !errors.As(err, &cmdErr) {
+		return "", false
+	}
+	return cmdErr.Code, strings.TrimSpace(cmdErr.Code) != ""
+}
+
+func stringMapField(fields map[string]any, key string) (string, bool) {
+	value, ok := fields[key]
+	if !ok {
+		return "", false
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	return text, text != ""
 }
 
 func (a *app) connectionStateName(ctx context.Context) string {

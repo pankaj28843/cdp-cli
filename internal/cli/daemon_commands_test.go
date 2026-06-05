@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -276,6 +277,111 @@ func TestDaemonHealthCheckHeadlessHealthyJSON(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("artifact %s missing: %v", path, err)
 		}
+	}
+}
+
+func TestDaemonHealthCheckRepairUsesKeepaliveForStaleHeadlessRuntime(t *testing.T) {
+	stateDir := shortCLIStateDir(t)
+	artifactDir := filepath.Join(stateDir, "health-artifacts")
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	endpoint := fakeWebSocketEndpoint(t, server.URL)
+	port := writeManagedActivePortForEndpoint(t, stateDir, endpoint)
+	profileDir := browser.ManagedProfileDir(stateDir)
+	managedStatus := browser.ManagedStatus{
+		BrowserMode:         "headless",
+		ChromePID:           os.Getpid(),
+		UserDataDir:         profileDir,
+		DebuggingPort:       port,
+		ProfileSeedStrategy: "managed",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           os.Getpid(),
+		StartedAt:           time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+		UserDataDir:         profileDir,
+		DebuggingPort:       port,
+		ProfileSeedStrategy: "managed",
+		LastSeededAt:        time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", daemon.Runtime{
+		PID:                 exitedProcessPID(t),
+		StartedAt:           time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+		BrowserMode:         "headless",
+		ConnectionMode:      "browser_url",
+		ReconnectInterval:   "30s",
+		SocketPath:          daemon.RuntimeSocketPathForMode(stateDir, "headless"),
+		Endpoint:            endpoint,
+		ManagedBrowser:      &managedStatus,
+		ManagedProfilePath:  profileDir,
+		ProfileSeedStrategy: "managed",
+		ChromePID:           os.Getpid(),
+		ChromePort:          port,
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--repair", "--state-dir", stateDir, "--out-dir", artifactDir, "--chrome-command", "", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health-check repair exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Repair struct {
+			RepairSource   string `json:"repair_source"`
+			PreviousState  string `json:"previous_state"`
+			Classification string `json:"classification"`
+			State          string `json:"state"`
+			Action         string `json:"action"`
+			Keepalive      struct {
+				State    string `json:"state"`
+				Action   string `json:"action"`
+				Previous struct {
+					State string `json:"state"`
+				} `json:"previous"`
+				Chrome struct {
+					Running bool `json:"running"`
+				} `json:"chrome"`
+			} `json:"keepalive"`
+		} `json:"repair"`
+		Steps []struct {
+			Name string `json:"name"`
+			OK   bool   `json:"ok"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon health-check repair output is invalid JSON: %v\n%s", err, out.String())
+	}
+	if !got.OK || got.State != "healthy" || got.Action != "validated" {
+		t.Fatalf("daemon health-check repair = %+v, want healthy validated result", got)
+	}
+	if got.Repair.RepairSource != "daemon_keepalive" || got.Repair.PreviousState != "stale_state" || got.Repair.Classification != "stale_runtime" || got.Repair.State != "repaired" || got.Repair.Action != "repaired" {
+		t.Fatalf("repair = %+v, want daemon_keepalive repair from stale runtime", got.Repair)
+	}
+	if got.Repair.Keepalive.State != "repaired" || got.Repair.Keepalive.Action != "repaired" || got.Repair.Keepalive.Previous.State != "stale_state" || !got.Repair.Keepalive.Chrome.Running {
+		t.Fatalf("keepalive repair = %+v, want reused managed Chrome and repaired daemon", got.Repair.Keepalive)
+	}
+	foundRepair := false
+	for _, step := range got.Steps {
+		if step.Name == "repair" && step.OK {
+			foundRepair = true
+			break
+		}
+	}
+	if !foundRepair {
+		t.Fatalf("steps = %+v, missing successful repair step", got.Steps)
 	}
 }
 
@@ -897,6 +1003,27 @@ func writeKeepaliveLock(t *testing.T, stateDir, name string, pid int, phase stri
 	if err := os.WriteFile(lockPath, lockBody, 0o600); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
+}
+
+func writeManagedActivePortForEndpoint(t *testing.T, stateDir, endpoint string) string {
+	t.Helper()
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatalf("parse managed endpoint: %v", err)
+	}
+	_, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split managed endpoint host: %v", err)
+	}
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll managed profile returned error: %v", err)
+	}
+	body := []byte(port + "\n" + u.EscapedPath() + "\n")
+	if err := os.WriteFile(filepath.Join(profileDir, "DevToolsActivePort"), body, 0o600); err != nil {
+		t.Fatalf("WriteFile DevToolsActivePort returned error: %v", err)
+	}
+	return port
 }
 
 func exitedProcessPID(t *testing.T) int {

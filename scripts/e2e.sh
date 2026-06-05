@@ -94,7 +94,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema protocol-describe --json | jq -e '.ok == true and .schema.name == "protocol-describe"' >/dev/null
 "$binary" schema daemon-restart --json | jq -e '.ok == true and .schema.name == "daemon-restart" and (.schema.fields | map(.name) | index("restart"))' >/dev/null
 "$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("lock"))' >/dev/null
-"$binary" schema daemon-health-check --json | jq -e '.ok == true and .schema.name == "daemon-health-check" and (.schema.fields | map(.name) | index("steps")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("failure_count"))' >/dev/null
+"$binary" schema daemon-health-check --json | jq -e '.ok == true and .schema.name == "daemon-health-check" and (.schema.fields | map(.name) | index("steps")) and (.schema.fields | map(.name) | index("repair")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("failure_count"))' >/dev/null
 "$binary" schema daemon-status --json | jq -e '.ok == true and .schema.name == "daemon-status" and (.schema.fields | map(.name) | index("daemon"))' >/dev/null
 "$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("entries"))' >/dev/null
 health_state_dir="$(mktemp -d)"
