@@ -9,6 +9,17 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 )
 
+type assertionStringDiffJSON struct {
+	Mode            string `json:"mode"`
+	Reason          string `json:"reason"`
+	ExpectedLength  int    `json:"expected_length"`
+	ActualLength    int    `json:"actual_length"`
+	PrefixLength    int    `json:"prefix_length"`
+	SuffixLength    int    `json:"suffix_length"`
+	ExpectedSnippet string `json:"expected_snippet"`
+	ActualSnippet   string `json:"actual_snippet"`
+}
+
 func TestFormValuesAndSelectorAssertionsJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
 	defer server.Close()
@@ -133,22 +144,23 @@ func TestAssertValueTimeoutJSON(t *testing.T) {
 		Data                struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Selector     string `json:"selector"`
-				Expected     string `json:"expected"`
-				Actual       string `json:"actual"`
-				Mode         string `json:"mode"`
-				Passed       bool   `json:"passed"`
-				Count        int    `json:"count"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Selector     string                   `json:"selector"`
+				Expected     string                   `json:"expected"`
+				Actual       string                   `json:"actual"`
+				Mode         string                   `json:"mode"`
+				Diff         *assertionStringDiffJSON `json:"diff"`
+				Passed       bool                     `json:"passed"`
+				Count        int                      `json:"count"`
+				Attempts     int                      `json:"attempts"`
+				ElapsedMS    int64                    `json:"elapsed_ms"`
+				PollInterval string                   `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert value timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#q" || got.Data.Assertion.Selector != "input#q" || got.Data.Assertion.Expected != "never" || got.Data.Assertion.Actual != "hello" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp form get 'input#q' --json") {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "input#q" || got.Data.Assertion.Selector != "input#q" || got.Data.Assertion.Expected != "never" || got.Data.Assertion.Actual != "hello" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "exact" || got.Data.Assertion.Diff.Reason != "different" || got.Data.Assertion.Diff.ExpectedLength != 5 || got.Data.Assertion.Diff.ActualLength != 5 || got.Data.Assertion.Diff.PrefixLength != 0 || got.Data.Assertion.Diff.SuffixLength != 0 || got.Data.Assertion.Diff.ExpectedSnippet != "never" || got.Data.Assertion.Diff.ActualSnippet != "hello" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp form get 'input#q' --json") {
 		t.Fatalf("assert value timeout = %+v, want timeout with last value diagnostics", got)
 	}
 }
@@ -279,22 +291,23 @@ func TestAssertTextTimeoutJSON(t *testing.T) {
 		Data                struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Selector     string `json:"selector"`
-				Expected     string `json:"expected"`
-				Actual       string `json:"actual"`
-				Mode         string `json:"mode"`
-				Passed       bool   `json:"passed"`
-				Count        int    `json:"count"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Selector     string                   `json:"selector"`
+				Expected     string                   `json:"expected"`
+				Actual       string                   `json:"actual"`
+				Mode         string                   `json:"mode"`
+				Diff         *assertionStringDiffJSON `json:"diff"`
+				Passed       bool                     `json:"passed"`
+				Count        int                      `json:"count"`
+				Attempts     int                      `json:"attempts"`
+				ElapsedMS    int64                    `json:"elapsed_ms"`
+				PollInterval string                   `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert text timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "Never text" || got.Data.Assertion.Actual != "Search button" || got.Data.Assertion.Mode != "contains" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp text 'button#submit' --limit 0 --json") {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#submit" || got.Data.Assertion.Selector != "button#submit" || got.Data.Assertion.Expected != "Never text" || got.Data.Assertion.Actual != "Search button" || got.Data.Assertion.Mode != "contains" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "contains" || got.Data.Assertion.Diff.Reason != "missing_substring" || got.Data.Assertion.Diff.ExpectedLength != 10 || got.Data.Assertion.Diff.ActualLength != 13 || got.Data.Assertion.Diff.ExpectedSnippet != "Never text" || got.Data.Assertion.Diff.ActualSnippet != "Search button" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp text 'button#submit' --limit 0 --json") {
 		t.Fatalf("assert text timeout = %+v, want timeout with last text diagnostics", got)
 	}
 }
@@ -399,23 +412,24 @@ func TestAssertURLTimeoutJSON(t *testing.T) {
 				Title string `json:"title"`
 			} `json:"target"`
 			Assertion struct {
-				Field        string `json:"field"`
-				Expected     string `json:"expected"`
-				Actual       string `json:"actual"`
-				Mode         string `json:"mode"`
-				Passed       bool   `json:"passed"`
-				URL          string `json:"url"`
-				Title        string `json:"title"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Field        string                   `json:"field"`
+				Expected     string                   `json:"expected"`
+				Actual       string                   `json:"actual"`
+				Mode         string                   `json:"mode"`
+				Diff         *assertionStringDiffJSON `json:"diff"`
+				Passed       bool                     `json:"passed"`
+				URL          string                   `json:"url"`
+				Title        string                   `json:"title"`
+				Attempts     int                      `json:"attempts"`
+				ElapsedMS    int64                    `json:"elapsed_ms"`
+				PollInterval string                   `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert url timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.Target.URL != "https://example.test/ready" || got.Data.Target.Title != "Ready Page" || got.Data.Assertion.Field != "url" || got.Data.Assertion.Expected != "missing" || got.Data.Assertion.Actual != "https://example.test/ready" || got.Data.Assertion.Mode != "contains" || got.Data.Assertion.Passed || got.Data.Assertion.URL != "https://example.test/ready" || got.Data.Assertion.Title != "Ready Page" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp pages --json") || !containsString(got.RemediationCommands, "cdp assert url missing --mode contains --json") {
+	if got.OK || got.Code != "timeout" || got.Data.Target.URL != "https://example.test/ready" || got.Data.Target.Title != "Ready Page" || got.Data.Assertion.Field != "url" || got.Data.Assertion.Expected != "missing" || got.Data.Assertion.Actual != "https://example.test/ready" || got.Data.Assertion.Mode != "contains" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "contains" || got.Data.Assertion.Diff.Reason != "missing_substring" || got.Data.Assertion.Diff.ExpectedLength != 7 || got.Data.Assertion.Diff.ActualLength != 26 || got.Data.Assertion.Diff.ExpectedSnippet != "missing" || got.Data.Assertion.Diff.ActualSnippet != "https://example.test/ready" || got.Data.Assertion.Passed || got.Data.Assertion.URL != "https://example.test/ready" || got.Data.Assertion.Title != "Ready Page" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp pages --json") || !containsString(got.RemediationCommands, "cdp assert url missing --mode contains --json") {
 		t.Fatalf("assert url timeout = %+v, want timeout with last page diagnostics", got)
 	}
 }
@@ -442,23 +456,24 @@ func TestAssertTitleTimeoutJSON(t *testing.T) {
 				Title string `json:"title"`
 			} `json:"target"`
 			Assertion struct {
-				Field        string `json:"field"`
-				Expected     string `json:"expected"`
-				Actual       string `json:"actual"`
-				Mode         string `json:"mode"`
-				Passed       bool   `json:"passed"`
-				URL          string `json:"url"`
-				Title        string `json:"title"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Field        string                   `json:"field"`
+				Expected     string                   `json:"expected"`
+				Actual       string                   `json:"actual"`
+				Mode         string                   `json:"mode"`
+				Diff         *assertionStringDiffJSON `json:"diff"`
+				Passed       bool                     `json:"passed"`
+				URL          string                   `json:"url"`
+				Title        string                   `json:"title"`
+				Attempts     int                      `json:"attempts"`
+				ElapsedMS    int64                    `json:"elapsed_ms"`
+				PollInterval string                   `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert title timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.Target.URL != "https://example.test/ready" || got.Data.Target.Title != "Ready Page" || got.Data.Assertion.Field != "title" || got.Data.Assertion.Expected != "Never Ready" || got.Data.Assertion.Actual != "Ready Page" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.URL != "https://example.test/ready" || got.Data.Assertion.Title != "Ready Page" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp pages --json") || !containsString(got.RemediationCommands, "cdp assert title 'Never Ready' --mode exact --json") {
+	if got.OK || got.Code != "timeout" || got.Data.Target.URL != "https://example.test/ready" || got.Data.Target.Title != "Ready Page" || got.Data.Assertion.Field != "title" || got.Data.Assertion.Expected != "Never Ready" || got.Data.Assertion.Actual != "Ready Page" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "exact" || got.Data.Assertion.Diff.Reason != "different" || got.Data.Assertion.Diff.ExpectedLength != 11 || got.Data.Assertion.Diff.ActualLength != 10 || got.Data.Assertion.Diff.ExpectedSnippet != "Never Ready" || got.Data.Assertion.Diff.ActualSnippet != "Ready Page" || got.Data.Assertion.Passed || got.Data.Assertion.URL != "https://example.test/ready" || got.Data.Assertion.Title != "Ready Page" || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp pages --json") || !containsString(got.RemediationCommands, "cdp assert title 'Never Ready' --mode exact --json") {
 		t.Fatalf("assert title timeout = %+v, want timeout with last page diagnostics", got)
 	}
 }
@@ -602,24 +617,25 @@ func TestAssertAttributeTimeoutJSON(t *testing.T) {
 		RemediationCommands []string `json:"remediation_commands"`
 		Data                struct {
 			Assertion struct {
-				Selector         string `json:"selector"`
-				Attribute        string `json:"attribute"`
-				AttributePresent bool   `json:"attribute_present"`
-				Expected         string `json:"expected"`
-				Actual           string `json:"actual"`
-				Mode             string `json:"mode"`
-				Passed           bool   `json:"passed"`
-				Count            int    `json:"count"`
-				Attempts         int    `json:"attempts"`
-				ElapsedMS        int64  `json:"elapsed_ms"`
-				PollInterval     string `json:"poll_interval"`
+				Selector         string                   `json:"selector"`
+				Attribute        string                   `json:"attribute"`
+				AttributePresent bool                     `json:"attribute_present"`
+				Expected         string                   `json:"expected"`
+				Actual           string                   `json:"actual"`
+				Mode             string                   `json:"mode"`
+				Diff             *assertionStringDiffJSON `json:"diff"`
+				Passed           bool                     `json:"passed"`
+				Count            int                      `json:"count"`
+				Attempts         int                      `json:"attempts"`
+				ElapsedMS        int64                    `json:"elapsed_ms"`
+				PollInterval     string                   `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert attribute timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Attribute != "data-state" || !got.Data.Assertion.AttributePresent || got.Data.Assertion.Expected != "never" || got.Data.Assertion.Actual != "ready" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp dom query 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert attribute 'button#checkout' data-state never --mode exact --json") {
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Attribute != "data-state" || !got.Data.Assertion.AttributePresent || got.Data.Assertion.Expected != "never" || got.Data.Assertion.Actual != "ready" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "exact" || got.Data.Assertion.Diff.Reason != "different" || got.Data.Assertion.Diff.ExpectedLength != 5 || got.Data.Assertion.Diff.ActualLength != 5 || got.Data.Assertion.Diff.ExpectedSnippet != "never" || got.Data.Assertion.Diff.ActualSnippet != "ready" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp dom query 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert attribute 'button#checkout' data-state never --mode exact --json") {
 		t.Fatalf("assert attribute timeout = %+v, want timeout with last attribute diagnostics", got)
 	}
 }
@@ -772,23 +788,24 @@ func TestAssertCSSTimeoutJSON(t *testing.T) {
 		RemediationCommands []string `json:"remediation_commands"`
 		Data                struct {
 			Assertion struct {
-				Selector     string `json:"selector"`
-				Property     string `json:"property"`
-				Expected     string `json:"expected"`
-				Actual       string `json:"actual"`
-				Mode         string `json:"mode"`
-				Passed       bool   `json:"passed"`
-				Count        int    `json:"count"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Selector     string                   `json:"selector"`
+				Property     string                   `json:"property"`
+				Expected     string                   `json:"expected"`
+				Actual       string                   `json:"actual"`
+				Mode         string                   `json:"mode"`
+				Diff         *assertionStringDiffJSON `json:"diff"`
+				Passed       bool                     `json:"passed"`
+				Count        int                      `json:"count"`
+				Attempts     int                      `json:"attempts"`
+				ElapsedMS    int64                    `json:"elapsed_ms"`
+				PollInterval string                   `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert css timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Property != "background-color" || got.Data.Assertion.Expected != "rgb(1, 2, 3)" || got.Data.Assertion.Actual != "rgb(20, 92, 160)" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp css inspect 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert css 'button#checkout' background-color 'rgb(1, 2, 3)' --mode exact --json") {
+	if got.OK || got.Code != "timeout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Property != "background-color" || got.Data.Assertion.Expected != "rgb(1, 2, 3)" || got.Data.Assertion.Actual != "rgb(20, 92, 160)" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "exact" || got.Data.Assertion.Diff.Reason != "different" || got.Data.Assertion.Diff.ExpectedLength != 12 || got.Data.Assertion.Diff.ActualLength != 16 || got.Data.Assertion.Diff.PrefixLength != 4 || got.Data.Assertion.Diff.SuffixLength != 1 || got.Data.Assertion.Diff.ExpectedSnippet != "rgb(1, 2, 3)" || got.Data.Assertion.Diff.ActualSnippet != "rgb(20, 92, 160)" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp css inspect 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert css 'button#checkout' background-color 'rgb(1, 2, 3)' --mode exact --json") {
 		t.Fatalf("assert css timeout = %+v, want timeout with last CSS diagnostics", got)
 	}
 }
@@ -906,25 +923,67 @@ func TestAssertRoleTimeoutJSON(t *testing.T) {
 		Data                struct {
 			ResolvedSelector string `json:"resolved_selector"`
 			Assertion        struct {
-				Query        string `json:"query"`
-				Selector     string `json:"selector"`
-				Field        string `json:"field"`
-				Expected     string `json:"expected"`
-				Actual       string `json:"actual"`
-				Mode         string `json:"mode"`
-				Passed       bool   `json:"passed"`
-				Count        int    `json:"count"`
-				Attempts     int    `json:"attempts"`
-				ElapsedMS    int64  `json:"elapsed_ms"`
-				PollInterval string `json:"poll_interval"`
+				Query        string                   `json:"query"`
+				Selector     string                   `json:"selector"`
+				Field        string                   `json:"field"`
+				Expected     string                   `json:"expected"`
+				Actual       string                   `json:"actual"`
+				Mode         string                   `json:"mode"`
+				Diff         *assertionStringDiffJSON `json:"diff"`
+				Passed       bool                     `json:"passed"`
+				Count        int                      `json:"count"`
+				Attempts     int                      `json:"attempts"`
+				ElapsedMS    int64                    `json:"elapsed_ms"`
+				PollInterval string                   `json:"poll_interval"`
 			} `json:"assertion"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("assert role timeout output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#checkout" || got.Data.Assertion.Query != "Checkout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Field != "role" || got.Data.Assertion.Expected != "link" || got.Data.Assertion.Actual != "button" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp locator find Checkout --by role --role button --json") || !containsString(got.RemediationCommands, "cdp a11y node 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert role Checkout link --mode exact --by role --role button --json") {
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#checkout" || got.Data.Assertion.Query != "Checkout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Field != "role" || got.Data.Assertion.Expected != "link" || got.Data.Assertion.Actual != "button" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "exact" || got.Data.Assertion.Diff.Reason != "different" || got.Data.Assertion.Diff.ExpectedLength != 4 || got.Data.Assertion.Diff.ActualLength != 6 || got.Data.Assertion.Diff.ExpectedSnippet != "link" || got.Data.Assertion.Diff.ActualSnippet != "button" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp locator find Checkout --by role --role button --json") || !containsString(got.RemediationCommands, "cdp a11y node 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert role Checkout link --mode exact --by role --role button --json") {
 		t.Fatalf("assert role timeout = %+v, want timeout with last accessible role diagnostics", got)
+	}
+}
+
+func TestAssertNameTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "url": "https://example.test/app", "title": "Example App"}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"assert", "name", "Checkout", "Submit", "--by", "role", "--role", "button", "--timeout", "120ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("assert name timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			ResolvedSelector string `json:"resolved_selector"`
+			Assertion        struct {
+				Query        string                   `json:"query"`
+				Selector     string                   `json:"selector"`
+				Field        string                   `json:"field"`
+				Expected     string                   `json:"expected"`
+				Actual       string                   `json:"actual"`
+				Mode         string                   `json:"mode"`
+				Diff         *assertionStringDiffJSON `json:"diff"`
+				Passed       bool                     `json:"passed"`
+				Count        int                      `json:"count"`
+				Attempts     int                      `json:"attempts"`
+				ElapsedMS    int64                    `json:"elapsed_ms"`
+				PollInterval string                   `json:"poll_interval"`
+			} `json:"assertion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("assert name timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.ResolvedSelector != "button#checkout" || got.Data.Assertion.Query != "Checkout" || got.Data.Assertion.Selector != "button#checkout" || got.Data.Assertion.Field != "name" || got.Data.Assertion.Expected != "Submit" || got.Data.Assertion.Actual != "Checkout" || got.Data.Assertion.Mode != "exact" || got.Data.Assertion.Diff == nil || got.Data.Assertion.Diff.Mode != "exact" || got.Data.Assertion.Diff.Reason != "different" || got.Data.Assertion.Diff.ExpectedLength != 6 || got.Data.Assertion.Diff.ActualLength != 8 || got.Data.Assertion.Diff.ExpectedSnippet != "Submit" || got.Data.Assertion.Diff.ActualSnippet != "Checkout" || got.Data.Assertion.Passed || got.Data.Assertion.Count != 1 || got.Data.Assertion.Attempts < 2 || got.Data.Assertion.ElapsedMS <= 0 || got.Data.Assertion.PollInterval != "10ms" || !containsString(got.RemediationCommands, "cdp locator find Checkout --by role --role button --json") || !containsString(got.RemediationCommands, "cdp a11y node 'button#checkout' --json") || !containsString(got.RemediationCommands, "cdp assert name Checkout Submit --mode exact --by role --role button --json") {
+		t.Fatalf("assert name timeout = %+v, want timeout with last accessible name diagnostics", got)
 	}
 }
 

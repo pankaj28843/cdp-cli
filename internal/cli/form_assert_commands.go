@@ -48,43 +48,46 @@ type formControl struct {
 }
 
 type assertValueResult struct {
-	Selector     string       `json:"selector"`
-	Expected     string       `json:"expected"`
-	Actual       string       `json:"actual"`
-	Mode         string       `json:"mode"`
-	Passed       bool         `json:"passed"`
-	Count        int          `json:"count"`
-	Control      *formControl `json:"control,omitempty"`
-	Attempts     int          `json:"attempts,omitempty"`
-	ElapsedMS    int64        `json:"elapsed_ms,omitempty"`
-	PollInterval string       `json:"poll_interval,omitempty"`
-	Error        *evalError   `json:"error,omitempty"`
+	Selector     string               `json:"selector"`
+	Expected     string               `json:"expected"`
+	Actual       string               `json:"actual"`
+	Mode         string               `json:"mode"`
+	Diff         *assertionStringDiff `json:"diff,omitempty"`
+	Passed       bool                 `json:"passed"`
+	Count        int                  `json:"count"`
+	Control      *formControl         `json:"control,omitempty"`
+	Attempts     int                  `json:"attempts,omitempty"`
+	ElapsedMS    int64                `json:"elapsed_ms,omitempty"`
+	PollInterval string               `json:"poll_interval,omitempty"`
+	Error        *evalError           `json:"error,omitempty"`
 }
 
 type assertTextResult struct {
-	Selector     string     `json:"selector,omitempty"`
-	Expected     string     `json:"expected"`
-	Actual       string     `json:"actual"`
-	Mode         string     `json:"mode"`
-	Passed       bool       `json:"passed"`
-	Count        int        `json:"count"`
-	Attempts     int        `json:"attempts,omitempty"`
-	ElapsedMS    int64      `json:"elapsed_ms,omitempty"`
-	PollInterval string     `json:"poll_interval,omitempty"`
-	Error        *evalError `json:"error,omitempty"`
+	Selector     string               `json:"selector,omitempty"`
+	Expected     string               `json:"expected"`
+	Actual       string               `json:"actual"`
+	Mode         string               `json:"mode"`
+	Diff         *assertionStringDiff `json:"diff,omitempty"`
+	Passed       bool                 `json:"passed"`
+	Count        int                  `json:"count"`
+	Attempts     int                  `json:"attempts,omitempty"`
+	ElapsedMS    int64                `json:"elapsed_ms,omitempty"`
+	PollInterval string               `json:"poll_interval,omitempty"`
+	Error        *evalError           `json:"error,omitempty"`
 }
 
 type assertPageResult struct {
-	Field        string `json:"field"`
-	Expected     string `json:"expected"`
-	Actual       string `json:"actual"`
-	Mode         string `json:"mode"`
-	Passed       bool   `json:"passed"`
-	URL          string `json:"url"`
-	Title        string `json:"title"`
-	Attempts     int    `json:"attempts,omitempty"`
-	ElapsedMS    int64  `json:"elapsed_ms,omitempty"`
-	PollInterval string `json:"poll_interval,omitempty"`
+	Field        string               `json:"field"`
+	Expected     string               `json:"expected"`
+	Actual       string               `json:"actual"`
+	Mode         string               `json:"mode"`
+	Diff         *assertionStringDiff `json:"diff,omitempty"`
+	Passed       bool                 `json:"passed"`
+	URL          string               `json:"url"`
+	Title        string               `json:"title"`
+	Attempts     int                  `json:"attempts,omitempty"`
+	ElapsedMS    int64                `json:"elapsed_ms,omitempty"`
+	PollInterval string               `json:"poll_interval,omitempty"`
 }
 
 type assertPageInfo struct {
@@ -115,18 +118,19 @@ type assertCountItem struct {
 }
 
 type assertAttributeResult struct {
-	Selector         string     `json:"selector"`
-	Attribute        string     `json:"attribute"`
-	AttributePresent bool       `json:"attribute_present"`
-	Expected         string     `json:"expected"`
-	Actual           string     `json:"actual"`
-	Mode             string     `json:"mode"`
-	Passed           bool       `json:"passed"`
-	Count            int        `json:"count"`
-	Attempts         int        `json:"attempts,omitempty"`
-	ElapsedMS        int64      `json:"elapsed_ms,omitempty"`
-	PollInterval     string     `json:"poll_interval,omitempty"`
-	Error            *evalError `json:"error,omitempty"`
+	Selector         string               `json:"selector"`
+	Attribute        string               `json:"attribute"`
+	AttributePresent bool                 `json:"attribute_present"`
+	Expected         string               `json:"expected"`
+	Actual           string               `json:"actual"`
+	Mode             string               `json:"mode"`
+	Diff             *assertionStringDiff `json:"diff,omitempty"`
+	Passed           bool                 `json:"passed"`
+	Count            int                  `json:"count"`
+	Attempts         int                  `json:"attempts,omitempty"`
+	ElapsedMS        int64                `json:"elapsed_ms,omitempty"`
+	PollInterval     string               `json:"poll_interval,omitempty"`
+	Error            *evalError           `json:"error,omitempty"`
 }
 
 type assertFocusedResult struct {
@@ -160,17 +164,18 @@ type assertFocusedItem struct {
 }
 
 type assertCSSResult struct {
-	Selector     string     `json:"selector"`
-	Property     string     `json:"property"`
-	Expected     string     `json:"expected"`
-	Actual       string     `json:"actual"`
-	Mode         string     `json:"mode"`
-	Passed       bool       `json:"passed"`
-	Count        int        `json:"count"`
-	Attempts     int        `json:"attempts,omitempty"`
-	ElapsedMS    int64      `json:"elapsed_ms,omitempty"`
-	PollInterval string     `json:"poll_interval,omitempty"`
-	Error        *evalError `json:"error,omitempty"`
+	Selector     string               `json:"selector"`
+	Property     string               `json:"property"`
+	Expected     string               `json:"expected"`
+	Actual       string               `json:"actual"`
+	Mode         string               `json:"mode"`
+	Diff         *assertionStringDiff `json:"diff,omitempty"`
+	Passed       bool                 `json:"passed"`
+	Count        int                  `json:"count"`
+	Attempts     int                  `json:"attempts,omitempty"`
+	ElapsedMS    int64                `json:"elapsed_ms,omitempty"`
+	PollInterval string               `json:"poll_interval,omitempty"`
+	Error        *evalError           `json:"error,omitempty"`
 }
 
 type assertAccessibleResult struct {
@@ -180,6 +185,7 @@ type assertAccessibleResult struct {
 	Expected     string                 `json:"expected"`
 	Actual       string                 `json:"actual"`
 	Mode         string                 `json:"mode"`
+	Diff         *assertionStringDiff   `json:"diff,omitempty"`
 	Passed       bool                   `json:"passed"`
 	Count        int                    `json:"count"`
 	Items        []assertAccessibleItem `json:"items,omitempty"`
@@ -336,6 +342,123 @@ type assertCheckedItem struct {
 	AriaChecked     string       `json:"aria_checked,omitempty"`
 	Visible         bool         `json:"visible"`
 	Rect            snapshotRect `json:"rect"`
+}
+
+const (
+	assertionDiffSnippetRunes = 120
+	assertionDiffContextRunes = 40
+)
+
+type assertionStringDiff struct {
+	Mode            string `json:"mode"`
+	Reason          string `json:"reason"`
+	ExpectedLength  int    `json:"expected_length"`
+	ActualLength    int    `json:"actual_length"`
+	PrefixLength    int    `json:"prefix_length,omitempty"`
+	SuffixLength    int    `json:"suffix_length,omitempty"`
+	ExpectedSnippet string `json:"expected_snippet,omitempty"`
+	ActualSnippet   string `json:"actual_snippet,omitempty"`
+}
+
+func stringAssertionDiff(actual, expected, mode string) *assertionStringDiff {
+	normalizedMode := normalizeAssertMode(mode)
+	diff := &assertionStringDiff{
+		Mode:           normalizedMode,
+		ExpectedLength: runeLength(expected),
+		ActualLength:   runeLength(actual),
+	}
+	switch normalizedMode {
+	case "contains":
+		if strings.Contains(actual, expected) {
+			return nil
+		}
+		diff.Reason = "missing_substring"
+		diff.ExpectedSnippet = compactAssertionSnippet(expected)
+		diff.ActualSnippet = compactAssertionSnippet(actual)
+	case "regex":
+		matched, err := regexp.MatchString(expected, actual)
+		if err == nil && matched {
+			return nil
+		}
+		diff.Reason = "regex_not_matched"
+		if err != nil {
+			diff.Reason = "invalid_regex"
+		}
+		diff.ExpectedSnippet = compactAssertionSnippet(expected)
+		diff.ActualSnippet = compactAssertionSnippet(actual)
+	default:
+		if actual == expected {
+			return nil
+		}
+		prefix, suffix := commonStringAffixes(expected, actual)
+		diff.Reason = "different"
+		diff.PrefixLength = prefix
+		diff.SuffixLength = suffix
+		diff.ExpectedSnippet = assertionMismatchSnippet(expected, prefix)
+		diff.ActualSnippet = assertionMismatchSnippet(actual, prefix)
+	}
+	return diff
+}
+
+func runeLength(value string) int {
+	return len([]rune(value))
+}
+
+func commonStringAffixes(expected, actual string) (int, int) {
+	expectedRunes := []rune(expected)
+	actualRunes := []rune(actual)
+	limit := minInt(len(expectedRunes), len(actualRunes))
+	prefix := 0
+	for prefix < limit && expectedRunes[prefix] == actualRunes[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < limit-prefix && expectedRunes[len(expectedRunes)-1-suffix] == actualRunes[len(actualRunes)-1-suffix] {
+		suffix++
+	}
+	return prefix, suffix
+}
+
+func compactAssertionSnippet(value string) string {
+	runes := []rune(value)
+	if len(runes) <= assertionDiffSnippetRunes {
+		return value
+	}
+	return string(runes[:assertionDiffSnippetRunes]) + "..."
+}
+
+func assertionMismatchSnippet(value string, prefix int) string {
+	runes := []rune(value)
+	if len(runes) <= assertionDiffSnippetRunes {
+		return value
+	}
+	start := prefix - assertionDiffContextRunes
+	if start < 0 {
+		start = 0
+	}
+	end := start + assertionDiffSnippetRunes
+	if end > len(runes) {
+		end = len(runes)
+		start = end - assertionDiffSnippetRunes
+		if start < 0 {
+			start = 0
+		}
+	}
+	snippet := string(runes[start:end])
+	if start > 0 {
+		snippet = "..." + snippet
+	}
+	if end < len(runes) {
+		snippet += "..."
+	}
+	return snippet
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (a *app) newFormCommand() *cobra.Command {
@@ -555,6 +678,9 @@ func waitForValueAssertion(ctx context.Context, session *cdp.PageSession, query,
 		}
 		result := assertValueResultFromFormGet(selector, expected, actual, mode, got, attempts, start, poll)
 		result.Passed = passed
+		if !result.Passed && got.Count == 1 && got.Error == nil {
+			result.Diff = stringAssertionDiff(actual, expected, result.Mode)
+		}
 		last = result
 		lastLocator = locator
 		lastSelector = selector
@@ -679,6 +805,9 @@ func waitForTextAssertion(ctx context.Context, session *cdp.PageSession, query, 
 		}
 		result := assertTextResultFromText(selector, expected, mode, got, attempts, start, poll)
 		result.Passed = passed
+		if !result.Passed && got.Count > 0 && got.Error == nil {
+			result.Diff = stringAssertionDiff(got.Text, expected, result.Mode)
+		}
 		last = result
 		lastLocator = locator
 		lastSelector = selector
@@ -804,6 +933,9 @@ func waitForPageAssertion(ctx context.Context, session *cdp.PageSession, field, 
 			Attempts:     attempts,
 			ElapsedMS:    time.Since(start).Milliseconds(),
 			PollInterval: poll.String(),
+		}
+		if !passed {
+			last.Diff = stringAssertionDiff(actual, expected, normalizedMode)
 		}
 		if passed {
 			return last, nil
@@ -1167,6 +1299,9 @@ func waitForAttributeAssertion(ctx context.Context, session *cdp.PageSession, qu
 			return last, lastLocator, lastSelector, err
 		}
 		result.Passed = got.Count == 1 && got.AttributePresent && passed
+		if !result.Passed && got.Count == 1 && got.AttributePresent && got.Error == nil {
+			result.Diff = stringAssertionDiff(got.Value, expected, result.Mode)
+		}
 		last = result
 		lastLocator = locator
 		lastSelector = selector
@@ -1409,6 +1544,9 @@ func waitForCSSAssertion(ctx context.Context, session *cdp.PageSession, query, p
 			return last, lastLocator, lastSelector, err
 		}
 		result.Passed = got.Count == 1 && passed
+		if !result.Passed && got.Count == 1 && got.Error == nil {
+			result.Diff = stringAssertionDiff(got.Actual, expected, result.Mode)
+		}
 		last = result
 		lastLocator = locator
 		lastSelector = selector
@@ -1520,6 +1658,9 @@ func waitForAccessibleAssertion(ctx context.Context, session *cdp.PageSession, f
 					return last, lastLocator, lastSelector, err
 				}
 				result.Passed = passed
+				if !result.Passed {
+					result.Diff = stringAssertionDiff(result.Actual, expected, result.Mode)
+				}
 				last = result
 				lastSelector = selector
 				if result.Passed {
