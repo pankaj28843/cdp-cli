@@ -121,6 +121,10 @@ type waitResult struct {
 	Needle       string             `json:"needle,omitempty"`
 	Selector     string             `json:"selector,omitempty"`
 	Expression   string             `json:"expression,omitempty"`
+	State        string             `json:"state,omitempty"`
+	ReadyState   string             `json:"ready_state,omitempty"`
+	URL          string             `json:"url,omitempty"`
+	Title        string             `json:"title,omitempty"`
 	By           string             `json:"by,omitempty"`
 	Query        string             `json:"query,omitempty"`
 	Role         string             `json:"role,omitempty"`
@@ -484,6 +488,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 	cmd.AddCommand(a.newWaitSelectorCommand())
 	cmd.AddCommand(a.newWaitLocatorCommand())
 	cmd.AddCommand(a.newWaitEvalCommand())
+	cmd.AddCommand(a.newWaitLoadStateCommand())
 	cmd.AddCommand(a.newWaitRequestCommand())
 	cmd.AddCommand(a.newWaitResponseCommand())
 	return cmd
@@ -699,6 +704,61 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newWaitLoadStateCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
+	var poll time.Duration
+	cmd := &cobra.Command{
+		Use:   "load-state <load|domcontentloaded>",
+		Short: "Wait until the document reaches a browser load state",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, err := normalizeLoadState(args[0])
+			if err != nil {
+				return err
+			}
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait load-state load --poll 250ms --json"})
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			start := time.Now()
+			result, err := waitForLoadStateCondition(ctx, session, poll, state)
+			result.ElapsedMS = time.Since(start).Milliseconds()
+			result.PollInterval = poll.String()
+			report := map[string]any{
+				"ok":     err == nil && result.Error == nil,
+				"target": pageRow(target),
+				"wait":   result,
+			}
+			if err != nil {
+				if ctx.Err() == nil {
+					return err
+				}
+				return commandErrorWithData("timeout", "timeout", fmt.Sprintf("wait load-state %q not reached for target %s: %v", state, session.TargetID, ctx.Err()), ExitTimeout, loadStateWaitRemediations(state), report)
+			}
+			if result.Error != nil {
+				return commandErrorWithData("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, loadStateWaitRemediations(state), report)
+			}
+			return a.render(ctx, fmt.Sprintf("matched load-state\t%s\t%s", state, result.ReadyState), report)
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
+	return cmd
+}
+
 func addLocatorWaitFlags(cmd *cobra.Command, opts *locatorWaitOptions) {
 	cmd.Flags().StringVar(&opts.By, "by", "text", "locator strategy: role, text, label, placeholder, alt, title, test-id, or css")
 	cmd.Flags().StringVar(&opts.Role, "role", "", "ARIA role to match when --by role is used")
@@ -741,6 +801,69 @@ func waitForLocatorCondition(ctx context.Context, session *cdp.PageSession, poll
 			return last, lastLocator, ctx.Err()
 		case <-timer.C:
 		}
+	}
+}
+
+func waitForLoadStateCondition(ctx context.Context, session *cdp.PageSession, poll time.Duration, state string) (waitResult, error) {
+	var last waitResult
+	for {
+		var result waitResult
+		if err := evaluateJSONValue(ctx, session, waitLoadStateExpression(state), "wait load-state", &result); err != nil {
+			return last, err
+		}
+		last = result
+		if result.Matched || result.Error != nil {
+			result.addEvidence()
+			return result, nil
+		}
+
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			last.Condition = loadStateWaitCondition(state)
+			last.Evidence = loadStateWaitEvidence(last)
+			return last, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func normalizeLoadState(raw string) (string, error) {
+	state := strings.ToLower(strings.TrimSpace(raw))
+	state = strings.ReplaceAll(state, "-", "")
+	switch state {
+	case "load":
+		return "load", nil
+	case "domcontentloaded":
+		return "domcontentloaded", nil
+	default:
+		return "", commandError("usage", "usage", "load-state must be load or domcontentloaded", ExitUsage, []string{"cdp wait load-state load --json", "cdp wait load-state domcontentloaded --json"})
+	}
+}
+
+func loadStateWaitCondition(state string) string {
+	switch state {
+	case "domcontentloaded":
+		return "document readyState is interactive or complete"
+	default:
+		return "document readyState is complete"
+	}
+}
+
+func loadStateWaitEvidence(result waitResult) map[string]any {
+	return map[string]any{
+		"state":       result.State,
+		"ready_state": result.ReadyState,
+		"matched":     result.Matched,
+	}
+}
+
+func loadStateWaitRemediations(state string) []string {
+	return []string{
+		"cdp wait load-state " + state + " --timeout 15s --json",
+		"cdp wait selector main --timeout 15s --json",
+		"cdp wait eval 'document.readyState === \"complete\"' --timeout 15s --json",
 	}
 }
 
@@ -839,6 +962,9 @@ func (r *waitResult) addEvidence() {
 	case "locator":
 		r.Condition = locatorWaitCondition(r.Query, locatorWaitOptions{By: r.By, Strict: r.Strict})
 		r.Evidence = locatorWaitEvidence(*r, r.Locator)
+	case "load-state":
+		r.Condition = loadStateWaitCondition(r.State)
+		r.Evidence = loadStateWaitEvidence(*r)
 	}
 }
 
@@ -1737,4 +1863,15 @@ func waitEvalExpression(expression string) string {
     return { kind: "eval", expression, matched: false, error: { name: error.name, message: error.message }, marker };
   }
 })()`, string(expressionJSON))
+}
+
+func waitLoadStateExpression(state string) string {
+	stateJSON, _ := json.Marshal(state)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_wait_load_state__";
+  const state = %s;
+  const readyState = String(document.readyState || "");
+  const matched = state === "domcontentloaded" ? readyState === "interactive" || readyState === "complete" : readyState === "complete";
+  return { kind: "load-state", state, ready_state: readyState, matched, url: location.href, title: document.title, marker };
+})()`, string(stateJSON))
 }

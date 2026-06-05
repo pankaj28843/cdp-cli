@@ -551,7 +551,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					}
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
 				} else {
-					resp["result"] = fakeRuntimeEvaluateResult(req.Params, blockedSessions[req.SessionID])
+					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID])
 					applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 				}
 			} else if req.Method == "Page.captureScreenshot" {
@@ -625,7 +625,7 @@ func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, p
 	}
 }
 
-func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[string]any {
+func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool) map[string]any {
 	var req struct {
 		Expression string `json:"expression"`
 	}
@@ -2311,6 +2311,27 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, serpBlocked bool) map[str
 					"expression": expression,
 					"matched":    matched,
 					"value":      matched,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_wait_load_state__") {
+		state := expressionStringArg(req.Expression, "const state = ")
+		readyState := "complete"
+		if strings.Contains(sessionID, "loading") {
+			readyState = "loading"
+		}
+		matched := readyState == "complete" || state == "domcontentloaded" && readyState == "interactive"
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"kind":        "load-state",
+					"state":       state,
+					"ready_state": readyState,
+					"matched":     matched,
+					"url":         "https://example.test/app",
+					"title":       "Example App",
 				},
 			},
 		}

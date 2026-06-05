@@ -1265,6 +1265,100 @@ func TestWaitEvalJSON(t *testing.T) {
 	}
 }
 
+func TestWaitLoadStateJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "load-state", "domcontentloaded", "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait load-state exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind         string         `json:"kind"`
+			State        string         `json:"state"`
+			ReadyState   string         `json:"ready_state"`
+			Matched      bool           `json:"matched"`
+			URL          string         `json:"url"`
+			Title        string         `json:"title"`
+			Condition    string         `json:"condition"`
+			Evidence     map[string]any `json:"evidence"`
+			PollInterval string         `json:"poll_interval"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait load-state output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "load-state" || got.Wait.State != "domcontentloaded" || got.Wait.ReadyState != "complete" || !got.Wait.Matched || got.Wait.URL != "https://example.test/app" || got.Wait.Title != "Example App" || !strings.Contains(got.Wait.Condition, "interactive or complete") || got.Wait.Evidence["ready_state"] != "complete" || got.Wait.PollInterval != "250ms" {
+		t.Fatalf("wait load-state output = %+v, want matched DOMContentLoaded state", got)
+	}
+}
+
+func TestWaitLoadStateTimeoutJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "loading-page", "type": "page", "title": "Loading App", "url": "https://example.test/loading", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "load-state", "load", "--timeout", "50ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait load-state timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+		Data                struct {
+			Wait struct {
+				Kind       string         `json:"kind"`
+				State      string         `json:"state"`
+				ReadyState string         `json:"ready_state"`
+				Matched    bool           `json:"matched"`
+				Condition  string         `json:"condition"`
+				Evidence   map[string]any `json:"evidence"`
+			} `json:"wait"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait load-state timeout output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "load-state" || got.Data.Wait.State != "load" || got.Data.Wait.ReadyState != "loading" || got.Data.Wait.Matched || !strings.Contains(got.Data.Wait.Condition, "complete") || got.Data.Wait.Evidence["ready_state"] != "loading" {
+		t.Fatalf("wait load-state timeout = %+v, want timeout with last loading state", got)
+	}
+	if !containsString(got.RemediationCommands, "cdp wait selector main --timeout 15s --json") {
+		t.Fatalf("wait load-state remediation commands = %+v, want selector follow-up", got.RemediationCommands)
+	}
+}
+
+func TestWaitLoadStateUnsupportedStateJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "load-state", "networkidle", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("wait load-state unsupported exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait load-state unsupported output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || !strings.Contains(got.Message, "load-state must be load or domcontentloaded") {
+		t.Fatalf("wait load-state unsupported output = %+v, want usage error", got)
+	}
+}
+
 func TestWaitTimeoutsFailClosedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
