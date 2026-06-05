@@ -373,14 +373,6 @@ func (a *app) newDaemonStatusCommand() *cobra.Command {
 }
 
 func (a *app) startKeepAlive(ctx context.Context, endpoint string, managed *managedKeepAlive, reconnect time.Duration) (daemon.Runtime, bool, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return daemon.Runtime{}, false, fmt.Errorf("resolve current executable: %w", err)
-	}
-	store, err := a.stateStore()
-	if err != nil {
-		return daemon.Runtime{}, false, err
-	}
 	metadata := daemon.KeepAliveMetadata{UserDataDir: a.opts.userDataDir}
 	if managed != nil {
 		metadata = daemon.KeepAliveMetadata{
@@ -392,7 +384,19 @@ func (a *app) startKeepAlive(ctx context.Context, endpoint string, managed *mana
 			ChromePort:          managed.Metadata.DebuggingPort,
 		}
 	}
-	return daemon.StartKeepAliveForModeWithMetadata(ctx, executable, store.Dir, a.browserModeName(), endpoint, a.connectionMode(), metadata, reconnect)
+	return a.startKeepAliveFromEndpoint(ctx, endpoint, a.connectionMode(), metadata, reconnect)
+}
+
+func (a *app) startKeepAliveFromEndpoint(ctx context.Context, endpoint, connectionMode string, metadata daemon.KeepAliveMetadata, reconnect time.Duration) (daemon.Runtime, bool, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return daemon.Runtime{}, false, fmt.Errorf("resolve current executable: %w", err)
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return daemon.Runtime{}, false, err
+	}
+	return daemon.StartKeepAliveForModeWithMetadata(ctx, executable, store.Dir, a.browserModeName(), endpoint, connectionMode, metadata, reconnect)
 }
 
 func (a *app) newDaemonStopCommand() *cobra.Command {
@@ -708,6 +712,72 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 					"probe":        probeResult,
 					"health":       runtimeCheck,
 					"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
+				})
+			}
+			if repair && browserMode == "headed" && a.opts.autoConnect && status.State == "stale_state" && status.Runtime != nil && strings.TrimSpace(status.Runtime.Endpoint) != "" {
+				if err := lock.Update(ctx, "starting_daemon_from_stale_runtime_endpoint"); err != nil {
+					return err
+				}
+				metadata := daemon.KeepAliveMetadata{UserDataDir: status.Runtime.UserDataDir}
+				if strings.TrimSpace(metadata.UserDataDir) == "" {
+					metadata.UserDataDir = a.opts.userDataDir
+				}
+				connectionMode := strings.TrimSpace(status.Runtime.ConnectionMode)
+				if connectionMode == "" {
+					connectionMode = a.connectionMode()
+				}
+				runtime, reused, err := a.startKeepAliveFromEndpoint(ctx, status.Runtime.Endpoint, connectionMode, metadata, reconnect)
+				if err != nil {
+					return commandErrorWithData(
+						"connection_failed",
+						"connection",
+						fmt.Sprintf("repair daemon from last approved endpoint: %v", err),
+						ExitConnection,
+						[]string{"cdp --browser-mode headed daemon status --json", "cdp --browser-mode headed daemon logs --tail 50 --json"},
+						map[string]any{"repair_source": "stale_runtime_endpoint", "previous": status},
+					)
+				}
+				repairProbe := browser.ProbeResult{
+					State:                "cdp_available",
+					Message:              "last approved browser endpoint was reused from stale daemon runtime state",
+					ConnectionMode:       connectionMode,
+					Channel:              a.opts.channel,
+					WebSocketDebuggerURL: true,
+				}
+				repairedStatus := daemon.SnapshotForMode(browserMode, connectionMode, connectionMode == "auto_connect", repairProbe)
+				repairedStatus = daemon.WithRuntime(repairedStatus, runtime, true)
+				repairedStatus.Health = a.browserHealthSnapshot(ctx, repairedStatus, false)
+				repairedHealthy, repairedCheck := keepaliveRuntimeCheck(ctx, repairedStatus)
+				state := "repaired"
+				action := "repaired"
+				if reused && repairedHealthy {
+					state = "healthy"
+					action = "none"
+				}
+				if err := lock.Update(ctx, state); err != nil {
+					return err
+				}
+				return a.render(ctx, fmt.Sprintf("keepalive\t%s\t%s", connectionName, state), map[string]any{
+					"ok":            true,
+					"browser_mode":  browserMode,
+					"connection":    connectionName,
+					"mode":          mode,
+					"state":         state,
+					"action":        action,
+					"repair_source": "stale_runtime_endpoint",
+					"locked":        false,
+					"daemon":        repairedStatus,
+					"start": map[string]any{
+						"keepalive_started":  !reused,
+						"already_running":    reused,
+						"reconnect_interval": durationString(reconnect),
+						"runtime":            runtime,
+					},
+					"chrome":   keepaliveChromeStatus{Skipped: true, Reason: "reused last approved daemon endpoint"},
+					"probe":    probeResult,
+					"previous": status,
+					"health":   repairedCheck,
+					"lock":     map[string]any{"name": lock.Metadata.Name, "acquired": true},
 				})
 			}
 			if status.State == "running" {

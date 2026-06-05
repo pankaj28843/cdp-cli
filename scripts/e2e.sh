@@ -129,11 +129,11 @@ EOF_CRONTAB_BIN
 chmod +x "$fake_crontab_bin"
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and (.intended_block.entries | length == 5)' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron diff --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and .actions[0].action == "append_managed_block"' >/dev/null
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --profile agent --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 1) and (.intended_block.entries[0] | contains("daemon keepalive --auto-connect --repair --probe auto"))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --profile agent --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 1) and (.intended_block.entries[0] | contains("daemon keepalive --auto-connect --repair --probe passive"))' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.managed_block.entries | length == 5)' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == false and .action == "unchanged"' >/dev/null
 rg -q '^SHELL=/bin/sh$' "$fake_crontab_store"
-rg -q -- '--browser-mode headed daemon keepalive --auto-connect --repair --probe auto' "$fake_crontab_store"
+rg -q -- '--browser-mode headed daemon keepalive --auto-connect --repair --probe passive' "$fake_crontab_store"
 ! rg -q 'cron heal headed' "$fake_crontab_store"
 rg -q 'command -v flock' "$fake_crontab_store"
 rg -q -- '--strategy managed' "$fake_crontab_store"
@@ -259,7 +259,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema workflow-a11y --json | jq -e '.ok == true and .schema.name == "workflow-a11y" and (.schema.fields | map(.name) | index("a11y"))' >/dev/null
 "$binary" schema workflow-page-load --json | jq -e '.ok == true and .schema.name == "workflow-page-load" and (.schema.fields | map(.name) | index("content_state")) and (.schema.fields | map(.name) | index("storage"))' >/dev/null
 "$binary" schema workflow-rendered-extract --json | jq -e '.ok == true and .schema.name == "workflow-rendered-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
-"$binary" schema workflow-web-research-serp --json | jq -e '.ok == true and .schema.name == "workflow-web-research-serp" and (.schema.fields | map(.name) | index("candidates")) and (.schema.fields | map(.name) | index("warnings")) and (.schema.fields | map(.name) | index("failures")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields[] | select(.name == "workflow").description | contains("parallel engine"))' >/dev/null
+"$binary" schema workflow-web-research-serp --json | jq -e '.ok == true and .schema.name == "workflow-web-research-serp" and (.schema.fields | map(.name) | index("candidates")) and (.schema.fields | map(.name) | index("warnings")) and (.schema.fields | map(.name) | index("failures")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields[] | select(.name == "workflow").description | contains("reusable engine lanes"))' >/dev/null
 "$binary" schema workflow-web-research-extract --json | jq -e '.ok == true and .schema.name == "workflow-web-research-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("failures")) and (.schema.fields[] | select(.name == "workflow").description | contains("backpressure"))' >/dev/null
 "$binary" schema workflow-verify --json | jq -e '.ok == true and .schema.name == "workflow-verify" and (.schema.fields | map(.name) | index("requests"))' >/dev/null
 "$binary" schema workflow-perf --json | jq -e '.ok == true and .schema.name == "workflow-perf" and (.schema.fields | map(.name) | index("performance"))' >/dev/null

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"encoding/json"
@@ -15,6 +16,8 @@ import (
 	"github.com/spf13/cobra"
 	"path/filepath"
 )
+
+var pageCleanupRecordsMu sync.Mutex
 
 func (a *app) newTargetsCommand() *cobra.Command {
 	var limit int
@@ -1167,6 +1170,8 @@ func (a *app) recordCreatedPageTarget(ctx context.Context, targetID, rawURL, cre
 	if err != nil {
 		return err
 	}
+	pageCleanupRecordsMu.Lock()
+	defer pageCleanupRecordsMu.Unlock()
 	records, err := loadPageCleanupRecords(ctx, store.Dir)
 	if err != nil {
 		return err

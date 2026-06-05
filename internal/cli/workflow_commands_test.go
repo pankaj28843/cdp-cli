@@ -678,10 +678,11 @@ func TestWorkflowWebResearchSERPRunsMultipleEnginesInOneCommand(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
+	fakeTargetCreateCount.Store(0)
 
 	tmpDir := t.TempDir()
 	queryFile := filepath.Join(tmpDir, "queries.txt")
-	if err := os.WriteFile(queryFile, []byte("agentic engineering\n"), 0o600); err != nil {
+	if err := os.WriteFile(queryFile, []byte("agentic engineering\nplaywright parity\n"), 0o600); err != nil {
 		t.Fatalf("write query file: %v", err)
 	}
 	outDir := filepath.Join(tmpDir, "research")
@@ -696,16 +697,22 @@ func TestWorkflowWebResearchSERPRunsMultipleEnginesInOneCommand(t *testing.T) {
 			Serp string `json:"serp"`
 		} `json:"serps"`
 		Workflow struct {
-			Serp                 string   `json:"serp"`
-			Serps                []string `json:"serps"`
-			EngineCount          int      `json:"engine_count"`
-			ParallelEngines      bool     `json:"parallel_engines"`
-			ParallelEngineCount  int      `json:"parallel_engine_count"`
-			PerEngineParallel    int      `json:"per_engine_parallel"`
-			ScheduledResultPages int      `json:"scheduled_result_pages"`
-			CompletedResultPages int      `json:"completed_result_pages"`
-			FallbackSerp         string   `json:"fallback_serp"`
-			ResolvedFallbackSerp string   `json:"resolved_fallback_serp"`
+			Serp                string   `json:"serp"`
+			Serps               []string `json:"serps"`
+			EngineCount         int      `json:"engine_count"`
+			ParallelEngines     bool     `json:"parallel_engines"`
+			ParallelEngineCount int      `json:"parallel_engine_count"`
+			PerEngineParallel   int      `json:"per_engine_parallel"`
+			EngineLanes         []struct {
+				Serp        string `json:"serp"`
+				PageReused  bool   `json:"page_reused"`
+				CreatedPage bool   `json:"created_page"`
+				JobCount    int    `json:"job_count"`
+			} `json:"engine_lanes"`
+			ScheduledResultPages int    `json:"scheduled_result_pages"`
+			CompletedResultPages int    `json:"completed_result_pages"`
+			FallbackSerp         string `json:"fallback_serp"`
+			ResolvedFallbackSerp string `json:"resolved_fallback_serp"`
 		} `json:"workflow"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
@@ -714,10 +721,21 @@ func TestWorkflowWebResearchSERPRunsMultipleEnginesInOneCommand(t *testing.T) {
 	if !got.OK || got.Workflow.Serp != "google,bing" || !reflect.DeepEqual(got.Workflow.Serps, []string{"google", "bing"}) || got.Workflow.EngineCount != 2 || !got.Workflow.ParallelEngines || got.Workflow.ParallelEngineCount != 2 || got.Workflow.PerEngineParallel != 1 {
 		t.Fatalf("workflow multi-engine metadata = %+v", got.Workflow)
 	}
-	if got.Workflow.ScheduledResultPages != 2 || got.Workflow.CompletedResultPages != 2 || got.Workflow.FallbackSerp != "none" || got.Workflow.ResolvedFallbackSerp != "none" {
+	if got.Workflow.ScheduledResultPages != 4 || got.Workflow.CompletedResultPages != 4 || got.Workflow.FallbackSerp != "none" || got.Workflow.ResolvedFallbackSerp != "none" {
 		t.Fatalf("workflow multi-engine counts/fallback = %+v", got.Workflow)
 	}
-	if len(got.SERPs) != 2 || got.SERPs[0].Serp != "google" || got.SERPs[1].Serp != "bing" {
+	if len(got.Workflow.EngineLanes) != 2 || got.Workflow.EngineLanes[0].Serp != "google" || got.Workflow.EngineLanes[1].Serp != "bing" {
+		t.Fatalf("workflow engine lanes = %+v, want deterministic one lane per engine", got.Workflow.EngineLanes)
+	}
+	for _, lane := range got.Workflow.EngineLanes {
+		if !lane.PageReused || !lane.CreatedPage || lane.JobCount != 2 {
+			t.Fatalf("workflow engine lane = %+v, want one created reusable page handling two jobs", lane)
+		}
+	}
+	if creates := fakeTargetCreateCount.Load(); creates != 2 {
+		t.Fatalf("Target.createTarget calls = %d, want one reusable page per engine", creates)
+	}
+	if len(got.SERPs) != 4 || got.SERPs[0].Serp != "google" || got.SERPs[1].Serp != "google" || got.SERPs[2].Serp != "bing" || got.SERPs[3].Serp != "bing" {
 		t.Fatalf("serp reports = %+v, want deterministic google then bing order", got.SERPs)
 	}
 }

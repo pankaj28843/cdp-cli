@@ -29,10 +29,13 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe auto", "--browser-mode headless daemon keepalive --repair", "command -v flock", "--strategy managed"} {
+	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "command -v flock", "--strategy managed"} {
 		if !strings.Contains(afterFirst, want) {
 			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
 		}
+	}
+	if strings.Contains(afterFirst, " cdp pages ") || strings.Contains(afterFirst, " cdp pages --browser-mode") || strings.Contains(afterFirst, " pages --browser-mode headed") {
+		t.Fatalf("crontab after install still uses pages polling instead of daemon keepalive:\n%s", afterFirst)
 	}
 	if strings.Contains(afterFirst, "cron heal headed") {
 		t.Fatalf("crontab after install still uses headed cron heal instead of daemon keepalive:\n%s", afterFirst)
@@ -72,7 +75,7 @@ func TestCronInstallHeadedOnlyDryRunDoesNotMutateCrontab(t *testing.T) {
 		t.Fatalf("cron install headed dry-run = %+v, want one intended headed entry without install", got)
 	}
 	entry := got.IntendedBlock.Entries[0]
-	if !strings.Contains(entry, "--browser-mode headed daemon keepalive --auto-connect --repair --probe auto") || strings.Contains(entry, "--browser-mode headless") || strings.Contains(entry, "cron heal headed") {
+	if !strings.Contains(entry, "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive") || strings.Contains(entry, "--browser-mode headless") || strings.Contains(entry, "cron heal headed") || strings.Contains(entry, " pages ") {
 		t.Fatalf("headed dry-run entry = %q, want headed daemon keepalive only", entry)
 	}
 	if after := readFileString(t, crontabPath); after != initial {

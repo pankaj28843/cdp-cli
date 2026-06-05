@@ -75,6 +75,7 @@ type renderedExtractOptions struct {
 	MinMarkdownWords   int
 	MinHTMLChars       int
 	KeepOpen           bool
+	ReusePage          *renderedExtractReusablePage
 }
 
 type renderedExtractResult struct {
@@ -82,6 +83,56 @@ type renderedExtractResult struct {
 	Human    string
 	Links    renderedExtractLinks
 	Warnings []string
+}
+
+type renderedExtractReusablePage struct {
+	Client      browserEventClient
+	CloseClient func(context.Context) error
+	Session     *cdp.PageSession
+	TargetID    string
+}
+
+func (a *app) openRenderedExtractReusablePage(ctx context.Context, rawURL, workflow string) (*renderedExtractReusablePage, error) {
+	client, closeClient, err := a.browserEventCDPClient(ctx)
+	if err != nil {
+		return nil, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
+	}
+	targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, workflow)
+	if err != nil {
+		_ = closeClient(ctx)
+		return nil, err
+	}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
+	if err != nil {
+		_ = closeClient(ctx)
+		return nil, commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+	}
+	return &renderedExtractReusablePage{Client: client, CloseClient: closeClient, Session: session, TargetID: targetID}, nil
+}
+
+func (p *renderedExtractReusablePage) Close(ctx context.Context) (bool, string) {
+	if p == nil {
+		return false, ""
+	}
+	closed := false
+	closeErr := ""
+	if p.Client != nil && strings.TrimSpace(p.TargetID) != "" {
+		if err := cdp.CloseTargetWithClient(ctx, p.Client, p.TargetID); err != nil {
+			closeErr = err.Error()
+		} else {
+			closed = true
+		}
+	}
+	if p.Session != nil {
+		if err := p.Session.Close(ctx); err != nil && closeErr == "" {
+			closeErr = err.Error()
+		}
+	} else if p.CloseClient != nil {
+		if err := p.CloseClient(ctx); err != nil && closeErr == "" {
+			closeErr = err.Error()
+		}
+	}
+	return closed, closeErr
 }
 
 func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
@@ -179,21 +230,30 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	formatSet := renderedExtractFormatSet(options.Formats)
 	serpMode := renderedExtractSERPMode(rawURL, options.Serp)
 
-	client, closeClient, err := a.browserEventCDPClient(ctx)
-	if err != nil {
-		return renderedExtractResult{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
+	var client browserEventClient
+	var session *cdp.PageSession
+	var createdID string
+	createdPage := true
+	reusedPage := false
+	if options.ReusePage != nil {
+		if options.ReusePage.Client == nil || options.ReusePage.Session == nil || strings.TrimSpace(options.ReusePage.TargetID) == "" {
+			return renderedExtractResult{}, commandError("invalid_reusable_page", "internal", "rendered-extract reusable page is incomplete", ExitInternal, []string{options.UsageCommand + " <url> --json"})
+		}
+		client = options.ReusePage.Client
+		session = options.ReusePage.Session
+		createdID = options.ReusePage.TargetID
+		createdPage = false
+		reusedPage = true
+	} else {
+		reusablePage, err := a.openRenderedExtractReusablePage(ctx, "about:blank", "rendered-extract")
+		if err != nil {
+			return renderedExtractResult{}, err
+		}
+		client = reusablePage.Client
+		session = reusablePage.Session
+		createdID = reusablePage.TargetID
+		defer session.Close(ctx)
 	}
-	createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "rendered-extract")
-	if err != nil {
-		_ = closeClient(ctx)
-		return renderedExtractResult{}, err
-	}
-	session, err := cdp.AttachToTargetWithClient(ctx, client, createdID, closeClient)
-	if err != nil {
-		_ = closeClient(ctx)
-		return renderedExtractResult{}, commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", createdID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
-	}
-	defer session.Close(ctx)
 
 	collectorErrors, teardownCollectors := enablePageLoadCollectorsWithTeardown(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
 	defer func() {
@@ -322,7 +382,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	closed := false
 	closeErr := ""
 	unclosedTargetPath := ""
-	if !options.KeepOpen {
+	if !options.KeepOpen && createdPage {
 		if err := cdp.CloseTargetWithClient(ctx, client, createdID); err != nil {
 			closeErr = err.Error()
 			unclosedTargetPath, _ = writeArtifactFile(filepath.Join(options.OutDir, "unclosed-targets.txt"), []byte(createdID+"\t"+finalURL+"\t"+closeErr+"\n"))
@@ -361,7 +421,8 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			"wait_until":       options.WaitUntil,
 			"formats":          setKeys(formatSet),
 			"serp":             serpMode,
-			"created_page":     true,
+			"created_page":     createdPage,
+			"reused_page":      reusedPage,
 			"closed":           closed,
 			"close_error":      closeErr,
 			"unclosed_targets": unclosedTargetPath,

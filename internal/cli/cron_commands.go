@@ -404,7 +404,7 @@ func managedCronBlock(opts cronRenderOptions) string {
 	}
 	lines := []string{cronManagedBlockStart}
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headed" {
-		lines = append(lines, fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headed.lock", logDir), fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed daemon keepalive --auto-connect --repair --probe auto --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir))))
+		lines = append(lines, fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headed.lock", logDir), fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir))))
 	}
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headless" {
 		lines = append(lines,

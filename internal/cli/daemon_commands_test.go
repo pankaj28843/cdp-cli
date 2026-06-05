@@ -437,6 +437,66 @@ func TestDaemonKeepaliveHealthyJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonKeepaliveRepairsHeadedFromStaleApprovedEndpointWithoutActiveProbe(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	staleRuntime := daemon.Runtime{
+		PID:               999999999,
+		StartedAt:         time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+		BrowserMode:       "headed",
+		ConnectionMode:    "auto_connect",
+		ReconnectInterval: "30s",
+		SocketPath:        daemon.RuntimeSocketPathForMode(stateDir, "headed"),
+		Endpoint:          fakeWebSocketEndpoint(t, server.URL),
+	}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headed", staleRuntime); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headed", "daemon", "keepalive", "--auto-connect", "--repair", "--probe", "passive", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s stdout=%s", code, cli.ExitOK, errOut.String(), out.String())
+	}
+	var got struct {
+		OK           bool   `json:"ok"`
+		BrowserMode  string `json:"browser_mode"`
+		State        string `json:"state"`
+		Action       string `json:"action"`
+		RepairSource string `json:"repair_source"`
+		Probe        struct {
+			Mode   string `json:"mode"`
+			Result string `json:"result"`
+		} `json:"probe"`
+		Previous struct {
+			State string `json:"state"`
+		} `json:"previous"`
+		Daemon struct {
+			State   string `json:"state"`
+			Runtime struct {
+				ConnectionMode string `json:"connection_mode"`
+			} `json:"runtime"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v\n%s", err, out.String())
+	}
+	if !got.OK || got.BrowserMode != "headed" || got.State != "repaired" || got.Action != "repaired" || got.RepairSource != "stale_runtime_endpoint" {
+		t.Fatalf("daemon keepalive = %+v, want repaired from stale runtime endpoint", got)
+	}
+	if got.Probe.Mode != "passive" || got.Probe.Result != "permission_pending" || got.Previous.State != "stale_state" {
+		t.Fatalf("daemon keepalive probe/previous = probe %+v previous %+v, want passive stale-state repair", got.Probe, got.Previous)
+	}
+	if got.Daemon.State != "running" || got.Daemon.Runtime.ConnectionMode != "auto_connect" {
+		t.Fatalf("daemon keepalive daemon = %+v, want running runtime on last approved endpoint", got.Daemon)
+	}
+}
+
 func TestDaemonKeepaliveLockedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

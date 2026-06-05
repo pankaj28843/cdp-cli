@@ -24,7 +24,7 @@ cdp daemon status --json
 cdp doctor --check scheduled-tasks --json
 cdp doctor --check browser-health --json
 cdp doctor --check headless-security --json
-cdp --browser-mode headed daemon keepalive --auto-connect --repair --display :0 --json
+cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --display :0 --json
 cdp --browser-mode headless browser profile seed --strategy managed --json
 cdp --browser-mode headless daemon keepalive --repair --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
@@ -53,6 +53,10 @@ cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
 ```
+
+Multi-engine SERP research runs engines concurrently and reuses one workflow tab
+lane per engine, so large query files avoid opening a fresh tab for every
+engine/query/page combination.
 
 ## Browser Runtime Modes
 
@@ -106,6 +110,13 @@ setups; they are not the normal headed/headless selector.
 mode-specific per-connection lock before any active probe, exits successfully when
 another keepalive already owns that lock, and starts or repairs the selected-mode
 daemon only when the selected connection is not healthy.
+
+For headed auto-connect, scheduled keepalive uses `--probe passive`: if a prior
+approved daemon runtime went stale while Chrome stayed open, keepalive restarts
+the daemon from that last approved endpoint without opening pages or asking for a
+new prompt. Use `--probe active` only for a human-managed repair when someone can
+approve Chrome if needed. Headless keepalive remains fully unattended and starts
+or reuses the managed headless Chrome runtime.
 
 The managed path is available through first-class cron commands:
 

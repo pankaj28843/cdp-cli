@@ -30,6 +30,7 @@ var fakeDelayedAssertEditableAttempts atomic.Int64
 var fakeDelayedAssertReadonlyAttempts atomic.Int64
 var fakeDelayedAssertTextAttempts atomic.Int64
 var fakeDelayedAssertValueAttempts atomic.Int64
+var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -221,6 +222,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["result"] = map[string]any{"targetInfo": found}
 				}
 			} else if req.Method == "Target.createTarget" {
+				fakeTargetCreateCount.Add(1)
 				resp["result"] = map[string]any{"targetId": "created-page"}
 			} else if req.Method == "Target.attachToTarget" {
 				var params struct {
