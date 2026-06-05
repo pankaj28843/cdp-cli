@@ -87,6 +87,51 @@ func TestDaemonStatusReportsRuntimeJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonHealthClassifiesRuntimeSocketUnreadyJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	socketPath := daemon.RuntimeSocketPathForMode(stateDir, "headless")
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", daemon.Runtime{
+		PID:            os.Getpid(),
+		StartedAt:      time.Now().UTC().Format(time.RFC3339),
+		BrowserMode:    "headless",
+		ConnectionMode: "browser_url",
+		SocketPath:     socketPath,
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Daemon struct {
+			State              string `json:"state"`
+			ProcessRunning     bool   `json:"process_running"`
+			RuntimeSocketReady bool   `json:"runtime_socket_ready"`
+		} `json:"daemon"`
+		Health struct {
+			State        string   `json:"state"`
+			Reasons      []string `json:"reasons"`
+			DaemonRPC    bool     `json:"daemon_rpc_ready"`
+			NextCommands []string `json:"next_commands"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon health output is invalid JSON: %v", err)
+	}
+	if got.Daemon.State != "runtime_socket_unready" || !got.Daemon.ProcessRunning || got.Daemon.RuntimeSocketReady {
+		t.Fatalf("daemon = %+v, want live process with unready runtime socket", got.Daemon)
+	}
+	if got.Health.State != "daemon_socket_unready" || got.Health.DaemonRPC || !containsString(got.Health.Reasons, "daemon_socket_unready") {
+		t.Fatalf("health = %+v, want daemon_socket_unready", got.Health)
+	}
+	if !containsString(got.Health.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
+		t.Fatalf("next_commands = %+v, want headless keepalive repair", got.Health.NextCommands)
+	}
+}
+
 func TestDaemonStatusUsesSelectedBrowserModeRuntime(t *testing.T) {
 	stateDir := filepath.Join(os.TempDir(), "cdp-cli-mode-runtime-test")
 	if err := os.RemoveAll(stateDir); err != nil {

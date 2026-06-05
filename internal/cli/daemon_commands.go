@@ -714,7 +714,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 					"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
 				})
 			}
-			if repair && browserMode == "headed" && a.opts.autoConnect && status.State == "stale_state" && status.Runtime != nil && strings.TrimSpace(status.Runtime.Endpoint) != "" {
+			if repair && browserMode == "headed" && a.opts.autoConnect && (status.State == "stale_state" || status.State == "runtime_socket_unready") && status.Runtime != nil && strings.TrimSpace(status.Runtime.Endpoint) != "" {
 				if err := lock.Update(ctx, "starting_daemon_from_stale_runtime_endpoint"); err != nil {
 					return err
 				}
@@ -998,6 +998,11 @@ func keepaliveRuntimeCheck(ctx context.Context, status daemon.Status) (bool, map
 	if !status.ProcessRunning {
 		check["ok"] = false
 		check["result"] = "not_running"
+		return false, check
+	}
+	if !status.RuntimeSocketReady {
+		check["ok"] = false
+		check["result"] = "daemon_socket_unready"
 		return false, check
 	}
 	if ok, managed := managedRuntimeProcessCheck(status.Runtime); managed != nil {

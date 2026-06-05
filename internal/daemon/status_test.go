@@ -48,6 +48,14 @@ func TestWithRuntimeHeadlessNextCommands(t *testing.T) {
 	}
 }
 
+func TestWithRuntimeReadinessClassifiesSocketUnready(t *testing.T) {
+	status := daemon.SnapshotForMode("headless", "browser_url", false, browser.ProbeResult{State: "cdp_available"})
+	got := daemon.WithRuntimeReadiness(status, daemon.Runtime{PID: 123, BrowserMode: "headless"}, true, false)
+	if got.State != "runtime_socket_unready" || !got.ProcessRunning || got.RuntimeSocketReady || !containsStatusCommand(got.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
+		t.Fatalf("WithRuntimeReadiness = %+v, want socket-unready repairable headless runtime", got)
+	}
+}
+
 func containsStatusCommand(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

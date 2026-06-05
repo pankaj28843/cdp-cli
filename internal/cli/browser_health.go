@@ -151,6 +151,12 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		health["reasons"] = appendStringReasons(health["reasons"], daemonHealthState(status))
 		return health
 	}
+	if !status.RuntimeSocketReady {
+		a.applyManagedBrowserHealth(health, status.Runtime)
+		health["reasons"] = appendStringReasons(health["reasons"], daemonHealthState(status))
+		health["next_commands"] = uniqueCommands(toStringSlice(health["next_commands"]), status.NextCommands, a.connectionRemediationCommands())
+		return health
+	}
 	client := daemon.RuntimeClient{Runtime: *status.Runtime}
 	budgetOpts := a.browserResourceBudgetOptions()
 	budgetOpts.BrowserMode = status.BrowserMode
@@ -296,6 +302,9 @@ func daemonHealthState(status daemon.Status) string {
 	}
 	if status.State == "stale_state" {
 		return "stale_runtime"
+	}
+	if status.State == "runtime_socket_unready" {
+		return "daemon_socket_unready"
 	}
 	if status.State == "chrome_unavailable" || status.State == "disconnected" {
 		return "browser_unreachable"

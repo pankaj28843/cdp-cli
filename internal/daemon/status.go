@@ -40,6 +40,7 @@ type Status struct {
 	RequiresUserAllow   bool                `json:"requires_user_allow"`
 	DefaultProfileFlow  bool                `json:"default_profile_flow"`
 	ProcessRunning      bool                `json:"process_running"`
+	RuntimeSocketReady  bool                `json:"runtime_socket_ready"`
 	Runtime             *Runtime            `json:"runtime,omitempty"`
 	BrowserProbe        browser.ProbeResult `json:"browser_probe"`
 	NextCommands        []string            `json:"next_commands"`
@@ -110,13 +111,18 @@ func SnapshotForMode(browserMode, connectionMode string, autoConnect bool, probe
 }
 
 func WithRuntime(status Status, runtime Runtime, running bool) Status {
+	return WithRuntimeReadiness(status, runtime, running, running)
+}
+
+func WithRuntimeReadiness(status Status, runtime Runtime, processRunning, socketReady bool) Status {
 	if status.BrowserMode == "" {
 		status.BrowserMode = runtimeModeName(runtime.BrowserMode)
 	}
 	prefix := commandPrefix(status.BrowserMode)
 	status.Runtime = &runtime
-	status.ProcessRunning = running
-	if running {
+	status.ProcessRunning = processRunning
+	status.RuntimeSocketReady = socketReady
+	if processRunning && socketReady {
 		status.State = "running"
 		status.Message = "daemon keepalive process is running"
 		if status.DefaultProfileFlow {
@@ -124,6 +130,17 @@ func WithRuntime(status Status, runtime Runtime, running bool) Status {
 			status.HumanRepairCommands = []string{prefix + " daemon stop --json"}
 		} else {
 			status.NextCommands = []string{prefix + " pages --json", prefix + " daemon stop --json"}
+		}
+	} else if processRunning && !socketReady {
+		status.State = "runtime_socket_unready"
+		status.Message = "daemon process is running but the runtime socket is not ready"
+		if status.DefaultProfileFlow {
+			status.NextCommands = []string{prefix + " daemon status --json", prefix + " doctor --check browser-health --json", prefix + " daemon logs --tail 50 --json"}
+			status.HumanRepairCommands = []string{prefix + " daemon stop --json", prefix + " daemon keepalive --auto-connect --repair --json"}
+		} else if status.BrowserMode == "headless" {
+			status.NextCommands = []string{prefix + " daemon keepalive --repair --json", prefix + " daemon logs --tail 50 --json", prefix + " daemon stop --json"}
+		} else {
+			status.NextCommands = []string{prefix + " daemon stop --json", prefix + " daemon keepalive --repair --json", prefix + " daemon logs --tail 50 --json"}
 		}
 	} else if runtime.PID > 0 {
 		status.State = "stale_state"

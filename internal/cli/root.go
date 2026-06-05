@@ -316,11 +316,16 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	if !a.runtimeMatchesConnection(runtime) {
 		return status
 	}
-	running := daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime)
+	processRunning := daemon.RuntimeRunning(runtime)
+	socketReady := processRunning && daemon.RuntimeSocketReady(ctx, runtime)
 	if a.runtimeOverridesSelectedConnection(runtime) {
+		message := "mode-specific managed headless daemon runtime is ready"
+		if !socketReady {
+			message = "mode-specific managed headless daemon runtime socket is not ready"
+		}
 		probe = browser.ProbeResult{
 			State:                "cdp_available",
-			Message:              "mode-specific managed headless daemon runtime is ready",
+			Message:              message,
 			ConnectionMode:       runtime.ConnectionMode,
 			WebSocketDebuggerURL: true,
 		}
@@ -328,7 +333,7 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	} else if !a.hasExplicitConnectionOptions() && runtime.ConnectionMode != status.ConnectionMode {
 		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
 	}
-	status = daemon.WithRuntime(status, runtime, running)
+	status = daemon.WithRuntimeReadiness(status, runtime, processRunning, socketReady)
 	return status
 }
 

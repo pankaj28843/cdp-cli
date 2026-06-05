@@ -541,6 +541,19 @@ mode_status_dir="$state_dir/mode-status"
 "$binary" daemon logs --state-dir "$mode_status_dir" --json | jq -e '.ok == true and .browser_mode == "headed" and .log.count == 0 and (.entries | length == 0)' >/dev/null
 "$binary" --browser-mode headless daemon logs --state-dir "$mode_status_dir" --json | jq -e '.ok == true and .browser_mode == "headless" and (.log.path | contains("headless/daemon.log")) and .log.count == 0 and (.entries | length == 0)' >/dev/null
 
+socket_unready_dir="$state_dir/socket-unready"
+mkdir -p "$socket_unready_dir/headless"
+cat > "$socket_unready_dir/headless/daemon.json" <<JSON
+{
+  "pid": $$,
+  "started_at": "2026-06-05T00:00:00Z",
+  "browser_mode": "headless",
+  "connection_mode": "browser_url",
+  "socket_path": "$socket_unready_dir/headless/missing.sock"
+}
+JSON
+"$binary" --browser-mode headless daemon health --state-dir "$socket_unready_dir" --json | jq -e '.ok == true and .daemon.state == "runtime_socket_unready" and .daemon.process_running == true and .daemon.runtime_socket_ready == false and .health.state == "daemon_socket_unready" and .health.daemon_rpc_ready == false and (.health.reasons | index("daemon_socket_unready")) and (.health.next_commands | index("cdp --browser-mode headless daemon keepalive --repair --json"))' >/dev/null
+
 set +e
 snapshot_output="$("$binary" snapshot --state-dir "$state_dir" --json 2>/tmp/cdp-cli-snapshot.err)"
 snapshot_code=$?
