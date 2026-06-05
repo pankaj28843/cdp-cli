@@ -29,7 +29,7 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25", "command -v flock", "--strategy managed"} {
+	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25", "command -v flock", "--strategy managed", "--if-older-than 6h"} {
 		if !strings.Contains(afterFirst, want) {
 			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
 		}
@@ -52,6 +52,44 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	afterSecond := readFileString(t, crontabPath)
 	if afterSecond != afterFirst {
 		t.Fatalf("idempotent install changed crontab:\nfirst:\n%s\nsecond:\n%s", afterFirst, afterSecond)
+	}
+}
+
+func TestCronInstallUsesHeadlessSeedConfigDryRun(t *testing.T) {
+	initial := "SHELL=/bin/sh\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"30m"}}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var got struct {
+		OK          bool `json:"ok"`
+		DryRun      bool `json:"dry_run"`
+		ProfileSeed struct {
+			Strategy           string `json:"strategy"`
+			IfOlderThan        string `json:"if_older_than"`
+			IfOlderThanSeconds int64  `json:"if_older_than_seconds"`
+			Schedule           string `json:"schedule"`
+		} `json:"profile_seed"`
+		IntendedBlock struct {
+			Entries []string `json:"entries"`
+		} `json:"intended_block"`
+	}
+	executeCronJSON(t, []string{"--config", configPath, "cron", "install", "--dry-run", "--state-dir", stateDir, "--json"}, &got)
+	if !got.OK || !got.DryRun || got.ProfileSeed.Strategy != "copy-default" || got.ProfileSeed.IfOlderThan != "30m" || got.ProfileSeed.IfOlderThanSeconds != 1800 || got.ProfileSeed.Schedule != "*/15 * * * *" {
+		t.Fatalf("cron install dry-run profile_seed = %+v, want copy-default 30m cadence", got.ProfileSeed)
+	}
+	block := strings.Join(got.IntendedBlock.Entries, "\n")
+	for _, want := range []string{"*/15 * * * *", "--browser-mode headless browser profile seed --strategy copy-default --if-older-than 30m --json"} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("intended cron block missing %q:\n%s", want, block)
+		}
+	}
+	if after := readFileString(t, crontabPath); after != initial {
+		t.Fatalf("dry-run mutated crontab:\n%s", after)
 	}
 }
 

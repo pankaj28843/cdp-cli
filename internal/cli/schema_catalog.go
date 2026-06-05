@@ -63,6 +63,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when cron metadata or mutation completed."},
 				{Name: "browser_mode", Type: "string", Required: false, Description: "Rendered cron browser mode: all, headed, or headless."},
+				{Name: "profile_seed", Type: "object", Required: false, Description: "Headless profile seed strategy, age gate, and cron cadence used in rendered cron entries."},
 				{Name: "dry_run", Type: "boolean", Required: false, Description: "True when install rendered the intended block without writing the user crontab."},
 				{Name: "installed", Type: "boolean", Required: false, Description: "True when the cdp-managed block exists in the current user crontab."},
 				{Name: "matches_intended", Type: "boolean", Required: false, Description: "True when the installed block exactly matches the rendered agent profile block."},

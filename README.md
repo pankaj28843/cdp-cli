@@ -72,10 +72,12 @@ full-state snapshot of Chrome's default profile for developer-controlled harness
 work, preserving browser-state files such as cookies, Local Storage, IndexedDB,
 extensions, history, and cache in the local cdp-owned profile. Normal JSON
 summaries report metadata and counts rather than copied file values, and cron
-uses `managed` by default so profile snapshots are operator initiated. When
-headless is already running, explicit `copy-default` can stop the headless
-daemon, reseed, and start headless again; headless is disposable managed agent
-infrastructure.
+uses `managed` by default so profile snapshots are operator initiated. Configure
+`browser.headless.profile_seed_strategy` and
+`browser.headless.profile_refresh_after` when the managed cron block should keep
+an explicit `copy-default` seed fresh on an age-gated cadence. When headless is
+already running, explicit `copy-default` can stop the headless daemon, reseed,
+and start headless again; headless is disposable managed agent infrastructure.
 
 ```bash
 cdp browser mode get --json

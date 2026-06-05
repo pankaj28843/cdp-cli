@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +29,8 @@ type cronRenderOptions struct {
 	XDGRuntimeDir string
 	Reconnect     time.Duration
 	BrowserMode   string
+	SeedStrategy  string
+	SeedAfter     time.Duration
 }
 
 type cronBlockState struct {
@@ -82,6 +86,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 			data := map[string]any{
 				"ok":                 true,
 				"browser_mode":       opts.BrowserMode,
+				"profile_seed":       cronProfileSeedMetadata(opts),
 				"available":          available,
 				"installed":          state.Installed,
 				"matches_intended":   normalizeCronBlock(state.Text) == normalizeCronBlock(intended),
@@ -129,6 +134,7 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 			data := map[string]any{
 				"ok":               true,
 				"browser_mode":     opts.BrowserMode,
+				"profile_seed":     cronProfileSeedMetadata(opts),
 				"installed":        installed.Installed,
 				"matches_intended": normalizeCronBlock(installed.Text) == normalizeCronBlock(intendedText),
 				"current_block":    installed,
@@ -180,6 +186,7 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 			data := map[string]any{
 				"ok":               true,
 				"browser_mode":     opts.BrowserMode,
+				"profile_seed":     cronProfileSeedMetadata(opts),
 				"action":           actionString(changed, "installed", "unchanged"),
 				"changed":          changed,
 				"dry_run":          dryRun,
@@ -447,6 +454,8 @@ func defaultCronRenderOptions() cronRenderOptions {
 		XDGRuntimeDir: envDefault("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", os.Getuid())),
 		Reconnect:     30 * time.Second,
 		BrowserMode:   "all",
+		SeedStrategy:  browser.ProfileSeedStrategyManaged,
+		SeedAfter:     6 * time.Hour,
 	}
 }
 
@@ -469,6 +478,26 @@ func (a *app) applyCronBrowserMode(cmd *cobra.Command, opts *cronRenderOptions) 
 	if opts.BrowserMode == "" {
 		opts.BrowserMode = "all"
 	}
+	cfg, err := config.Load(a.opts.config)
+	if err != nil {
+		return commandError("invalid_config", "usage", err.Error(), ExitUsage, []string{"cdp --config <path> cron install --dry-run --json"})
+	}
+	if strategy := strings.TrimSpace(cfg.Browser.Headless.ProfileSeedStrategy); strategy != "" {
+		strategy = browser.NormalizeProfileSeedStrategy(strategy)
+		if !browser.SupportedProfileSeedStrategy(strategy) {
+			return commandError("invalid_profile_seed_strategy", "usage", fmt.Sprintf("unsupported managed profile seed strategy %q", cfg.Browser.Headless.ProfileSeedStrategy), ExitUsage, []string{"cdp --browser-mode headless browser profile seed --strategy managed --json", "cdp --browser-mode headless browser profile seed --strategy copy-default --json"})
+		}
+		opts.SeedStrategy = strategy
+	}
+	if cfg.Browser.Headless.ProfileRefreshAfter > 0 {
+		opts.SeedAfter = cfg.Browser.Headless.ProfileRefreshAfter
+	}
+	if opts.SeedStrategy == "" {
+		opts.SeedStrategy = browser.ProfileSeedStrategyManaged
+	}
+	if opts.SeedAfter <= 0 {
+		opts.SeedAfter = 6 * time.Hour
+	}
 	return nil
 }
 
@@ -481,6 +510,9 @@ func managedCronBlock(opts cronRenderOptions) string {
 	if opts.Reconnect <= 0 {
 		reconnect = "30s"
 	}
+	seedStrategy := cronProfileSeedStrategy(opts)
+	seedAfter := cronDurationLiteral(cronProfileSeedAfter(opts))
+	seedSchedule := cronProfileSeedSchedule(cronProfileSeedAfter(opts))
 	lines := []string{cronManagedBlockStart}
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headed" {
 		lines = append(lines, fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headed.lock", logDir), fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir))))
@@ -489,12 +521,69 @@ func managedCronBlock(opts cronRenderOptions) string {
 		lines = append(lines,
 			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
 			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
-			fmt.Sprintf("0 */6 * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy managed --if-older-than 6h --json >> %s/profile-seed-headless.log 2>&1", cdpBin, logDir))),
+			fmt.Sprintf("%s %s", seedSchedule, cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy %s --if-older-than %s --json >> %s/profile-seed-headless.log 2>&1", cdpBin, seedStrategy, seedAfter, logDir))),
 			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
 		)
 	}
 	lines = append(lines, cronManagedBlockEnd)
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func cronProfileSeedStrategy(opts cronRenderOptions) string {
+	strategy := browser.NormalizeProfileSeedStrategy(opts.SeedStrategy)
+	if !browser.SupportedProfileSeedStrategy(strategy) {
+		return browser.ProfileSeedStrategyManaged
+	}
+	return strategy
+}
+
+func cronProfileSeedAfter(opts cronRenderOptions) time.Duration {
+	if opts.SeedAfter > 0 {
+		return opts.SeedAfter
+	}
+	return 6 * time.Hour
+}
+
+func cronProfileSeedSchedule(seedAfter time.Duration) string {
+	if seedAfter <= 0 {
+		seedAfter = 6 * time.Hour
+	}
+	switch {
+	case seedAfter <= 15*time.Minute:
+		return "*/5 * * * *"
+	case seedAfter <= time.Hour:
+		return "*/15 * * * *"
+	case seedAfter <= 6*time.Hour:
+		return "0 * * * *"
+	default:
+		return "0 */6 * * *"
+	}
+}
+
+func cronProfileSeedMetadata(opts cronRenderOptions) map[string]any {
+	after := cronProfileSeedAfter(opts)
+	return map[string]any{
+		"strategy":              cronProfileSeedStrategy(opts),
+		"if_older_than":         cronDurationLiteral(after),
+		"if_older_than_seconds": int64(after.Seconds()),
+		"schedule":              cronProfileSeedSchedule(after),
+	}
+}
+
+func cronDurationLiteral(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int64(d/time.Hour))
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", int64(d/time.Minute))
+	}
+	if d%time.Second == 0 {
+		return fmt.Sprintf("%ds", int64(d/time.Second))
+	}
+	return d.String()
 }
 
 func cronLockedCommand(lockPath, command string) string {
