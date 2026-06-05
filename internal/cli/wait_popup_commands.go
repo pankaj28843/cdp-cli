@@ -152,12 +152,25 @@ func popupWaitListTargets(ctx context.Context, client cdp.CommandClient) ([]popu
 }
 
 func waitForPopupEvent(ctx context.Context, client browserEventClient, baselineTargets []popupWaitTarget, criteria popupWaitCriteria) (popupWaitObservation, func(context.Context) error, error) {
-	if err := client.Call(ctx, "Target.setDiscoverTargets", map[string]any{"discover": true}, nil); err != nil {
+	teardown, err := enablePopupTargetDiscovery(ctx, client)
+	if err != nil {
 		return popupWaitObservation{}, nil, err
+	}
+	observation, err := collectPopupEvent(ctx, client, baselineTargets, criteria)
+	return observation, teardown, err
+}
+
+func enablePopupTargetDiscovery(ctx context.Context, client cdp.CommandClient) (func(context.Context) error, error) {
+	if err := client.Call(ctx, "Target.setDiscoverTargets", map[string]any{"discover": true}, nil); err != nil {
+		return nil, err
 	}
 	teardown := func(teardownCtx context.Context) error {
 		return client.Call(teardownCtx, "Target.setDiscoverTargets", map[string]any{"discover": false}, nil)
 	}
+	return teardown, nil
+}
+
+func collectPopupEvent(ctx context.Context, client browserEventClient, baselineTargets []popupWaitTarget, criteria popupWaitCriteria) (popupWaitObservation, error) {
 	baseline := map[string]bool{}
 	for _, target := range baselineTargets {
 		baseline[target.ID] = true
@@ -192,20 +205,20 @@ func waitForPopupEvent(ctx context.Context, client browserEventClient, baselineT
 	}
 	events, err := client.DrainEvents(ctx)
 	if err != nil {
-		return observation, teardown, err
+		return observation, err
 	}
 	for _, event := range events {
 		if observe(event) {
-			return observation, teardown, nil
+			return observation, nil
 		}
 	}
 	for {
 		event, err := client.ReadEvent(ctx)
 		if err != nil {
-			return observation, teardown, err
+			return observation, err
 		}
 		if observe(event) {
-			return observation, teardown, nil
+			return observation, nil
 		}
 	}
 }

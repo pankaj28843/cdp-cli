@@ -391,7 +391,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"click": {
 			Name:        "click",
-			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action verification, and final target evidence.",
+			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action verification, popup waits, and final target evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the click completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: clicked for dispatched clicks, trial for --trial checks, or blocked inside actionability_failed error data."},
@@ -406,6 +406,10 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before clicking."},
 				{Name: "verification", Type: "wait_result", Required: false, Description: "Post-click wait condition result when --wait-text or --wait-selector is used."},
+				{Name: "popup_wait", Type: "wait_result", Required: false, Description: "Post-click popup wait result when --wait-popup is used, including Target discovery baseline_count and opener_id criteria."},
+				{Name: "popup", Type: "popup_event", Required: false, Description: "Matched popup target event with target id, URL/title, opener_id, and CDP method when --wait-popup is used."},
+				{Name: "last_popup_event", Type: "popup_event", Required: false, Description: "Last observed popup candidate when --wait-popup times out or criteria do not match."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands for selecting, waiting on, and snapshotting the popup target."},
 				{Name: "target_refresh", Type: "object", Required: false, Description: "Target metadata refresh failure details when final target evidence could not be refreshed."},
 				{Name: "diagnostics", Type: "object", Required: false, Description: "Privacy-preserving click diagnostics when --diagnostics-out is used."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "Diagnostics artifact metadata when --diagnostics-out is used."},

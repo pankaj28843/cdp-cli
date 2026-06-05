@@ -46,6 +46,67 @@ func TestClickJSON(t *testing.T) {
 	}
 }
 
+func TestClickWaitPopupJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "opener-page", "type": "page", "title": "Login App", "url": "https://example.test/login", "attached": false, "popupOnClick": true, "popupTargetId": "click-popup-page", "popupTitle": "Click Popup", "popupURL": "https://example.test/click-popup"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "a#oauth", "--target", "opener-page", "--wait-popup", "--wait-popup-url", "/click-popup", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click wait popup exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Click  struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+			Verified *bool  `json:"verified"`
+		} `json:"click"`
+		PopupWait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			BaselineCount int    `json:"baseline_count"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				OpenerID    string `json:"opener_id"`
+				URLContains string `json:"url_contains"`
+			} `json:"criteria"`
+		} `json:"popup_wait"`
+		Popup struct {
+			Target struct {
+				ID       string `json:"id"`
+				Title    string `json:"title"`
+				URL      string `json:"url"`
+				OpenerID string `json:"opener_id"`
+			} `json:"target"`
+			NewTarget     bool `json:"new_target"`
+			OpenerMatched bool `json:"opener_matched"`
+		} `json:"popup"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click wait popup output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "clicked" || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.Verified == nil || !*got.Click.Verified {
+		t.Fatalf("click wait popup action = %+v, want raw-input clicked and verified", got)
+	}
+	if got.PopupWait.Kind != "popup" || !got.PopupWait.Matched || got.PopupWait.BaselineCount != 1 || got.PopupWait.EventCount == 0 || got.PopupWait.ObservedCount == 0 || got.PopupWait.Criteria.OpenerID != "opener-page" || got.PopupWait.Criteria.URLContains != "/click-popup" {
+		t.Fatalf("click wait popup wait = %+v, want matched popup wait evidence", got.PopupWait)
+	}
+	if got.Popup.Target.ID != "click-popup-page" || got.Popup.Target.Title != "Click Popup" || got.Popup.Target.URL != "https://example.test/click-popup" || got.Popup.Target.OpenerID != "opener-page" || !got.Popup.NewTarget || !got.Popup.OpenerMatched {
+		t.Fatalf("click wait popup event = %+v, want click-created popup target", got.Popup)
+	}
+	if !containsString(got.NextCommands, "cdp page select --target click-popup-page --json") {
+		t.Fatalf("click wait popup next commands = %+v, want popup follow-up commands", got.NextCommands)
+	}
+}
+
 func TestClickByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

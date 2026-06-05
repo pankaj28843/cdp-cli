@@ -147,6 +147,9 @@ func (a *app) newClickCommand() *cobra.Command {
 	var activate bool
 	var waitText string
 	var waitSelector string
+	var waitPopup bool
+	var waitPopupURL string
+	var waitPopupTitle string
 	var diagnosticsOut string
 	var poll time.Duration
 	var trial bool
@@ -166,11 +169,18 @@ func (a *app) newClickCommand() *cobra.Command {
 			if strings.TrimSpace(waitText) != "" && strings.TrimSpace(waitSelector) != "" {
 				return commandError("usage", "usage", "use only one of --wait-text or --wait-selector", ExitUsage, []string{"cdp click button --wait-text Done --json"})
 			}
+			waitPopup = waitPopup || strings.TrimSpace(waitPopupURL) != "" || strings.TrimSpace(waitPopupTitle) != ""
+			if waitPopup && (strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "") {
+				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
+			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
 			}
 			if trial && (strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "") {
 				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-text or --wait-selector", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
+			}
+			if trial && waitPopup {
+				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-popup", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
 			}
 			if trial && strings.TrimSpace(diagnosticsOut) != "" {
 				return commandError("usage", "usage", "--trial returns actionability diagnostics inline; omit --diagnostics-out", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
@@ -293,7 +303,40 @@ func (a *app) newClickCommand() *cobra.Command {
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("click", selector, actionability), ExitCheckFailed, actionabilityRemediations("click", args[0], selector, locatorOpts), report)
 			}
 
-			result, err := performClick(ctx, session, selector, strategy)
+			var popupCriteria popupWaitCriteria
+			var popupBaseline []popupWaitTarget
+			var popupReport map[string]any
+			var popupErr error
+			if waitPopup {
+				popupCriteria = popupWaitCriteria{
+					OpenerID:    target.TargetID,
+					URLContains: strings.TrimSpace(waitPopupURL),
+					Title:       strings.TrimSpace(waitPopupTitle),
+				}
+				popupBaseline, err = popupWaitListTargets(ctx, client)
+				if err != nil {
+					return popupWaitConnectionError(target.TargetID, err)
+				}
+				teardown, err := enablePopupTargetDiscovery(ctx, client)
+				if err != nil {
+					return popupWaitConnectionError(target.TargetID, err)
+				}
+				defer func() {
+					teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer teardownCancel()
+					_ = teardown(teardownCtx)
+				}()
+				if _, err := client.DrainEvents(ctx); err != nil {
+					return popupWaitConnectionError(target.TargetID, err)
+				}
+			}
+
+			clickStrategy := strategy
+			if waitPopup && clickStrategy == "auto" {
+				clickStrategy = "raw-input"
+			}
+			popupStart := time.Now()
+			result, err := performClick(ctx, session, selector, clickStrategy)
 			if err != nil {
 				return err
 			}
@@ -338,6 +381,15 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 				result.Verified = &verified
 			}
+			if waitPopup {
+				observation, err := collectPopupEvent(ctx, client, popupBaseline, popupCriteria)
+				popupReport = popupWaitReport(observation, popupCriteria, target, time.Since(popupStart), a.effectiveNetworkWaitTimeout(), len(popupBaseline))
+				verified = observation.Matched
+				result.Verified = &verified
+				if err != nil {
+					popupErr = err
+				}
+			}
 
 			finalTarget, refreshErr := refreshedClickTarget(ctx, client, target)
 			result.TargetID = finalTarget.TargetID
@@ -372,11 +424,17 @@ func (a *app) newClickCommand() *cobra.Command {
 			if verification != nil {
 				report["verification"] = verification
 			}
+			if popupReport != nil {
+				addPopupWaitToClickReport(report, popupReport)
+			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
 				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
 				if autoScroll != nil {
 					diagnostics["auto_scroll"] = autoScroll
+				}
+				if popupReport != nil {
+					addPopupWaitToClickReport(diagnostics, popupReport)
 				}
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
@@ -390,7 +448,13 @@ func (a *app) newClickCommand() *cobra.Command {
 				report["artifact"] = map[string]any{"type": "click-diagnostics", "path": writtenPath, "bytes": len(b) + 1}
 				report["artifacts"] = []map[string]any{{"type": "click-diagnostics", "path": writtenPath, "bytes": len(b) + 1}}
 			}
+			if popupErr != nil {
+				return popupWaitError(ctx, target.TargetID, popupCriteria, report, popupErr)
+			}
 			human := fmt.Sprintf("clicked\t%s\t%s", target.TargetID, result.Selector)
+			if waitPopup {
+				human = fmt.Sprintf("clicked-popup\t%s\t%s", target.TargetID, result.Selector)
+			}
 			if !verified {
 				human = fmt.Sprintf("click-unverified\t%s\t%s", target.TargetID, result.Selector)
 			}
@@ -405,6 +469,9 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&activate, "activate", false, "bring the target page to the foreground before clicking")
 	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
 	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().BoolVar(&waitPopup, "wait-popup", false, "wait for a popup or new tab opened by this click")
+	cmd.Flags().StringVar(&waitPopupURL, "wait-popup-url", "", "substring that the popup URL must contain; implies --wait-popup")
+	cmd.Flags().StringVar(&waitPopupTitle, "wait-popup-title", "", "substring that the popup title must contain; implies --wait-popup")
 	cmd.Flags().StringVar(&diagnosticsOut, "diagnostics-out", "", "optional path for privacy-preserving click diagnostics JSON")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching the click")
@@ -653,6 +720,24 @@ func clickPageState(before, after cdp.TargetInfo) map[string]any {
 		"same_target":   before.TargetID == after.TargetID,
 		"url_changed":   before.URL != after.URL,
 		"title_changed": before.Title != after.Title,
+	}
+}
+
+func addPopupWaitToClickReport(report map[string]any, popupReport map[string]any) {
+	if report == nil || popupReport == nil {
+		return
+	}
+	if wait, ok := popupReport["wait"]; ok {
+		report["popup_wait"] = wait
+	}
+	if popup, ok := popupReport["popup"]; ok {
+		report["popup"] = popup
+	}
+	if lastEvent, ok := popupReport["last_event"]; ok {
+		report["last_popup_event"] = lastEvent
+	}
+	if nextCommands, ok := popupReport["next_commands"]; ok {
+		report["next_commands"] = nextCommands
 	}
 }
 

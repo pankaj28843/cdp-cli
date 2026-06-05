@@ -686,6 +686,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
 				} else {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
+					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 				}
 			} else if req.Method == "Page.captureScreenshot" {
@@ -734,6 +735,72 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	})
 	server = httptest.NewServer(mux)
 	return server
+}
+
+func syntheticPopupEventsForClick(targetInfos *[]map[string]any, sessionID string, params json.RawMessage) []map[string]any {
+	expression := string(params)
+	if !strings.Contains(expression, "__cdp_cli_click__") && !strings.Contains(expression, "__cdp_cli_click_point__") {
+		return nil
+	}
+	openerID := strings.TrimPrefix(sessionID, "session-")
+	if openerID == "" || openerID == sessionID {
+		return nil
+	}
+	var opener map[string]any
+	for _, target := range *targetInfos {
+		if target["targetId"] == openerID {
+			opener = target
+			break
+		}
+	}
+	if opener == nil || opener["popupOnClick"] != true {
+		return nil
+	}
+	popupID := syntheticStringValue(opener, "popupTargetId", "popup-page")
+	popupTitle := syntheticStringValue(opener, "popupTitle", "OAuth Popup")
+	popupURL := syntheticStringValue(opener, "popupURL", "https://example.test/oauth/callback")
+	if !syntheticTargetInfoExists(*targetInfos, popupID) {
+		*targetInfos = append(*targetInfos, map[string]any{
+			"targetId":        popupID,
+			"type":            "page",
+			"title":           popupTitle,
+			"url":             popupURL,
+			"attached":        false,
+			"openerId":        openerID,
+			"canAccessOpener": true,
+		})
+	}
+	return []map[string]any{{
+		"method": "Target.targetCreated",
+		"params": map[string]any{
+			"targetInfo": map[string]any{
+				"targetId":        popupID,
+				"type":            "page",
+				"title":           popupTitle,
+				"url":             popupURL,
+				"attached":        false,
+				"openerId":        openerID,
+				"canAccessOpener": true,
+			},
+		},
+	}}
+}
+
+func syntheticStringValue(values map[string]any, key, fallback string) string {
+	value, ok := values[key].(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func syntheticTargetInfoExists(targetInfos []map[string]any, targetID string) bool {
+	for _, target := range targetInfos {
+		if target["targetId"] == targetID {
+			return true
+		}
+	}
+	return false
 }
 
 func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, params json.RawMessage) {
