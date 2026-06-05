@@ -88,3 +88,23 @@ func TestBrowserBudgetTreatsWindowMappingFailureAsUnknown(t *testing.T) {
 		t.Fatalf("OverBudgetForNewPage = true, want false when only window count is unknown and tabs are under budget")
 	}
 }
+
+func TestBrowserBudgetUsesModeSpecificDefaultTabs(t *testing.T) {
+	client := budgetFakeClient{windows: map[string]int{}}
+
+	headed, err := cdp.BrowserBudget(context.Background(), client, cdp.BrowserResourceBudgetOptions{BrowserMode: "headed"})
+	if err != nil {
+		t.Fatalf("headed BrowserBudget returned error: %v", err)
+	}
+	if headed.MaxTabs != cdp.DefaultHeadedMaxTabs || headed.MaxTabsSource != "mode_default" || headed.BrowserMode != "headed" {
+		t.Fatalf("headed budget = %+v, want headed mode default", headed)
+	}
+
+	headless, err := cdp.BrowserBudget(context.Background(), client, cdp.BrowserResourceBudgetOptions{BrowserMode: "headless"})
+	if err != nil {
+		t.Fatalf("headless BrowserBudget returned error: %v", err)
+	}
+	if headless.MaxTabs != cdp.DefaultHeadlessMaxTabs || headless.MaxTabsSource != "mode_default" || headless.BrowserMode != "headless" {
+		t.Fatalf("headless budget = %+v, want headless mode default", headless)
+	}
+}

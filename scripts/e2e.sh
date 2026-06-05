@@ -22,6 +22,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --jq '.globals | index("--connection")' >/dev/null
 "$binary" describe --jq '.globals | index("--browser-mode")' >/dev/null
 "$binary" describe --jq '.globals | index("--browserMode")' >/dev/null
+"$binary" describe --jq '.globals | index("--max-tabs")' >/dev/null
 "$binary" describe --command "version" --json | jq -e '.ok == true and .commands.name == "version" and (.commands.examples | any(contains("version --json")))' >/dev/null
 "$binary" describe --command "pages" --json | jq -e '.ok == true and .commands.name == "pages" and (.commands.flags[] | select(.name == "title-contains" and .type == "string"))' >/dev/null
 "$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
@@ -192,7 +193,7 @@ rg -q "cleanup routine|page cleanup|clean" <<<"$help_output"
 page_cleanup_describe="$("$binary" describe --command "page cleanup" --json)"
 page_cleanup_examples="$(jq -r '.commands.examples[]' <<<"$page_cleanup_describe")"
 rg -q -- '--browser-mode headed page cleanup' <<<"$page_cleanup_examples"
-rg -q -- '--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force' <<<"$page_cleanup_examples"
+rg -q -- '--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25' <<<"$page_cleanup_examples"
 page_cleanup_short="$(jq -r '.commands.short' <<<"$page_cleanup_describe")"
 rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null

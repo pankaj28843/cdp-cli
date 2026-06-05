@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -66,7 +67,35 @@ func (a *app) connectionRemediationCommands() []string {
 }
 
 func (a *app) browserBudget(ctx context.Context, client cdp.CommandClient) (cdp.BrowserResourceBudget, error) {
-	return cdp.BrowserBudget(ctx, client, cdp.BrowserResourceBudgetOptions{ConnectionMode: a.connectionMode()})
+	return cdp.BrowserBudget(ctx, client, a.browserResourceBudgetOptions())
+}
+
+func (a *app) browserResourceBudgetOptions() cdp.BrowserResourceBudgetOptions {
+	browserMode := a.browserModeName()
+	maxTabs, source := a.maxTabsBudget(browserMode)
+	return cdp.BrowserResourceBudgetOptions{
+		MaxTabs:        maxTabs,
+		MaxTabsSource:  source,
+		BrowserMode:    browserMode,
+		ConnectionMode: a.connectionMode(),
+	}
+}
+
+func (a *app) maxTabsBudget(browserMode string) (int, string) {
+	if a.root != nil {
+		flags := a.root.PersistentFlags()
+		if flags.Changed("max-tabs") && a.opts.maxTabs > 0 {
+			return a.opts.maxTabs, "flag"
+		}
+	}
+	if strings.TrimSpace(os.Getenv("CDP_MAX_TABS")) != "" && a.opts.maxTabs > 0 {
+		return a.opts.maxTabs, "env"
+	}
+	cfg, err := config.Load(a.opts.config)
+	if err == nil && cfg.Browser.ResourceBudget.MaxTabs > 0 {
+		return cfg.Browser.ResourceBudget.MaxTabs, "config"
+	}
+	return cdp.DefaultMaxTabsForMode(browserMode), "mode_default"
 }
 
 func (a *app) enforceBrowserBudgetForNewPage(ctx context.Context, client cdp.CommandClient) (cdp.BrowserResourceBudget, error) {
@@ -122,7 +151,10 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		return health
 	}
 	client := daemon.RuntimeClient{Runtime: *status.Runtime}
-	budget, err := cdp.BrowserBudget(ctx, client, cdp.BrowserResourceBudgetOptions{ConnectionMode: status.ConnectionMode})
+	budgetOpts := a.browserResourceBudgetOptions()
+	budgetOpts.BrowserMode = status.BrowserMode
+	budgetOpts.ConnectionMode = status.ConnectionMode
+	budget, err := cdp.BrowserBudget(ctx, client, budgetOpts)
 	if err != nil {
 		health["state"] = "degraded"
 		health["reasons"] = appendStringReasons(health["reasons"], "target_list_failed")
@@ -261,6 +293,7 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 func applyBudgetToHealth(health map[string]any, budget cdp.BrowserResourceBudget) {
 	health["tab_count"] = budget.TabCount
 	health["max_tabs"] = budget.MaxTabs
+	health["max_tabs_source"] = budget.MaxTabsSource
 	health["tabs_over_budget"] = budget.TabsOverBudget
 	health["window_count"] = budget.WindowCount
 	health["max_windows"] = budget.MaxWindows

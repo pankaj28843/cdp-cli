@@ -264,6 +264,8 @@ func TestPageCleanupStateIsScopedByBrowserModeJSON(t *testing.T) {
 	var got struct {
 		Cleanup struct {
 			BrowserMode string `json:"browser_mode"`
+			Max         int    `json:"max"`
+			MaxSource   string `json:"max_source"`
 		} `json:"cleanup"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
@@ -271,6 +273,9 @@ func TestPageCleanupStateIsScopedByBrowserModeJSON(t *testing.T) {
 	}
 	if got.Cleanup.BrowserMode != "headless" {
 		t.Fatalf("cleanup browser mode = %q, want headless", got.Cleanup.BrowserMode)
+	}
+	if got.Cleanup.Max != cdp.DefaultHeadlessMaxTabs || got.Cleanup.MaxSource != "mode_default" {
+		t.Fatalf("cleanup max = %d source %q, want headless mode default", got.Cleanup.Max, got.Cleanup.MaxSource)
 	}
 
 	b, err := os.ReadFile(cleanupStatePath)
@@ -699,6 +704,9 @@ func TestPagesIncludeBrowserBudgetJSON(t *testing.T) {
 		OK     bool `json:"ok"`
 		Budget struct {
 			TabCount          int            `json:"tab_count"`
+			MaxTabs           int            `json:"max_tabs"`
+			MaxTabsSource     string         `json:"max_tabs_source"`
+			BrowserMode       string         `json:"browser_mode"`
 			WindowCount       int            `json:"window_count"`
 			WindowCountKnown  bool           `json:"window_count_known"`
 			AttachedPageCount int            `json:"attached_page_count"`
@@ -708,8 +716,99 @@ func TestPagesIncludeBrowserBudgetJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("pages output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Budget.TabCount != 2 || got.Budget.WindowCount != 2 || !got.Budget.WindowCountKnown || got.Budget.AttachedPageCount != 1 || got.Budget.TargetTypeCounts["service_worker"] != 1 {
+	if !got.OK || got.Budget.TabCount != 2 || got.Budget.MaxTabs != cdp.DefaultHeadedMaxTabs || got.Budget.MaxTabsSource != "mode_default" || got.Budget.BrowserMode != "headed" || got.Budget.WindowCount != 2 || !got.Budget.WindowCountKnown || got.Budget.AttachedPageCount != 1 || got.Budget.TargetTypeCounts["service_worker"] != 1 {
 		t.Fatalf("pages budget = %+v, want tab/window budget summary", got.Budget)
+	}
+}
+
+func TestPagesHeadlessBudgetDefaultAndOverrideJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	t.Setenv("CDP_STATE_DIR", stateDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		oldMode := os.Getenv("CDP_DAEMON_BROWSER_MODE")
+		_ = os.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+		defer os.Setenv("CDP_DAEMON_BROWSER_MODE", oldMode)
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+	defer func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("headless daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("headless daemon hold did not stop")
+		}
+	}()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headless pages exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Budget struct {
+			MaxTabs       int    `json:"max_tabs"`
+			MaxTabsSource string `json:"max_tabs_source"`
+			BrowserMode   string `json:"browser_mode"`
+		} `json:"budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("headless pages output is invalid JSON: %v", err)
+	}
+	if got.Budget.MaxTabs != cdp.DefaultHeadlessMaxTabs || got.Budget.MaxTabsSource != "mode_default" || got.Budget.BrowserMode != "headless" {
+		t.Fatalf("headless pages budget = %+v, want headless mode default", got.Budget)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "--max-tabs", "33", "pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headless pages override exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("headless pages override output is invalid JSON: %v", err)
+	}
+	if got.Budget.MaxTabs != 33 || got.Budget.MaxTabsSource != "flag" || got.Budget.BrowserMode != "headless" {
+		t.Fatalf("headless pages override budget = %+v, want flag override", got.Budget)
+	}
+}
+
+func TestPagesBudgetConfigOverrideJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"browser":{"resource_budget":{"max_tabs":33}}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages config override exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Budget struct {
+			MaxTabs       int    `json:"max_tabs"`
+			MaxTabsSource string `json:"max_tabs_source"`
+		} `json:"budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("pages config override output is invalid JSON: %v", err)
+	}
+	if got.Budget.MaxTabs != 33 || got.Budget.MaxTabsSource != "config" {
+		t.Fatalf("pages config override budget = %+v, want config max-tabs", got.Budget)
 	}
 }
 

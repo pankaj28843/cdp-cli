@@ -160,8 +160,8 @@ func TestDescribeIncludesBrowserModeMetadata(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("describe output is invalid JSON: %v", err)
 	}
-	if !containsTestString(got.Globals, "--browser-mode") || !containsTestString(got.Globals, "--browserMode") {
-		t.Fatalf("globals = %+v, want browser mode flags", got.Globals)
+	if !containsTestString(got.Globals, "--browser-mode") || !containsTestString(got.Globals, "--browserMode") || !containsTestString(got.Globals, "--max-tabs") {
+		t.Fatalf("globals = %+v, want browser mode and budget flags", got.Globals)
 	}
 
 	out.Reset()
@@ -285,6 +285,25 @@ func TestInvalidBrowserModeReturnsUsageEnvelope(t *testing.T) {
 				t.Fatalf("error envelope = %+v, want invalid_browser_mode usage", got)
 			}
 		})
+	}
+}
+
+func TestInvalidMaxTabsReturnsUsageEnvelope(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Execute(context.Background(), []string{"--max-tabs", "-1", "version", "--json"}, &out, &errOut, BuildInfo{})
+	if code != ExitUsage {
+		t.Fatalf("Execute exit code = %d, want %d; stdout=%s stderr=%s", code, ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK       bool   `json:"ok"`
+		Code     string `json:"code"`
+		ErrClass string `json:"err_class"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("error output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if got.OK || got.Code != "invalid_resource_budget" || got.ErrClass != "usage" {
+		t.Fatalf("error envelope = %+v, want invalid_resource_budget usage", got)
 	}
 }
 

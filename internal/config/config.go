@@ -40,12 +40,17 @@ type Config struct {
 }
 
 type BrowserConfig struct {
-	Mode     BrowserMode    `json:"mode,omitempty"`
-	Headed   HeadedConfig   `json:"headed,omitempty"`
-	Headless HeadlessConfig `json:"headless,omitempty"`
+	Mode           BrowserMode          `json:"mode,omitempty"`
+	Headed         HeadedConfig         `json:"headed,omitempty"`
+	Headless       HeadlessConfig       `json:"headless,omitempty"`
+	ResourceBudget ResourceBudgetConfig `json:"resource_budget,omitempty"`
 }
 
 type HeadedConfig struct{}
+
+type ResourceBudgetConfig struct {
+	MaxTabs int `json:"max_tabs,omitempty"`
+}
 
 type HeadlessConfig struct {
 	ProfileSeedStrategy string        `json:"profile_seed_strategy,omitempty"`
@@ -181,13 +186,18 @@ type fileConfig struct {
 }
 
 type fileBrowserConfig struct {
-	Mode     string              `json:"mode,omitempty"`
-	Headless *fileHeadlessConfig `json:"headless,omitempty"`
+	Mode           string                    `json:"mode,omitempty"`
+	Headless       *fileHeadlessConfig       `json:"headless,omitempty"`
+	ResourceBudget *fileResourceBudgetConfig `json:"resource_budget,omitempty"`
 }
 
 type fileHeadlessConfig struct {
 	ProfileSeedStrategy string `json:"profile_seed_strategy,omitempty"`
 	ProfileRefreshAfter string `json:"profile_refresh_after,omitempty"`
+}
+
+type fileResourceBudgetConfig struct {
+	MaxTabs int `json:"max_tabs,omitempty"`
 }
 
 func decode(data []byte) (Config, error) {
@@ -227,6 +237,12 @@ func decode(data []byte) (Config, error) {
 				cfg.Browser.Headless.ProfileRefreshAfter = d
 			}
 		}
+		if raw.Browser.ResourceBudget != nil {
+			if raw.Browser.ResourceBudget.MaxTabs < 0 {
+				return Config{}, fmt.Errorf("browser.resource_budget.max_tabs must be non-negative")
+			}
+			cfg.Browser.ResourceBudget.MaxTabs = raw.Browser.ResourceBudget.MaxTabs
+		}
 	}
 	return cfg, nil
 }
@@ -241,7 +257,10 @@ func encode(cfg Config) ([]byte, error) {
 	if cfg.Timeout > 0 {
 		raw.Timeout = cfg.Timeout.String()
 	}
-	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 {
+	if cfg.Browser.ResourceBudget.MaxTabs < 0 {
+		return nil, fmt.Errorf("browser.resource_budget.max_tabs must be non-negative")
+	}
+	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.ResourceBudget.MaxTabs > 0 {
 		raw.Browser = &fileBrowserConfig{}
 		if cfg.Browser.Mode != "" {
 			if !cfg.Browser.Mode.Valid() {
@@ -256,6 +275,9 @@ func encode(cfg Config) ([]byte, error) {
 			if cfg.Browser.Headless.ProfileRefreshAfter > 0 {
 				raw.Browser.Headless.ProfileRefreshAfter = cfg.Browser.Headless.ProfileRefreshAfter.String()
 			}
+		}
+		if cfg.Browser.ResourceBudget.MaxTabs > 0 {
+			raw.Browser.ResourceBudget = &fileResourceBudgetConfig{MaxTabs: cfg.Browser.ResourceBudget.MaxTabs}
 		}
 	}
 

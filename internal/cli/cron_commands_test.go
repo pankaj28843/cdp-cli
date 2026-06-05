@@ -29,7 +29,7 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "command -v flock", "--strategy managed"} {
+	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25", "command -v flock", "--strategy managed"} {
 		if !strings.Contains(afterFirst, want) {
 			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
 		}

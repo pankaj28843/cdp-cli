@@ -72,8 +72,11 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{
   "profile": "work",
   "timeout": "3s",
-  "browser": {
+    "browser": {
     "mode": "headless",
+    "resource_budget": {
+      "max_tabs": 33
+    },
     "headless": {
       "profile_seed_strategy": "managed",
       "profile_refresh_after": "24h"
@@ -105,6 +108,9 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	if got := cfg.Browser.Headless.ProfileRefreshAfter; got != 24*time.Hour {
 		t.Fatalf("ProfileRefreshAfter = %v, want 24h", got)
 	}
+	if got := cfg.Browser.ResourceBudget.MaxTabs; got != 33 {
+		t.Fatalf("ResourceBudget.MaxTabs = %d, want 33", got)
+	}
 }
 
 func TestLoadRejectsMalformedConfig(t *testing.T) {
@@ -116,6 +122,7 @@ func TestLoadRejectsMalformedConfig(t *testing.T) {
 		{"bad mode", `{"browser":{"mode":"hidden"}}`},
 		{"bad timeout", `{"timeout":"soon"}`},
 		{"bad refresh duration", `{"browser":{"headless":{"profile_refresh_after":"daily"}}}`},
+		{"bad max tabs", `{"browser":{"resource_budget":{"max_tabs":-1}}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -140,6 +147,9 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 			Headless: config.HeadlessConfig{
 				ProfileSeedStrategy: "managed",
 				ProfileRefreshAfter: 48 * time.Hour,
+			},
+			ResourceBudget: config.ResourceBudgetConfig{
+				MaxTabs: 33,
 			},
 		},
 	}
@@ -172,6 +182,9 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 	if loaded.Browser.Headless.ProfileRefreshAfter != 48*time.Hour {
 		t.Fatalf("loaded ProfileRefreshAfter = %v, want 48h", loaded.Browser.Headless.ProfileRefreshAfter)
 	}
+	if loaded.Browser.ResourceBudget.MaxTabs != 33 {
+		t.Fatalf("loaded ResourceBudget.MaxTabs = %d, want 33", loaded.Browser.ResourceBudget.MaxTabs)
+	}
 }
 
 func TestSaveRejectsInvalidBrowserMode(t *testing.T) {
@@ -179,6 +192,14 @@ func TestSaveRejectsInvalidBrowserMode(t *testing.T) {
 	cfg := config.Config{Browser: config.BrowserConfig{Mode: config.BrowserMode("hidden")}}
 	if err := config.Save(path, cfg); err == nil {
 		t.Fatalf("Save returned nil error, want invalid mode failure")
+	}
+}
+
+func TestSaveRejectsNegativeMaxTabs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Config{Browser: config.BrowserConfig{ResourceBudget: config.ResourceBudgetConfig{MaxTabs: -1}}}
+	if err := config.Save(path, cfg); err == nil {
+		t.Fatalf("Save returned nil error, want invalid max_tabs failure")
 	}
 }
 

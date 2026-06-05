@@ -8,13 +8,17 @@ import (
 )
 
 const (
-	DefaultMaxTabs    = 15
-	DefaultMaxWindows = 5
+	DefaultHeadedMaxTabs   = 15
+	DefaultHeadlessMaxTabs = 25
+	DefaultMaxTabs         = DefaultHeadedMaxTabs
+	DefaultMaxWindows      = 5
 )
 
 type BrowserResourceBudgetOptions struct {
 	MaxTabs        int
+	MaxTabsSource  string
 	MaxWindows     int
+	BrowserMode    string
 	ConnectionMode string
 }
 
@@ -26,6 +30,7 @@ type WindowMappingFailure struct {
 type BrowserResourceBudget struct {
 	TabCount              int                    `json:"tab_count"`
 	MaxTabs               int                    `json:"max_tabs"`
+	MaxTabsSource         string                 `json:"max_tabs_source,omitempty"`
 	TabsOverBudget        bool                   `json:"tabs_over_budget"`
 	WindowCount           int                    `json:"window_count"`
 	MaxWindows            int                    `json:"max_windows"`
@@ -34,6 +39,7 @@ type BrowserResourceBudget struct {
 	WindowMappingFailures []WindowMappingFailure `json:"window_mapping_failures,omitempty"`
 	TargetTypeCounts      map[string]int         `json:"target_type_counts"`
 	AttachedPageCount     int                    `json:"attached_page_count"`
+	BrowserMode           string                 `json:"browser_mode,omitempty"`
 	ConnectionMode        string                 `json:"connection_mode,omitempty"`
 	Warnings              []string               `json:"warnings,omitempty"`
 }
@@ -48,15 +54,20 @@ func BrowserBudget(ctx context.Context, client CommandClient, opts BrowserResour
 
 func BrowserBudgetForTargets(ctx context.Context, client CommandClient, targets []TargetInfo, opts BrowserResourceBudgetOptions) BrowserResourceBudget {
 	if opts.MaxTabs <= 0 {
-		opts.MaxTabs = DefaultMaxTabs
+		opts.MaxTabs = DefaultMaxTabsForMode(opts.BrowserMode)
+		if strings.TrimSpace(opts.MaxTabsSource) == "" {
+			opts.MaxTabsSource = "mode_default"
+		}
 	}
 	if opts.MaxWindows <= 0 {
 		opts.MaxWindows = DefaultMaxWindows
 	}
 	budget := BrowserResourceBudget{
 		MaxTabs:          opts.MaxTabs,
+		MaxTabsSource:    strings.TrimSpace(opts.MaxTabsSource),
 		MaxWindows:       opts.MaxWindows,
 		TargetTypeCounts: map[string]int{},
+		BrowserMode:      strings.TrimSpace(opts.BrowserMode),
 		ConnectionMode:   strings.TrimSpace(opts.ConnectionMode),
 	}
 	pageTargets := make([]TargetInfo, 0)
@@ -89,6 +100,13 @@ func BrowserBudgetForTargets(ctx context.Context, client CommandClient, targets 
 		budget.Warnings = append(budget.Warnings, "window count is conservative because Browser.getWindowForTarget failed for at least one page target")
 	}
 	return budget
+}
+
+func DefaultMaxTabsForMode(browserMode string) int {
+	if strings.EqualFold(strings.TrimSpace(browserMode), "headless") {
+		return DefaultHeadlessMaxTabs
+	}
+	return DefaultHeadedMaxTabs
 }
 
 func WindowForTarget(ctx context.Context, client CommandClient, targetID string) (int, error) {

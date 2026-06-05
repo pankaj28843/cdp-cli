@@ -232,7 +232,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp page cleanup": {
 			"cdp --browser-mode headed page cleanup --json",
-			"cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --json",
+			"cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25 --json",
 			"cdp page cleanup --workflow-created --close --include-url localhost --json",
 			"cdp page cleanup --target <target-id> --force --json",
 			"cdp page cleanup --close --max 10 --exclude-url localhost --json",

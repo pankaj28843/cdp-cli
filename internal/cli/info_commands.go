@@ -85,6 +85,8 @@ func (a *app) newDescribeCommand() *cobra.Command {
 					"--browserMode",
 					"--active-browser-probe",
 					"--connection",
+					"--allow-over-budget",
+					"--max-tabs",
 				},
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)

@@ -70,7 +70,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 			}
 			defer closeClient(ctx)
-			budget := cdp.BrowserBudgetForTargets(ctx, client, targets, cdp.BrowserResourceBudgetOptions{ConnectionMode: a.connectionMode()})
+			budget := cdp.BrowserBudgetForTargets(ctx, client, targets, a.browserResourceBudgetOptions())
 			pages := pageRows(targets)
 			pages = filterRowsContains(pages, "url", firstNonEmpty(urlContains, includeURL))
 			pages = filterRowsContains(pages, "title", titleContains)
@@ -514,6 +514,7 @@ attached.`,
 				return err
 			}
 			browserMode := a.browserModeName()
+			effectiveMax, maxSource := pageCleanupEffectiveMax(browserMode, max, cmd.Flags().Changed("max"))
 			connectionName := a.connectionStateName(ctx)
 			selectedID := a.selectedPageID(ctx)
 			records, err := loadPageCleanupRecords(ctx, store.Dir)
@@ -535,7 +536,7 @@ attached.`,
 				ForceTarget:     forceTarget,
 				Since:           since,
 				IdleFor:         idleFor,
-				Max:             max,
+				Max:             effectiveMax,
 				Now:             now,
 				Records:         records,
 			})
@@ -596,10 +597,13 @@ attached.`,
 					"force":             force,
 					"force_target":      strings.TrimSpace(forceTarget),
 					"since":             durationString(since),
+					"max":               effectiveMax,
+					"max_source":        maxSource,
+					"max_unlimited":     effectiveMax == 0,
 					"selected_page":     selectedID,
 					"next_commands": []string{
 						"cdp page cleanup --json",
-						"cdp page cleanup --close --max 10 --json",
+						modeScopedCommand(browserMode, fmt.Sprintf("page cleanup --close --max %d --json", pageCleanupDefaultMaxForMode(browserMode))),
 						"cdp cron status --json",
 					},
 				},
@@ -618,8 +622,22 @@ attached.`,
 	cmd.Flags().StringVar(&forceTarget, "target", "", "force-close a specific page target id or unique prefix when used with --force")
 	cmd.Flags().DurationVar(&since, "since", 0, "only consider cleanup records first seen within this duration; 0 disables the filter")
 	cmd.Flags().DurationVar(&idleFor, "idle-for", 30*time.Minute, "minimum duration a page must remain inactive before --close can close it")
-	cmd.Flags().IntVar(&max, "max", 10, "maximum ready candidate pages to close or report; use 0 for no limit")
+	cmd.Flags().IntVar(&max, "max", 0, "maximum ready candidate pages to close or report; use 0 for no limit; default is 10 headed or 25 headless")
 	return cmd
+}
+
+func pageCleanupEffectiveMax(browserMode string, flagMax int, flagChanged bool) (int, string) {
+	if flagChanged {
+		return flagMax, "flag"
+	}
+	return pageCleanupDefaultMaxForMode(browserMode), "mode_default"
+}
+
+func pageCleanupDefaultMaxForMode(browserMode string) int {
+	if cleanupBrowserMode(browserMode) == "headless" {
+		return cdp.DefaultHeadlessMaxTabs
+	}
+	return 10
 }
 
 type cleanupOptions struct {
