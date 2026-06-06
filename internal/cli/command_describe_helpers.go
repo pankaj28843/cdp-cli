@@ -288,6 +288,7 @@ func commandExamples(path string) []string {
 			"cdp fill input[name='email'] user@example.com --json",
 			"cdp fill 'Search Wikipedia' Aarhus --by label --json",
 			"cdp fill 'Search Wikipedia' Aarhus --by label --wait-selector '.suggestions' --json",
+			"cdp fill 'Search Wikipedia' Aarhus --by label --wait-url-contains /search --json",
 			"cdp fill 'Search Wikipedia' Aarhus --by label --trial --json",
 			"cdp fill 'input[type=hidden][name=token]' value --force --json",
 			"cdp fill textarea#notes \"first line\\nsecond line\" --url-contains localhost --json",

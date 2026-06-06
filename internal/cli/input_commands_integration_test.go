@@ -993,6 +993,60 @@ func TestFillWaitSelectorJSON(t *testing.T) {
 	}
 }
 
+func TestFillWaitURLByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"fill", "Search", "typed value", "--by", "label", "--wait-url-contains", "results", "--poll", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("fill wait url exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Target           struct {
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		Fill struct {
+			Selector string `json:"selector"`
+			URL      string `json:"url"`
+			Title    string `json:"title"`
+			Filled   bool   `json:"filled"`
+			Verified *bool  `json:"verified"`
+			Value    string `json:"value"`
+		} `json:"fill"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Condition    string `json:"condition"`
+			URL          string `json:"url"`
+			Title        string `json:"title"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+		Locator struct {
+			Strict bool `json:"strict"`
+		} `json:"locator"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("fill wait url output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "filled" || got.ResolvedSelector != "input#q" || got.Fill.Selector != "input#q" || !got.Fill.Filled || got.Fill.Verified == nil || !*got.Fill.Verified || got.Fill.Value != "typed value" || got.Verification.Kind != "url" || got.Verification.Needle != "results" || got.Verification.Condition != "contains" || !strings.Contains(got.Verification.URL, "results") || got.Verification.Title != "Example App" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "100ms" || !got.Locator.Strict {
+		t.Fatalf("fill wait url = %+v, want filled value with matched URL verification", got)
+	}
+	if got.Target.URL != got.Verification.URL || got.Target.Title != "Example App" || got.Fill.URL != got.Verification.URL || got.Fill.Title != "Example App" {
+		t.Fatalf("fill wait url target/result = %+v, want final URL/title evidence", got)
+	}
+}
+
 func TestFillTrialByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

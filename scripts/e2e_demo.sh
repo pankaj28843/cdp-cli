@@ -382,6 +382,11 @@ type_url_probe="$(date +%s%N)"
   | jq -e '.ok == true' >/dev/null
 "$binary" type "Agent input" "url" --by label --wait-url-contains "$type_url_probe" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg probe "$type_url_probe" '.ok == true and .action == "typed" and .type.typing == true and .type.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and (.target.url | contains($probe)) and (.type.url | contains($probe))' >/dev/null
+fill_url_probe="$(date +%s%N)"
+"$binary" eval "window.__cdpFillURLProbe = '$fill_url_probe'; document.querySelector('#agent-input').addEventListener('input', () => { history.pushState({}, '', '/fill-url?fill_wait_url=' + window.__cdpFillURLProbe); }, { once: true })" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" fill "Agent input" "fill-url" --by label --wait-url-contains "$fill_url_probe" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg probe "$fill_url_probe" '.ok == true and .action == "filled" and .fill.filled == true and .fill.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and (.target.url | contains($probe)) and (.fill.url | contains($probe))' >/dev/null
 idle_probe="$(date +%s%N)"
 wait_idle_output="$state_dir/wait-network-idle.json"
 "$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &

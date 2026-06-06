@@ -434,7 +434,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"fill": {
 			Name:        "fill",
-			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-fill state.",
+			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks. Optional text, selector, or URL waits verify post-fill state.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when fill command completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: filled for value updates, trial for --trial checks, or blocked inside actionability_failed error data."},
@@ -443,7 +443,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective actionability evidence for attached, visible, enabled, editable, supporting checks, force, and skipped-check state."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before filling."},
-				{Name: "verification", Type: "wait_result", Required: false, Description: "Text or selector wait result when --wait-text or --wait-selector is used."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, or URL wait result when --wait-text, --wait-selector, --wait-url, or --wait-url-contains is used."},
 			},
 		},
 		"select": {

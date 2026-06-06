@@ -1269,6 +1269,8 @@ func (a *app) newFillCommand() *cobra.Command {
 	var force bool
 	var waitText string
 	var waitSelector string
+	var waitURL string
+	var waitURLContains string
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "fill <selector-or-locator> <value>",
@@ -1278,16 +1280,27 @@ func (a *app) newFillCommand() *cobra.Command {
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
-			hasWaitText := strings.TrimSpace(waitText) != ""
-			hasWaitSelector := strings.TrimSpace(waitSelector) != ""
-			if hasWaitText && hasWaitSelector {
-				return commandError("usage", "usage", "use only one fill wait mode: --wait-text or --wait-selector", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-selector '.suggestions' --json"})
+			stateWaitCount := 0
+			if strings.TrimSpace(waitText) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitSelector) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitURL) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitURLContains) != "" {
+				stateWaitCount++
+			}
+			if stateWaitCount > 1 {
+				return commandError("usage", "usage", "use only one fill wait mode: --wait-text, --wait-selector, --wait-url, or --wait-url-contains", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-url-contains /results --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-text Results --poll 250ms --json"})
 			}
-			if trial && (hasWaitText || hasWaitSelector) {
-				return commandError("usage", "usage", "--trial does not change the page, so it cannot use fill wait flags", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-text Results --json"})
+			if trial && stateWaitCount > 0 {
+				return commandError("usage", "usage", "--trial does not change the page, so it cannot use fill wait flags", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-url-contains /results --json"})
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -1370,14 +1383,27 @@ func (a *app) newFillCommand() *cobra.Command {
 			}
 			verified := true
 			var verification *waitResult
-			if hasWaitText || hasWaitSelector {
-				wait, err := waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+			if stateWaitCount > 0 {
+				wait, err := waitForActionVerification(ctx, session, poll, actionWaitCriteria{
+					Text:        waitText,
+					Selector:    waitSelector,
+					URL:         waitURL,
+					URLContains: waitURLContains,
+				})
 				if err != nil {
 					return err
 				}
 				verified = wait.Matched
 				result.Verified = &verified
 				verification = &wait
+				if wait.Kind == "url" && strings.TrimSpace(wait.URL) != "" {
+					result.URL = wait.URL
+					result.Title = wait.Title
+					target.URL = wait.URL
+					if strings.TrimSpace(wait.Title) != "" {
+						target.Title = wait.Title
+					}
+				}
 			}
 			report := map[string]any{
 				"ok":            verified,
@@ -1408,6 +1434,8 @@ func (a *app) newFillCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential fill actionability checks and record skipped checks in JSON")
 	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
 	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().StringVar(&waitURL, "wait-url", "", "verify by waiting until the page URL exactly matches this value")
+	cmd.Flags().StringVar(&waitURLContains, "wait-url-contains", "", "verify by waiting until the page URL contains this string")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }
