@@ -624,10 +624,11 @@ func commandExamples(path string) []string {
 	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --json"}
 	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}
 	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json"}
-	examples["cdp emulate"] = []string{"cdp emulate viewport --preset mobile --json", "cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json", "cdp emulate timezone --timezone-id UTC --json", "cdp emulate locale --locale de-DE --json", "cdp emulate network --preset slow-3g --json"}
+	examples["cdp emulate"] = []string{"cdp emulate viewport --preset mobile --json", "cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json", "cdp emulate timezone --timezone-id UTC --json", "cdp emulate locale --locale de-DE --json", "cdp emulate color-scheme --scheme dark --json", "cdp emulate network --preset slow-3g --json"}
 	examples["cdp emulate viewport"] = []string{"cdp emulate viewport --width 390 --height 844 --mobile --dpr 1 --json", "cdp emulate viewport --preset iphone-12 --json"}
 	examples["cdp emulate clear"] = []string{"cdp emulate clear --json"}
 	examples["cdp emulate media"] = []string{"cdp emulate media --prefers-color-scheme dark --json"}
+	examples["cdp emulate color-scheme"] = []string{"cdp emulate color-scheme --scheme dark --json", "cdp emulate color-scheme --scheme light --json"}
 	examples["cdp emulate user-agent"] = []string{"cdp emulate user-agent --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36' --platform Linux --json"}
 	examples["cdp emulate geolocation"] = []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --accuracy 100 --json"}
 	examples["cdp emulate timezone"] = []string{"cdp emulate timezone --timezone-id UTC --json", "cdp emulate timezone --timezone-id America/New_York --json"}

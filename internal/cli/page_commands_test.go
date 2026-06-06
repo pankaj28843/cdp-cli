@@ -2217,6 +2217,39 @@ func TestEmulateLocaleJSON(t *testing.T) {
 	}
 }
 
+func TestEmulateColorSchemeJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "color-scheme", "--scheme", "dark", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate color-scheme exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			ColorScheme struct {
+				Scheme         string              `json:"scheme"`
+				ObservedScheme string              `json:"observed_scheme"`
+				Verified       bool                `json:"verified"`
+				MediaFeatures  []map[string]string `json:"media_features"`
+			} `json:"color_scheme"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate color-scheme output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.ColorScheme.Scheme != "dark" || got.Emulation.ColorScheme.ObservedScheme != "dark" || !got.Emulation.ColorScheme.Verified || len(got.Emulation.ColorScheme.MediaFeatures) != 1 || !strings.Contains(got.Emulation.CleanupCommand, "cdp emulate clear") {
+		t.Fatalf("emulate color-scheme output = %+v, want applied color-scheme override and cleanup command", got)
+	}
+}
+
 func TestEmulateCPUJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -2269,8 +2302,8 @@ func TestEmulateClearJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("emulate clear output is invalid JSON: %v", err)
 	}
-	if !got.OK || !containsString(got.Emulation.ClearedOverrides, "network") || !containsString(got.Emulation.ClearedOverrides, "timezone") || !containsString(got.Emulation.ClearedOverrides, "locale") {
-		t.Fatalf("emulate clear output = %+v, want network, timezone, and locale cleared", got)
+	if !got.OK || !containsString(got.Emulation.ClearedOverrides, "network") || !containsString(got.Emulation.ClearedOverrides, "timezone") || !containsString(got.Emulation.ClearedOverrides, "locale") || !containsString(got.Emulation.ClearedOverrides, "media") {
+		t.Fatalf("emulate clear output = %+v, want network, timezone, locale, and media cleared", got)
 	}
 }
 

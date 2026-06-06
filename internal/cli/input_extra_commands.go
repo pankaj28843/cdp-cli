@@ -764,6 +764,7 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateViewportCommand())
 	cmd.AddCommand(a.newEmulateClearCommand())
 	cmd.AddCommand(a.newEmulateMediaCommand())
+	cmd.AddCommand(a.newEmulateColorSchemeCommand())
 	cmd.AddCommand(a.newEmulateUserAgentCommand())
 	cmd.AddCommand(a.newEmulateGeolocationCommand())
 	cmd.AddCommand(a.newEmulateTimezoneCommand())
@@ -885,6 +886,41 @@ func (a *app) newEmulateMediaCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&colorScheme, "prefers-color-scheme", "", "emulate prefers-color-scheme: light or dark")
+	return cmd
+}
+
+func (a *app) newEmulateColorSchemeCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, scheme string
+	cmd := &cobra.Command{Use: "color-scheme", Short: "Apply prefers-color-scheme emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		scheme = strings.ToLower(strings.TrimSpace(scheme))
+		if scheme != "dark" && scheme != "light" {
+			return commandError("usage", "usage", "--scheme must be dark or light", ExitUsage, []string{"cdp emulate color-scheme --scheme dark --json", "cdp emulate color-scheme --scheme light --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		features := []map[string]string{{"name": "prefers-color-scheme", "value": scheme}}
+		if err := execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{"features": features}, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate color-scheme: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setEmulatedMedia --json"})
+		}
+		colorScheme := map[string]any{"scheme": scheme, "media_features": features}
+		if result, err := session.Evaluate(ctx, `matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"`, false); err == nil && result.Exception == nil {
+			var observed string
+			if err := json.Unmarshal(result.Object.Value, &observed); err == nil && strings.TrimSpace(observed) != "" {
+				colorScheme["observed_scheme"] = observed
+				colorScheme["verified"] = observed == scheme
+			}
+		}
+		return a.render(ctx, "color-scheme emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"color_scheme": colorScheme, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&scheme, "scheme", "", "prefers-color-scheme value to emulate: dark or light")
 	return cmd
 }
 

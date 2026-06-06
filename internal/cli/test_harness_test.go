@@ -1028,6 +1028,9 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 	if strings.Contains(req.Expression, "Intl.DateTimeFormat().resolvedOptions().locale") {
 		return map[string]any{"result": map[string]any{"type": "string", "value": "de-DE"}}
 	}
+	if strings.Contains(req.Expression, "prefers-color-scheme") {
+		return map[string]any{"result": map[string]any{"type": "string", "value": "dark"}}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_locator_find__") {
 		by := expressionStringArg(req.Expression, "const by = ")
 		query := expressionStringArg(req.Expression, "const query = ")

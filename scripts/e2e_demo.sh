@@ -144,8 +144,10 @@ fi
   | jq -e '.ok == true and .emulation.timezone.timezone_id == "UTC" and .emulation.timezone.observed_timezone == "UTC" and .emulation.timezone.verified == true and (.emulation.cleanup_command | contains("cdp emulate clear"))' >/dev/null
 "$binary" emulate locale --locale de-DE --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .emulation.locale.locale == "de-DE" and .emulation.locale.observed_locale == "de-DE" and .emulation.locale.verified == true and (.emulation.cleanup_command | contains("cdp emulate clear"))' >/dev/null
+"$binary" emulate color-scheme --scheme dark --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .emulation.color_scheme.scheme == "dark" and .emulation.color_scheme.observed_scheme == "dark" and .emulation.color_scheme.verified == true and (.emulation.cleanup_command | contains("cdp emulate clear"))' >/dev/null
 "$binary" emulate clear --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and (.emulation.cleared_overrides | index("timezone")) and (.emulation.cleared_overrides | index("locale"))' >/dev/null
+  | jq -e '.ok == true and (.emulation.cleared_overrides | index("timezone")) and (.emulation.cleared_overrides | index("locale")) and (.emulation.cleared_overrides | index("media"))' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
   | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
 require_artifact "$state_dir/page-load.local.json"
