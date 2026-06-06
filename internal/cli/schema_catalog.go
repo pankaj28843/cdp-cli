@@ -1253,7 +1253,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective fill/type actionability evidence, including --force skipped-check state."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before input."},
-				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, or URL wait result when --wait-text, --wait-selector, --wait-url, or --wait-url-contains is used."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, URL, or load-state wait result when --wait-text, --wait-selector, --wait-url, --wait-url-contains, or --wait-load-state is used."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Suggested follow-up commands for pages, snapshot/text evidence, and focused-state verification."},
 				{Name: "target_refresh", Type: "object", Required: false, Description: "Target metadata refresh failure details when final target evidence could not be refreshed."},
 			},

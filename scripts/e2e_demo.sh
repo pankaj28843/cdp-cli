@@ -397,6 +397,8 @@ suggestion_probe="$(date +%s%N)"
   | jq -e '.ok == true' >/dev/null
 "$binary" workflow submit-search "Agent input" "workflow-suggestion" --by label --suggestion "Click target" --suggestion-by role --suggestion-role button --submit none --wait-url-contains "$suggestion_probe" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg probe "$suggestion_probe" '.ok == true and .action == "submit_search" and .workflow.name == "submit-search" and .workflow.suggestion_requested == true and .workflow.suggestion_selected == true and .workflow.submit == "none" and .suggestion.strict == true and .suggestion.matches[0].selector_hint == "button#action" and .suggestion_selector == "button#action" and .suggestion_click.clicked == true and .suggestion_click.verified == true and .verification.kind == "url" and .verification.needle == $probe and (.final_target.url | contains($probe))' >/dev/null
+"$binary" workflow submit-search "Agent input" "workflow-load-state" --by label --submit none --wait-load-state domcontentloaded --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .workflow.name == "submit-search" and .workflow.wait_requested == true and .workflow.verified == true and .fill.filled == true and .fill.verified == true and .verification.kind == "load-state" and .verification.state == "domcontentloaded" and (.verification.ready_state == "interactive" or .verification.ready_state == "complete") and .verification.matched == true' >/dev/null
 idle_probe="$(date +%s%N)"
 wait_idle_output="$state_dir/wait-network-idle.json"
 "$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &

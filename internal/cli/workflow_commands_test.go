@@ -322,6 +322,68 @@ func TestWorkflowSubmitSearchSuggestionNotFoundJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowSubmitSearchWaitLoadStateJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "submit-search", "Search", "typed value",
+		"--by", "label",
+		"--submit", "none",
+		"--wait-load-state", "domcontentloaded",
+		"--poll", "100ms",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow submit-search wait load-state exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool `json:"ok"`
+		Workflow struct {
+			Name          string `json:"name"`
+			WaitRequested bool   `json:"wait_requested"`
+			Verified      bool   `json:"verified"`
+			PollInterval  string `json:"poll_interval"`
+		} `json:"workflow"`
+		Fill struct {
+			Filled   bool  `json:"filled"`
+			Verified *bool `json:"verified"`
+		} `json:"fill"`
+		Verification struct {
+			Kind         string         `json:"kind"`
+			State        string         `json:"state"`
+			ReadyState   string         `json:"ready_state"`
+			Condition    string         `json:"condition"`
+			Matched      bool           `json:"matched"`
+			URL          string         `json:"url"`
+			Title        string         `json:"title"`
+			PollInterval string         `json:"poll_interval"`
+			Evidence     map[string]any `json:"evidence"`
+		} `json:"verification"`
+		FinalTarget struct {
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"final_target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow submit-search wait load-state output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Workflow.Name != "submit-search" || !got.Workflow.WaitRequested || !got.Workflow.Verified || got.Workflow.PollInterval != "100ms" || !got.Fill.Filled || got.Fill.Verified == nil || !*got.Fill.Verified {
+		t.Fatalf("workflow submit-search wait load-state metadata = %+v fill=%+v", got.Workflow, got.Fill)
+	}
+	if got.Verification.Kind != "load-state" || got.Verification.State != "domcontentloaded" || got.Verification.ReadyState != "complete" || !got.Verification.Matched || got.Verification.URL != "https://example.test/app" || got.Verification.Title != "Example App" || !strings.Contains(got.Verification.Condition, "interactive or complete") || got.Verification.Evidence["ready_state"] != "complete" || got.Verification.PollInterval != "100ms" {
+		t.Fatalf("workflow submit-search load-state verification = %+v, want matched load-state evidence", got.Verification)
+	}
+	if got.FinalTarget.URL != got.Verification.URL || got.FinalTarget.Title != got.Verification.Title {
+		t.Fatalf("workflow submit-search load-state target = %+v, want final load-state URL/title", got.FinalTarget)
+	}
+}
+
 func TestWorkflowActionCaptureJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

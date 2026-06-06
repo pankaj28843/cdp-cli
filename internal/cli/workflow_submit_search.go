@@ -31,6 +31,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 	var waitSelector string
 	var waitURL string
 	var waitURLContains string
+	var waitLoadState string
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "submit-search <input-selector-or-locator> <query>",
@@ -78,8 +79,17 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 			if strings.TrimSpace(waitURLContains) != "" {
 				stateWaitCount++
 			}
+			var loadState string
+			if strings.TrimSpace(waitLoadState) != "" {
+				var err error
+				loadState, err = normalizeLoadState(waitLoadState)
+				if err != nil {
+					return err
+				}
+				stateWaitCount++
+			}
 			if stateWaitCount > 1 {
-				return commandError("usage", "usage", "use only one submit-search wait mode: --wait-text, --wait-selector, --wait-url, or --wait-url-contains", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --wait-url-contains /results --json"})
+				return commandError("usage", "usage", "use only one submit-search wait mode: --wait-text, --wait-selector, --wait-url, --wait-url-contains, or --wait-load-state", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --wait-url-contains /results --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --wait-text Results --poll 250ms --json"})
@@ -257,10 +267,22 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				verification = &wait
 				submitSearchSetVerified(fill, typed, press, suggestionClick, verified)
 				submitSearchApplyWaitURL(fill, typed, press, suggestionClick, wait)
+			} else if loadState != "" {
+				start := time.Now()
+				wait, err := waitForLoadStateCondition(ctx, session, poll, loadState)
+				wait.ElapsedMS = time.Since(start).Milliseconds()
+				wait.PollInterval = poll.String()
+				if err != nil && ctx.Err() == nil {
+					return err
+				}
+				verified = err == nil && wait.Matched && wait.Error == nil
+				verification = &wait
+				submitSearchSetVerified(fill, typed, press, suggestionClick, verified)
+				submitSearchApplyWaitURL(fill, typed, press, suggestionClick, wait)
 			}
 
 			finalTarget, refreshErr := refreshedClickTarget(ctx, client, beforeTarget)
-			if verification != nil && verification.Kind == "url" && strings.TrimSpace(verification.URL) != "" {
+			if verification != nil && (verification.Kind == "url" || verification.Kind == "load-state") && strings.TrimSpace(verification.URL) != "" {
 				finalTarget.URL = verification.URL
 				if strings.TrimSpace(verification.Title) != "" {
 					finalTarget.Title = verification.Title
@@ -289,7 +311,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 					"suggestion_requested": suggestionOpts.Requested(),
 					"suggestion_selected":  suggestionClick != nil && suggestionClick.Clicked,
 					"suggestion_strategy":  suggestionOpts.Strategy,
-					"wait_requested":       waitCriteria.Has(),
+					"wait_requested":       waitCriteria.Has() || loadState != "",
 					"verified":             verified,
 					"poll_interval":        poll.String(),
 				},
@@ -358,6 +380,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
 	cmd.Flags().StringVar(&waitURL, "wait-url", "", "verify by waiting until the page URL exactly matches this value")
 	cmd.Flags().StringVar(&waitURLContains, "wait-url-contains", "", "verify by waiting until the page URL contains this string")
+	cmd.Flags().StringVar(&waitLoadState, "wait-load-state", "", "verify by waiting for document load state: load or domcontentloaded")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }
@@ -504,7 +527,7 @@ func submitSearchSetVerified(fill *fillResult, typed *typeResult, press *pressRe
 }
 
 func submitSearchApplyWaitURL(fill *fillResult, typed *typeResult, press *pressResult, suggestionClick *clickResult, wait waitResult) {
-	if wait.Kind != "url" || strings.TrimSpace(wait.URL) == "" {
+	if strings.TrimSpace(wait.URL) == "" || wait.Kind != "url" && wait.Kind != "load-state" {
 		return
 	}
 	if fill != nil {
