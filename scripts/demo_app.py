@@ -83,6 +83,7 @@ DEMO_HTML = """<!doctype html>
       <button id="download-action">Download report</button>
       <button id="request-action">Send request</button>
       <button id="response-action">Save via API</button>
+      <button id="url-action">Change URL</button>
       <button id="dismiss" class="hidden-fixture">Dismiss</button>
       <input id="hidden-agent-input" class="hidden-fixture" value="hidden initial">
       <label class="agent-form">
@@ -192,6 +193,11 @@ DEMO_HTML = """<!doctype html>
     document.querySelector('#response-action').addEventListener('click', () => {
       const probe = window.__cdpClickResponseProbe || 'default';
       fetch('/api/ok?click_wait_response=' + encodeURIComponent(probe)).catch(error => console.warn('response click failed', error));
+    });
+    document.querySelector('#url-action').addEventListener('click', () => {
+      const probe = window.__cdpClickURLProbe || 'default';
+      history.pushState({probe}, '', '/url-result?click_wait_url=' + encodeURIComponent(probe));
+      document.querySelector('#status').textContent = 'URL changed: ' + probe;
     });
     document.querySelector('#agent-input').addEventListener('input', event => {
       document.querySelector('#status').textContent = 'Suggestion ready: ' + event.target.value;

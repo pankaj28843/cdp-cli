@@ -151,6 +151,8 @@ func (a *app) newClickCommand() *cobra.Command {
 	var activate bool
 	var waitText string
 	var waitSelector string
+	var waitURL string
+	var waitURLContains string
 	var waitPopup bool
 	var waitPopupURL string
 	var waitPopupTitle string
@@ -200,8 +202,21 @@ func (a *app) newClickCommand() *cobra.Command {
 			if strategy != "auto" && strategy != "dom" && strategy != "raw-input" {
 				return commandError("usage", "usage", "--strategy must be auto, dom, or raw-input", ExitUsage, []string{"cdp click main --strategy raw-input --json"})
 			}
-			if strings.TrimSpace(waitText) != "" && strings.TrimSpace(waitSelector) != "" {
-				return commandError("usage", "usage", "use only one of --wait-text or --wait-selector", ExitUsage, []string{"cdp click button --wait-text Done --json"})
+			stateWaitCount := 0
+			if strings.TrimSpace(waitText) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitSelector) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitURL) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitURLContains) != "" {
+				stateWaitCount++
+			}
+			if stateWaitCount > 1 {
+				return commandError("usage", "usage", "use only one state wait mode: --wait-text, --wait-selector, --wait-url, or --wait-url-contains", ExitUsage, []string{"cdp click button --wait-url-contains /results --json"})
 			}
 			waitPopup = waitPopup || strings.TrimSpace(waitPopupURL) != "" || strings.TrimSpace(waitPopupTitle) != ""
 			waitDownload = waitDownload || cmd.Flags().Changed("wait-download-url") || cmd.Flags().Changed("wait-download-filename") || cmd.Flags().Changed("wait-download-state") || cmd.Flags().Changed("download-dir") || cmd.Flags().Changed("wait-download-redact")
@@ -210,7 +225,7 @@ func (a *app) newClickCommand() *cobra.Command {
 			waitRequest = waitRequest || cmd.Flags().Changed("wait-request-url") || cmd.Flags().Changed("wait-request-match-url") || cmd.Flags().Changed("wait-request-method") || cmd.Flags().Changed("wait-request-resource-type") || cmd.Flags().Changed("wait-request-redact")
 			waitResponse = waitResponse || cmd.Flags().Changed("wait-response-url") || cmd.Flags().Changed("wait-response-match-url") || cmd.Flags().Changed("wait-response-method") || cmd.Flags().Changed("wait-response-resource-type") || cmd.Flags().Changed("wait-response-status") || cmd.Flags().Changed("wait-response-status-min") || cmd.Flags().Changed("wait-response-status-max") || cmd.Flags().Changed("wait-response-redact")
 			waitModeCount := 0
-			if strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "" {
+			if stateWaitCount > 0 {
 				waitModeCount++
 			}
 			if waitPopup {
@@ -232,13 +247,13 @@ func (a *app) newClickCommand() *cobra.Command {
 				waitModeCount++
 			}
 			if waitModeCount > 1 {
-				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-download, --wait-dialog, --wait-file-chooser, --wait-request, --wait-response, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
+				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-download, --wait-dialog, --wait-file-chooser, --wait-request, --wait-response, --wait-text, --wait-selector, --wait-url, or --wait-url-contains", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
 			}
-			if trial && (strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "") {
-				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-text or --wait-selector", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
+			if trial && stateWaitCount > 0 {
+				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use state wait flags", ExitUsage, []string{"cdp click 'Search' --by role --role button --wait-url-contains /results --json"})
 			}
 			if trial && waitPopup {
 				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-popup", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
@@ -556,8 +571,14 @@ func (a *app) newClickCommand() *cobra.Command {
 
 			verified := true
 			var verification *waitResult
-			if strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "" {
-				wait, err := waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+			stateWaitCriteria := actionWaitCriteria{
+				Text:        waitText,
+				Selector:    waitSelector,
+				URL:         waitURL,
+				URLContains: waitURLContains,
+			}
+			if stateWaitCriteria.Has() {
+				wait, err := waitForActionVerification(ctx, session, poll, stateWaitCriteria)
 				if err != nil {
 					return err
 				}
@@ -572,7 +593,7 @@ func (a *app) newClickCommand() *cobra.Command {
 						return invalidSelectorError(selector, fallback.Error, "cdp click main --strategy raw-input --json")
 					}
 					result = fallback
-					wait, err = waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+					wait, err = waitForActionVerification(ctx, session, poll, stateWaitCriteria)
 					if err != nil {
 						return err
 					}
@@ -696,7 +717,7 @@ func (a *app) newClickCommand() *cobra.Command {
 				addNetworkWaitToClickReport(report, networkWaitKind, networkReport)
 			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
-				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, a.clickTimeout(), result, verification)
+				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, waitURL, waitURLContains, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
 				if autoScroll != nil {
 					diagnostics["auto_scroll"] = autoScroll
@@ -762,6 +783,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			if waitResponse {
 				human = fmt.Sprintf("clicked-response\t%s\t%s", target.TargetID, result.Selector)
 			}
+			if strings.TrimSpace(waitURL) != "" || strings.TrimSpace(waitURLContains) != "" {
+				human = fmt.Sprintf("clicked-url\t%s\t%s", target.TargetID, result.Selector)
+			}
 			if !verified {
 				human = fmt.Sprintf("click-unverified\t%s\t%s", target.TargetID, result.Selector)
 			}
@@ -776,6 +800,8 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&activate, "activate", false, "bring the target page to the foreground before clicking")
 	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
 	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().StringVar(&waitURL, "wait-url", "", "verify by waiting until the page URL exactly matches this URL")
+	cmd.Flags().StringVar(&waitURLContains, "wait-url-contains", "", "verify by waiting until the page URL contains this string")
 	cmd.Flags().BoolVar(&waitPopup, "wait-popup", false, "wait for a popup or new tab opened by this click")
 	cmd.Flags().StringVar(&waitPopupURL, "wait-popup-url", "", "substring that the popup URL must contain; implies --wait-popup")
 	cmd.Flags().StringVar(&waitPopupTitle, "wait-popup-title", "", "substring that the popup title must contain; implies --wait-popup")
@@ -968,23 +994,54 @@ func locatorActionFindCommand(query string, opts locatorActionOptions) string {
 	return command + " --json"
 }
 
+type actionWaitCriteria struct {
+	Text        string
+	Selector    string
+	URL         string
+	URLContains string
+}
+
+func (c actionWaitCriteria) Has() bool {
+	return strings.TrimSpace(c.Text) != "" ||
+		strings.TrimSpace(c.Selector) != "" ||
+		strings.TrimSpace(c.URL) != "" ||
+		strings.TrimSpace(c.URLContains) != ""
+}
+
 func waitForClickVerification(ctx context.Context, session *cdp.PageSession, poll time.Duration, waitText, waitSelector string) (waitResult, error) {
+	return waitForActionVerification(ctx, session, poll, actionWaitCriteria{Text: waitText, Selector: waitSelector})
+}
+
+func waitForActionVerification(ctx context.Context, session *cdp.PageSession, poll time.Duration, criteria actionWaitCriteria) (waitResult, error) {
 	start := time.Now()
 	kind := "text"
-	value := strings.TrimSpace(waitText)
+	value := strings.TrimSpace(criteria.Text)
 	label := "wait text"
 	expression := func() string { return waitTextExpression(value) }
-	if strings.TrimSpace(waitSelector) != "" {
+	if strings.TrimSpace(criteria.Selector) != "" {
 		kind = "selector"
-		value = strings.TrimSpace(waitSelector)
+		value = strings.TrimSpace(criteria.Selector)
 		label = "wait selector"
 		expression = func() string { return waitSelectorExpression(value) }
+	} else if strings.TrimSpace(criteria.URL) != "" {
+		kind = "url"
+		value = strings.TrimSpace(criteria.URL)
+		label = "wait url"
+		expression = func() string { return waitURLExpression(value, false) }
+	} else if strings.TrimSpace(criteria.URLContains) != "" {
+		kind = "url"
+		value = strings.TrimSpace(criteria.URLContains)
+		label = "wait url"
+		expression = func() string { return waitURLExpression(value, true) }
 	}
 	last := waitResult{Kind: kind, PollInterval: poll.String()}
-	if kind == "text" {
+	switch kind {
+	case "text":
 		last.Needle = value
-	} else {
+	case "selector":
 		last.Selector = value
+	case "url":
+		last.Needle = value
 	}
 	for {
 		select {
@@ -1169,7 +1226,7 @@ func (a *app) clickTimeout() time.Duration {
 	return 10 * time.Second
 }
 
-func clickDiagnostics(beforeTarget, afterTarget cdp.TargetInfo, selector, requestedStrategy string, activate bool, force bool, waitText, waitSelector string, timeout time.Duration, click clickResult, verification *waitResult) map[string]any {
+func clickDiagnostics(beforeTarget, afterTarget cdp.TargetInfo, selector, requestedStrategy string, activate bool, force bool, waitText, waitSelector, waitURL, waitURLContains string, timeout time.Duration, click clickResult, verification *waitResult) map[string]any {
 	diagnostics := map[string]any{
 		"selector":           selector,
 		"requested_strategy": requestedStrategy,
@@ -1193,6 +1250,10 @@ func clickDiagnostics(beforeTarget, afterTarget cdp.TargetInfo, selector, reques
 		diagnostics["wait"] = map[string]any{"kind": "text", "needle": waitText}
 	} else if strings.TrimSpace(waitSelector) != "" {
 		diagnostics["wait"] = map[string]any{"kind": "selector", "selector": waitSelector}
+	} else if strings.TrimSpace(waitURL) != "" {
+		diagnostics["wait"] = map[string]any{"kind": "url", "condition": "exact", "needle": waitURL}
+	} else if strings.TrimSpace(waitURLContains) != "" {
+		diagnostics["wait"] = map[string]any{"kind": "url", "condition": "contains", "needle": waitURLContains}
 	}
 	if verification != nil {
 		diagnostics["verification"] = verification

@@ -986,7 +986,7 @@ func syntheticTargetInfoExists(targetInfos []map[string]any, targetID string) bo
 
 func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, params json.RawMessage) {
 	expression := string(params)
-	if !strings.Contains(expression, "__cdp_cli_wait_text__") && !strings.Contains(expression, "__cdp_cli_wait_selector__") {
+	if !strings.Contains(expression, "__cdp_cli_wait_text__") && !strings.Contains(expression, "__cdp_cli_wait_selector__") && !strings.Contains(expression, "__cdp_cli_wait_url__") {
 		return
 	}
 	targetID := strings.TrimPrefix(sessionID, "session-")
@@ -3066,6 +3066,38 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 					"selector": selector,
 					"matched":  matched,
 					"count":    boolCount(matched),
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_wait_url__") {
+		needle := expressionStringArg(req.Expression, "const needle = ")
+		condition := expressionStringArg(req.Expression, "const condition = ")
+		url := "https://example.test/app"
+		if needle != "" && !strings.Contains(needle, "Never Ready") {
+			if condition == "contains" {
+				url = "https://example.test/app?matched=" + needle
+			} else {
+				url = needle
+			}
+		}
+		matched := false
+		if condition == "contains" {
+			matched = strings.Contains(url, needle)
+		} else {
+			matched = url == needle
+		}
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"kind":      "url",
+					"needle":    needle,
+					"condition": condition,
+					"url":       url,
+					"title":     "Example App",
+					"matched":   matched,
+					"count":     boolCount(matched),
 				},
 			},
 		}

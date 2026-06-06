@@ -391,7 +391,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"click": {
 			Name:        "click",
-			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action verification, popup/download/dialog/file-chooser/request/response waits, and final target evidence.",
+			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action text/selector/URL verification, popup/download/dialog/file-chooser/request/response waits, and final target evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the click completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: clicked for dispatched clicks, trial for --trial checks, or blocked inside actionability_failed error data."},
@@ -405,7 +405,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal click auto-scrolled an offscreen target before rechecking actionability."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before clicking."},
-				{Name: "verification", Type: "wait_result", Required: false, Description: "Post-click wait condition result when --wait-text or --wait-selector is used."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Post-click wait condition result when --wait-text, --wait-selector, --wait-url, or --wait-url-contains is used."},
 				{Name: "popup_wait", Type: "wait_result", Required: false, Description: "Post-click popup wait result when --wait-popup is used, including Target discovery baseline_count and opener_id criteria."},
 				{Name: "popup", Type: "popup_event", Required: false, Description: "Matched popup target event with target id, URL/title, opener_id, and CDP method when --wait-popup is used."},
 				{Name: "last_popup_event", Type: "popup_event", Required: false, Description: "Last observed popup candidate when --wait-popup times out or criteria do not match."},

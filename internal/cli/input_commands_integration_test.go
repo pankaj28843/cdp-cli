@@ -46,6 +46,68 @@ func TestClickJSON(t *testing.T) {
 	}
 }
 
+func TestClickWaitURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterURL": "https://example.test/results?q=agent", "afterTitle": "Results"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#search", "--target", "page-1", "--wait-url", "https://example.test/results?q=agent", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click wait url exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Target struct {
+			URL string `json:"url"`
+		} `json:"target"`
+		Before struct {
+			URL string `json:"url"`
+		} `json:"before_target"`
+		After struct {
+			URL string `json:"url"`
+		} `json:"after_target"`
+		Final struct {
+			URL string `json:"url"`
+		} `json:"final_target"`
+		PageState struct {
+			URLChanged bool `json:"url_changed"`
+		} `json:"page_state"`
+		Click struct {
+			Clicked    bool   `json:"clicked"`
+			Verified   *bool  `json:"verified"`
+			FinalURL   string `json:"final_url"`
+			FinalTitle string `json:"final_title"`
+		} `json:"click"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Condition    string `json:"condition"`
+			URL          string `json:"url"`
+			Title        string `json:"title"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click wait url output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "clicked" || !got.Click.Clicked || got.Click.Verified == nil || !*got.Click.Verified {
+		t.Fatalf("click wait url action = %+v, want clicked and verified", got)
+	}
+	if got.Before.URL != "https://example.test/app" || got.After.URL != "https://example.test/results?q=agent" || got.Final.URL != got.After.URL || got.Target.URL != got.After.URL || got.Click.FinalURL != got.After.URL || got.Click.FinalTitle != "Results" || !got.PageState.URLChanged {
+		t.Fatalf("click wait url target state = %+v, want refreshed final URL evidence", got)
+	}
+	if got.Verification.Kind != "url" || got.Verification.Needle != "https://example.test/results?q=agent" || got.Verification.Condition != "exact" || got.Verification.URL != "https://example.test/results?q=agent" || got.Verification.Title != "Example App" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "250ms" {
+		t.Fatalf("click wait url verification = %+v, want matched URL evidence", got.Verification)
+	}
+}
+
 func TestClickWaitPopupJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "opener-page", "type": "page", "title": "Login App", "url": "https://example.test/login", "attached": false, "popupOnClick": true, "popupTargetId": "click-popup-page", "popupTitle": "Click Popup", "popupURL": "https://example.test/click-popup"},

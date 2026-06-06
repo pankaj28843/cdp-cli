@@ -1947,6 +1947,23 @@ func waitSelectorExpression(selector string) string {
 })()`, string(selectorJSON))
 }
 
+func waitURLExpression(expected string, contains bool) string {
+	expectedJSON, _ := json.Marshal(expected)
+	mode := "exact"
+	if contains {
+		mode = "contains"
+	}
+	modeJSON, _ := json.Marshal(mode)
+	return fmt.Sprintf(`(() => {
+  const marker = "__cdp_cli_wait_url__";
+  const needle = %s;
+  const condition = %s;
+  const url = location.href;
+  const matched = condition === "contains" ? url.includes(needle) : url === needle;
+  return { kind: "url", needle, condition, url, title: document.title, matched, count: matched ? 1 : 0, marker };
+})()`, string(expectedJSON), string(modeJSON))
+}
+
 func waitEvalExpression(expression string) string {
 	expressionJSON, _ := json.Marshal(expression)
 	return fmt.Sprintf(`(async () => {

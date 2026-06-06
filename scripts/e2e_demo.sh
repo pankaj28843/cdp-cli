@@ -365,6 +365,11 @@ click_response_probe="$(date +%s%N)"
   | jq -e '.ok == true' >/dev/null
 "$binary" click "Save via API" --by role --role button --wait-response --wait-response-match-url "$click_response_probe" --wait-response-method GET --wait-response-status 200 --wait-response-resource-type Fetch --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg probe "$click_response_probe" '.ok == true and .action == "clicked" and .click.clicked == true and .click.strategy == "raw-input" and .click.verified == true and .response_wait.kind == "response" and .response_wait.matched == true and .response_wait.criteria.url_contains == $probe and .response_wait.criteria.method == "GET" and .response_wait.criteria.status == 200 and .response.cdp_method == "Network.responseReceived" and .response.method == "GET" and .response.status == 200 and (.response.url | contains($probe)) and .response.resource_type == "Fetch" and .response_wait.evidence.bounded == true and .response_wait.evidence.headers == false and .response_wait.evidence.bodies == false' >/dev/null
+click_url_probe="$(date +%s%N)"
+"$binary" eval "window.__cdpClickURLProbe = '$click_url_probe'" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" click "Change URL" --by role --role button --wait-url-contains "$click_url_probe" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg probe "$click_url_probe" '.ok == true and .action == "clicked" and .click.clicked == true and .click.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and .page_state.url_changed == true and (.final_target.url | contains($probe))' >/dev/null
 idle_probe="$(date +%s%N)"
 wait_idle_output="$state_dir/wait-network-idle.json"
 "$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &
