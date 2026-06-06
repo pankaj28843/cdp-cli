@@ -514,7 +514,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"press": {
 			Name:        "press",
-			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching; optional text/selector waits verify post-press state.",
+			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching; optional text, selector, or URL waits verify post-press state.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when press command completed and any requested verification matched, or --trial target evidence passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: pressed, trial, or blocked inside actionability_failed error data."},
@@ -523,7 +523,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "actionability", Type: "actionability_result", Required: false, Description: "Locator/selector target evidence for press. Playwright locator.press does not require visible/stable/enabled/editable checks, so only attachment is required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector resolved from a locator before press target evidence or dispatch."},
-				{Name: "verification", Type: "wait_result", Required: false, Description: "Text or selector wait result when --wait-text or --wait-selector is used."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, or URL wait result when --wait-text, --wait-selector, --wait-url, or --wait-url-contains is used."},
 			},
 		},
 		"hover": {

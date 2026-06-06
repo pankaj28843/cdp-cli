@@ -1642,6 +1642,8 @@ func (a *app) newPressCommand() *cobra.Command {
 	var trial bool
 	var waitText string
 	var waitSelector string
+	var waitURL string
+	var waitURLContains string
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "press <key> [selector-or-locator]",
@@ -1667,14 +1669,27 @@ func (a *app) newPressCommand() *cobra.Command {
 			if trial && query == "" {
 				return commandError("missing_selector", "usage", "press --trial requires a selector or locator query", ExitUsage, []string{"cdp press Enter 'Search' --by label --trial --json"})
 			}
-			if strings.TrimSpace(waitText) != "" && strings.TrimSpace(waitSelector) != "" {
-				return commandError("usage", "usage", "use only one press wait mode: --wait-text or --wait-selector", ExitUsage, []string{"cdp press Enter 'Search' --by label --wait-text Results --json"})
+			stateWaitCount := 0
+			if strings.TrimSpace(waitText) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitSelector) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitURL) != "" {
+				stateWaitCount++
+			}
+			if strings.TrimSpace(waitURLContains) != "" {
+				stateWaitCount++
+			}
+			if stateWaitCount > 1 {
+				return commandError("usage", "usage", "use only one press wait mode: --wait-text, --wait-selector, --wait-url, or --wait-url-contains", ExitUsage, []string{"cdp press Enter 'Search' --by label --wait-url-contains /results --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp press Enter --selector input --wait-text Done --poll 250ms --json"})
 			}
-			if trial && (strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "") {
-				return commandError("usage", "usage", "--trial does not dispatch key events, so it cannot use press wait flags", ExitUsage, []string{"cdp press Enter 'Search' --by label --wait-text Results --json"})
+			if trial && stateWaitCount > 0 {
+				return commandError("usage", "usage", "--trial does not dispatch key events, so it cannot use press wait flags", ExitUsage, []string{"cdp press Enter 'Search' --by label --wait-url-contains /results --json"})
 			}
 
 			ctx, cancel := a.browserCommandContext(cmd)
@@ -1778,14 +1793,27 @@ func (a *app) newPressCommand() *cobra.Command {
 			}
 			verified := true
 			var verification *waitResult
-			if strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "" {
-				wait, err := waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+			if stateWaitCount > 0 {
+				wait, err := waitForActionVerification(ctx, session, poll, actionWaitCriteria{
+					Text:        waitText,
+					Selector:    waitSelector,
+					URL:         waitURL,
+					URLContains: waitURLContains,
+				})
 				if err != nil {
 					return err
 				}
 				verified = wait.Matched
 				result.Verified = &verified
 				verification = &wait
+				if wait.Kind == "url" && strings.TrimSpace(wait.URL) != "" {
+					result.URL = wait.URL
+					result.Title = wait.Title
+					target.URL = wait.URL
+					if strings.TrimSpace(wait.Title) != "" {
+						target.Title = wait.Title
+					}
+				}
 			}
 			report := map[string]any{
 				"ok":     verified,
@@ -1818,6 +1846,8 @@ func (a *app) newPressCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&trial, "trial", false, "resolve selector/locator and report press target evidence without dispatching keyboard events")
 	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
 	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().StringVar(&waitURL, "wait-url", "", "verify by waiting until the page URL exactly matches this value")
+	cmd.Flags().StringVar(&waitURLContains, "wait-url-contains", "", "verify by waiting until the page URL contains this string")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }

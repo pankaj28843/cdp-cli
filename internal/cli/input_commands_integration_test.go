@@ -3067,6 +3067,54 @@ func TestPressWaitSelectorJSON(t *testing.T) {
 	}
 }
 
+func TestPressWaitURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"press", "Enter", "--selector", "input#q", "--wait-url-contains", "results", "--poll", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("press wait url exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		Press struct {
+			Selector   string `json:"selector"`
+			URL        string `json:"url"`
+			Title      string `json:"title"`
+			Dispatched bool   `json:"dispatched"`
+			Verified   *bool  `json:"verified"`
+		} `json:"press"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Condition    string `json:"condition"`
+			URL          string `json:"url"`
+			Title        string `json:"title"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("press wait url output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Press.Selector != "input#q" || !got.Press.Dispatched || got.Press.Verified == nil || !*got.Press.Verified || got.Verification.Kind != "url" || got.Verification.Needle != "results" || got.Verification.Condition != "contains" || !strings.Contains(got.Verification.URL, "results") || got.Verification.Title != "Example App" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "100ms" {
+		t.Fatalf("press wait url = %+v, want matched URL verification", got)
+	}
+	if got.Target.URL != got.Verification.URL || got.Target.Title != "Example App" || got.Press.URL != got.Verification.URL || got.Press.Title != "Example App" {
+		t.Fatalf("press wait url target/result = %+v, want final URL/title evidence", got)
+	}
+}
+
 func TestPressTrialByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

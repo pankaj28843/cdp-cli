@@ -305,6 +305,7 @@ func commandExamples(path string) []string {
 			"cdp press Tab --selector 'input[name=\"q\"]' --json",
 			"cdp press Enter 'Search Wikipedia' --by label --json",
 			"cdp press Enter 'Search Wikipedia' --by label --wait-text Results --json",
+			"cdp press Enter 'Search Wikipedia' --by label --wait-url-contains /search --json",
 			"cdp press Enter 'Search Wikipedia' --by label --trial --json",
 		},
 		"cdp hover": {
