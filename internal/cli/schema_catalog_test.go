@@ -64,6 +64,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"protocol-examples",
 		"storage",
 		"workflow-rendered-extract",
+		"workflow-submit-search",
 		"workflow-web-research-serp",
 		"workflow-web-research-extract",
 	}

@@ -387,6 +387,11 @@ fill_url_probe="$(date +%s%N)"
   | jq -e '.ok == true' >/dev/null
 "$binary" fill "Agent input" "fill-url" --by label --wait-url-contains "$fill_url_probe" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg probe "$fill_url_probe" '.ok == true and .action == "filled" and .fill.filled == true and .fill.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and (.target.url | contains($probe)) and (.fill.url | contains($probe))' >/dev/null
+submit_search_probe="$(date +%s%N)"
+"$binary" eval "window.__cdpSubmitSearchProbe = '$submit_search_probe'; document.querySelector('#agent-input').addEventListener('keydown', event => { if (event.key === 'Enter') history.pushState({}, '', '/submit-search?submit_search=' + window.__cdpSubmitSearchProbe); }, { once: true })" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" workflow submit-search "Agent input" "workflow-query" --by label --wait-url-contains "$submit_search_probe" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg probe "$submit_search_probe" '.ok == true and .action == "submit_search" and .workflow.name == "submit-search" and .workflow.input_mode == "fill" and .workflow.submit == "enter" and .workflow.verified == true and .input.selector == "input#agent-input" and .input.query == "workflow-query" and .fill.filled == true and .fill.verified == true and .press.dispatched == true and .press.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and .page_state.same_target == true and .page_state.url_changed == true and (.final_target.url | contains($probe))' >/dev/null
 idle_probe="$(date +%s%N)"
 wait_idle_output="$state_dir/wait-network-idle.json"
 "$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &

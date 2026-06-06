@@ -70,6 +70,118 @@ func TestWorkflowA11yJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowSubmitSearchFillEnterWaitURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "submit-search", "Search", "typed value", "--by", "label", "--wait-url-contains", "results", "--poll", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow submit-search exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Target           struct {
+			ID    string `json:"id"`
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		BeforeTarget struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"before_target"`
+		FinalTarget struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"final_target"`
+		PageState struct {
+			SameTarget bool `json:"same_target"`
+			URLChanged bool `json:"url_changed"`
+		} `json:"page_state"`
+		Input struct {
+			Mode     string `json:"mode"`
+			Selector string `json:"selector"`
+			Query    string `json:"query"`
+		} `json:"input"`
+		Workflow struct {
+			Name          string `json:"name"`
+			InputMode     string `json:"input_mode"`
+			Submit        string `json:"submit"`
+			SubmitKey     string `json:"submit_key"`
+			WaitRequested bool   `json:"wait_requested"`
+			Verified      bool   `json:"verified"`
+			PollInterval  string `json:"poll_interval"`
+		} `json:"workflow"`
+		Fill struct {
+			Selector string `json:"selector"`
+			URL      string `json:"url"`
+			Title    string `json:"title"`
+			Filled   bool   `json:"filled"`
+			Verified *bool  `json:"verified"`
+			Value    string `json:"value"`
+		} `json:"fill"`
+		Press struct {
+			Selector   string `json:"selector"`
+			URL        string `json:"url"`
+			Title      string `json:"title"`
+			Key        string `json:"key"`
+			Dispatched bool   `json:"dispatched"`
+			Verified   *bool  `json:"verified"`
+		} `json:"press"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Condition    string `json:"condition"`
+			URL          string `json:"url"`
+			Title        string `json:"title"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+		Locator struct {
+			Strict bool `json:"strict"`
+		} `json:"locator"`
+		Actionability struct {
+			Actionable bool `json:"actionable"`
+		} `json:"actionability"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow submit-search output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "submit_search" || got.ResolvedSelector != "input#q" || got.Workflow.Name != "submit-search" || got.Workflow.InputMode != "fill" || got.Workflow.Submit != "enter" || got.Workflow.SubmitKey != "Enter" || !got.Workflow.WaitRequested || !got.Workflow.Verified || got.Workflow.PollInterval != "100ms" {
+		t.Fatalf("workflow submit-search metadata = %+v, want verified fill/enter workflow", got)
+	}
+	if got.Input.Mode != "fill" || got.Input.Selector != "input#q" || got.Input.Query != "typed value" || !got.Fill.Filled || got.Fill.Value != "typed value" || got.Fill.Verified == nil || !*got.Fill.Verified {
+		t.Fatalf("workflow submit-search fill = %+v, input=%+v", got.Fill, got.Input)
+	}
+	if got.Press.Selector != "input#q" || got.Press.Key != "Enter" || !got.Press.Dispatched || got.Press.Verified == nil || !*got.Press.Verified {
+		t.Fatalf("workflow submit-search press = %+v, want dispatched Enter", got.Press)
+	}
+	if got.Verification.Kind != "url" || got.Verification.Needle != "results" || got.Verification.Condition != "contains" || !strings.Contains(got.Verification.URL, "results") || got.Verification.Title != "Example App" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "100ms" {
+		t.Fatalf("workflow submit-search verification = %+v, want matched URL wait", got.Verification)
+	}
+	if got.Target.ID != got.BeforeTarget.ID || got.Target.ID != got.FinalTarget.ID || !got.PageState.SameTarget || !got.PageState.URLChanged || got.Target.URL != got.Verification.URL || got.FinalTarget.URL != got.Verification.URL || got.Fill.URL != got.Verification.URL || got.Press.URL != got.Verification.URL {
+		t.Fatalf("workflow submit-search target/result = %+v, want same target with final URL evidence", got)
+	}
+	hasSnapshotCommand := false
+	for _, next := range got.NextCommands {
+		if strings.Contains(next, "snapshot") {
+			hasSnapshotCommand = true
+			break
+		}
+	}
+	if !got.Locator.Strict || !got.Actionability.Actionable || !hasSnapshotCommand {
+		t.Fatalf("workflow submit-search support fields = locator=%+v actionability=%+v next=%+v", got.Locator, got.Actionability, got.NextCommands)
+	}
+}
+
 func TestWorkflowActionCaptureJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

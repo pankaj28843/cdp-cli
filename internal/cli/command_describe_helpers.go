@@ -559,6 +559,11 @@ func commandExamples(path string) []string {
 			"cdp workflow action-capture --action click:'button.submit' --include screenshot --screenshot-full-page --evidence-out-dir tmp/action-capture --json",
 			"cdp workflow action-capture --action press:Enter --selector 'input[name=q]' --include network,console,dom,text --out tmp/action-capture.json --json",
 		},
+		"cdp workflow submit-search": {
+			"cdp workflow submit-search 'Search Wikipedia' Aarhus --by label --wait-url-contains /search --json",
+			"cdp workflow submit-search 'Search' 'agentic engineering' --by label --input-mode type --wait-text Results --json",
+			"cdp workflow submit-search 'Search' 'agentic engineering' --by label --submit none --wait-selector '.suggestions' --json",
+		},
 		"cdp workflow a11y": {
 			"cdp workflow a11y 'https://example.com' --wait 5s --json",
 			"cdp workflow a11y 'https://example.com' --limit 50 --wait 5s --json",

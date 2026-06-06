@@ -12,6 +12,7 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowA11yCommand())
 	cmd.AddCommand(a.newWorkflowDebugBundleCommand())
 	cmd.AddCommand(a.newWorkflowActionCaptureCommand())
+	cmd.AddCommand(a.newWorkflowSubmitSearchCommand())
 	cmd.AddCommand(a.newWorkflowVisiblePostsCommand())
 	cmd.AddCommand(a.newWorkflowHackerNewsCommand())
 	cmd.AddCommand(a.newWorkflowConsoleErrorsCommand())
