@@ -486,6 +486,7 @@ func (a *app) newWaitCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newWaitTextCommand())
 	cmd.AddCommand(a.newWaitSelectorCommand())
+	cmd.AddCommand(a.newWaitURLCommand())
 	cmd.AddCommand(a.newWaitLocatorCommand())
 	cmd.AddCommand(a.newWaitEvalCommand())
 	cmd.AddCommand(a.newWaitLoadStateCommand())
@@ -545,6 +546,72 @@ func (a *app) newWaitTextCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
+	return cmd
+}
+
+func (a *app) newWaitURLCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
+	var mode string
+	var poll time.Duration
+	cmd := &cobra.Command{
+		Use:   "url <expected>",
+		Short: "Wait until the page URL matches",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			expected := strings.TrimSpace(args[0])
+			if expected == "" {
+				return commandError("usage", "usage", "expected URL must not be empty", ExitUsage, []string{"cdp wait url /results --mode contains --json"})
+			}
+			mode = strings.ToLower(strings.TrimSpace(mode))
+			if mode != "exact" && mode != "contains" {
+				return commandError("usage", "usage", "--mode must be exact or contains", ExitUsage, []string{"cdp wait url /results --mode contains --json", "cdp wait url https://example.com/checkout --mode exact --json"})
+			}
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait url /results --mode contains --poll 250ms --json"})
+			}
+			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			start := time.Now()
+			result, err := waitForPageCondition(ctx, session, poll, func() (waitResult, error) {
+				var result waitResult
+				err := evaluateJSONValue(ctx, session, waitURLExpression(expected, mode == "contains"), "wait url", &result)
+				return result, err
+			})
+			if err != nil {
+				return err
+			}
+			if result.Error != nil {
+				return commandError("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, []string{"cdp wait url /results --mode contains --json"})
+			}
+			result.ElapsedMS = time.Since(start).Milliseconds()
+			result.PollInterval = poll.String()
+			if strings.TrimSpace(result.URL) != "" {
+				target.URL = result.URL
+			}
+			if strings.TrimSpace(result.Title) != "" {
+				target.Title = result.Title
+			}
+			return a.render(ctx, fmt.Sprintf("matched url\t%s", expected), map[string]any{
+				"ok":     true,
+				"target": pageRow(target),
+				"wait":   result,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&mode, "mode", "contains", "URL match mode: exact or contains")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	return cmd
 }
@@ -974,6 +1041,8 @@ func (r *waitResult) addEvidence() {
 	case "selector":
 		r.Condition = fmt.Sprintf("selector %q matched at least one element", r.Selector)
 		r.Evidence = map[string]any{"selector": r.Selector, "matched": true, "count": r.Count}
+	case "url":
+		r.Evidence = map[string]any{"needle": r.Needle, "condition": r.Condition, "url": r.URL, "title": r.Title, "matched": true, "count": r.Count}
 	case "eval":
 		r.Condition = fmt.Sprintf("expression %q evaluated truthy", r.Expression)
 		r.Evidence = map[string]any{"expression": r.Expression, "matched": true, "value": r.Value}

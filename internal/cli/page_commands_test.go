@@ -1274,6 +1274,80 @@ func TestWaitSelectorJSON(t *testing.T) {
 	}
 }
 
+func TestWaitURLJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "url", "https://example.test/results", "--mode", "exact", "--poll", "100ms", "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait url exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			ID    string `json:"id"`
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		Wait struct {
+			Kind         string         `json:"kind"`
+			Needle       string         `json:"needle"`
+			Condition    string         `json:"condition"`
+			URL          string         `json:"url"`
+			Title        string         `json:"title"`
+			Matched      bool           `json:"matched"`
+			Count        int            `json:"count"`
+			PollInterval string         `json:"poll_interval"`
+			Evidence     map[string]any `json:"evidence"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait url output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Target.ID != "page-1" || got.Target.URL != "https://example.test/results" || got.Target.Title != "Example App" || got.Wait.Kind != "url" || got.Wait.Needle != "https://example.test/results" || got.Wait.Condition != "exact" || got.Wait.URL != "https://example.test/results" || got.Wait.Title != "Example App" || !got.Wait.Matched || got.Wait.Count != 1 || got.Wait.PollInterval != "100ms" {
+		t.Fatalf("wait url output = %+v, want matched exact URL evidence", got)
+	}
+	if got.Wait.Evidence["needle"] != "https://example.test/results" || got.Wait.Evidence["condition"] != "exact" || got.Wait.Evidence["url"] != "https://example.test/results" || got.Wait.Evidence["title"] != "Example App" || got.Wait.Evidence["matched"] != true {
+		t.Fatalf("wait url evidence = %+v, want URL evidence", got.Wait.Evidence)
+	}
+}
+
+func TestWaitURLDefaultContainsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "url", "results", "--timeout", "1s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait url contains exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind      string `json:"kind"`
+			Needle    string `json:"needle"`
+			Condition string `json:"condition"`
+			URL       string `json:"url"`
+			Matched   bool   `json:"matched"`
+		} `json:"wait"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait url contains output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "url" || got.Wait.Needle != "results" || got.Wait.Condition != "contains" || !strings.Contains(got.Wait.URL, "results") || !got.Wait.Matched {
+		t.Fatalf("wait url contains output = %+v, want default contains URL match", got)
+	}
+}
+
 func TestWaitLocatorByRoleJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

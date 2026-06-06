@@ -641,11 +641,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait": {
 			Name:        "wait",
-			Description: "Page condition wait result for text, selector, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks.",
+			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, condition or CDP event method, load state and readyState when applicable, criteria, match status, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, file-chooser interception state, popup target discovery state, download progress state, elapsed time, timeout, and poll interval when applicable."},
+				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, URL condition, CDP event method, load state and readyState when applicable, criteria, match status, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, file-chooser interception state, popup target discovery state, download progress state, elapsed time, timeout, and poll interval when applicable."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator result when waiting by user-facing locator."},
 				{Name: "matches", Type: "array<locator_match>", Required: false, Description: "Locator matches duplicated for jq convenience when waiting by locator."},
 				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched request or response CDP event metadata with safe URL redaction by default and no headers or bodies."},
@@ -655,6 +655,15 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "download", Type: "download_wait_summary", Required: false, Description: "Matched Browser download metadata with suggested filename, safe URL, completion state, received bytes, and optional file path."},
 				{Name: "last_event", Type: "network_dialog_file_chooser_popup_or_download_wait_event", Required: false, Description: "Last observed request/response candidate, network-idle lifecycle event, dialog event, file chooser event, popup target event, or download event."},
 				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands, especially for unhandled dialogs."},
+			},
+		},
+		"wait-url": {
+			Name:        "wait-url",
+			Description: "Page URL wait result for exact or substring URL matching.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page URL matched before timeout."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind url, URL match needle, condition exact or contains, final observed URL, title, match status, count, bounded evidence, elapsed_ms, and poll_interval."},
 			},
 		},
 		"wait-request": {

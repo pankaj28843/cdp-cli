@@ -136,6 +136,8 @@ fi
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
 "$binary" assert url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \
   | jq -e --arg url "$app_url" '.ok == true and .assertion.field == "url" and .assertion.passed == true and (.assertion.actual | contains($url)) and (.assertion.url | contains($url)) and .assertion.title == "cdp-cli demo app" and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and (.target.url | contains($url))' >/dev/null
+"$binary" wait url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \
+  | jq -e --arg url "$app_url" '.ok == true and .wait.kind == "url" and .wait.condition == "contains" and .wait.matched == true and .wait.needle == $url and (.wait.url | contains($url)) and .wait.title == "cdp-cli demo app" and .wait.poll_interval == "100ms" and .wait.evidence.condition == "contains" and (.target.url | contains($url))' >/dev/null
 "$binary" assert title "cdp-cli demo app" --mode exact --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \
   | jq -e --arg url "$app_url" '.ok == true and .assertion.field == "title" and .assertion.passed == true and .assertion.actual == "cdp-cli demo app" and .assertion.title == "cdp-cli demo app" and (.assertion.url | contains($url)) and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .target.title == "cdp-cli demo app"' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \

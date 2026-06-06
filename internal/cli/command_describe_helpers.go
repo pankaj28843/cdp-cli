@@ -346,6 +346,10 @@ func commandExamples(path string) []string {
 			"cdp wait selector main --timeout 10s --json",
 			"cdp wait selector '[data-ready=\"true\"]' --poll 500ms --json",
 		},
+		"cdp wait url": {
+			"cdp wait url /results --mode contains --timeout 10s --json",
+			"cdp wait url https://example.com/checkout --mode exact --poll 100ms --json",
+		},
 		"cdp wait locator": {
 			"cdp wait locator 'Search' --by role --role button --strict --timeout 10s --json",
 			"cdp wait locator 'Dashboard loaded' --by text --timeout 10s --json",
