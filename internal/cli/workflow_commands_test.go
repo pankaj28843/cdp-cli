@@ -182,6 +182,146 @@ func TestWorkflowSubmitSearchFillEnterWaitURLJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowSubmitSearchSuggestionSelectionJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "submit-search", "Search", "typed value",
+		"--by", "label",
+		"--suggestion", "Checkout",
+		"--suggestion-by", "text",
+		"--submit", "none",
+		"--wait-url-contains", "results",
+		"--poll", "100ms",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow submit-search suggestion exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Workflow         struct {
+			Name                string `json:"name"`
+			InputMode           string `json:"input_mode"`
+			Submit              string `json:"submit"`
+			SuggestionRequested bool   `json:"suggestion_requested"`
+			SuggestionSelected  bool   `json:"suggestion_selected"`
+			SuggestionStrategy  string `json:"suggestion_strategy"`
+			Verified            bool   `json:"verified"`
+		} `json:"workflow"`
+		Fill struct {
+			Selector string `json:"selector"`
+			Filled   bool   `json:"filled"`
+			Verified *bool  `json:"verified"`
+		} `json:"fill"`
+		Suggestion struct {
+			By      string `json:"by"`
+			Query   string `json:"query"`
+			Count   int    `json:"count"`
+			Strict  bool   `json:"strict"`
+			Matches []struct {
+				SelectorHint string `json:"selector_hint"`
+				Role         string `json:"role"`
+				Name         string `json:"name"`
+			} `json:"matches"`
+		} `json:"suggestion"`
+		SuggestionSelector string `json:"suggestion_selector"`
+		SuggestionClick    struct {
+			Selector string `json:"selector"`
+			Clicked  bool   `json:"clicked"`
+			Verified *bool  `json:"verified"`
+			URL      string `json:"url"`
+		} `json:"suggestion_click"`
+		SuggestionActionability struct {
+			Actionable bool `json:"actionable"`
+		} `json:"suggestion_actionability"`
+		Verification struct {
+			Kind    string `json:"kind"`
+			Needle  string `json:"needle"`
+			URL     string `json:"url"`
+			Matched bool   `json:"matched"`
+		} `json:"verification"`
+		FinalTarget struct {
+			URL string `json:"url"`
+		} `json:"final_target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow submit-search suggestion output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "submit_search" || got.ResolvedSelector != "input#q" || got.Workflow.Name != "submit-search" || got.Workflow.InputMode != "fill" || got.Workflow.Submit != "none" || !got.Workflow.SuggestionRequested || !got.Workflow.SuggestionSelected || got.Workflow.SuggestionStrategy != "auto" || !got.Workflow.Verified {
+		t.Fatalf("workflow submit-search suggestion metadata = %+v, want selected suggestion workflow", got.Workflow)
+	}
+	if got.Suggestion.By != "text" || got.Suggestion.Query != "Checkout" || got.Suggestion.Count != 1 || !got.Suggestion.Strict || len(got.Suggestion.Matches) != 1 || got.Suggestion.Matches[0].SelectorHint != "button#checkout" || got.SuggestionSelector != "button#checkout" {
+		t.Fatalf("workflow submit-search suggestion = %+v selector=%q, want strict checkout candidate", got.Suggestion, got.SuggestionSelector)
+	}
+	if !got.Fill.Filled || got.Fill.Verified == nil || !*got.Fill.Verified || !got.SuggestionActionability.Actionable || !got.SuggestionClick.Clicked || got.SuggestionClick.Selector != "button#checkout" || got.SuggestionClick.Verified == nil || !*got.SuggestionClick.Verified {
+		t.Fatalf("workflow submit-search suggestion actions = fill=%+v actionability=%+v click=%+v", got.Fill, got.SuggestionActionability, got.SuggestionClick)
+	}
+	if got.Verification.Kind != "url" || got.Verification.Needle != "results" || !got.Verification.Matched || !strings.Contains(got.Verification.URL, "results") || got.FinalTarget.URL != got.Verification.URL || got.SuggestionClick.URL != got.Verification.URL {
+		t.Fatalf("workflow submit-search suggestion verification = %+v final=%+v click=%+v", got.Verification, got.FinalTarget, got.SuggestionClick)
+	}
+}
+
+func TestWorkflowSubmitSearchSuggestionNotFoundJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "submit-search", "Search", "typed value",
+		"--by", "label",
+		"--suggestion", "Gone",
+		"--suggestion-by", "text",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("workflow submit-search missing suggestion exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action   string `json:"action"`
+			Workflow struct {
+				Name                string `json:"name"`
+				SuggestionRequested bool   `json:"suggestion_requested"`
+				SuggestionSelected  bool   `json:"suggestion_selected"`
+				Verified            bool   `json:"verified"`
+			} `json:"workflow"`
+			Fill struct {
+				Filled bool   `json:"filled"`
+				Value  string `json:"value"`
+			} `json:"fill"`
+			Suggestion struct {
+				By      string `json:"by"`
+				Query   string `json:"query"`
+				Count   int    `json:"count"`
+				Strict  bool   `json:"strict"`
+				Matches []any  `json:"matches"`
+			} `json:"suggestion"`
+			NextCommands []string `json:"next_commands"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow submit-search missing suggestion output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "suggestion_not_found" || got.Data.Action != "suggestion_not_found" || got.Data.Workflow.Name != "submit-search" || !got.Data.Workflow.SuggestionRequested || got.Data.Workflow.SuggestionSelected || got.Data.Workflow.Verified || !got.Data.Fill.Filled || got.Data.Fill.Value != "typed value" || got.Data.Suggestion.By != "text" || got.Data.Suggestion.Query != "Gone" || got.Data.Suggestion.Count != 0 || got.Data.Suggestion.Strict || len(got.Data.Suggestion.Matches) != 0 || !containsSubstring(got.Data.NextCommands, "snapshot") {
+		t.Fatalf("workflow submit-search missing suggestion = %+v, want not-found diagnostic with candidates", got)
+	}
+}
+
 func TestWorkflowActionCaptureJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

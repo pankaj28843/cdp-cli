@@ -14,6 +14,14 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
 	var locatorOpts locatorActionOptions
+	var suggestionQuery string
+	var suggestionBy string
+	var suggestionRole string
+	var suggestionTestIDAttr string
+	var suggestionExact bool
+	var suggestionIncludeHidden bool
+	var suggestionLimit int
+	var suggestionStrategy string
 	var inputMode string
 	var inputStrategy string
 	var submit string
@@ -75,6 +83,27 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --wait-text Results --poll 250ms --json"})
+			}
+			suggestionOpts := submitSearchSuggestionOptions{
+				Query:         strings.TrimSpace(suggestionQuery),
+				By:            normalizeLocatorStrategy(suggestionBy),
+				Role:          strings.TrimSpace(suggestionRole),
+				TestIDAttr:    strings.TrimSpace(suggestionTestIDAttr),
+				Exact:         suggestionExact,
+				IncludeHidden: suggestionIncludeHidden,
+				Limit:         suggestionLimit,
+				Strategy:      strings.ToLower(strings.TrimSpace(suggestionStrategy)),
+			}
+			if suggestionOpts.Strategy == "" {
+				suggestionOpts.Strategy = "auto"
+			}
+			if suggestionOpts.Requested() {
+				if err := validateLocatorFindOptions(suggestionOpts.By, suggestionOpts.Role, suggestionOpts.TestIDAttr, suggestionOpts.Limit); err != nil {
+					return err
+				}
+				if suggestionOpts.Strategy != "auto" && suggestionOpts.Strategy != "dom" && suggestionOpts.Strategy != "raw-input" {
+					return commandError("usage", "usage", "--suggestion-strategy must be auto, dom, or raw-input", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --suggestion 'Aarhus Denmark' --suggestion-by text --json"})
+				}
 			}
 
 			ctx, cancel := a.browserCommandContext(cmd)
@@ -140,6 +169,62 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				typed = &result
 			}
 
+			var suggestion *locatorFindResult
+			var suggestionSelector string
+			var suggestionActionability *actionabilityResult
+			var suggestionClick *clickResult
+			if suggestionOpts.Requested() {
+				var result locatorFindResult
+				if err := evaluateJSONValue(ctx, session, locatorFindExpression(suggestionOpts.By, suggestionOpts.Query, suggestionOpts.Role, suggestionOpts.Exact, suggestionOpts.IncludeHidden, suggestionOpts.TestIDAttr, suggestionOpts.Limit), "submit-search suggestion", &result); err != nil {
+					return err
+				}
+				suggestion = &result
+				if result.Error != nil {
+					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_invalid")
+					return commandErrorWithData("invalid_suggestion_locator", "usage", fmt.Sprintf("submit-search suggestion locator %s %q: %s", suggestionOpts.By, suggestionOpts.Query, result.Error.Message), ExitUsage, submitSearchSuggestionRemediations(suggestionOpts), report)
+				}
+				if result.Count == 0 || len(result.Matches) == 0 {
+					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_not_found")
+					return commandErrorWithData("suggestion_not_found", "check_failed", fmt.Sprintf("submit-search suggestion %s %q matched no elements", suggestionOpts.By, suggestionOpts.Query), ExitCheckFailed, submitSearchSuggestionRemediations(suggestionOpts), report)
+				}
+				if result.Count != 1 || len(result.Matches) != 1 {
+					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_ambiguous")
+					return commandErrorWithData("ambiguous_suggestion", "check_failed", fmt.Sprintf("submit-search suggestion %s %q matched %d elements; refine the suggestion locator before acting", suggestionOpts.By, suggestionOpts.Query, result.Count), ExitCheckFailed, submitSearchSuggestionRemediations(suggestionOpts), report)
+				}
+				match := result.Matches[0]
+				suggestionSelector = strings.TrimSpace(match.SelectorHint)
+				if suggestionSelector == "" || match.SelectorAmbiguous {
+					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_ambiguous")
+					return commandErrorWithData("ambiguous_suggestion", "check_failed", fmt.Sprintf("submit-search suggestion %s %q matched one element but did not produce a unique CSS selector hint", suggestionOpts.By, suggestionOpts.Query), ExitCheckFailed, submitSearchSuggestionRemediations(suggestionOpts), report)
+				}
+				checks, err := evaluateActionability(ctx, session, suggestionSelector, "click")
+				if err != nil {
+					return err
+				}
+				if checks.Error != nil {
+					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_invalid")
+					return commandErrorWithData("invalid_suggestion_selector", "usage", fmt.Sprintf("submit-search suggestion %q: %s", suggestionSelector, checks.Error.Message), ExitUsage, submitSearchSuggestionRemediations(suggestionOpts), report)
+				}
+				prepareActionability(&checks, "click", false, false)
+				suggestionActionability = &checks
+				if !checks.Actionable {
+					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_blocked")
+					report["suggestion_actionability"] = checks
+					return commandErrorWithData("suggestion_not_actionable", "check_failed", actionabilityFailureMessage("click", suggestionSelector, checks), ExitCheckFailed, actionabilityRemediations("click", suggestionOpts.Query, suggestionSelector, locatorActionOptions{By: suggestionOpts.By, Role: suggestionOpts.Role, Exact: suggestionOpts.Exact, IncludeHidden: suggestionOpts.IncludeHidden, TestIDAttr: suggestionOpts.TestIDAttr, Limit: suggestionOpts.Limit}), report)
+				}
+				click, err := performClick(ctx, session, suggestionSelector, suggestionOpts.Strategy)
+				if err != nil {
+					return err
+				}
+				if click.Error != nil {
+					return commandError("invalid_suggestion_selector", "usage", fmt.Sprintf("submit-search suggestion click %q: %s", suggestionSelector, click.Error.Message), ExitUsage, submitSearchSuggestionRemediations(suggestionOpts))
+				}
+				if !click.Clicked {
+					return commandError("suggestion_not_clicked", "check_failed", fmt.Sprintf("no suggestion target clicked for selector %q", suggestionSelector), ExitCheckFailed, submitSearchSuggestionRemediations(suggestionOpts))
+				}
+				suggestionClick = &click
+			}
+
 			var press *pressResult
 			if submit == "enter" {
 				var result pressResult
@@ -170,8 +255,8 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				}
 				verified = wait.Matched
 				verification = &wait
-				submitSearchSetVerified(fill, typed, press, verified)
-				submitSearchApplyWaitURL(fill, typed, press, wait)
+				submitSearchSetVerified(fill, typed, press, suggestionClick, verified)
+				submitSearchApplyWaitURL(fill, typed, press, suggestionClick, wait)
 			}
 
 			finalTarget, refreshErr := refreshedClickTarget(ctx, client, beforeTarget)
@@ -196,14 +281,17 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 					"query":    args[1],
 				},
 				"workflow": map[string]any{
-					"name":           "submit-search",
-					"input_mode":     inputMode,
-					"input_strategy": inputStrategy,
-					"submit":         submit,
-					"submit_key":     submitKey,
-					"wait_requested": waitCriteria.Has(),
-					"verified":       verified,
-					"poll_interval":  poll.String(),
+					"name":                 "submit-search",
+					"input_mode":           inputMode,
+					"input_strategy":       inputStrategy,
+					"submit":               submit,
+					"submit_key":           submitKey,
+					"suggestion_requested": suggestionOpts.Requested(),
+					"suggestion_selected":  suggestionClick != nil && suggestionClick.Clicked,
+					"suggestion_strategy":  suggestionOpts.Strategy,
+					"wait_requested":       waitCriteria.Has(),
+					"verified":             verified,
+					"poll_interval":        poll.String(),
 				},
 				"actionability": actionability,
 				"next_commands": submitSearchNextCommands(finalTarget.TargetID, selector),
@@ -216,6 +304,16 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 			}
 			if press != nil {
 				report["press"] = press
+			}
+			if suggestion != nil {
+				report["suggestion"] = suggestion
+				report["suggestion_selector"] = suggestionSelector
+			}
+			if suggestionActionability != nil {
+				report["suggestion_actionability"] = suggestionActionability
+			}
+			if suggestionClick != nil {
+				report["suggestion_click"] = suggestionClick
 			}
 			if locator != nil {
 				report["locator"] = locator
@@ -243,6 +341,14 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	addLocatorActionFlags(cmd, &locatorOpts)
+	cmd.Flags().StringVar(&suggestionQuery, "suggestion", "", "optional suggestion locator query to click after input and before submit")
+	cmd.Flags().StringVar(&suggestionBy, "suggestion-by", "text", "suggestion locator strategy: css, role, text, label, placeholder, alt, title, or test-id")
+	cmd.Flags().StringVar(&suggestionRole, "suggestion-role", "", "ARIA role to match when --suggestion-by role is used")
+	cmd.Flags().StringVar(&suggestionTestIDAttr, "suggestion-test-id-attr", "data-testid", "attribute name for --suggestion-by test-id")
+	cmd.Flags().BoolVar(&suggestionExact, "suggestion-exact", false, "require exact normalized suggestion text/name/attribute match")
+	cmd.Flags().BoolVar(&suggestionIncludeHidden, "suggestion-include-hidden", false, "include hidden suggestion locator matches")
+	cmd.Flags().IntVar(&suggestionLimit, "suggestion-limit", 20, "maximum suggestion locator matches to inspect")
+	cmd.Flags().StringVar(&suggestionStrategy, "suggestion-strategy", "auto", "suggestion click strategy: auto, dom, or raw-input")
 	cmd.Flags().StringVar(&inputMode, "input-mode", "fill", "input mode before submit: fill or type")
 	cmd.Flags().StringVar(&inputStrategy, "input-strategy", "auto", "text input strategy used when --input-mode type: auto, dom, or insert-text")
 	cmd.Flags().StringVar(&submit, "submit", "enter", "submit mode after input: enter or none")
@@ -307,7 +413,82 @@ func submitSearchBlockedReport(target cdp.TargetInfo, selector, query, inputMode
 	return report
 }
 
-func submitSearchSetVerified(fill *fillResult, typed *typeResult, press *pressResult, verified bool) {
+type submitSearchSuggestionOptions struct {
+	Query         string
+	By            string
+	Role          string
+	TestIDAttr    string
+	Exact         bool
+	IncludeHidden bool
+	Limit         int
+	Strategy      string
+}
+
+func (o submitSearchSuggestionOptions) Requested() bool {
+	return strings.TrimSpace(o.Query) != ""
+}
+
+func submitSearchSuggestionFailureReport(target cdp.TargetInfo, selector, query, inputMode, inputStrategy, submit, submitKey string, poll time.Duration, actionability actionabilityResult, fill *fillResult, typed *typeResult, locator *locatorFindResult, suggestion locatorFindResult, action string) map[string]any {
+	report := map[string]any{
+		"ok":            false,
+		"action":        action,
+		"target":        pageRow(target),
+		"before_target": pageRow(target),
+		"after_target":  pageRow(target),
+		"final_target":  pageRow(target),
+		"page_state":    clickPageState(target, target),
+		"input": map[string]any{
+			"mode":     inputMode,
+			"selector": selector,
+			"query":    query,
+		},
+		"workflow": map[string]any{
+			"name":                 "submit-search",
+			"input_mode":           inputMode,
+			"input_strategy":       inputStrategy,
+			"submit":               submit,
+			"submit_key":           submitKey,
+			"suggestion_requested": true,
+			"suggestion_selected":  false,
+			"wait_requested":       false,
+			"verified":             false,
+			"poll_interval":        poll.String(),
+		},
+		"actionability": actionability,
+		"suggestion":    suggestion,
+		"next_commands": submitSearchNextCommands(target.TargetID, selector),
+	}
+	if fill != nil {
+		report["fill"] = fill
+	}
+	if typed != nil {
+		report["type"] = typed
+	}
+	if locator != nil {
+		report["locator"] = locator
+		report["resolved_selector"] = selector
+	}
+	return report
+}
+
+func submitSearchSuggestionRemediations(opts submitSearchSuggestionOptions) []string {
+	command := "cdp locator find " + shellQuote(opts.Query) + " --by " + opts.By
+	if opts.By == "role" {
+		command += " --role " + shellQuote(opts.Role)
+	}
+	if opts.Exact {
+		command += " --exact"
+	}
+	if opts.IncludeHidden {
+		command += " --include-hidden"
+	}
+	if opts.By == "test-id" && opts.TestIDAttr != "data-testid" {
+		command += " --test-id-attr " + shellQuote(opts.TestIDAttr)
+	}
+	return []string{command + " --json", "cdp snapshot --selector body --json"}
+}
+
+func submitSearchSetVerified(fill *fillResult, typed *typeResult, press *pressResult, suggestionClick *clickResult, verified bool) {
 	if fill != nil {
 		fill.Verified = &verified
 	}
@@ -317,9 +498,12 @@ func submitSearchSetVerified(fill *fillResult, typed *typeResult, press *pressRe
 	if press != nil {
 		press.Verified = &verified
 	}
+	if suggestionClick != nil {
+		suggestionClick.Verified = &verified
+	}
 }
 
-func submitSearchApplyWaitURL(fill *fillResult, typed *typeResult, press *pressResult, wait waitResult) {
+func submitSearchApplyWaitURL(fill *fillResult, typed *typeResult, press *pressResult, suggestionClick *clickResult, wait waitResult) {
 	if wait.Kind != "url" || strings.TrimSpace(wait.URL) == "" {
 		return
 	}
@@ -334,6 +518,12 @@ func submitSearchApplyWaitURL(fill *fillResult, typed *typeResult, press *pressR
 	if press != nil {
 		press.URL = wait.URL
 		press.Title = wait.Title
+	}
+	if suggestionClick != nil {
+		suggestionClick.URL = wait.URL
+		suggestionClick.Title = wait.Title
+		suggestionClick.FinalURL = wait.URL
+		suggestionClick.FinalTitle = wait.Title
 	}
 }
 
