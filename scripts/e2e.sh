@@ -372,6 +372,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 
 "$binary" describe --command "a11y tree" --json | jq -e '.ok == true and .commands.name == "tree" and (.commands.flags[] | select(.name == "depth"))' >/dev/null
 "$binary" describe --command "a11y find" --json | jq -e '.ok == true and .commands.name == "find" and (.commands.flags[] | select(.name == "role"))' >/dev/null
+"$binary" describe --command "a11y snapshot" --json | jq -e '.ok == true and .commands.name == "snapshot" and (.commands.examples | any(contains("--selector body"))) and (.commands.flags[] | select(.name == "selector")) and (.commands.flags[] | select(.name == "depth")) and (.commands.flags[] | select(.name == "limit"))' >/dev/null
 "$binary" describe --command "emulate viewport" --json | jq -e '.ok == true and .commands.name == "viewport" and (.commands.examples | any(contains("--preset")))' >/dev/null
 "$binary" describe --command "emulate user-agent" --json | jq -e '.ok == true and .commands.name == "user-agent" and (.commands.examples | any(contains("--user-agent")))' >/dev/null
 "$binary" describe --command "emulate geolocation" --json | jq -e '.ok == true and .commands.name == "geolocation" and (.commands.examples | any(contains("--latitude")))' >/dev/null
@@ -386,6 +387,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "workflow responsive-audit" --json | jq -e '.ok == true and .commands.name == "responsive-audit"' >/dev/null
 "$binary" schema protocol-compat --json | jq -e '.ok == true and .schema.name == "protocol-compat"' >/dev/null
 "$binary" schema a11y --json | jq -e '.ok == true and .schema.name == "a11y"' >/dev/null
+"$binary" schema a11y-snapshot --json | jq -e '.ok == true and .schema.name == "a11y-snapshot" and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields | map(.name) | index("lines")) and (.schema.fields | map(.name) | index("text")) and (.schema.fields[] | select(.name == "snapshot").description | contains("include_ignored"))' >/dev/null
 "$binary" schema workflow-feeds --json | jq -e '.ok == true and .schema.name == "workflow-feeds"' >/dev/null
 
 mkdir -p "$state_dir/user-data"

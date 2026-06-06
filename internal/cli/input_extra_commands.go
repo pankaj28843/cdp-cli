@@ -1060,6 +1060,7 @@ func (a *app) newA11yCommand() *cobra.Command {
 	cmd.AddCommand(a.newA11yTreeCommand())
 	cmd.AddCommand(a.newA11yFindCommand())
 	cmd.AddCommand(a.newA11yNodeCommand())
+	cmd.AddCommand(a.newA11ySnapshotCommand())
 	return cmd
 }
 
@@ -1136,5 +1137,49 @@ func (a *app) newA11yNodeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	return cmd
+}
+
+func (a *app) newA11ySnapshotCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, selector string
+	var depth, limit int
+	var includeIgnored bool
+	cmd := &cobra.Command{Use: "snapshot", Short: "Generate a bounded ARIA snapshot from the accessibility tree", RunE: func(cmd *cobra.Command, args []string) error {
+		if depth < 0 {
+			return commandError("usage", "usage", "--depth must be non-negative", ExitUsage, []string{"cdp a11y snapshot --depth 4 --json"})
+		}
+		if limit < 0 {
+			return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp a11y snapshot --limit 100 --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		snapshot, err := collectA11ySnapshot(ctx, session, selector, depth, limit, includeIgnored)
+		if err != nil {
+			return err
+		}
+		snapshot.URL = target.URL
+		snapshot.Title = target.Title
+		report := map[string]any{
+			"ok":        true,
+			"target":    pageRow(target),
+			"snapshot":  snapshot,
+			"lines":     snapshot.Lines,
+			"text":      snapshot.Text,
+			"truncated": snapshot.Truncated,
+		}
+		return a.render(ctx, fmt.Sprintf("a11y-snapshot\t%d lines", snapshot.LineCount), report)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector that names the intended snapshot scope")
+	cmd.Flags().IntVar(&depth, "depth", 4, "maximum accessibility tree depth to include")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum snapshot lines to return")
+	cmd.Flags().BoolVar(&includeIgnored, "include-ignored", false, "include ignored accessibility nodes")
 	return cmd
 }

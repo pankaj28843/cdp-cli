@@ -145,6 +145,8 @@ fi
 require_artifact "$state_dir/page-load.local.json"
 "$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null
+"$binary" a11y snapshot --selector body --depth 5 --limit 80 --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .snapshot.selector == "body" and .snapshot.source == "cdp-accessibility-tree" and .snapshot.line_count >= 1 and (.snapshot.lines | length) == .snapshot.line_count and (.snapshot.text | contains("Click target")) and (.text | contains("button"))' >/dev/null
 "$binary" locator find "Agent input" --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .locator.strict == true and .locator.matches[0].selector_hint == "input#agent-input" and any(.next_commands[]; contains("cdp fill"))' >/dev/null
 "$binary" locator find "Click target" --by role --role button --state-dir "$state_dir/cdp-state" --json \

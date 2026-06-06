@@ -697,14 +697,15 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{
 					"data": base64.StdEncoding.EncodeToString([]byte("synthetic screenshot")),
 				}
-			} else if req.Method == "Accessibility.getFullAXTree" {
+			} else if req.Method == "Accessibility.getFullAXTree" || req.Method == "Accessibility.getPartialAXTree" {
 				resp["result"] = map[string]any{
 					"nodes": []map[string]any{
 						{
-							"nodeId":  "1",
-							"ignored": false,
-							"role":    map[string]any{"type": "role", "value": "RootWebArea"},
-							"name":    map[string]any{"type": "computedString", "value": "Example App"},
+							"nodeId":   "1",
+							"ignored":  false,
+							"role":     map[string]any{"type": "role", "value": "RootWebArea"},
+							"name":     map[string]any{"type": "computedString", "value": "Example App"},
+							"childIds": []string{"2", "3", "4"},
 						},
 						{
 							"nodeId":  "2",
@@ -717,6 +718,15 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 							"ignored": false,
 							"role":    map[string]any{"type": "role", "value": "button"},
 							"name":    map[string]any{"type": "computedString", "value": "Submit"},
+						},
+						{
+							"nodeId":  "4",
+							"ignored": false,
+							"role":    map[string]any{"type": "role", "value": "heading"},
+							"name":    map[string]any{"type": "computedString", "value": "Welcome"},
+							"properties": []map[string]any{
+								{"name": "level", "value": map[string]any{"type": "integer", "value": 1}},
+							},
 						},
 					},
 				}

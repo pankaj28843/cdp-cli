@@ -1136,11 +1136,27 @@ type a11yNode struct {
 	NodeID   string         `json:"node_id,omitempty"`
 	Role     string         `json:"role,omitempty"`
 	Name     string         `json:"name,omitempty"`
+	Value    string         `json:"value,omitempty"`
 	Disabled bool           `json:"disabled,omitempty"`
 	Ignored  bool           `json:"ignored"`
 	Depth    int            `json:"depth"`
 	Path     string         `json:"path,omitempty"`
+	ChildIDs []string       `json:"child_ids,omitempty"`
 	Raw      map[string]any `json:"raw,omitempty"`
+}
+
+type a11ySnapshotResult struct {
+	URL            string   `json:"url,omitempty"`
+	Title          string   `json:"title,omitempty"`
+	Selector       string   `json:"selector"`
+	LineCount      int      `json:"line_count"`
+	Lines          []string `json:"lines"`
+	Text           string   `json:"text"`
+	Truncated      bool     `json:"truncated"`
+	Depth          int      `json:"depth"`
+	Limit          int      `json:"limit"`
+	IncludeIgnored bool     `json:"include_ignored,omitempty"`
+	Source         string   `json:"source"`
 }
 
 func focusExpression(selector string) string {
@@ -1311,21 +1327,7 @@ func collectA11yNodes(ctx context.Context, session *cdp.PageSession, depth, limi
 	if err := execSessionJSON(ctx, session, "Accessibility.getFullAXTree", map[string]any{}, &raw); err != nil {
 		return nil, false, commandError("connection_failed", "connection", fmt.Sprintf("collect accessibility tree: %v", err), ExitConnection, []string{"cdp protocol describe Accessibility.getFullAXTree --json"})
 	}
-	nodes := make([]a11yNode, 0, len(raw.Nodes))
-	for _, item := range raw.Nodes {
-		node := normalizeA11yNode(item)
-		if !includeIgnored && node.Ignored {
-			continue
-		}
-		if depth > 0 && node.Depth > depth {
-			continue
-		}
-		nodes = append(nodes, node)
-		if limit > 0 && len(nodes) >= limit {
-			return nodes, true, nil
-		}
-	}
-	return nodes, false, nil
+	return normalizeA11yNodes(raw.Nodes, depth, limit, includeIgnored), a11yNodesTruncated(raw.Nodes, depth, limit, includeIgnored), nil
 }
 
 func normalizeA11yNode(raw map[string]any) a11yNode {
@@ -1335,6 +1337,8 @@ func normalizeA11yNode(raw map[string]any) a11yNode {
 	}
 	node.Role = axPropString(raw["role"])
 	node.Name = axPropString(raw["name"])
+	node.Value = axPropString(raw["value"])
+	node.ChildIDs = stringSliceValue(raw["childIds"])
 	if props, ok := raw["properties"].([]any); ok {
 		for _, prop := range props {
 			m, ok := prop.(map[string]any)
@@ -1347,6 +1351,294 @@ func normalizeA11yNode(raw map[string]any) a11yNode {
 		}
 	}
 	return node
+}
+
+func normalizeA11yNodes(rawNodes []map[string]any, maxDepth, limit int, includeIgnored bool) []a11yNode {
+	nodesByID := map[string]a11yNode{}
+	childrenByID := map[string][]string{}
+	hasParent := map[string]bool{}
+	order := make([]string, 0, len(rawNodes))
+	for _, raw := range rawNodes {
+		node := normalizeA11yNode(raw)
+		if node.NodeID == "" {
+			node.NodeID = fmt.Sprintf("index:%d", len(order))
+		}
+		nodesByID[node.NodeID] = node
+		childrenByID[node.NodeID] = node.ChildIDs
+		order = append(order, node.NodeID)
+		for _, childID := range node.ChildIDs {
+			hasParent[childID] = true
+		}
+	}
+	roots := make([]string, 0, len(order))
+	for _, id := range order {
+		if !hasParent[id] {
+			roots = append(roots, id)
+		}
+	}
+	if len(roots) == 0 {
+		roots = order
+	}
+
+	out := make([]a11yNode, 0, len(rawNodes))
+	seen := map[string]bool{}
+	var visit func(id string, depth int, path string)
+	visit = func(id string, depth int, path string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		node, ok := nodesByID[id]
+		if !ok {
+			return
+		}
+		node.Depth = depth
+		node.Path = path
+		if (includeIgnored || !node.Ignored) && (maxDepth <= 0 || depth <= maxDepth) {
+			out = append(out, node)
+		}
+		for idx, childID := range childrenByID[id] {
+			childPath := fmt.Sprintf("%s/%d", path, idx)
+			if path == "" {
+				childPath = fmt.Sprint(idx)
+			}
+			visit(childID, depth+1, childPath)
+		}
+	}
+	for idx, id := range roots {
+		visit(id, 0, fmt.Sprint(idx))
+	}
+	for _, id := range order {
+		if !seen[id] {
+			visit(id, 0, fmt.Sprint(len(seen)))
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		return out[:limit]
+	}
+	return out
+}
+
+func a11yNodesTruncated(rawNodes []map[string]any, depth, limit int, includeIgnored bool) bool {
+	if limit <= 0 {
+		return false
+	}
+	nodes := normalizeA11yNodes(rawNodes, depth, 0, includeIgnored)
+	return len(nodes) > limit
+}
+
+func collectA11ySnapshot(ctx context.Context, session *cdp.PageSession, selector string, depth, limit int, includeIgnored bool) (a11ySnapshotResult, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		selector = "body"
+	}
+	rawNodes, source, err := collectA11yRawNodesForSnapshot(ctx, session, selector)
+	if err != nil {
+		return a11ySnapshotResult{}, err
+	}
+	nodes := normalizeA11yNodes(rawNodes, depth, limit, includeIgnored)
+	truncated := a11yNodesTruncated(rawNodes, depth, limit, includeIgnored)
+	lines := ariaSnapshotLines(nodes)
+	text := strings.Join(lines, "\n")
+	if text != "" {
+		text += "\n"
+	}
+	return a11ySnapshotResult{
+		Selector:       selector,
+		LineCount:      len(lines),
+		Lines:          lines,
+		Text:           text,
+		Truncated:      truncated,
+		Depth:          depth,
+		Limit:          limit,
+		IncludeIgnored: includeIgnored,
+		Source:         source,
+	}, nil
+}
+
+func collectA11yRawNodesForSnapshot(ctx context.Context, session *cdp.PageSession, selector string) ([]map[string]any, string, error) {
+	if selector == "" || selector == "body" || selector == "html" {
+		var raw struct {
+			Nodes []map[string]any `json:"nodes"`
+		}
+		if err := execSessionJSON(ctx, session, "Accessibility.getFullAXTree", map[string]any{}, &raw); err != nil {
+			return nil, "", commandError("connection_failed", "connection", fmt.Sprintf("collect accessibility snapshot: %v", err), ExitConnection, []string{"cdp protocol describe Accessibility.getFullAXTree --json"})
+		}
+		return raw.Nodes, "cdp-accessibility-tree", nil
+	}
+	nodeID, err := queryDOMNodeID(ctx, session, selector, "cdp a11y snapshot --selector "+shellQuote(selector)+" --json")
+	if err != nil {
+		return nil, "", err
+	}
+	var raw struct {
+		Nodes []map[string]any `json:"nodes"`
+	}
+	if err := execSessionJSON(ctx, session, "Accessibility.getPartialAXTree", map[string]any{"nodeId": nodeID, "fetchRelatives": true}, &raw); err != nil {
+		return nil, "", commandError("connection_failed", "connection", fmt.Sprintf("collect accessibility snapshot for %q: %v", selector, err), ExitConnection, []string{"cdp protocol describe Accessibility.getPartialAXTree --json"})
+	}
+	return raw.Nodes, "cdp-accessibility-partial-tree", nil
+}
+
+func queryDOMNodeID(ctx context.Context, session *cdp.PageSession, selector, example string) (int, error) {
+	var doc struct {
+		Root struct {
+			NodeID int `json:"nodeId"`
+		} `json:"root"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.getDocument", map[string]any{"depth": 0, "pierce": true}, &doc); err != nil {
+		return 0, commandError("connection_failed", "connection", fmt.Sprintf("inspect DOM for selector %q: %v", selector, err), ExitConnection, []string{"cdp protocol describe DOM.getDocument --json"})
+	}
+	if doc.Root.NodeID == 0 {
+		return 0, commandError("dom_unavailable", "connection", "DOM.getDocument did not return a root node", ExitConnection, []string{"cdp daemon health --json"})
+	}
+	var query struct {
+		NodeID int `json:"nodeId"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.querySelector", map[string]any{"nodeId": doc.Root.NodeID, "selector": selector}, &query); err != nil {
+		return 0, commandError("invalid_selector", "usage", fmt.Sprintf("query selector %q: %v", selector, err), ExitUsage, []string{example})
+	}
+	if query.NodeID == 0 {
+		return 0, commandError("invalid_selector", "usage", fmt.Sprintf("selector %q matched no DOM node", selector), ExitUsage, []string{example})
+	}
+	return query.NodeID, nil
+}
+
+func ariaSnapshotLines(nodes []a11yNode) []string {
+	minDepth := -1
+	for _, node := range nodes {
+		if !ariaSnapshotIncludeNode(node) {
+			continue
+		}
+		if minDepth == -1 || node.Depth < minDepth {
+			minDepth = node.Depth
+		}
+	}
+	if minDepth < 0 {
+		return []string{}
+	}
+	lines := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if !ariaSnapshotIncludeNode(node) {
+			continue
+		}
+		depth := node.Depth - minDepth
+		if depth < 0 {
+			depth = 0
+		}
+		lines = append(lines, strings.Repeat("  ", depth)+ariaSnapshotLine(node))
+	}
+	return lines
+}
+
+func ariaSnapshotIncludeNode(node a11yNode) bool {
+	role := strings.TrimSpace(node.Role)
+	if role == "" {
+		return false
+	}
+	switch strings.ToLower(role) {
+	case "rootwebarea":
+		return false
+	case "none", "generic":
+		return strings.TrimSpace(node.Name) != ""
+	default:
+		return true
+	}
+}
+
+func ariaSnapshotLine(node a11yNode) string {
+	role := ariaSnapshotRole(node.Role)
+	name := strings.TrimSpace(node.Name)
+	if name == "" {
+		name = strings.TrimSpace(node.Value)
+	}
+	attrs := ariaSnapshotAttrs(node)
+	if name == "" {
+		if attrs == "" {
+			return "- " + role
+		}
+		return "- " + role + " " + attrs
+	}
+	if role == "text" || role == "paragraph" || role == "textbox" {
+		if attrs == "" {
+			return "- " + role + ": " + name
+		}
+		return "- " + role + ": " + name + " " + attrs
+	}
+	if attrs == "" {
+		return "- " + role + " " + fmt.Sprintf("%q", name)
+	}
+	return "- " + role + " " + fmt.Sprintf("%q", name) + " " + attrs
+}
+
+func ariaSnapshotRole(role string) string {
+	role = strings.TrimSpace(role)
+	switch strings.ToLower(role) {
+	case "statictext", "inlinetextbox":
+		return "text"
+	case "rootwebarea":
+		return "document"
+	default:
+		return strings.ToLower(role)
+	}
+}
+
+func ariaSnapshotAttrs(node a11yNode) string {
+	attrs := []string{}
+	if node.Disabled {
+		attrs = append(attrs, "disabled")
+	}
+	if props, ok := node.Raw["properties"].([]any); ok {
+		for _, prop := range props {
+			m, ok := prop.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := m["name"].(string)
+			if name == "" || name == "disabled" && node.Disabled {
+				continue
+			}
+			if !ariaSnapshotAttrName(name) {
+				continue
+			}
+			value := propValue(m["value"])
+			if b, ok := value.(bool); ok {
+				if b {
+					attrs = append(attrs, name)
+				}
+				continue
+			}
+			if s := strings.TrimSpace(fmt.Sprint(value)); s != "" {
+				attrs = append(attrs, name+"="+s)
+			}
+		}
+	}
+	if len(attrs) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(attrs, " ") + "]"
+}
+
+func ariaSnapshotAttrName(name string) bool {
+	switch name {
+	case "checked", "disabled", "expanded", "level", "pressed", "selected":
+		return true
+	default:
+		return false
+	}
+}
+
+func stringSliceValue(v any) []string {
+	values, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if s, ok := value.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func filterA11yNodes(nodes []a11yNode, role, name string) []a11yNode {
