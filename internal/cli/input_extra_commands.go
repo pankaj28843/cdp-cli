@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -765,6 +766,7 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateMediaCommand())
 	cmd.AddCommand(a.newEmulateUserAgentCommand())
 	cmd.AddCommand(a.newEmulateGeolocationCommand())
+	cmd.AddCommand(a.newEmulateTimezoneCommand())
 	cmd.AddCommand(a.newEmulateCPUCommand())
 	cmd.AddCommand(a.newEmulateNetworkCommand())
 	return cmd
@@ -818,7 +820,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 
 func (a *app) newEmulateClearCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
-	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, CPU, and network emulation", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, timezone, CPU, and network emulation", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -838,6 +840,9 @@ func (a *app) newEmulateClearCommand() *cobra.Command {
 		}
 		if err := execSessionJSON(ctx, session, "Emulation.setUserAgentOverride", map[string]any{"userAgent": ""}, nil); err == nil {
 			cleared = append(cleared, "user-agent")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setTimezoneOverride", map[string]any{"timezoneId": ""}, nil); err == nil {
+			cleared = append(cleared, "timezone")
 		}
 		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", map[string]any{"rate": 1}, nil); err == nil {
 			cleared = append(cleared, "cpu")
@@ -941,6 +946,41 @@ func (a *app) newEmulateGeolocationCommand() *cobra.Command {
 	cmd.Flags().Float64Var(&latitude, "latitude", 0, "latitude to emulate")
 	cmd.Flags().Float64Var(&longitude, "longitude", 0, "longitude to emulate")
 	cmd.Flags().Float64Var(&accuracy, "accuracy", 100, "geolocation accuracy in meters")
+	return cmd
+}
+
+func (a *app) newEmulateTimezoneCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, timezoneID string
+	cmd := &cobra.Command{Use: "timezone", Short: "Apply timezone emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		timezoneID = strings.TrimSpace(timezoneID)
+		if timezoneID == "" {
+			return commandError("usage", "usage", "--timezone-id is required", ExitUsage, []string{"cdp emulate timezone --timezone-id UTC --json", "cdp emulate timezone --timezone-id America/New_York --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"timezoneId": timezoneID}
+		if err := execSessionJSON(ctx, session, "Emulation.setTimezoneOverride", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate timezone: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setTimezoneOverride --json"})
+		}
+		timezone := map[string]any{"timezone_id": timezoneID}
+		if result, err := session.Evaluate(ctx, "Intl.DateTimeFormat().resolvedOptions().timeZone", false); err == nil && result.Exception == nil {
+			var observed string
+			if err := json.Unmarshal(result.Object.Value, &observed); err == nil && strings.TrimSpace(observed) != "" {
+				timezone["observed_timezone"] = observed
+				timezone["verified"] = observed == timezoneID
+			}
+		}
+		return a.render(ctx, "timezone emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"timezone": timezone, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&timezoneID, "timezone-id", "", "IANA timezone id to emulate, for example UTC or America/New_York")
 	return cmd
 }
 

@@ -140,6 +140,10 @@ fi
   | jq -e --arg url "$app_url" '.ok == true and .wait.kind == "url" and .wait.condition == "contains" and .wait.matched == true and .wait.needle == $url and (.wait.url | contains($url)) and .wait.title == "cdp-cli demo app" and .wait.poll_interval == "100ms" and .wait.evidence.condition == "contains" and (.target.url | contains($url))' >/dev/null
 "$binary" assert title "cdp-cli demo app" --mode exact --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \
   | jq -e --arg url "$app_url" '.ok == true and .assertion.field == "title" and .assertion.passed == true and .assertion.actual == "cdp-cli demo app" and .assertion.title == "cdp-cli demo app" and (.assertion.url | contains($url)) and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .target.title == "cdp-cli demo app"' >/dev/null
+"$binary" emulate timezone --timezone-id UTC --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .emulation.timezone.timezone_id == "UTC" and .emulation.timezone.observed_timezone == "UTC" and .emulation.timezone.verified == true and (.emulation.cleanup_command | contains("cdp emulate clear"))' >/dev/null
+"$binary" emulate clear --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and (.emulation.cleared_overrides | index("timezone"))' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
   | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
 require_artifact "$state_dir/page-load.local.json"

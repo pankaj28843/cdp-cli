@@ -2153,6 +2153,38 @@ func TestEmulateGeolocationJSON(t *testing.T) {
 	}
 }
 
+func TestEmulateTimezoneJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "timezone", "--timezone-id", "UTC", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate timezone exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			Timezone struct {
+				TimezoneID       string `json:"timezone_id"`
+				ObservedTimezone string `json:"observed_timezone"`
+				Verified         bool   `json:"verified"`
+			} `json:"timezone"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate timezone output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.Timezone.TimezoneID != "UTC" || got.Emulation.Timezone.ObservedTimezone != "UTC" || !got.Emulation.Timezone.Verified || !strings.Contains(got.Emulation.CleanupCommand, "cdp emulate clear") {
+		t.Fatalf("emulate timezone output = %+v, want applied timezone override and cleanup command", got)
+	}
+}
+
 func TestEmulateCPUJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -2205,7 +2237,7 @@ func TestEmulateClearJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("emulate clear output is invalid JSON: %v", err)
 	}
-	if !got.OK || !containsString(got.Emulation.ClearedOverrides, "network") {
+	if !got.OK || !containsString(got.Emulation.ClearedOverrides, "network") || !containsString(got.Emulation.ClearedOverrides, "timezone") {
 		t.Fatalf("emulate clear output = %+v, want network cleared", got)
 	}
 }

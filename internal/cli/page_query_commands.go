@@ -813,10 +813,14 @@ func (a *app) newWaitLoadStateCommand() *cobra.Command {
 				"wait":   result,
 			}
 			if err != nil {
-				if ctx.Err() == nil {
+				if ctx.Err() == nil && exitCode(err) != ExitTimeout {
 					return err
 				}
-				return commandErrorWithData("timeout", "timeout", fmt.Sprintf("wait load-state %q not reached for target %s: %v", state, session.TargetID, ctx.Err()), ExitTimeout, loadStateWaitRemediations(state), report)
+				cause := err
+				if ctx.Err() != nil {
+					cause = ctx.Err()
+				}
+				return commandErrorWithData("timeout", "timeout", fmt.Sprintf("wait load-state %q not reached for target %s: %v", state, session.TargetID, cause), ExitTimeout, loadStateWaitRemediations(state), report)
 			}
 			if result.Error != nil {
 				return commandErrorWithData("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, loadStateWaitRemediations(state), report)
@@ -881,8 +885,8 @@ func waitForLoadStateCondition(ctx context.Context, session *cdp.PageSession, po
 	for {
 		var result waitResult
 		if err := evaluateJSONValue(ctx, session, waitLoadStateExpression(state), "wait load-state", &result); err != nil {
-			if ctx.Err() != nil {
-				return decorateLoadStateTimeoutResult(last, state), ctx.Err()
+			if ctx.Err() != nil || exitCode(err) == ExitTimeout {
+				return decorateLoadStateTimeoutResult(last, state), err
 			}
 			return last, err
 		}
