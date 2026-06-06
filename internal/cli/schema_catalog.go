@@ -511,15 +511,16 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"press": {
 			Name:        "press",
-			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching.",
+			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching; optional text/selector waits verify post-press state.",
 			Fields: []schemaField{
-				{Name: "ok", Type: "boolean", Required: true, Description: "True when press command completed or --trial target evidence passed."},
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when press command completed and any requested verification matched, or --trial target evidence passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: pressed, trial, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "press", Type: "press_result", Required: true, Description: "Selector, key name, matched count, trial flag, and dispatch status."},
+				{Name: "press", Type: "press_result", Required: true, Description: "Selector, key name, matched count, trial flag, dispatch status, and optional verification boolean."},
 				{Name: "actionability", Type: "actionability_result", Required: false, Description: "Locator/selector target evidence for press. Playwright locator.press does not require visible/stable/enabled/editable checks, so only attachment is required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector resolved from a locator before press target evidence or dispatch."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Text or selector wait result when --wait-text or --wait-selector is used."},
 			},
 		},
 		"hover": {

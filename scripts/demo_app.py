@@ -193,6 +193,11 @@ DEMO_HTML = """<!doctype html>
       const probe = window.__cdpClickResponseProbe || 'default';
       fetch('/api/ok?click_wait_response=' + encodeURIComponent(probe)).catch(error => console.warn('response click failed', error));
     });
+    document.querySelector('#agent-input').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        document.querySelector('#status').textContent = 'Submitted from press';
+      }
+    });
     document.querySelector('#partial-selection').indeterminate = true;
     fetch('/api/ok').then(() => fetch('/api/fail'));
     Promise.all([cacheReady, serviceWorkerReady, indexedDBReady]).finally(() => {

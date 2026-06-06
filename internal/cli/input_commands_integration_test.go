@@ -2692,6 +2692,84 @@ func TestPressByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestPressWaitTextByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"press", "Enter", "Search", "--by", "label", "--wait-text", "Example", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("press wait text exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Press            struct {
+			Selector   string `json:"selector"`
+			Key        string `json:"key"`
+			Dispatched bool   `json:"dispatched"`
+			Verified   *bool  `json:"verified"`
+		} `json:"press"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+		Locator struct {
+			Strict bool `json:"strict"`
+		} `json:"locator"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("press wait text output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "pressed" || got.ResolvedSelector != "input#q" || got.Press.Selector != "input#q" || got.Press.Key != "Enter" || !got.Press.Dispatched || got.Press.Verified == nil || !*got.Press.Verified || got.Verification.Kind != "text" || got.Verification.Needle != "Example" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "250ms" || !got.Locator.Strict {
+		t.Fatalf("press wait text = %+v, want dispatched press with matched text verification", got)
+	}
+}
+
+func TestPressWaitSelectorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"press", "Enter", "--selector", "input#q", "--wait-selector", "main", "--poll", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("press wait selector exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Press struct {
+			Selector   string `json:"selector"`
+			Dispatched bool   `json:"dispatched"`
+			Verified   *bool  `json:"verified"`
+		} `json:"press"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Selector     string `json:"selector"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("press wait selector output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Press.Selector != "input#q" || !got.Press.Dispatched || got.Press.Verified == nil || !*got.Press.Verified || got.Verification.Kind != "selector" || got.Verification.Selector != "main" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "100ms" {
+		t.Fatalf("press wait selector = %+v, want matched selector verification", got)
+	}
+}
+
 func TestPressTrialByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

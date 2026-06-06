@@ -269,8 +269,8 @@ require_artifact "$action_capture_dir/action-capture.manifest.json"
   | jq -e '.ok == true and .action == "typed" and .type.typing == true and .type.typed == " plus typed"' >/dev/null
 "$binary" press Enter "Agent input" --by label --trial --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "trial" and .press.trial == true and .press.dispatched == false and .locator.strict == true and .resolved_selector == "input#agent-input" and .actionability.actionable == true and .actionability.required_checks == ["attached"] and .actionability.checks.attached.passed == true and .actionability.checks.visible.required == false' >/dev/null
-"$binary" press Enter "Agent input" --by label --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "pressed" and .press.dispatched == true and .press.key == "Enter" and .press.selector == "input#agent-input" and .locator.strict == true and .resolved_selector == "input#agent-input" and .actionability.actionable == true and .actionability.required_checks == ["attached"]' >/dev/null
+"$binary" press Enter "Agent input" --by label --wait-text "Submitted from press" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "pressed" and .press.dispatched == true and .press.key == "Enter" and .press.verified == true and .press.selector == "input#agent-input" and .verification.kind == "text" and .verification.needle == "Submitted from press" and .verification.matched == true and .locator.strict == true and .resolved_selector == "input#agent-input" and .actionability.actionable == true and .actionability.required_checks == ["attached"]' >/dev/null
 "$binary" press Enter --selector "#agent-input" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "pressed" and .press.dispatched == true and .press.key == "Enter"' >/dev/null
 "$binary" hover "Click target" --by role --role button --trial --state-dir "$state_dir/cdp-state" --json \
