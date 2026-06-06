@@ -69,6 +69,7 @@ type typeResult struct {
 	Value    string     `json:"value,omitempty"`
 	Kind     string     `json:"kind,omitempty"`
 	Strategy string     `json:"strategy,omitempty"`
+	Verified *bool      `json:"verified,omitempty"`
 	Error    *evalError `json:"error,omitempty"`
 }
 
@@ -1358,6 +1359,9 @@ func (a *app) newTypeCommand() *cobra.Command {
 	var locatorOpts locatorActionOptions
 	var trial bool
 	var force bool
+	var waitText string
+	var waitSelector string
+	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "type <selector-or-locator> <text>",
 		Short: "Type text into the first matching editable element by CSS selector or strict locator",
@@ -1372,6 +1376,17 @@ func (a *app) newTypeCommand() *cobra.Command {
 			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
+			}
+			hasWaitText := strings.TrimSpace(waitText) != ""
+			hasWaitSelector := strings.TrimSpace(waitSelector) != ""
+			if hasWaitText && hasWaitSelector {
+				return commandError("usage", "usage", "use only one type wait mode: --wait-text or --wait-selector", ExitUsage, []string{"cdp type 'Search' query --by label --wait-selector '.suggestions' --json"})
+			}
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp type 'Search' query --by label --wait-text Results --poll 250ms --json"})
+			}
+			if trial && (hasWaitText || hasWaitSelector) {
+				return commandError("usage", "usage", "--trial does not change the page, so it cannot use type wait flags", ExitUsage, []string{"cdp type 'Search' query --by label --wait-text Results --json"})
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -1452,18 +1467,36 @@ func (a *app) newTypeCommand() *cobra.Command {
 					[]string{"cdp type #name Alice --json"},
 				)
 			}
+			verified := true
+			var verification *waitResult
+			if hasWaitText || hasWaitSelector {
+				wait, err := waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+				if err != nil {
+					return err
+				}
+				verified = wait.Matched
+				result.Verified = &verified
+				verification = &wait
+			}
 			report := map[string]any{
-				"ok":            true,
+				"ok":            verified,
 				"action":        "typed",
 				"target":        pageRow(target),
 				"type":          result,
 				"actionability": actionability,
 			}
+			if verification != nil {
+				report["verification"] = verification
+			}
 			if locator != nil {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
-			return a.render(ctx, fmt.Sprintf("typed\t%s\t%s", target.TargetID, result.Selector), report)
+			human := fmt.Sprintf("typed\t%s\t%s", target.TargetID, result.Selector)
+			if !verified {
+				human = fmt.Sprintf("type-unverified\t%s\t%s", target.TargetID, result.Selector)
+			}
+			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -1473,6 +1506,9 @@ func (a *app) newTypeCommand() *cobra.Command {
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without typing text")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential type actionability checks and record skipped checks in JSON")
+	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
+	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }
 

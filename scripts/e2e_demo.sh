@@ -265,8 +265,8 @@ require_artifact "$action_capture_dir/action-capture.action.console.json"
 require_artifact "$action_capture_dir/action-capture.manifest.json"
 "$binary" fill "#agent-input" "filled value" --wait-text "Suggestion ready: filled value" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.verified == true and .fill.value == "filled value" and .verification.kind == "text" and .verification.needle == "Suggestion ready: filled value" and .verification.matched == true and .actionability.actionable == true' >/dev/null
-"$binary" type "#agent-input" " plus typed" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "typed" and .type.typing == true and .type.typed == " plus typed"' >/dev/null
+"$binary" type "#agent-input" " plus typed" --wait-text "Suggestion ready: filled value plus typed" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "typed" and .type.typing == true and .type.verified == true and .type.typed == " plus typed" and .verification.kind == "text" and .verification.needle == "Suggestion ready: filled value plus typed" and .verification.matched == true' >/dev/null
 "$binary" press Enter "Agent input" --by label --trial --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "trial" and .press.trial == true and .press.dispatched == false and .locator.strict == true and .resolved_selector == "input#agent-input" and .actionability.actionable == true and .actionability.required_checks == ["attached"] and .actionability.checks.attached.passed == true and .actionability.checks.visible.required == false' >/dev/null
 "$binary" press Enter "Agent input" --by label --wait-text "Submitted from press" --state-dir "$state_dir/cdp-state" --json \

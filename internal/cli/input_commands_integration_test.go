@@ -2579,6 +2579,85 @@ func TestTypeByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestTypeWaitTextByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "Search", "typed value", "--by", "label", "--wait-text", "Example", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("type wait text exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Type             struct {
+			Selector string `json:"selector"`
+			Typing   bool   `json:"typing"`
+			Verified *bool  `json:"verified"`
+			Typed    string `json:"typed"`
+			Value    string `json:"value"`
+		} `json:"type"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+		Locator struct {
+			Strict bool `json:"strict"`
+		} `json:"locator"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("type wait text output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "typed" || got.ResolvedSelector != "input#q" || got.Type.Selector != "input#q" || !got.Type.Typing || got.Type.Verified == nil || !*got.Type.Verified || got.Type.Typed != "typed value" || got.Type.Value != "beforetyped value" || got.Verification.Kind != "text" || got.Verification.Needle != "Example" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "250ms" || !got.Locator.Strict {
+		t.Fatalf("type wait text = %+v, want typed value with matched text verification", got)
+	}
+}
+
+func TestTypeWaitSelectorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "input#q", "typed value", "--wait-selector", "main", "--poll", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("type wait selector exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Type struct {
+			Selector string `json:"selector"`
+			Typing   bool   `json:"typing"`
+			Verified *bool  `json:"verified"`
+		} `json:"type"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Selector     string `json:"selector"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("type wait selector output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Type.Selector != "input#q" || !got.Type.Typing || got.Type.Verified == nil || !*got.Type.Verified || got.Verification.Kind != "selector" || got.Verification.Selector != "main" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "100ms" {
+		t.Fatalf("type wait selector = %+v, want matched selector verification", got)
+	}
+}
+
 func TestTypeForceSkipsVisibleJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
