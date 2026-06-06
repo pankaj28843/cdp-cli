@@ -399,7 +399,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{"nodeId": nodeID}
 			} else if req.Method == "DOM.setFileInputFiles" {
 				resp["result"] = map[string]any{}
-			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setTimezoneOverride" || req.Method == "Emulation.setCPUThrottlingRate" || req.Method == "Network.emulateNetworkConditions" {
+			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setTimezoneOverride" || req.Method == "Emulation.setLocaleOverride" || req.Method == "Emulation.setCPUThrottlingRate" || req.Method == "Network.emulateNetworkConditions" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.disable" {
 				resp["result"] = map[string]any{}
@@ -1024,6 +1024,9 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 	_ = json.Unmarshal(params, &req)
 	if strings.Contains(req.Expression, "Intl.DateTimeFormat().resolvedOptions().timeZone") {
 		return map[string]any{"result": map[string]any{"type": "string", "value": "UTC"}}
+	}
+	if strings.Contains(req.Expression, "Intl.DateTimeFormat().resolvedOptions().locale") {
+		return map[string]any{"result": map[string]any{"type": "string", "value": "de-DE"}}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_locator_find__") {
 		by := expressionStringArg(req.Expression, "const by = ")

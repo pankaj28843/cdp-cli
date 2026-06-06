@@ -767,6 +767,7 @@ func (a *app) newEmulateCommand() *cobra.Command {
 	cmd.AddCommand(a.newEmulateUserAgentCommand())
 	cmd.AddCommand(a.newEmulateGeolocationCommand())
 	cmd.AddCommand(a.newEmulateTimezoneCommand())
+	cmd.AddCommand(a.newEmulateLocaleCommand())
 	cmd.AddCommand(a.newEmulateCPUCommand())
 	cmd.AddCommand(a.newEmulateNetworkCommand())
 	return cmd
@@ -820,7 +821,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 
 func (a *app) newEmulateClearCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
-	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, timezone, CPU, and network emulation", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, timezone, locale, CPU, and network emulation", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
 		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
@@ -843,6 +844,9 @@ func (a *app) newEmulateClearCommand() *cobra.Command {
 		}
 		if err := execSessionJSON(ctx, session, "Emulation.setTimezoneOverride", map[string]any{"timezoneId": ""}, nil); err == nil {
 			cleared = append(cleared, "timezone")
+		}
+		if err := execSessionJSON(ctx, session, "Emulation.setLocaleOverride", map[string]any{"locale": ""}, nil); err == nil {
+			cleared = append(cleared, "locale")
 		}
 		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", map[string]any{"rate": 1}, nil); err == nil {
 			cleared = append(cleared, "cpu")
@@ -981,6 +985,41 @@ func (a *app) newEmulateTimezoneCommand() *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&timezoneID, "timezone-id", "", "IANA timezone id to emulate, for example UTC or America/New_York")
+	return cmd
+}
+
+func (a *app) newEmulateLocaleCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, locale string
+	cmd := &cobra.Command{Use: "locale", Short: "Apply locale emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		locale = strings.TrimSpace(locale)
+		if locale == "" {
+			return commandError("usage", "usage", "--locale is required", ExitUsage, []string{"cdp emulate locale --locale de-DE --json", "cdp emulate locale --locale en-US --json"})
+		}
+		ctx, cancel := a.browserCommandContext(cmd)
+		defer cancel()
+		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
+		defer session.Close(ctx)
+		params := map[string]any{"locale": locale}
+		if err := execSessionJSON(ctx, session, "Emulation.setLocaleOverride", params, nil); err != nil {
+			return commandError("connection_failed", "connection", fmt.Sprintf("emulate locale: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setLocaleOverride --json"})
+		}
+		localeInfo := map[string]any{"locale": locale}
+		if result, err := session.Evaluate(ctx, "Intl.DateTimeFormat().resolvedOptions().locale", false); err == nil && result.Exception == nil {
+			var observed string
+			if err := json.Unmarshal(result.Object.Value, &observed); err == nil && strings.TrimSpace(observed) != "" {
+				localeInfo["observed_locale"] = observed
+				localeInfo["verified"] = strings.EqualFold(observed, locale)
+			}
+		}
+		return a.render(ctx, "locale emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"locale": localeInfo, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&locale, "locale", "", "BCP 47 locale to emulate, for example de-DE or en-US")
 	return cmd
 }
 

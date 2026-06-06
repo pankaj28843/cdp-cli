@@ -2185,6 +2185,38 @@ func TestEmulateTimezoneJSON(t *testing.T) {
 	}
 }
 
+func TestEmulateLocaleJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"emulate", "locale", "--locale", "de-DE", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("emulate locale exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK        bool `json:"ok"`
+		Emulation struct {
+			Locale struct {
+				Locale         string `json:"locale"`
+				ObservedLocale string `json:"observed_locale"`
+				Verified       bool   `json:"verified"`
+			} `json:"locale"`
+			CleanupCommand string `json:"cleanup_command"`
+		} `json:"emulation"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("emulate locale output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Emulation.Locale.Locale != "de-DE" || got.Emulation.Locale.ObservedLocale != "de-DE" || !got.Emulation.Locale.Verified || !strings.Contains(got.Emulation.CleanupCommand, "cdp emulate clear") {
+		t.Fatalf("emulate locale output = %+v, want applied locale override and cleanup command", got)
+	}
+}
+
 func TestEmulateCPUJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -2237,8 +2269,8 @@ func TestEmulateClearJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("emulate clear output is invalid JSON: %v", err)
 	}
-	if !got.OK || !containsString(got.Emulation.ClearedOverrides, "network") || !containsString(got.Emulation.ClearedOverrides, "timezone") {
-		t.Fatalf("emulate clear output = %+v, want network cleared", got)
+	if !got.OK || !containsString(got.Emulation.ClearedOverrides, "network") || !containsString(got.Emulation.ClearedOverrides, "timezone") || !containsString(got.Emulation.ClearedOverrides, "locale") {
+		t.Fatalf("emulate clear output = %+v, want network, timezone, and locale cleared", got)
 	}
 }
 

@@ -142,8 +142,10 @@ fi
   | jq -e --arg url "$app_url" '.ok == true and .assertion.field == "title" and .assertion.passed == true and .assertion.actual == "cdp-cli demo app" and .assertion.title == "cdp-cli demo app" and (.assertion.url | contains($url)) and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .target.title == "cdp-cli demo app"' >/dev/null
 "$binary" emulate timezone --timezone-id UTC --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .emulation.timezone.timezone_id == "UTC" and .emulation.timezone.observed_timezone == "UTC" and .emulation.timezone.verified == true and (.emulation.cleanup_command | contains("cdp emulate clear"))' >/dev/null
+"$binary" emulate locale --locale de-DE --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .emulation.locale.locale == "de-DE" and .emulation.locale.observed_locale == "de-DE" and .emulation.locale.verified == true and (.emulation.cleanup_command | contains("cdp emulate clear"))' >/dev/null
 "$binary" emulate clear --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and (.emulation.cleared_overrides | index("timezone"))' >/dev/null
+  | jq -e '.ok == true and (.emulation.cleared_overrides | index("timezone")) and (.emulation.cleared_overrides | index("locale"))' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
   | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
 require_artifact "$state_dir/page-load.local.json"

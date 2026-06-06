@@ -250,7 +250,7 @@ func capabilityCatalog() []map[string]any {
 		capabilityRow("performance", "implemented", "perf summary, workflow perf, workflow page-load metrics", []string{"cdp perf summary --duration 1s --json"}, []string{"cdp workflow perf 'https://example.com' --wait 1s --trace tmp/perf.local.json --json"}),
 		capabilityRow("memory", "implemented", "memory counters, heap snapshot artifact", []string{"cdp memory counters --json"}, []string{"cdp memory heap-snapshot --out tmp/heap.heapsnapshot --json"}),
 		capabilityRow("advanced_storage", "implemented", "storage indexeddb, storage cache, storage service-workers", []string{"cdp storage indexeddb list --json", "cdp storage cache list --json", "cdp storage service-workers list --json"}, []string{"cdp storage snapshot --json"}),
-		capabilityRow("emulation", "implemented", "viewport, media, user-agent, geolocation, timezone, CPU throttling, network throttling, responsive audit", []string{"cdp emulate viewport --help", "cdp emulate user-agent --help", "cdp emulate geolocation --help", "cdp emulate timezone --help", "cdp emulate cpu --help", "cdp emulate network --help"}, []string{"cdp workflow responsive-audit 'https://example.com' --json", "cdp emulate network --preset slow-3g --json"}),
+		capabilityRow("emulation", "implemented", "viewport, media, user-agent, geolocation, timezone, locale, CPU throttling, network throttling, responsive audit", []string{"cdp emulate viewport --help", "cdp emulate user-agent --help", "cdp emulate geolocation --help", "cdp emulate timezone --help", "cdp emulate locale --help", "cdp emulate cpu --help", "cdp emulate network --help"}, []string{"cdp workflow responsive-audit 'https://example.com' --json", "cdp emulate network --preset slow-3g --json"}),
 	}
 }
 

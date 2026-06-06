@@ -10,7 +10,7 @@ Active implementation. The command tree, JSON/error conventions, connection
 memory, browser readiness probes, target/page listing, page open/eval/wait/
 observe/snapshot/html/DOM/CSS/layout commands, input automation, screenshots,
 console and network capture, emulation for viewport/media/user-agent/
-geolocation/CPU/network, accessibility/performance/memory probes, raw CDP
+geolocation/timezone/locale/CPU/network, accessibility/performance/memory probes, raw CDP
 discovery/examples/exec, Web Storage/cookie/IndexedDB/Cache Storage/service
 worker controls, headed/default-profile and managed-headless browser runtime
 modes, and cron-safe `daemon keepalive` plus page cleanup commands are in place.
