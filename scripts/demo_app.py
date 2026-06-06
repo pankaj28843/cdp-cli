@@ -193,6 +193,9 @@ DEMO_HTML = """<!doctype html>
       const probe = window.__cdpClickResponseProbe || 'default';
       fetch('/api/ok?click_wait_response=' + encodeURIComponent(probe)).catch(error => console.warn('response click failed', error));
     });
+    document.querySelector('#agent-input').addEventListener('input', event => {
+      document.querySelector('#status').textContent = 'Suggestion ready: ' + event.target.value;
+    });
     document.querySelector('#agent-input').addEventListener('keydown', event => {
       if (event.key === 'Enter') {
         document.querySelector('#status').textContent = 'Submitted from press';

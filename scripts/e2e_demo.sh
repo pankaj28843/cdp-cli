@@ -263,8 +263,8 @@ require_artifact "$action_capture_dir/action-capture.after.a11y.json"
 require_artifact "$action_capture_dir/action-capture.action.network.json"
 require_artifact "$action_capture_dir/action-capture.action.console.json"
 require_artifact "$action_capture_dir/action-capture.manifest.json"
-"$binary" fill "#agent-input" "filled value" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.value == "filled value" and .actionability.actionable == true' >/dev/null
+"$binary" fill "#agent-input" "filled value" --wait-text "Suggestion ready: filled value" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.verified == true and .fill.value == "filled value" and .verification.kind == "text" and .verification.needle == "Suggestion ready: filled value" and .verification.matched == true and .actionability.actionable == true' >/dev/null
 "$binary" type "#agent-input" " plus typed" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "typed" and .type.typing == true and .type.typed == " plus typed"' >/dev/null
 "$binary" press Enter "Agent input" --by label --trial --state-dir "$state_dir/cdp-state" --json \

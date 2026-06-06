@@ -434,15 +434,16 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"fill": {
 			Name:        "fill",
-			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks.",
+			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-fill state.",
 			Fields: []schemaField{
-				{Name: "ok", Type: "boolean", Required: true, Description: "True when fill command completed, or when --trial actionability checks passed."},
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when fill command completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: filled for value updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "fill", Type: "fill_result", Required: true, Description: "Selector, matched count, filled boolean, trial/force flags, and previous/current values."},
+				{Name: "fill", Type: "fill_result", Required: true, Description: "Selector, matched count, filled boolean, trial/force flags, optional verification boolean, and previous/current values."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective actionability evidence for attached, visible, enabled, editable, supporting checks, force, and skipped-check state."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before filling."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Text or selector wait result when --wait-text or --wait-selector is used."},
 			},
 		},
 		"select": {

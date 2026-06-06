@@ -41,6 +41,7 @@ type fillResult struct {
 	Filled   bool       `json:"filled"`
 	Trial    bool       `json:"trial,omitempty"`
 	Force    bool       `json:"force,omitempty"`
+	Verified *bool      `json:"verified,omitempty"`
 	Value    string     `json:"value"`
 	Previous string     `json:"previous"`
 	Error    *evalError `json:"error,omitempty"`
@@ -1204,6 +1205,9 @@ func (a *app) newFillCommand() *cobra.Command {
 	var locatorOpts locatorActionOptions
 	var trial bool
 	var force bool
+	var waitText string
+	var waitSelector string
+	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "fill <selector-or-locator> <value>",
 		Short: "Set the value of the first matching form control by CSS selector or strict locator",
@@ -1211,6 +1215,17 @@ func (a *app) newFillCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
+			}
+			hasWaitText := strings.TrimSpace(waitText) != ""
+			hasWaitSelector := strings.TrimSpace(waitSelector) != ""
+			if hasWaitText && hasWaitSelector {
+				return commandError("usage", "usage", "use only one fill wait mode: --wait-text or --wait-selector", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-selector '.suggestions' --json"})
+			}
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-text Results --poll 250ms --json"})
+			}
+			if trial && (hasWaitText || hasWaitSelector) {
+				return commandError("usage", "usage", "--trial does not change the page, so it cannot use fill wait flags", ExitUsage, []string{"cdp fill 'Search' query --by label --wait-text Results --json"})
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -1291,18 +1306,36 @@ func (a *app) newFillCommand() *cobra.Command {
 					[]string{"cdp fill #name Alice --json"},
 				)
 			}
+			verified := true
+			var verification *waitResult
+			if hasWaitText || hasWaitSelector {
+				wait, err := waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+				if err != nil {
+					return err
+				}
+				verified = wait.Matched
+				result.Verified = &verified
+				verification = &wait
+			}
 			report := map[string]any{
-				"ok":            true,
+				"ok":            verified,
 				"action":        "filled",
 				"target":        pageRow(target),
 				"fill":          result,
 				"actionability": actionability,
 			}
+			if verification != nil {
+				report["verification"] = verification
+			}
 			if locator != nil {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
-			return a.render(ctx, fmt.Sprintf("filled\t%s\t%s", target.TargetID, result.Selector), report)
+			human := fmt.Sprintf("filled\t%s\t%s", target.TargetID, result.Selector)
+			if !verified {
+				human = fmt.Sprintf("fill-unverified\t%s\t%s", target.TargetID, result.Selector)
+			}
+			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -1311,6 +1344,9 @@ func (a *app) newFillCommand() *cobra.Command {
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing the value")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential fill actionability checks and record skipped checks in JSON")
+	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
+	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }
 
