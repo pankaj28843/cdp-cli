@@ -635,6 +635,9 @@ func commandExamples(path string) []string {
 	examples["cdp emulate locale"] = []string{"cdp emulate locale --locale de-DE --json", "cdp emulate locale --locale en-US --json"}
 	examples["cdp emulate cpu"] = []string{"cdp emulate cpu --rate 4 --json", "cdp emulate cpu --rate 1 --json"}
 	examples["cdp emulate network"] = []string{"cdp emulate network --preset slow-3g --json", "cdp emulate network --latency 100 --download-kbps 750 --upload-kbps 250 --json", "cdp emulate network --preset none --json"}
+	examples["cdp permissions"] = []string{"cdp permissions grant notifications --origin https://example.com --json", "cdp permissions reset --json"}
+	examples["cdp permissions grant"] = []string{"cdp permissions grant notifications --origin https://example.com --json", "cdp permissions grant geolocation notifications --origin https://example.com --json"}
+	examples["cdp permissions reset"] = []string{"cdp permissions reset --json"}
 	examples["cdp a11y"] = []string{"cdp a11y tree --depth 4 --json"}
 	examples["cdp a11y tree"] = []string{"cdp a11y tree --target <target-id> --depth 4 --json"}
 	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json"}

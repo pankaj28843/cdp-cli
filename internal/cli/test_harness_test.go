@@ -326,6 +326,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						}
 					}
 				}
+			} else if req.Method == "Browser.setPermission" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Browser.resetPermissions" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.navigate" {
 				var params struct {
 					URL string `json:"url"`

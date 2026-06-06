@@ -160,6 +160,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newFileCommand())
 	root.AddCommand(a.newDialogCommand())
 	root.AddCommand(a.newEmulateCommand())
+	root.AddCommand(a.newPermissionsCommand())
 	root.AddCommand(a.newA11yCommand())
 	root.AddCommand(a.newPerfCommand())
 	root.AddCommand(a.newMemoryCommand())
