@@ -1807,8 +1807,8 @@ func TestDoctorCapabilitiesJSON(t *testing.T) {
 	if commands := capabilityEvidenceCommands(got.Capabilities, "performance"); !containsString(commands, "cdp workflow perf 'https://example.com' --wait 1s --trace tmp/perf.local.json --json") {
 		t.Fatalf("performance evidence_commands = %v, want workflow perf trace evidence", commands)
 	}
-	if commands := capabilityVerifyCommands(got.Capabilities, "emulation"); !containsString(commands, "cdp emulate user-agent --help") || !containsString(commands, "cdp emulate timezone --help") || !containsString(commands, "cdp emulate locale --help") || !containsString(commands, "cdp emulate color-scheme --help") || !containsString(commands, "cdp permissions grant --help") || !containsString(commands, "cdp emulate cpu --help") || !containsString(commands, "cdp emulate network --help") {
-		t.Fatalf("emulation verify_commands = %v, want user-agent, timezone, locale, color-scheme, permissions, CPU, and network help checks", commands)
+	if commands := capabilityVerifyCommands(got.Capabilities, "emulation"); !containsString(commands, "cdp emulate user-agent --help") || !containsString(commands, "cdp emulate timezone --help") || !containsString(commands, "cdp emulate locale --help") || !containsString(commands, "cdp emulate color-scheme --help") || !containsString(commands, "cdp permissions grant --help") || !containsString(commands, "cdp permissions set --help") || !containsString(commands, "cdp emulate cpu --help") || !containsString(commands, "cdp emulate network --help") {
+		t.Fatalf("emulation verify_commands = %v, want user-agent, timezone, locale, color-scheme, permissions grant/set, CPU, and network help checks", commands)
 	}
 	if got.AgentReadiness.Status != "ready" || got.AgentReadiness.Mode != "daemon_first_cli" || got.AgentReadiness.Implemented == 0 {
 		t.Fatalf("agent_readiness = %+v, want daemon-first readiness summary", got.AgentReadiness)

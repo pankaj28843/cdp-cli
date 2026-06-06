@@ -151,6 +151,8 @@ fi
 app_origin="${app_url%/}"
 "$binary" permissions grant notifications --origin "$app_origin" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg origin "$app_origin" '.ok == true and .permissions.action == "grant" and .permissions.origin == $origin and .permissions.browser_scoped == true and (.permissions.permissions[] | select(.name == "notifications" and .setting == "granted" and .method == "Browser.setPermission")) and (.permissions.reset_command | contains("permissions reset"))' >/dev/null
+"$binary" permissions set notifications --setting denied --origin "$app_origin" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg origin "$app_origin" '.ok == true and .permissions.action == "set" and .permissions.origin == $origin and .permissions.setting == "denied" and (.permissions.permissions[] | select(.name == "notifications" and .setting == "denied" and .method == "Browser.setPermission")) and (.permissions.reset_command | contains("permissions reset"))' >/dev/null
 "$binary" permissions reset --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .permissions.action == "reset" and .permissions.method == "Browser.resetPermissions" and .permissions.browser_scoped == true and .permissions.reset_all_origins == true' >/dev/null
 "$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \

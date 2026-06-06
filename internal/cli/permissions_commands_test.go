@@ -55,6 +55,40 @@ func TestPermissionsGrantJSON(t *testing.T) {
 	}
 }
 
+func TestPermissionsSetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"permissions", "set", "notifications", "--setting", "denied", "--origin", "https://example.test", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("permissions set exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK          bool `json:"ok"`
+		Permissions struct {
+			Action      string `json:"action"`
+			Origin      string `json:"origin"`
+			Setting     string `json:"setting"`
+			Permissions []struct {
+				Name    string `json:"name"`
+				Setting string `json:"setting"`
+				Method  string `json:"method"`
+			} `json:"permissions"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("permissions set output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Permissions.Action != "set" || got.Permissions.Origin != "https://example.test" || got.Permissions.Setting != "denied" || len(got.Permissions.Permissions) != 1 || got.Permissions.Permissions[0].Name != "notifications" || got.Permissions.Permissions[0].Setting != "denied" || got.Permissions.Permissions[0].Method != "Browser.setPermission" {
+		t.Fatalf("permissions set output = %+v, want denied notification setting", got)
+	}
+}
+
 func TestPermissionsResetJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
