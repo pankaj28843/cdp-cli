@@ -32,6 +32,15 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 	var waitURL string
 	var waitURLContains string
 	var waitLoadState string
+	var waitResponse bool
+	var waitResponseURL string
+	var waitResponseMatchURL string
+	var waitResponseMethod string
+	var waitResponseResourceType string
+	var waitResponseStatus int
+	var waitResponseStatusMin int
+	var waitResponseStatusMax int
+	var waitResponseRedact string
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "submit-search <input-selector-or-locator> <query>",
@@ -80,6 +89,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				stateWaitCount++
 			}
 			var loadState string
+			waitResponse = waitResponse || cmd.Flags().Changed("wait-response-url") || cmd.Flags().Changed("wait-response-match-url") || cmd.Flags().Changed("wait-response-method") || cmd.Flags().Changed("wait-response-resource-type") || cmd.Flags().Changed("wait-response-status") || cmd.Flags().Changed("wait-response-status-min") || cmd.Flags().Changed("wait-response-status-max") || cmd.Flags().Changed("wait-response-redact")
 			if strings.TrimSpace(waitLoadState) != "" {
 				var err error
 				loadState, err = normalizeLoadState(waitLoadState)
@@ -88,8 +98,12 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				}
 				stateWaitCount++
 			}
-			if stateWaitCount > 1 {
-				return commandError("usage", "usage", "use only one submit-search wait mode: --wait-text, --wait-selector, --wait-url, --wait-url-contains, or --wait-load-state", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --wait-url-contains /results --json"})
+			waitModeCount := stateWaitCount
+			if waitResponse {
+				waitModeCount++
+			}
+			if waitModeCount > 1 {
+				return commandError("usage", "usage", "use only one submit-search wait mode: --wait-text, --wait-selector, --wait-url, --wait-url-contains, --wait-load-state, or --wait-response", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --wait-url-contains /results --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp workflow submit-search 'Search' query --by label --wait-text Results --poll 250ms --json"})
@@ -149,6 +163,37 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage(actionName, selector, actionability), ExitCheckFailed, actionabilityRemediations(actionName, args[0], selector, locatorOpts), report)
 			}
 
+			var networkCriteria networkWaitCriteria
+			var responseReport map[string]any
+			var responseErr error
+			if waitResponse {
+				networkCriteria = networkWaitCriteria{
+					URL:          waitResponseURL,
+					URLContains:  waitResponseMatchURL,
+					Method:       waitResponseMethod,
+					ResourceType: waitResponseResourceType,
+					Status:       waitResponseStatus,
+					StatusMin:    waitResponseStatusMin,
+					StatusMax:    waitResponseStatusMax,
+					StatusSet:    cmd.Flags().Changed("wait-response-status"),
+					StatusMinSet: cmd.Flags().Changed("wait-response-status-min"),
+					StatusMaxSet: cmd.Flags().Changed("wait-response-status-max"),
+				}
+				if err := normalizeNetworkWaitCriteria(&networkCriteria); err != nil {
+					return err
+				}
+				if _, err := networkWaitRedactor(waitResponseRedact); err != nil {
+					return err
+				}
+				if err := setupNetworkEventWait(ctx, client, session.SessionID); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("submit-search response wait target %s: %v", beforeTarget.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+				if _, err := client.DrainEvents(ctx); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("submit-search response wait target %s: %v", beforeTarget.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+			}
+
+			eventWaitStart := time.Now()
 			var fill *fillResult
 			var typed *typeResult
 			if inputMode == "fill" {
@@ -280,6 +325,20 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				submitSearchSetVerified(fill, typed, press, suggestionClick, verified)
 				submitSearchApplyWaitURL(fill, typed, press, suggestionClick, wait)
 			}
+			if waitResponse {
+				redactor, err := networkWaitRedactor(waitResponseRedact)
+				if err != nil {
+					return err
+				}
+				observation, err := collectNetworkEvent(ctx, client, session.SessionID, networkWaitKindResponse, networkCriteria)
+				responseReport = networkWaitReport(networkWaitKindResponse, networkCriteria, observation, time.Since(eventWaitStart), a.effectiveNetworkWaitTimeout(), waitResponseRedact, redactor)
+				responseReport["target"] = pageRow(beforeTarget)
+				verified = observation.Matched
+				submitSearchSetVerified(fill, typed, press, suggestionClick, verified)
+				if err != nil {
+					responseErr = err
+				}
+			}
 
 			finalTarget, refreshErr := refreshedClickTarget(ctx, client, beforeTarget)
 			if verification != nil && (verification.Kind == "url" || verification.Kind == "load-state") && strings.TrimSpace(verification.URL) != "" {
@@ -311,7 +370,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 					"suggestion_requested": suggestionOpts.Requested(),
 					"suggestion_selected":  suggestionClick != nil && suggestionClick.Clicked,
 					"suggestion_strategy":  suggestionOpts.Strategy,
-					"wait_requested":       waitCriteria.Has() || loadState != "",
+					"wait_requested":       waitCriteria.Has() || loadState != "" || waitResponse,
 					"verified":             verified,
 					"poll_interval":        poll.String(),
 				},
@@ -344,6 +403,9 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 			if verification != nil {
 				report["verification"] = verification
 			}
+			if responseReport != nil {
+				addNetworkWaitToClickReport(report, networkWaitKindResponse, responseReport)
+			}
 			if refreshErr != nil {
 				report["target_refresh"] = map[string]any{
 					"ok":        false,
@@ -351,8 +413,14 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 					"error":     refreshErr.Error(),
 				}
 			}
+			if responseErr != nil {
+				return networkWaitError(ctx, beforeTarget.TargetID, networkWaitKindResponse, networkCriteria, report, responseErr)
+			}
 
 			human := fmt.Sprintf("submit-search\t%s\t%s", finalTarget.TargetID, selector)
+			if waitResponse {
+				human = fmt.Sprintf("submit-search-response\t%s\t%s", finalTarget.TargetID, selector)
+			}
 			if !verified {
 				human = fmt.Sprintf("submit-search-unverified\t%s\t%s", finalTarget.TargetID, selector)
 			}
@@ -381,6 +449,15 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 	cmd.Flags().StringVar(&waitURL, "wait-url", "", "verify by waiting until the page URL exactly matches this value")
 	cmd.Flags().StringVar(&waitURLContains, "wait-url-contains", "", "verify by waiting until the page URL contains this string")
 	cmd.Flags().StringVar(&waitLoadState, "wait-load-state", "", "verify by waiting for document load state: load or domcontentloaded")
+	cmd.Flags().BoolVar(&waitResponse, "wait-response", false, "verify by waiting for a matching network response triggered by this workflow")
+	cmd.Flags().StringVar(&waitResponseURL, "wait-response-url", "", "exact response URL to match; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseMatchURL, "wait-response-match-url", "", "substring that the response URL must contain; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseMethod, "wait-response-method", "", "HTTP method of the request to match when it was observed; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseResourceType, "wait-response-resource-type", "", "CDP resource type to match, such as Document, Fetch, XHR, or Script; implies --wait-response")
+	cmd.Flags().IntVar(&waitResponseStatus, "wait-response-status", 0, "exact HTTP status to match; implies --wait-response")
+	cmd.Flags().IntVar(&waitResponseStatusMin, "wait-response-status-min", 0, "minimum HTTP status to match; implies --wait-response")
+	cmd.Flags().IntVar(&waitResponseStatusMax, "wait-response-status-max", 0, "maximum HTTP status to match; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseRedact, "wait-response-redact", "safe", "redaction preset for returned response URL: safe or none; implies --wait-response")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }

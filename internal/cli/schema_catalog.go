@@ -1232,7 +1232,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-submit-search": {
 			Name:        "workflow-submit-search",
-			Description: "Locator-driven search input workflow that fills or types a query, optionally selects a strict suggestion candidate, submits with Enter, and verifies text, selector, or URL state while preserving target evidence.",
+			Description: "Locator-driven search input workflow that fills or types a query, optionally selects a strict suggestion candidate, submits with Enter, and verifies text, selector, URL, load-state, or network response state while preserving target evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when input, optional submit, and any requested verification completed and matched."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: submit_search for completed workflows or blocked inside actionability_failed error data."},
@@ -1254,6 +1254,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before input."},
 				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, URL, or load-state wait result when --wait-text, --wait-selector, --wait-url, --wait-url-contains, or --wait-load-state is used."},
+				{Name: "response_wait", Type: "network_wait_result", Required: false, Description: "Network response wait result when --wait-response is used, including URL/method/resource/status criteria, event counts, redaction mode, and bounded evidence without headers or bodies."},
+				{Name: "response", Type: "network_event", Required: false, Description: "Matched network response event when --wait-response is used, with a redacted URL and no headers or body payload."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Suggested follow-up commands for pages, snapshot/text evidence, and focused-state verification."},
 				{Name: "target_refresh", Type: "object", Required: false, Description: "Target metadata refresh failure details when final target evidence could not be refreshed."},
 			},

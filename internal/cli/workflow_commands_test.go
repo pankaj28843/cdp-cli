@@ -270,6 +270,98 @@ func TestWorkflowSubmitSearchSuggestionSelectionJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowSubmitSearchWaitResponseJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "network-page", "type": "page", "title": "Network App", "url": "https://example.test/network", "attached": false, "networkOnClick": true, "networkURL": "https://example.test/api/suggest?token=abc", "networkMethod": "POST", "networkResourceType": "Fetch", "networkStatus": 202, "networkStatusText": "Accepted", "networkMimeType": "application/json"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "submit-search", "Search", "typed value",
+		"--target", "network-page",
+		"--by", "label",
+		"--suggestion", "Checkout",
+		"--suggestion-by", "text",
+		"--submit", "none",
+		"--wait-response",
+		"--wait-response-match-url", "/api/suggest",
+		"--wait-response-method", "POST",
+		"--wait-response-resource-type", "Fetch",
+		"--wait-response-status", "202",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow submit-search wait response exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK       bool   `json:"ok"`
+		Action   string `json:"action"`
+		Workflow struct {
+			Name                string `json:"name"`
+			SuggestionRequested bool   `json:"suggestion_requested"`
+			SuggestionSelected  bool   `json:"suggestion_selected"`
+			Submit              string `json:"submit"`
+			WaitRequested       bool   `json:"wait_requested"`
+			Verified            bool   `json:"verified"`
+		} `json:"workflow"`
+		Fill struct {
+			Filled   bool  `json:"filled"`
+			Verified *bool `json:"verified"`
+		} `json:"fill"`
+		SuggestionClick struct {
+			Clicked  bool  `json:"clicked"`
+			Verified *bool `json:"verified"`
+		} `json:"suggestion_click"`
+		ResponseWait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			CDPMethod     string `json:"cdp_method"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				URLContains  string `json:"url_contains"`
+				Method       string `json:"method"`
+				ResourceType string `json:"resource_type"`
+				Status       int    `json:"status"`
+			} `json:"criteria"`
+			Evidence struct {
+				Headers bool `json:"headers"`
+				Bodies  bool `json:"bodies"`
+				Bounded bool `json:"bounded"`
+			} `json:"evidence"`
+		} `json:"response_wait"`
+		Response struct {
+			Kind         string `json:"kind"`
+			CDPMethod    string `json:"cdp_method"`
+			RequestID    string `json:"request_id"`
+			URL          string `json:"url"`
+			Method       string `json:"method"`
+			ResourceType string `json:"resource_type"`
+			Status       int    `json:"status"`
+			StatusText   string `json:"status_text"`
+			MimeType     string `json:"mime_type"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow submit-search wait response output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "submit_search" || got.Workflow.Name != "submit-search" || !got.Workflow.SuggestionRequested || !got.Workflow.SuggestionSelected || got.Workflow.Submit != "none" || !got.Workflow.WaitRequested || !got.Workflow.Verified {
+		t.Fatalf("workflow submit-search wait response metadata = %+v", got.Workflow)
+	}
+	if !got.Fill.Filled || got.Fill.Verified == nil || !*got.Fill.Verified || !got.SuggestionClick.Clicked || got.SuggestionClick.Verified == nil || !*got.SuggestionClick.Verified {
+		t.Fatalf("workflow submit-search wait response actions = fill=%+v suggestion_click=%+v", got.Fill, got.SuggestionClick)
+	}
+	if got.ResponseWait.Kind != "response" || !got.ResponseWait.Matched || got.ResponseWait.CDPMethod != "Network.responseReceived" || got.ResponseWait.EventCount == 0 || got.ResponseWait.ObservedCount < 1 || got.ResponseWait.Criteria.URLContains != "/api/suggest" || got.ResponseWait.Criteria.Method != "POST" || got.ResponseWait.Criteria.ResourceType != "Fetch" || got.ResponseWait.Criteria.Status != 202 || got.ResponseWait.Evidence.Headers || got.ResponseWait.Evidence.Bodies || !got.ResponseWait.Evidence.Bounded {
+		t.Fatalf("workflow submit-search wait response wait = %+v, want matched bounded response evidence", got.ResponseWait)
+	}
+	if got.Response.Kind != "response" || got.Response.CDPMethod != "Network.responseReceived" || got.Response.RequestID != "click-request-1" || got.Response.Method != "POST" || got.Response.ResourceType != "Fetch" || got.Response.Status != 202 || got.Response.StatusText != "Accepted" || got.Response.MimeType != "application/json" || strings.Contains(got.Response.URL, "token=abc") {
+		t.Fatalf("workflow submit-search wait response event = %+v, want redacted response event", got.Response)
+	}
+}
+
 func TestWorkflowSubmitSearchSuggestionNotFoundJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

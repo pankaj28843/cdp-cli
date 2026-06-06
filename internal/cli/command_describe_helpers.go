@@ -563,6 +563,7 @@ func commandExamples(path string) []string {
 			"cdp workflow submit-search 'Search Wikipedia' Aarhus --by label --wait-url-contains /search --json",
 			"cdp workflow submit-search 'From' Aarhus --by label --suggestion 'Aarhus Denmark' --suggestion-by text --submit none --wait-selector '.destination-selected' --json",
 			"cdp workflow submit-search 'Search' 'agentic engineering' --by label --input-mode type --wait-text Results --json",
+			"cdp workflow submit-search 'Search' 'agentic engineering' --by label --suggestion 'Save' --suggestion-by role --suggestion-role button --submit none --wait-response-match-url /api/search --wait-response-status 200 --json",
 			"cdp workflow submit-search 'Search' 'agentic engineering' --by label --submit none --wait-load-state domcontentloaded --json",
 			"cdp workflow submit-search 'Search' 'agentic engineering' --by label --submit none --wait-selector '.suggestions' --json",
 		},
