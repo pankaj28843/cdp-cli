@@ -166,6 +166,21 @@ func (a *app) newClickCommand() *cobra.Command {
 	var waitDialogRedact string
 	var waitFileChooser bool
 	var waitFileChooserMode string
+	var waitRequest bool
+	var waitRequestURL string
+	var waitRequestMatchURL string
+	var waitRequestMethod string
+	var waitRequestResourceType string
+	var waitRequestRedact string
+	var waitResponse bool
+	var waitResponseURL string
+	var waitResponseMatchURL string
+	var waitResponseMethod string
+	var waitResponseResourceType string
+	var waitResponseStatus int
+	var waitResponseStatusMin int
+	var waitResponseStatusMax int
+	var waitResponseRedact string
 	var diagnosticsOut string
 	var poll time.Duration
 	var trial bool
@@ -189,6 +204,8 @@ func (a *app) newClickCommand() *cobra.Command {
 			waitDownload = waitDownload || cmd.Flags().Changed("wait-download-url") || cmd.Flags().Changed("wait-download-filename") || cmd.Flags().Changed("wait-download-state") || cmd.Flags().Changed("download-dir") || cmd.Flags().Changed("wait-download-redact")
 			waitDialog = waitDialog || cmd.Flags().Changed("wait-dialog-type") || cmd.Flags().Changed("wait-dialog-message") || cmd.Flags().Changed("wait-dialog-message-contains") || cmd.Flags().Changed("wait-dialog-action") || cmd.Flags().Changed("wait-dialog-prompt-text") || cmd.Flags().Changed("wait-dialog-redact")
 			waitFileChooser = waitFileChooser || cmd.Flags().Changed("wait-file-chooser-mode")
+			waitRequest = waitRequest || cmd.Flags().Changed("wait-request-url") || cmd.Flags().Changed("wait-request-match-url") || cmd.Flags().Changed("wait-request-method") || cmd.Flags().Changed("wait-request-resource-type") || cmd.Flags().Changed("wait-request-redact")
+			waitResponse = waitResponse || cmd.Flags().Changed("wait-response-url") || cmd.Flags().Changed("wait-response-match-url") || cmd.Flags().Changed("wait-response-method") || cmd.Flags().Changed("wait-response-resource-type") || cmd.Flags().Changed("wait-response-status") || cmd.Flags().Changed("wait-response-status-min") || cmd.Flags().Changed("wait-response-status-max") || cmd.Flags().Changed("wait-response-redact")
 			waitModeCount := 0
 			if strings.TrimSpace(waitText) != "" || strings.TrimSpace(waitSelector) != "" {
 				waitModeCount++
@@ -205,8 +222,14 @@ func (a *app) newClickCommand() *cobra.Command {
 			if waitFileChooser {
 				waitModeCount++
 			}
+			if waitRequest {
+				waitModeCount++
+			}
+			if waitResponse {
+				waitModeCount++
+			}
 			if waitModeCount > 1 {
-				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-download, --wait-dialog, --wait-file-chooser, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
+				return commandError("usage", "usage", "use only one click wait mode: --wait-popup, --wait-download, --wait-dialog, --wait-file-chooser, --wait-request, --wait-response, --wait-text, or --wait-selector", ExitUsage, []string{"cdp click 'Sign in' --by role --role link --wait-popup --json"})
 			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp click button --wait-text Done --poll 250ms --json"})
@@ -225,6 +248,12 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if trial && waitFileChooser {
 				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-file-chooser", ExitUsage, []string{"cdp click 'Upload' --by label --wait-file-chooser --json"})
+			}
+			if trial && waitRequest {
+				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-request", ExitUsage, []string{"cdp click 'Save' --by role --role button --wait-request --json"})
+			}
+			if trial && waitResponse {
+				return commandError("usage", "usage", "--trial does not dispatch a click, so it cannot use --wait-response", ExitUsage, []string{"cdp click 'Save' --by role --role button --wait-response --json"})
 			}
 			if trial && strings.TrimSpace(diagnosticsOut) != "" {
 				return commandError("usage", "usage", "--trial returns actionability diagnostics inline; omit --diagnostics-out", ExitUsage, []string{"cdp click 'Search' --by role --role button --trial --json"})
@@ -360,6 +389,11 @@ func (a *app) newClickCommand() *cobra.Command {
 			var fileChooserCriteria fileChooserWaitCriteria
 			var fileChooserReport map[string]any
 			var fileChooserErr error
+			var networkWaitKind string
+			var networkCriteria networkWaitCriteria
+			var networkRedact string
+			var networkReport map[string]any
+			var networkErr error
 			if waitPopup {
 				popupCriteria = popupWaitCriteria{
 					OpenerID:    target.TargetID,
@@ -454,9 +488,48 @@ func (a *app) newClickCommand() *cobra.Command {
 					return commandError("connection_failed", "connection", fmt.Sprintf("click file chooser wait target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 				}
 			}
+			if waitRequest || waitResponse {
+				if waitRequest {
+					networkWaitKind = networkWaitKindRequest
+					networkCriteria = networkWaitCriteria{
+						URL:          waitRequestURL,
+						URLContains:  waitRequestMatchURL,
+						Method:       waitRequestMethod,
+						ResourceType: waitRequestResourceType,
+					}
+					networkRedact = waitRequestRedact
+				} else {
+					networkWaitKind = networkWaitKindResponse
+					networkCriteria = networkWaitCriteria{
+						URL:          waitResponseURL,
+						URLContains:  waitResponseMatchURL,
+						Method:       waitResponseMethod,
+						ResourceType: waitResponseResourceType,
+						Status:       waitResponseStatus,
+						StatusMin:    waitResponseStatusMin,
+						StatusMax:    waitResponseStatusMax,
+						StatusSet:    cmd.Flags().Changed("wait-response-status"),
+						StatusMinSet: cmd.Flags().Changed("wait-response-status-min"),
+						StatusMaxSet: cmd.Flags().Changed("wait-response-status-max"),
+					}
+					networkRedact = waitResponseRedact
+				}
+				if err := normalizeNetworkWaitCriteria(&networkCriteria); err != nil {
+					return err
+				}
+				if _, err := networkWaitRedactor(networkRedact); err != nil {
+					return err
+				}
+				if err := setupNetworkEventWait(ctx, client, session.SessionID); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("click %s wait target %s: %v", networkWaitKind, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+				if _, err := client.DrainEvents(ctx); err != nil {
+					return commandError("connection_failed", "connection", fmt.Sprintf("click %s wait target %s: %v", networkWaitKind, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+			}
 
 			clickStrategy := strategy
-			if (waitPopup || waitDownload || waitDialog || waitFileChooser) && clickStrategy == "auto" {
+			if (waitPopup || waitDownload || waitDialog || waitFileChooser || waitRequest || waitResponse) && clickStrategy == "auto" {
 				clickStrategy = "raw-input"
 			}
 			eventWaitStart := time.Now()
@@ -556,6 +629,20 @@ func (a *app) newClickCommand() *cobra.Command {
 					fileChooserErr = err
 				}
 			}
+			if waitRequest || waitResponse {
+				redactor, err := networkWaitRedactor(networkRedact)
+				if err != nil {
+					return err
+				}
+				observation, err := collectNetworkEvent(ctx, client, session.SessionID, networkWaitKind, networkCriteria)
+				networkReport = networkWaitReport(networkWaitKind, networkCriteria, observation, time.Since(eventWaitStart), a.effectiveNetworkWaitTimeout(), networkRedact, redactor)
+				networkReport["target"] = pageRow(target)
+				verified = observation.Matched
+				result.Verified = &verified
+				if err != nil {
+					networkErr = err
+				}
+			}
 
 			finalTarget, refreshErr := refreshedClickTarget(ctx, client, target)
 			result.TargetID = finalTarget.TargetID
@@ -602,6 +689,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			if fileChooserReport != nil {
 				addFileChooserWaitToClickReport(report, fileChooserReport)
 			}
+			if networkReport != nil {
+				addNetworkWaitToClickReport(report, networkWaitKind, networkReport)
+			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
 				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
@@ -619,6 +709,9 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 				if fileChooserReport != nil {
 					addFileChooserWaitToClickReport(diagnostics, fileChooserReport)
+				}
+				if networkReport != nil {
+					addNetworkWaitToClickReport(diagnostics, networkWaitKind, networkReport)
 				}
 				report["diagnostics"] = diagnostics
 				b, err := json.MarshalIndent(diagnostics, "", "  ")
@@ -644,6 +737,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			if fileChooserErr != nil {
 				return fileChooserWaitError(ctx, target.TargetID, fileChooserCriteria, report, fileChooserErr)
 			}
+			if networkErr != nil {
+				return networkWaitError(ctx, target.TargetID, networkWaitKind, networkCriteria, report, networkErr)
+			}
 			human := fmt.Sprintf("clicked\t%s\t%s", target.TargetID, result.Selector)
 			if waitPopup {
 				human = fmt.Sprintf("clicked-popup\t%s\t%s", target.TargetID, result.Selector)
@@ -656,6 +752,12 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if waitFileChooser {
 				human = fmt.Sprintf("clicked-file-chooser\t%s\t%s", target.TargetID, result.Selector)
+			}
+			if waitRequest {
+				human = fmt.Sprintf("clicked-request\t%s\t%s", target.TargetID, result.Selector)
+			}
+			if waitResponse {
+				human = fmt.Sprintf("clicked-response\t%s\t%s", target.TargetID, result.Selector)
 			}
 			if !verified {
 				human = fmt.Sprintf("click-unverified\t%s\t%s", target.TargetID, result.Selector)
@@ -689,6 +791,21 @@ func (a *app) newClickCommand() *cobra.Command {
 	cmd.Flags().StringVar(&waitDialogRedact, "wait-dialog-redact", "safe", "redaction preset for returned dialog URL: safe or none")
 	cmd.Flags().BoolVar(&waitFileChooser, "wait-file-chooser", false, "wait for a file chooser opened by this click")
 	cmd.Flags().StringVar(&waitFileChooserMode, "wait-file-chooser-mode", "", "file chooser mode to match: selectSingle/single or selectMultiple/multiple; implies --wait-file-chooser")
+	cmd.Flags().BoolVar(&waitRequest, "wait-request", false, "wait for a matching network request triggered by this click")
+	cmd.Flags().StringVar(&waitRequestURL, "wait-request-url", "", "exact request URL to match; implies --wait-request")
+	cmd.Flags().StringVar(&waitRequestMatchURL, "wait-request-match-url", "", "substring that the request URL must contain; implies --wait-request")
+	cmd.Flags().StringVar(&waitRequestMethod, "wait-request-method", "", "HTTP method to match, such as GET or POST; implies --wait-request")
+	cmd.Flags().StringVar(&waitRequestResourceType, "wait-request-resource-type", "", "CDP resource type to match, such as Document, Fetch, XHR, or Script; implies --wait-request")
+	cmd.Flags().StringVar(&waitRequestRedact, "wait-request-redact", "safe", "redaction preset for returned request URL: safe or none; implies --wait-request")
+	cmd.Flags().BoolVar(&waitResponse, "wait-response", false, "wait for a matching network response triggered by this click")
+	cmd.Flags().StringVar(&waitResponseURL, "wait-response-url", "", "exact response URL to match; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseMatchURL, "wait-response-match-url", "", "substring that the response URL must contain; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseMethod, "wait-response-method", "", "HTTP method of the request to match when it was observed; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseResourceType, "wait-response-resource-type", "", "CDP resource type to match, such as Document, Fetch, XHR, or Script; implies --wait-response")
+	cmd.Flags().IntVar(&waitResponseStatus, "wait-response-status", 0, "exact HTTP status to match; implies --wait-response")
+	cmd.Flags().IntVar(&waitResponseStatusMin, "wait-response-status-min", 0, "minimum HTTP status to match; implies --wait-response")
+	cmd.Flags().IntVar(&waitResponseStatusMax, "wait-response-status-max", 0, "maximum HTTP status to match; implies --wait-response")
+	cmd.Flags().StringVar(&waitResponseRedact, "wait-response-redact", "safe", "redaction preset for returned response URL: safe or none; implies --wait-response")
 	cmd.Flags().StringVar(&diagnosticsOut, "diagnostics-out", "", "optional path for privacy-preserving click diagnostics JSON")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching the click")
@@ -1015,6 +1132,30 @@ func addFileChooserWaitToClickReport(report map[string]any, fileChooserReport ma
 	}
 	if nextCommands, ok := fileChooserReport["next_commands"]; ok {
 		report["next_commands"] = nextCommands
+	}
+}
+
+func addNetworkWaitToClickReport(report map[string]any, kind string, networkReport map[string]any) {
+	if report == nil || networkReport == nil {
+		return
+	}
+	prefix := ""
+	switch kind {
+	case networkWaitKindRequest:
+		prefix = "request"
+	case networkWaitKindResponse:
+		prefix = "response"
+	default:
+		return
+	}
+	if wait, ok := networkReport["wait"]; ok {
+		report[prefix+"_wait"] = wait
+	}
+	if event, ok := networkReport["event"]; ok {
+		report[prefix] = event
+	}
+	if lastEvent, ok := networkReport["last_event"]; ok {
+		report["last_"+prefix+"_event"] = lastEvent
 	}
 }
 

@@ -265,6 +265,8 @@ func commandExamples(path string) []string {
 			"cdp click 'Download report' --by role --role link --wait-download --wait-download-filename report --download-dir tmp/downloads --json",
 			"cdp click 'Delete' --by role --role button --wait-dialog --wait-dialog-action dismiss --json",
 			"cdp click 'Upload file' --by label --wait-file-chooser --wait-file-chooser-mode single --json",
+			"cdp click 'Save' --by role --role button --wait-request --wait-request-match-url /api --wait-request-method POST --json",
+			"cdp click 'Save' --by role --role button --wait-response --wait-response-match-url /api --wait-response-status 200 --json",
 			"cdp click 'button[type=submit]' --wait-text 'Results' --json",
 			"cdp click 'button.submit' --wait-selector '.toast-success' --diagnostics-out tmp/click.local.json --json",
 		},

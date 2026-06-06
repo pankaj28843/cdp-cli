@@ -300,6 +300,119 @@ func TestClickWaitFileChooserJSON(t *testing.T) {
 	}
 }
 
+func TestClickWaitRequestJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "network-page", "type": "page", "title": "Network App", "url": "https://example.test/network", "attached": false, "networkOnClick": true, "networkURL": "https://example.test/api/click?token=abc", "networkMethod": "POST", "networkResourceType": "Fetch"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#save", "--target", "network-page", "--wait-request", "--wait-request-match-url", "/api/click", "--wait-request-method", "POST", "--wait-request-resource-type", "Fetch", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click wait request exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Click struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+			Verified *bool  `json:"verified"`
+		} `json:"click"`
+		RequestWait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			CDPMethod     string `json:"cdp_method"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				URLContains  string `json:"url_contains"`
+				Method       string `json:"method"`
+				ResourceType string `json:"resource_type"`
+			} `json:"criteria"`
+		} `json:"request_wait"`
+		Request struct {
+			Kind         string `json:"kind"`
+			CDPMethod    string `json:"cdp_method"`
+			RequestID    string `json:"request_id"`
+			URL          string `json:"url"`
+			Method       string `json:"method"`
+			ResourceType string `json:"resource_type"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click wait request output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.Verified == nil || !*got.Click.Verified {
+		t.Fatalf("click wait request action = %+v, want raw-input clicked and verified", got)
+	}
+	if got.RequestWait.Kind != "request" || !got.RequestWait.Matched || got.RequestWait.CDPMethod != "Network.requestWillBeSent" || got.RequestWait.EventCount == 0 || got.RequestWait.ObservedCount < 1 || got.RequestWait.Criteria.URLContains != "/api/click" || got.RequestWait.Criteria.Method != "POST" || got.RequestWait.Criteria.ResourceType != "Fetch" {
+		t.Fatalf("click wait request wait = %+v, want matched request criteria", got.RequestWait)
+	}
+	if got.Request.Kind != "request" || got.Request.CDPMethod != "Network.requestWillBeSent" || got.Request.RequestID != "click-request-1" || got.Request.Method != "POST" || got.Request.ResourceType != "Fetch" || strings.Contains(got.Request.URL, "token=abc") {
+		t.Fatalf("click wait request event = %+v, want redacted request evidence", got.Request)
+	}
+}
+
+func TestClickWaitResponseJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "network-page", "type": "page", "title": "Network App", "url": "https://example.test/network", "attached": false, "networkOnClick": true, "networkURL": "https://example.test/api/save?token=abc", "networkMethod": "POST", "networkResourceType": "Fetch", "networkStatus": 201, "networkStatusText": "Created", "networkMimeType": "application/json"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#save", "--target", "network-page", "--wait-response", "--wait-response-match-url", "/api/save", "--wait-response-method", "POST", "--wait-response-status", "201", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("click wait response exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Click struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+			Verified *bool  `json:"verified"`
+		} `json:"click"`
+		ResponseWait struct {
+			Kind          string `json:"kind"`
+			Matched       bool   `json:"matched"`
+			CDPMethod     string `json:"cdp_method"`
+			EventCount    int    `json:"event_count"`
+			ObservedCount int    `json:"observed_count"`
+			Criteria      struct {
+				URLContains string `json:"url_contains"`
+				Method      string `json:"method"`
+				Status      int    `json:"status"`
+			} `json:"criteria"`
+		} `json:"response_wait"`
+		Response struct {
+			Kind         string `json:"kind"`
+			CDPMethod    string `json:"cdp_method"`
+			RequestID    string `json:"request_id"`
+			URL          string `json:"url"`
+			Method       string `json:"method"`
+			ResourceType string `json:"resource_type"`
+			Status       int    `json:"status"`
+			StatusText   string `json:"status_text"`
+			MimeType     string `json:"mime_type"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("click wait response output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Click.Clicked || got.Click.Strategy != "raw-input" || got.Click.Verified == nil || !*got.Click.Verified {
+		t.Fatalf("click wait response action = %+v, want raw-input clicked and verified", got)
+	}
+	if got.ResponseWait.Kind != "response" || !got.ResponseWait.Matched || got.ResponseWait.CDPMethod != "Network.responseReceived" || got.ResponseWait.EventCount == 0 || got.ResponseWait.ObservedCount < 1 || got.ResponseWait.Criteria.URLContains != "/api/save" || got.ResponseWait.Criteria.Method != "POST" || got.ResponseWait.Criteria.Status != 201 {
+		t.Fatalf("click wait response wait = %+v, want matched response criteria", got.ResponseWait)
+	}
+	if got.Response.Kind != "response" || got.Response.CDPMethod != "Network.responseReceived" || got.Response.RequestID != "click-request-1" || got.Response.Method != "POST" || got.Response.ResourceType != "Fetch" || got.Response.Status != 201 || got.Response.StatusText != "Created" || got.Response.MimeType != "application/json" || strings.Contains(got.Response.URL, "token=abc") {
+		t.Fatalf("click wait response event = %+v, want redacted response evidence", got.Response)
+	}
+}
+
 func TestClickByRoleLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

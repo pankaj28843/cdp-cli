@@ -391,7 +391,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"click": {
 			Name:        "click",
-			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action verification, popup/download/dialog/file-chooser waits, and final target evidence.",
+			Description: "DOM or raw-input mouse click operation gated by actionability, with optional --trial, --force skipped-check evidence, post-action verification, popup/download/dialog/file-chooser/request/response waits, and final target evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the click completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: clicked for dispatched clicks, trial for --trial checks, or blocked inside actionability_failed error data."},
@@ -420,6 +420,12 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "file_chooser_wait", Type: "file_chooser_wait_result", Required: false, Description: "Post-click file chooser wait result when --wait-file-chooser is used, including mode criteria, interception state, event counts, warnings, and bounded evidence."},
 				{Name: "file_chooser", Type: "file_chooser_wait_event", Required: false, Description: "Matched Page.fileChooserOpened metadata with mode, multiple flag, frame id, and backend node id."},
 				{Name: "last_file_chooser_event", Type: "file_chooser_wait_event", Required: false, Description: "Last observed file chooser event when --wait-file-chooser times out or criteria do not match."},
+				{Name: "request_wait", Type: "network_wait_result", Required: false, Description: "Post-click network request wait result when --wait-request is used, including URL/method/resource criteria, event counts, redaction mode, and bounded evidence without headers or bodies."},
+				{Name: "request", Type: "network_wait_event", Required: false, Description: "Matched Network.requestWillBeSent metadata with safe URL, method, resource type, and request id."},
+				{Name: "last_request_event", Type: "network_wait_event", Required: false, Description: "Last observed request event when --wait-request times out or criteria do not match."},
+				{Name: "response_wait", Type: "network_wait_result", Required: false, Description: "Post-click network response wait result when --wait-response is used, including URL/method/resource/status criteria, event counts, redaction mode, and bounded evidence without headers or bodies."},
+				{Name: "response", Type: "network_wait_event", Required: false, Description: "Matched Network.responseReceived metadata with safe URL, method, resource type, request id, status, status text, and mime type."},
+				{Name: "last_response_event", Type: "network_wait_event", Required: false, Description: "Last observed response event when --wait-response times out or criteria do not match."},
 				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands for selecting/snapshotting popup targets, listing/retrying download directories, handling dialogs, or assigning files."},
 				{Name: "target_refresh", Type: "object", Required: false, Description: "Target metadata refresh failure details when final target evidence could not be refreshed."},
 				{Name: "diagnostics", Type: "object", Required: false, Description: "Privacy-preserving click diagnostics when --diagnostics-out is used."},

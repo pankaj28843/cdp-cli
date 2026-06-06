@@ -355,6 +355,16 @@ sleep 0.2
 wait "$wait_response_pid"
 require_artifact "$wait_response_output"
 jq -e --arg probe "$response_probe" '.ok == true and .wait.kind == "response" and .wait.matched == true and .wait.criteria.url_contains == $probe and .wait.criteria.method == "GET" and .wait.criteria.status == 200 and .event.cdp_method == "Network.responseReceived" and .event.method == "GET" and .event.status == 200 and (.event.url | contains($probe)) and .event.resource_type == "Fetch" and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false' "$wait_response_output" >/dev/null
+click_request_probe="$(date +%s%N)"
+"$binary" eval "window.__cdpClickRequestProbe = '$click_request_probe'" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" click "Send request" --by role --role button --wait-request --wait-request-match-url "$click_request_probe" --wait-request-method GET --wait-request-resource-type Fetch --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg probe "$click_request_probe" '.ok == true and .action == "clicked" and .click.clicked == true and .click.strategy == "raw-input" and .click.verified == true and .request_wait.kind == "request" and .request_wait.matched == true and .request_wait.criteria.url_contains == $probe and .request_wait.criteria.method == "GET" and .request.cdp_method == "Network.requestWillBeSent" and .request.method == "GET" and (.request.url | contains($probe)) and .request.resource_type == "Fetch" and .request_wait.evidence.bounded == true and .request_wait.evidence.headers == false and .request_wait.evidence.bodies == false' >/dev/null
+click_response_probe="$(date +%s%N)"
+"$binary" eval "window.__cdpClickResponseProbe = '$click_response_probe'" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" click "Save via API" --by role --role button --wait-response --wait-response-match-url "$click_response_probe" --wait-response-method GET --wait-response-status 200 --wait-response-resource-type Fetch --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg probe "$click_response_probe" '.ok == true and .action == "clicked" and .click.clicked == true and .click.strategy == "raw-input" and .click.verified == true and .response_wait.kind == "response" and .response_wait.matched == true and .response_wait.criteria.url_contains == $probe and .response_wait.criteria.method == "GET" and .response_wait.criteria.status == 200 and .response.cdp_method == "Network.responseReceived" and .response.method == "GET" and .response.status == 200 and (.response.url | contains($probe)) and .response.resource_type == "Fetch" and .response_wait.evidence.bounded == true and .response_wait.evidence.headers == false and .response_wait.evidence.bodies == false' >/dev/null
 idle_probe="$(date +%s%N)"
 wait_idle_output="$state_dir/wait-network-idle.json"
 "$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &

@@ -81,6 +81,8 @@ DEMO_HTML = """<!doctype html>
       <button id="disabled-action" disabled>Disabled target</button>
       <button id="popup-action">Open popup</button>
       <button id="download-action">Download report</button>
+      <button id="request-action">Send request</button>
+      <button id="response-action">Save via API</button>
       <button id="dismiss" class="hidden-fixture">Dismiss</button>
       <input id="hidden-agent-input" class="hidden-fixture" value="hidden initial">
       <label class="agent-form">
@@ -182,6 +184,14 @@ DEMO_HTML = """<!doctype html>
     });
     document.querySelector('#download-action').addEventListener('click', () => {
       window.location.href = '/download/report.txt';
+    });
+    document.querySelector('#request-action').addEventListener('click', () => {
+      const probe = window.__cdpClickRequestProbe || 'default';
+      fetch('/api/ok?click_wait_request=' + encodeURIComponent(probe)).catch(error => console.warn('request click failed', error));
+    });
+    document.querySelector('#response-action').addEventListener('click', () => {
+      const probe = window.__cdpClickResponseProbe || 'default';
+      fetch('/api/ok?click_wait_response=' + encodeURIComponent(probe)).catch(error => console.warn('response click failed', error));
     });
     document.querySelector('#partial-selection').indeterminate = true;
     fetch('/api/ok').then(() => fetch('/api/fail'));

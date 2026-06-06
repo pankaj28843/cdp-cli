@@ -321,10 +321,20 @@ func waitForNetworkEvent(ctx context.Context, client browserEventClient, session
 	if kind != networkWaitKindRequest && kind != networkWaitKindResponse {
 		return networkWaitObservation{}, commandError("usage", "usage", fmt.Sprintf("unsupported network wait kind %q", kind), ExitUsage, []string{"cdp wait request --json", "cdp wait response --json"})
 	}
-	if err := client.CallSession(ctx, sessionID, "Network.enable", map[string]any{}, nil); err != nil {
+	if err := setupNetworkEventWait(ctx, client, sessionID); err != nil {
 		return networkWaitObservation{}, err
 	}
+	return collectNetworkEvent(ctx, client, sessionID, kind, criteria)
+}
 
+func setupNetworkEventWait(ctx context.Context, client browserEventClient, sessionID string) error {
+	return client.CallSession(ctx, sessionID, "Network.enable", map[string]any{}, nil)
+}
+
+func collectNetworkEvent(ctx context.Context, client browserEventClient, sessionID string, kind string, criteria networkWaitCriteria) (networkWaitObservation, error) {
+	if kind != networkWaitKindRequest && kind != networkWaitKindResponse {
+		return networkWaitObservation{}, commandError("usage", "usage", fmt.Sprintf("unsupported network wait kind %q", kind), ExitUsage, []string{"cdp wait request --json", "cdp wait response --json"})
+	}
 	recordsByID := map[string]*networkRequest{}
 	observe := func(event cdp.Event, observation *networkWaitObservation) bool {
 		if event.SessionID != "" && event.SessionID != sessionID {

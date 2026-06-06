@@ -686,6 +686,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
 				} else {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
+					events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticDialogEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -900,6 +901,70 @@ func syntheticFileChooserEventsForClick(sessionID string, params json.RawMessage
 			"backendNodeId": backendNodeID,
 		},
 	}}
+}
+
+func syntheticNetworkEventsForClick(sessionID string, params json.RawMessage, targetInfos []map[string]any) []map[string]any {
+	expression := string(params)
+	if !strings.Contains(expression, "__cdp_cli_click__") && !strings.Contains(expression, "__cdp_cli_click_point__") {
+		return nil
+	}
+	targetID := strings.TrimPrefix(sessionID, "session-")
+	if targetID == "" || targetID == sessionID {
+		return nil
+	}
+	var target map[string]any
+	for _, candidate := range targetInfos {
+		if candidate["targetId"] == targetID {
+			target = candidate
+			break
+		}
+	}
+	if target == nil || target["networkOnClick"] != true {
+		return nil
+	}
+	requestID := syntheticStringValue(target, "networkRequestID", "click-request-1")
+	rawURL := syntheticStringValue(target, "networkURL", "https://example.test/api/click?token=abc")
+	method := syntheticStringValue(target, "networkMethod", "POST")
+	resourceType := syntheticStringValue(target, "networkResourceType", "Fetch")
+	status := 201
+	if value, ok := target["networkStatus"].(int); ok && value > 0 {
+		status = value
+	}
+	statusText := syntheticStringValue(target, "networkStatusText", "Created")
+	mimeType := syntheticStringValue(target, "networkMimeType", "application/json")
+	return []map[string]any{
+		{
+			"sessionId": sessionID,
+			"method":    "Network.requestWillBeSent",
+			"params": map[string]any{
+				"requestId": requestID,
+				"type":      resourceType,
+				"request": map[string]any{
+					"url":    rawURL,
+					"method": method,
+				},
+			},
+		},
+		{
+			"sessionId": sessionID,
+			"method":    "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": requestID,
+				"type":      resourceType,
+				"response": map[string]any{
+					"url":        rawURL,
+					"status":     status,
+					"statusText": statusText,
+					"mimeType":   mimeType,
+				},
+			},
+		},
+		{
+			"sessionId": sessionID,
+			"method":    "Network.loadingFinished",
+			"params":    map[string]any{"requestId": requestID, "encodedDataLength": 64},
+		},
+	}
 }
 
 func syntheticStringValue(values map[string]any, key, fallback string) string {
