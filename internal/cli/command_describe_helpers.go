@@ -637,6 +637,7 @@ func commandExamples(path string) []string {
 	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json"}
 	examples["cdp a11y node"] = []string{"cdp a11y node button[type=submit] --json"}
 	examples["cdp a11y snapshot"] = []string{"cdp a11y snapshot --selector body --depth 4 --json", "cdp a11y snapshot --limit 20 --json"}
+	examples["cdp assert aria-snapshot"] = []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --selector body --json", "cdp assert aria-snapshot --file tmp/aria-snapshot.txt --mode exact --json"}
 	examples["cdp perf summary"] = []string{"cdp perf summary --duration 5s --json"}
 	examples["cdp memory counters"] = []string{"cdp memory counters --json"}
 	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"}

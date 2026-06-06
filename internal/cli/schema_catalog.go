@@ -865,6 +865,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before asserting."},
 			},
 		},
+		"assert-aria-snapshot": {
+			Name:        "assert-aria-snapshot",
+			Description: "Auto-retrying bounded ARIA snapshot assertion result.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the ARIA snapshot assertion passed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "assertion", Type: "assert_aria_snapshot_result", Required: true, Description: "Selector, normalized expected and actual snapshot text, expected_lines, actual_lines, embedded snapshot metadata, optional diff, match mode contains/exact/regex, pass/fail status, line_count, attempts, elapsed_ms, and poll_interval."},
+				{Name: "snapshot", Type: "a11y_snapshot", Required: true, Description: "Bounded accessibility snapshot used for the assertion, including selector scope, source, lines, text, line_count, depth, limit, truncation, and include_ignored metadata."},
+			},
+		},
 		"assert-visible": {
 			Name:        "assert-visible",
 			Description: "Auto-retrying element visibility assertion result for CSS selector or strict locator.",

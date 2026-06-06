@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -224,6 +225,33 @@ type assertAccessibleResult struct {
 	ElapsedMS    int64                  `json:"elapsed_ms,omitempty"`
 	PollInterval string                 `json:"poll_interval,omitempty"`
 	Error        *evalError             `json:"error,omitempty"`
+}
+
+type assertAriaSnapshotResult struct {
+	Selector      string                  `json:"selector"`
+	Expected      string                  `json:"expected"`
+	Actual        string                  `json:"actual"`
+	Mode          string                  `json:"mode"`
+	Diff          *assertAriaSnapshotDiff `json:"diff,omitempty"`
+	Passed        bool                    `json:"passed"`
+	LineCount     int                     `json:"line_count"`
+	ExpectedLines []string                `json:"expected_lines"`
+	ActualLines   []string                `json:"actual_lines"`
+	Snapshot      a11ySnapshotResult      `json:"snapshot"`
+	Attempts      int                     `json:"attempts,omitempty"`
+	ElapsedMS     int64                   `json:"elapsed_ms,omitempty"`
+	PollInterval  string                  `json:"poll_interval,omitempty"`
+}
+
+type assertAriaSnapshotDiff struct {
+	Mode              string `json:"mode"`
+	Reason            string `json:"reason"`
+	ExpectedIndex     int    `json:"expected_index"`
+	ActualIndex       int    `json:"actual_index"`
+	ExpectedLine      string `json:"expected_line,omitempty"`
+	ActualLine        string `json:"actual_line,omitempty"`
+	ExpectedLineCount int    `json:"expected_line_count"`
+	ActualLineCount   int    `json:"actual_line_count"`
 }
 
 type assertAccessibleItem struct {
@@ -823,6 +851,7 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertCSSCommand())
 	cmd.AddCommand(a.newAssertRoleCommand())
 	cmd.AddCommand(a.newAssertNameCommand())
+	cmd.AddCommand(a.newAssertAriaSnapshotCommand())
 	cmd.AddCommand(a.newAssertAttachedCommand())
 	cmd.AddCommand(a.newAssertDetachedCommand())
 	cmd.AddCommand(a.newAssertVisibleCommand())
@@ -1384,6 +1413,64 @@ func (a *app) newAssertNameCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
+}
+
+func (a *app) newAssertAriaSnapshotCommand() *cobra.Command {
+	var targetID, urlContains, titleContains, selector, mode, expectedText, expectedFile string
+	var depth, limit int
+	var poll time.Duration
+	var includeIgnored bool
+	cmd := &cobra.Command{Use: "aria-snapshot [expected]", Short: "Assert a bounded ARIA snapshot with auto-retry", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		expected, err := readAriaSnapshotExpected(args, expectedText, expectedFile)
+		if err != nil {
+			return err
+		}
+		return a.runAssertAriaSnapshotCommand(cmd, expected, mode, targetID, urlContains, titleContains, selector, depth, limit, includeIgnored, poll)
+	}}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector that names the intended snapshot scope")
+	cmd.Flags().IntVar(&depth, "depth", 4, "maximum accessibility tree depth to include")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum snapshot lines to return")
+	cmd.Flags().BoolVar(&includeIgnored, "include-ignored", false, "include ignored accessibility nodes")
+	cmd.Flags().StringVar(&mode, "mode", "contains", "match mode: contains, exact, or regex")
+	cmd.Flags().StringVar(&expectedText, "expected", "", "inline expected ARIA snapshot text")
+	cmd.Flags().StringVar(&expectedFile, "file", "", "read expected ARIA snapshot text from a file")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
+	return cmd
+}
+
+func readAriaSnapshotExpected(args []string, expectedText, expectedFile string) (string, error) {
+	expectedText = strings.TrimSpace(expectedText)
+	expectedFile = strings.TrimSpace(expectedFile)
+	sources := 0
+	if len(args) > 0 {
+		sources++
+	}
+	if expectedText != "" {
+		sources++
+	}
+	if expectedFile != "" {
+		sources++
+	}
+	if sources > 1 {
+		return "", commandError("usage", "usage", "provide only one of positional expected snapshot, --expected, or --file", ExitUsage, []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --json", "cdp assert aria-snapshot --file tmp/aria-snapshot.txt --json"})
+	}
+	if expectedFile == "" {
+		if expectedText != "" {
+			return expectedText, nil
+		}
+		if len(args) == 0 {
+			return "", commandError("usage", "usage", "expected ARIA snapshot text is required", ExitUsage, []string{"cdp a11y snapshot --selector body --json", "cdp assert aria-snapshot --expected '- button \"Save\"' --json"})
+		}
+		return args[0], nil
+	}
+	data, err := os.ReadFile(expectedFile)
+	if err != nil {
+		return "", commandError("file_read_failed", "usage", fmt.Sprintf("read expected ARIA snapshot file %q: %v", expectedFile, err), ExitUsage, []string{"cdp a11y snapshot --selector body --json", "cdp assert aria-snapshot --file " + shellQuote(expectedFile) + " --json"})
+	}
+	return string(data), nil
 }
 
 func parseExpectedCount(value string) (int, error) {
@@ -2183,6 +2270,180 @@ func accessibleFieldValue(match locatorMatch, field string) string {
 		return strings.TrimSpace(match.Name)
 	default:
 		return ""
+	}
+}
+
+func (a *app) runAssertAriaSnapshotCommand(cmd *cobra.Command, expected, mode, targetID, urlContains, titleContains, selector string, depth, limit int, includeIgnored bool, poll time.Duration) error {
+	if poll <= 0 {
+		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --poll 250ms --json"})
+	}
+	if depth < 0 {
+		return commandError("usage", "usage", "--depth must be non-negative", ExitUsage, []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --depth 4 --json"})
+	}
+	if limit < 0 {
+		return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --limit 100 --json"})
+	}
+	if strings.TrimSpace(expected) == "" {
+		return commandError("usage", "usage", "expected ARIA snapshot text must not be empty", ExitUsage, []string{"cdp a11y snapshot --selector body --json", "cdp assert aria-snapshot --expected '- button \"Save\"' --json"})
+	}
+	normalizedMode := normalizeAssertMode(mode)
+	if !validAriaSnapshotAssertMode(normalizedMode) {
+		return commandError("invalid_assert_mode", "usage", "--mode must be contains, exact, or regex", ExitUsage, []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --mode contains --json"})
+	}
+	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
+	defer cancel()
+	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
+	defer session.Close(ctx)
+
+	assertionCtx, assertionCancel := context.WithTimeout(ctx, assertionTimeout)
+	defer assertionCancel()
+	start := time.Now()
+	got, err := waitForAriaSnapshotAssertion(assertionCtx, session, expected, normalizedMode, selector, depth, limit, includeIgnored, poll, start)
+	got.Snapshot.URL = target.URL
+	got.Snapshot.Title = target.Title
+	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got, "snapshot": got.Snapshot}
+	if err != nil {
+		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
+			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("ARIA snapshot assertion for %q did not pass before timeout: %v", got.Selector, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, ariaSnapshotAssertionRemediations(got.Selector, depth, limit), report)
+		}
+		return err
+	}
+	return a.render(ctx, "assertion passed", report)
+}
+
+func waitForAriaSnapshotAssertion(ctx context.Context, session *cdp.PageSession, expected, mode, selector string, depth, limit int, includeIgnored bool, poll time.Duration, start time.Time) (assertAriaSnapshotResult, error) {
+	attempts := 0
+	normalizedMode := normalizeAssertMode(mode)
+	expectedLines := normalizeAriaSnapshotAssertionLines(expected)
+	expectedText := strings.Join(expectedLines, "\n")
+	last := assertAriaSnapshotResult{
+		Selector:      normalizedAriaSnapshotSelector(selector),
+		Expected:      expectedText,
+		Mode:          normalizedMode,
+		ExpectedLines: expectedLines,
+		PollInterval:  poll.String(),
+	}
+	for {
+		attempts++
+		snapshot, err := collectA11ySnapshot(ctx, session, selector, depth, limit, includeIgnored)
+		if err != nil {
+			return last, err
+		}
+		actualLines := normalizeAriaSnapshotAssertionLines(snapshot.Text)
+		actualText := strings.Join(actualLines, "\n")
+		passed, diff, err := ariaSnapshotAssertionMatch(actualText, actualLines, expectedText, expectedLines, normalizedMode)
+		if err != nil {
+			return last, err
+		}
+		result := assertAriaSnapshotResult{
+			Selector:      snapshot.Selector,
+			Expected:      expectedText,
+			Actual:        actualText,
+			Mode:          normalizedMode,
+			Diff:          diff,
+			Passed:        passed,
+			LineCount:     len(actualLines),
+			ExpectedLines: expectedLines,
+			ActualLines:   actualLines,
+			Snapshot:      snapshot,
+			Attempts:      attempts,
+			ElapsedMS:     time.Since(start).Milliseconds(),
+			PollInterval:  poll.String(),
+		}
+		last = result
+		if result.Passed {
+			return result, nil
+		}
+		if done, err := waitForNextAssertionPoll(ctx, poll); done {
+			return last, err
+		}
+	}
+}
+
+func validAriaSnapshotAssertMode(mode string) bool {
+	switch normalizeAssertMode(mode) {
+	case "contains", "exact", "regex":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizedAriaSnapshotSelector(selector string) string {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return "body"
+	}
+	return selector
+}
+
+func normalizeAriaSnapshotAssertionLines(text string) []string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	rawLines := strings.Split(text, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func ariaSnapshotAssertionMatch(actualText string, actualLines []string, expectedText string, expectedLines []string, mode string) (bool, *assertAriaSnapshotDiff, error) {
+	normalizedMode := normalizeAssertMode(mode)
+	switch normalizedMode {
+	case "exact":
+		if len(actualLines) != len(expectedLines) {
+			return false, &assertAriaSnapshotDiff{Mode: normalizedMode, Reason: "line_count_mismatch", ExpectedIndex: -1, ActualIndex: -1, ExpectedLineCount: len(expectedLines), ActualLineCount: len(actualLines)}, nil
+		}
+		for i := range expectedLines {
+			if actualLines[i] != expectedLines[i] {
+				return false, &assertAriaSnapshotDiff{Mode: normalizedMode, Reason: "line_mismatch", ExpectedIndex: i, ActualIndex: i, ExpectedLine: expectedLines[i], ActualLine: actualLines[i], ExpectedLineCount: len(expectedLines), ActualLineCount: len(actualLines)}, nil
+			}
+		}
+		return true, nil, nil
+	case "contains":
+		actualIndex := 0
+		for expectedIndex, expectedLine := range expectedLines {
+			matched := false
+			for actualIndex < len(actualLines) {
+				if actualLines[actualIndex] == expectedLine {
+					matched = true
+					actualIndex++
+					break
+				}
+				actualIndex++
+			}
+			if !matched {
+				return false, &assertAriaSnapshotDiff{Mode: normalizedMode, Reason: "missing_line", ExpectedIndex: expectedIndex, ActualIndex: -1, ExpectedLine: expectedLine, ExpectedLineCount: len(expectedLines), ActualLineCount: len(actualLines)}, nil
+			}
+		}
+		return true, nil, nil
+	case "regex":
+		passed, err := assertionMatch(actualText, expectedText, normalizedMode)
+		if err != nil {
+			return false, nil, err
+		}
+		if passed {
+			return true, nil, nil
+		}
+		return false, &assertAriaSnapshotDiff{Mode: normalizedMode, Reason: "regex_no_match", ExpectedIndex: -1, ActualIndex: -1, ExpectedLine: expectedText, ExpectedLineCount: len(expectedLines), ActualLineCount: len(actualLines)}, nil
+	default:
+		return false, nil, commandError("invalid_assert_mode", "usage", "--mode must be contains, exact, or regex", ExitUsage, []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --mode contains --json"})
+	}
+}
+
+func ariaSnapshotAssertionRemediations(selector string, depth, limit int) []string {
+	selector = normalizedAriaSnapshotSelector(selector)
+	return []string{
+		"cdp a11y snapshot --selector " + shellQuote(selector) + " --depth " + strconv.Itoa(depth) + " --limit " + strconv.Itoa(limit) + " --json",
+		"cdp assert aria-snapshot --expected " + shellQuote("- button \"Save\"") + " --selector " + shellQuote(selector) + " --mode contains --json",
 	}
 }
 
