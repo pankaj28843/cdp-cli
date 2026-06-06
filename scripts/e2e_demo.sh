@@ -377,6 +377,11 @@ press_url_probe="$(date +%s%N)"
   | jq -e '.ok == true' >/dev/null
 "$binary" press Enter "Agent input" --by label --wait-url-contains "$press_url_probe" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg probe "$press_url_probe" '.ok == true and .action == "pressed" and .press.dispatched == true and .press.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and (.target.url | contains($probe)) and (.press.url | contains($probe))' >/dev/null
+type_url_probe="$(date +%s%N)"
+"$binary" eval "window.__cdpTypeURLProbe = '$type_url_probe'; document.querySelector('#agent-input').addEventListener('input', () => { history.pushState({}, '', '/type-url?type_wait_url=' + window.__cdpTypeURLProbe); }, { once: true })" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" type "Agent input" "url" --by label --wait-url-contains "$type_url_probe" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg probe "$type_url_probe" '.ok == true and .action == "typed" and .type.typing == true and .type.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and (.target.url | contains($probe)) and (.type.url | contains($probe))' >/dev/null
 idle_probe="$(date +%s%N)"
 wait_idle_output="$state_dir/wait-network-idle.json"
 "$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &

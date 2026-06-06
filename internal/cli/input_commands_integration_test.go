@@ -2798,6 +2798,61 @@ func TestTypeWaitSelectorJSON(t *testing.T) {
 	}
 }
 
+func TestTypeWaitURLByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"type", "Search", "typed value", "--by", "label", "--wait-url-contains", "results", "--poll", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("type wait url exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Target           struct {
+			URL   string `json:"url"`
+			Title string `json:"title"`
+		} `json:"target"`
+		Type struct {
+			Selector string `json:"selector"`
+			URL      string `json:"url"`
+			Title    string `json:"title"`
+			Typing   bool   `json:"typing"`
+			Verified *bool  `json:"verified"`
+			Typed    string `json:"typed"`
+			Value    string `json:"value"`
+		} `json:"type"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Condition    string `json:"condition"`
+			URL          string `json:"url"`
+			Title        string `json:"title"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+		Locator struct {
+			Strict bool `json:"strict"`
+		} `json:"locator"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("type wait url output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "typed" || got.ResolvedSelector != "input#q" || got.Type.Selector != "input#q" || !got.Type.Typing || got.Type.Verified == nil || !*got.Type.Verified || got.Type.Typed != "typed value" || got.Type.Value != "beforetyped value" || got.Verification.Kind != "url" || got.Verification.Needle != "results" || got.Verification.Condition != "contains" || !strings.Contains(got.Verification.URL, "results") || got.Verification.Title != "Example App" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "100ms" || !got.Locator.Strict {
+		t.Fatalf("type wait url = %+v, want typed value with matched URL verification", got)
+	}
+	if got.Target.URL != got.Verification.URL || got.Target.Title != "Example App" || got.Type.URL != got.Verification.URL || got.Type.Title != "Example App" {
+		t.Fatalf("type wait url target/result = %+v, want final URL/title evidence", got)
+	}
+}
+
 func TestTypeForceSkipsVisibleJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

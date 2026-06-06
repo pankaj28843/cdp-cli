@@ -490,7 +490,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"type": {
 			Name:        "type",
-			Description: "Type text into an editable control after locator resolution and fill-like actionability checks, or run non-mutating checks with --trial. --force records skipped visible evidence. Optional text/selector waits verify post-type state.",
+			Description: "Type text into an editable control after locator resolution and fill-like actionability checks, or run non-mutating checks with --trial. --force records skipped visible evidence. Optional text, selector, or URL waits verify post-type state.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when type completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: typed for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
@@ -499,7 +499,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective type actionability evidence for attached, visible, enabled, editable, force, and skipped-check state. Stable and receives-events are reported but not required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before typing."},
-				{Name: "verification", Type: "wait_result", Required: false, Description: "Text or selector wait result when --wait-text or --wait-selector is used."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, or URL wait result when --wait-text, --wait-selector, --wait-url, or --wait-url-contains is used."},
 			},
 		},
 

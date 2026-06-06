@@ -296,6 +296,7 @@ func commandExamples(path string) []string {
 			"cdp type input[name='email'] user@example.com --json",
 			"cdp type 'Search Wikipedia' Aarhus --by label --json",
 			"cdp type 'Search Wikipedia' Aarhus --by label --wait-text Results --json",
+			"cdp type 'Search Wikipedia' Aarhus --by label --wait-url-contains /search --json",
 			"cdp type 'Search Wikipedia' Aarhus --by label --trial --json",
 			"cdp type 'input[type=hidden][name=token]' value --force --json",
 			"cdp type textarea#notes \"typed characters\" --url-contains localhost --json",
