@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ type selectResult struct {
 	RequestedValue string     `json:"requested_value,omitempty"`
 	MatchedBy      string     `json:"matched_by,omitempty"`
 	SelectedValues []string   `json:"selected_values,omitempty"`
+	Verified       *bool      `json:"verified,omitempty"`
 	Error          *evalError `json:"error,omitempty"`
 }
 
@@ -439,6 +441,9 @@ func (a *app) newSelectCommand() *cobra.Command {
 	var locatorOpts locatorActionOptions
 	var trial bool
 	var force bool
+	var waitText string
+	var waitSelector string
+	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "select <selector-or-locator> <value>",
 		Short: "Select an option value in the first matching select control by CSS selector or strict locator",
@@ -446,6 +451,17 @@ func (a *app) newSelectCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
+			}
+			hasWaitText := strings.TrimSpace(waitText) != ""
+			hasWaitSelector := strings.TrimSpace(waitSelector) != ""
+			if hasWaitText && hasWaitSelector {
+				return commandError("usage", "usage", "use only one select wait mode: --wait-text or --wait-selector", ExitUsage, []string{"cdp select Plan pro --by label --wait-text Pro --json"})
+			}
+			if poll <= 0 {
+				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp select Plan pro --by label --wait-text Pro --poll 250ms --json"})
+			}
+			if trial && (hasWaitText || hasWaitSelector) {
+				return commandError("usage", "usage", "--trial does not change the page, so it cannot use select wait flags", ExitUsage, []string{"cdp select Plan pro --by label --wait-text Pro --json"})
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -515,18 +531,36 @@ func (a *app) newSelectCommand() *cobra.Command {
 			if !result.Selected {
 				return commandError("option_not_selected", "check_failed", fmt.Sprintf("select %q did not select value %q", selector, args[1]), ExitCheckFailed, []string{"cdp form get " + shellQuote(selector) + " --json"})
 			}
+			verified := true
+			var verification *waitResult
+			if hasWaitText || hasWaitSelector {
+				wait, err := waitForClickVerification(ctx, session, poll, waitText, waitSelector)
+				if err != nil {
+					return err
+				}
+				verified = wait.Matched
+				result.Verified = &verified
+				verification = &wait
+			}
 			report := map[string]any{
-				"ok":            true,
+				"ok":            verified,
 				"action":        "selected",
 				"target":        pageRow(target),
 				"select":        result,
 				"actionability": actionability,
 			}
+			if verification != nil {
+				report["verification"] = verification
+			}
 			if locator != nil {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
-			return a.render(ctx, fmt.Sprintf("selected\t%s\t%s", target.TargetID, result.Selector), report)
+			human := fmt.Sprintf("selected\t%s\t%s", target.TargetID, result.Selector)
+			if !verified {
+				human = fmt.Sprintf("select-unverified\t%s\t%s", target.TargetID, result.Selector)
+			}
+			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -535,6 +569,9 @@ func (a *app) newSelectCommand() *cobra.Command {
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing the selected option")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential select actionability checks and record skipped checks in JSON")
+	cmd.Flags().StringVar(&waitText, "wait-text", "", "verify by waiting until visible page text contains this string")
+	cmd.Flags().StringVar(&waitSelector, "wait-selector", "", "verify by waiting until this CSS selector matches")
+	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting for verification")
 	return cmd
 }
 

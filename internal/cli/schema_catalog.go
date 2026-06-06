@@ -448,15 +448,16 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"select": {
 			Name:        "select",
-			Description: "Set the selected option on the first matching select control after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks.",
+			Description: "Set the selected option on the first matching select control after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-select state.",
 			Fields: []schemaField{
-				{Name: "ok", Type: "boolean", Required: true, Description: "True when select completed, or when --trial actionability checks passed."},
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when select completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: selected for value updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "select", Type: "select_result", Required: true, Description: "Selector, matched count, selected boolean, trial/force flags, previous value, requested value, selected value, selected values, and match mode."},
+				{Name: "select", Type: "select_result", Required: true, Description: "Selector, matched count, selected boolean, trial/force flags, optional verification boolean, previous value, requested value, selected value, selected values, and match mode."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective select actionability evidence for attached, visible, enabled, supporting checks, force, and skipped-check state. Stable, receives-events, and editable are reported but not required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before selecting."},
+				{Name: "verification", Type: "wait_result", Required: false, Description: "Text or selector wait result when --wait-text or --wait-selector is used."},
 			},
 		},
 		"check": {

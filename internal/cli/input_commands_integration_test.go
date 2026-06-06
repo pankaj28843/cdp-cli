@@ -1211,6 +1211,84 @@ func TestSelectByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestSelectWaitTextByLabelLocatorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"select", "Plan", "pro", "--by", "label", "--wait-text", "Example", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("select wait text exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK               bool   `json:"ok"`
+		Action           string `json:"action"`
+		ResolvedSelector string `json:"resolved_selector"`
+		Select           struct {
+			Selector string `json:"selector"`
+			Selected bool   `json:"selected"`
+			Verified *bool  `json:"verified"`
+			Value    string `json:"value"`
+		} `json:"select"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Needle       string `json:"needle"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+		Locator struct {
+			Strict bool `json:"strict"`
+		} `json:"locator"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("select wait text output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "selected" || got.ResolvedSelector != "select#plan" || got.Select.Selector != "select#plan" || !got.Select.Selected || got.Select.Verified == nil || !*got.Select.Verified || got.Select.Value != "pro" || got.Verification.Kind != "text" || got.Verification.Needle != "Example" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "250ms" || !got.Locator.Strict {
+		t.Fatalf("select wait text = %+v, want selected value with matched text verification", got)
+	}
+}
+
+func TestSelectWaitSelectorJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"select", "select#plan", "pro", "--wait-selector", "main", "--poll", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("select wait selector exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Select struct {
+			Selector string `json:"selector"`
+			Selected bool   `json:"selected"`
+			Verified *bool  `json:"verified"`
+		} `json:"select"`
+		Verification struct {
+			Kind         string `json:"kind"`
+			Selector     string `json:"selector"`
+			Matched      bool   `json:"matched"`
+			Count        int    `json:"count"`
+			PollInterval string `json:"poll_interval"`
+		} `json:"verification"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("select wait selector output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Select.Selector != "select#plan" || !got.Select.Selected || got.Select.Verified == nil || !*got.Select.Verified || got.Verification.Kind != "selector" || got.Verification.Selector != "main" || !got.Verification.Matched || got.Verification.Count != 1 || got.Verification.PollInterval != "100ms" {
+		t.Fatalf("select wait selector = %+v, want matched selector verification", got)
+	}
+}
+
 func TestSelectTrialByLabelLocatorJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

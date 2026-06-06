@@ -201,6 +201,9 @@ DEMO_HTML = """<!doctype html>
         document.querySelector('#status').textContent = 'Submitted from press';
       }
     });
+    document.querySelector('#plan').addEventListener('change', event => {
+      document.querySelector('#status').textContent = 'Plan selected: ' + event.target.value;
+    });
     document.querySelector('#partial-selection').indeterminate = true;
     fetch('/api/ok').then(() => fetch('/api/fail'));
     Promise.all([cacheReady, serviceWorkerReady, indexedDBReady]).finally(() => {
