@@ -59,11 +59,15 @@ func (a *app) modeDiagnosticCommands() []string {
 }
 
 func (a *app) connectionRemediationCommands() []string {
-	commands := a.modeDiagnosticCommands()
 	if a.browserModeName() == string(config.BrowserModeHeadless) {
-		return append([]string{modeScopedCommand(a.browserModeName(), "daemon keepalive --repair --json")}, commands...)
+		return []string{
+			modeScopedCommand(a.browserModeName(), "daemon keepalive --repair --json"),
+			modeScopedCommand(a.browserModeName(), "daemon status --json"),
+			modeScopedCommand(a.browserModeName(), "daemon health-check --repair --json"),
+			"cdp cron status --json",
+		}
 	}
-	return commands
+	return a.modeDiagnosticCommands()
 }
 
 func (a *app) browserBudget(ctx context.Context, client cdp.CommandClient) (cdp.BrowserResourceBudget, error) {
@@ -192,6 +196,11 @@ func (a *app) applyManagedBrowserHealth(health map[string]any, runtime *daemon.R
 	}
 	health["managed_browser_health"] = detail
 	if ok {
+		return
+	}
+	if ready, _ := health["daemon_rpc_ready"].(bool); ready {
+		detail["state"] = "daemon_rpc_ready_pid_not_running"
+		detail["daemon_rpc_ready"] = true
 		return
 	}
 	health["state"] = "degraded"

@@ -987,6 +987,14 @@ func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]
 	if !info.Exists {
 		return entry
 	}
+	if info.Metadata.PID == 0 && strings.TrimSpace(info.Metadata.StartedAt) == "" && strings.TrimSpace(info.Metadata.Name) == "" {
+		entry["stale"] = false
+		entry["marker"] = "flock_lockfile"
+		if info.ModifiedAt != "" {
+			entry["modified_at"] = info.ModifiedAt
+		}
+		return entry
+	}
 	if info.ModifiedAt != "" {
 		entry["modified_at"] = info.ModifiedAt
 	}

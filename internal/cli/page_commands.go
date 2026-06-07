@@ -2,19 +2,20 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"encoding/json"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
-	"path/filepath"
 )
 
 var pageCleanupRecordsMu sync.Mutex
@@ -980,28 +981,113 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 		return daemon.Runtime{}, err
 	}
 	browserMode := a.browserModeName()
+	runtime, err := a.loadRequiredDaemonRuntime(ctx, store.Dir, browserMode)
+	if err == nil {
+		return runtime, nil
+	}
+	if browserMode != string(config.BrowserModeHeadless) {
+		return daemon.Runtime{}, err
+	}
+	if repairErr := a.repairHeadlessDaemonForBrowserCommand(ctx, store.Dir); repairErr != nil {
+		return daemon.Runtime{}, fmt.Errorf("%v; automatic headless daemon repair failed: %v", err, repairErr)
+	}
+	runtime, retryErr := a.loadRequiredDaemonRuntime(ctx, store.Dir, browserMode)
+	if retryErr != nil {
+		return daemon.Runtime{}, fmt.Errorf("%v; automatic headless daemon repair completed but daemon runtime is still unavailable: %v", err, retryErr)
+	}
+	return runtime, nil
+}
+
+func (a *app) loadRequiredDaemonRuntime(ctx context.Context, storeDir, browserMode string) (daemon.Runtime, error) {
 	statusCommand := modeScopedCommand(browserMode, "daemon status --json")
 	doctorCommand := modeScopedCommand(browserMode, "doctor --check daemon --json")
 	resolveCommand := modeScopedCommand(browserMode, "connection resolve --json")
 	currentCommand := modeScopedCommand(browserMode, "connection current --json")
 	repairCommand := modeScopedCommand(browserMode, "daemon keepalive --repair --json")
-	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, store.Dir, browserMode)
+	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, storeDir, browserMode)
 	if err != nil {
 		return daemon.Runtime{}, err
 	}
 	if !ok {
+		if browserMode == string(config.BrowserModeHeadless) {
+			return daemon.Runtime{}, fmt.Errorf("browser commands require a running %s cdp daemon; run `%s` or inspect `%s` before retrying", browserMode, repairCommand, statusCommand)
+		}
 		return daemon.Runtime{}, fmt.Errorf("browser commands require a running %s cdp daemon; inspect `%s` and `%s` before retrying", browserMode, statusCommand, doctorCommand)
 	}
 	if !a.runtimeMatchesConnection(runtime) {
 		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the effective %s browser-mode connection; inspect `%s`, `%s`, and `%s`, then run `%s` if the effective connection is correct and repair is appropriate for the current unattended context", browserMode, statusCommand, currentCommand, resolveCommand, repairCommand)
 	}
 	if !daemon.RuntimeRunning(runtime) {
+		if browserMode == string(config.BrowserModeHeadless) {
+			return daemon.Runtime{}, fmt.Errorf("%s daemon process is not running; run `%s` or inspect `%s`", browserMode, repairCommand, statusCommand)
+		}
 		return daemon.Runtime{}, fmt.Errorf("%s daemon runtime state exists but the process is not running; inspect `%s` or run `%s` when repair is appropriate for the current unattended context", browserMode, statusCommand, repairCommand)
 	}
 	if !daemon.RuntimeSocketReady(ctx, runtime) {
+		if browserMode == string(config.BrowserModeHeadless) {
+			return daemon.Runtime{}, fmt.Errorf("%s daemon socket is not ready; run `%s` or inspect `%s`", browserMode, repairCommand, statusCommand)
+		}
 		return daemon.Runtime{}, fmt.Errorf("%s daemon runtime socket is not ready; inspect `%s` or run `%s` when repair is appropriate for the current unattended context", browserMode, statusCommand, repairCommand)
 	}
 	return runtime, nil
+}
+
+func (a *app) repairHeadlessDaemonForBrowserCommand(ctx context.Context, storeDir string) error {
+	connectionName := a.connectionStateName(ctx)
+	if strings.TrimSpace(connectionName) == "" {
+		connectionName = defaultConnectionNameForBrowserMode(string(config.BrowserModeHeadless))
+	}
+	mode := a.connectionMode()
+	if strings.TrimSpace(mode) == "" {
+		mode = "browser_url"
+	}
+	lockName := "daemon-keepalive-headless-" + mode + "-" + connectionName
+	lock, acquired, existingLock, err := daemon.AcquireLock(ctx, storeDir, lockName, 5*time.Second, 10*time.Minute, daemon.LockMetadata{
+		Name:  lockName,
+		Phase: "browser_command_repair",
+	})
+	if err != nil {
+		return fmt.Errorf("acquire headless keepalive lock: %w", err)
+	}
+	if !acquired {
+		phase := strings.TrimSpace(existingLock.Phase)
+		if phase == "" {
+			phase = "unknown"
+		}
+		return fmt.Errorf("headless keepalive repair is locked by pid %d in phase %s", existingLock.PID, phase)
+	}
+	defer lock.Release()
+
+	probe, err := a.browserProbe(ctx)
+	if err != nil {
+		return fmt.Errorf("probe selected headless connection: %w", err)
+	}
+	status := a.daemonStatus(ctx, probe)
+	runtimeHealthy, runtimeCheck := keepaliveRuntimeCheck(ctx, status)
+	if status.State == "running" && runtimeHealthy {
+		return nil
+	}
+	probeResult := map[string]any{
+		"mode":             "browser-command",
+		"result":           probe.State,
+		"repair_requested": true,
+	}
+	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), status, probeResult, runtimeCheck)
+	if err != nil {
+		return err
+	}
+	state, _ := stringMapField(keepalive, "state")
+	switch state {
+	case "healthy", "started", "repaired":
+		return nil
+	case "locked":
+		return fmt.Errorf("headless keepalive repair is locked")
+	default:
+		if state == "" {
+			state = "unknown"
+		}
+		return fmt.Errorf("headless keepalive repair ended in state %s", state)
+	}
 }
 
 func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titleContains string) (*cdp.PageSession, cdp.TargetInfo, error) {

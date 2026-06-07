@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -606,7 +607,7 @@ func TestManagedHeadlessRuntimeOverridesSelectedAutoConnect(t *testing.T) {
 	}
 }
 
-func TestDaemonHealthClassifiesDeadManagedHeadlessChrome(t *testing.T) {
+func TestDaemonHealthKeepsReadyHeadlessHealthyWhenLauncherPIDExited(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	stateDir := shortCLIStateDir(t)
@@ -665,14 +666,14 @@ func TestDaemonHealthClassifiesDeadManagedHeadlessChrome(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("daemon health output is invalid JSON: %v", err)
 	}
-	if got.Health.State != "degraded" || !containsString(got.Health.Reasons, "managed_chrome_process_not_running") {
-		t.Fatalf("daemon health = %+v, want degraded managed Chrome reason", got.Health)
+	if got.Health.State != "healthy" || containsString(got.Health.Reasons, "managed_chrome_process_not_running") {
+		t.Fatalf("daemon health = %+v, want healthy daemon RPC despite exited launcher PID", got.Health)
 	}
-	if !got.Health.ManagedBrowserHealth.Expected || got.Health.ManagedBrowserHealth.State != "process_not_running" || got.Health.ManagedBrowserHealth.Running || got.Health.ManagedBrowserHealth.ChromePID != deadChromePID {
-		t.Fatalf("managed_browser_health = %+v, want dead managed Chrome classification", got.Health.ManagedBrowserHealth)
+	if !got.Health.ManagedBrowserHealth.Expected || got.Health.ManagedBrowserHealth.State != "daemon_rpc_ready_pid_not_running" || got.Health.ManagedBrowserHealth.Running || got.Health.ManagedBrowserHealth.ChromePID != deadChromePID {
+		t.Fatalf("managed_browser_health = %+v, want diagnostic launcher PID classification", got.Health.ManagedBrowserHealth)
 	}
-	if !containsString(got.Health.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
-		t.Fatalf("next_commands = %+v, want headless keepalive repair", got.Health.NextCommands)
+	if containsString(got.Health.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
+		t.Fatalf("next_commands = %+v, should not recommend repair while daemon RPC is healthy", got.Health.NextCommands)
 	}
 }
 
@@ -841,6 +842,72 @@ func TestDaemonKeepaliveHealthyJSON(t *testing.T) {
 	}
 	if !got.OK || got.BrowserMode != "headed" || got.State != "healthy" || got.Action != "none" || got.Daemon.State != "running" {
 		t.Fatalf("daemon keepalive = %+v, want healthy running daemon", got)
+	}
+}
+
+func TestDaemonKeepaliveHeadlessDoesNotRepairWhenDaemonRPCReadyAndLauncherPIDExited(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	deadChromePID := exitedProcessPID(t)
+	runtimeState, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil || !ok {
+		t.Fatalf("LoadRuntimeForMode headless ok=%v err=%v, want runtime", ok, err)
+	}
+	runtimeState.ManagedProfilePath = browser.ManagedProfileDir(stateDir)
+	runtimeState.ProfileSeedStrategy = "managed"
+	runtimeState.ChromePID = deadChromePID
+	runtimeState.ChromePort = "9222"
+	managed := browser.ManagedStatus{BrowserMode: "headless", ChromePID: deadChromePID, UserDataDir: browser.ManagedProfileDir(stateDir), DebuggingPort: "9222", ProfileSeedStrategy: "managed"}
+	runtimeState.ManagedBrowser = &managed
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", runtimeState); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "keepalive", "--repair", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Health struct {
+			Result               string `json:"result"`
+			ManagedBrowserHealth struct {
+				State          string `json:"state"`
+				DaemonRPCReady bool   `json:"daemon_rpc_ready"`
+			} `json:"managed_browser_health"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v\n%s", err, out.String())
+	}
+	if !got.OK || got.State != "healthy" || got.Action != "none" || got.Health.Result != "target_list_ok" {
+		t.Fatalf("daemon keepalive = %+v, want healthy/no repair when daemon RPC works", got)
+	}
+	if got.Health.ManagedBrowserHealth.State != "daemon_rpc_ready_pid_not_running" || !got.Health.ManagedBrowserHealth.DaemonRPCReady {
+		t.Fatalf("managed browser health = %+v, want launcher PID diagnostic only", got.Health.ManagedBrowserHealth)
 	}
 }
 
@@ -1026,6 +1093,32 @@ func writeManagedActivePortForEndpoint(t *testing.T, stateDir, endpoint string) 
 	return port
 }
 
+func writeFakeManagedChrome(t *testing.T, port, path string) string {
+	t.Helper()
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+user_data_dir=""
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) user_data_dir=${arg#--user-data-dir=} ;;
+  esac
+done
+if [ -z "$user_data_dir" ]; then
+  echo "missing --user-data-dir" >&2
+  exit 2
+fi
+mkdir -p "$user_data_dir"
+printf '%%s\n%%s\n' %q %q > "$user_data_dir/DevToolsActivePort"
+trap 'exit 0' INT TERM
+while :; do sleep 1; done
+`, port, path)
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake chrome: %v", err)
+	}
+	return chromePath
+}
+
 func exitedProcessPID(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("sh", "-c", "exit 0")
@@ -1080,6 +1173,108 @@ func TestDaemonRestartBrowserURLJSON(t *testing.T) {
 	}
 	if !got.OK || got.Daemon.State != "running" || got.Daemon.ConnectionMode != "browser_url" || !got.Start.Keepalive || !got.Restart.Stopped {
 		t.Fatalf("daemon restart = %+v, want stopped previous daemon and running browser-url daemon", got)
+	}
+}
+
+func TestDaemonRestartHeadlessIgnoresStaleSavedPortAndStartsManagedRuntime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell chrome test is unix-only")
+	}
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse fake server URL: %v", err)
+	}
+	_, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split fake server host: %v", err)
+	}
+	chromePath := writeFakeManagedChrome(t, port, "/devtools/browser/test")
+	t.Setenv("CDP_CHROME_CANDIDATES", chromePath)
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
+	managedProfileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(managedProfileDir, 0o700); err != nil {
+		t.Fatalf("create stale managed profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(managedProfileDir, "DevToolsActivePort"), []byte("1\n/devtools/browser/stale\n"), 0o600); err != nil {
+		t.Fatalf("write stale active port: %v", err)
+	}
+	if err := browser.SaveManagedMetadata(stateDir, browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           os.Getpid(),
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         managedProfileDir,
+		DebuggingPort:       "1",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+	}); err != nil {
+		t.Fatalf("save stale managed metadata: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	staleBrowserURL := "http://" + net.JoinHostPort("127.0.0.1", "1")
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "default", "--browser-url", staleBrowserURL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add stale headless exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "restart", "--reconnect", "30s", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headless daemon restart exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool `json:"ok"`
+		Daemon struct {
+			State   string `json:"state"`
+			Runtime struct {
+				BrowserMode        string `json:"browser_mode"`
+				ConnectionMode     string `json:"connection_mode"`
+				ReconnectInterval  string `json:"reconnect_interval"`
+				ChromePID          int    `json:"chrome_pid"`
+				ChromePort         string `json:"chrome_port"`
+				ManagedProfilePath string `json:"managed_profile_path"`
+				ManagedBrowser     *struct {
+					ChromePID           int    `json:"chrome_pid"`
+					DebuggingPort       string `json:"debugging_port"`
+					ProfileSeedStrategy string `json:"profile_seed_strategy"`
+				} `json:"managed_browser"`
+			} `json:"runtime"`
+		} `json:"daemon"`
+		Start struct {
+			ConnectionName string `json:"connection_name"`
+			Keepalive      bool   `json:"keepalive_started"`
+		} `json:"start"`
+		Restart struct {
+			ManagedRestart bool `json:"managed_restart"`
+		} `json:"restart"`
+		Chrome struct {
+			Launched bool `json:"launched"`
+		} `json:"chrome"`
+		Connection struct {
+			Name        string `json:"name"`
+			BrowserMode string `json:"browser_mode"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("headless daemon restart output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Daemon.State != "running" || got.Daemon.Runtime.BrowserMode != "headless" || got.Daemon.Runtime.ConnectionMode != "browser_url" || got.Daemon.Runtime.ReconnectInterval != "30s" {
+		t.Fatalf("headless daemon restart = %+v, want running managed browser-url daemon", got.Daemon)
+	}
+	if got.Daemon.Runtime.ChromePID <= 0 || got.Daemon.Runtime.ChromePort != port || got.Daemon.Runtime.ManagedProfilePath == "" || got.Daemon.Runtime.ManagedBrowser == nil {
+		t.Fatalf("runtime = %+v, want managed Chrome metadata for fresh headless restart", got.Daemon.Runtime)
+	}
+	if got.Daemon.Runtime.ManagedBrowser.DebuggingPort != port || got.Daemon.Runtime.ManagedBrowser.ProfileSeedStrategy != "managed" {
+		t.Fatalf("managed browser = %+v, want fake server port and managed seed strategy", got.Daemon.Runtime.ManagedBrowser)
+	}
+	if !got.Start.Keepalive || got.Start.ConnectionName != "headless" || !got.Restart.ManagedRestart || !got.Chrome.Launched || got.Connection.Name != "headless" || got.Connection.BrowserMode != "headless" {
+		t.Fatalf("restart/start metadata = start %+v restart %+v chrome %+v connection %+v, want managed headless restart metadata", got.Start, got.Restart, got.Chrome, got.Connection)
 	}
 }
 
@@ -1339,45 +1534,66 @@ func TestAutoConnectPagesRequiresRunningDaemon(t *testing.T) {
 	}
 }
 
-func TestHeadlessPagesRequireDaemonEvenWithManagedMetadata(t *testing.T) {
-	stateDir := t.TempDir()
-	metadata := browser.ManagedMetadata{
-		BrowserMode:         "headless",
-		ChromePID:           123456,
-		StartedAt:           "2026-05-21T12:00:00Z",
-		UserDataDir:         browser.ManagedProfileDir(stateDir),
-		DebuggingPort:       "9222",
-		ProfileSeedStrategy: "managed",
-		OwnedMarker:         "owned-token",
-		ProcessStartTime:    "2026-05-21T12:00:00Z",
+func TestHeadlessPagesAutoRepairsManagedDaemon(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell chrome test is unix-only")
 	}
-	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
-		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "auto-repaired-page", "type": "page", "title": "Recovered Page", "url": "https://example.test/recovered", "attached": false},
+	})
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse fake server URL: %v", err)
 	}
+	_, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split fake server host: %v", err)
+	}
+	chromePath := writeFakeManagedChrome(t, port, "/devtools/browser/test")
+	t.Setenv("CDP_CHROME_CANDIDATES", chromePath)
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitConnection {
-		t.Fatalf("pages exit code = %d, want %d; stderr=%s", code, cli.ExitConnection, errOut.String())
+	staleBrowserURL := "http://" + net.JoinHostPort("127.0.0.1", "1")
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "headless", "--browser-url", staleBrowserURL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add stale headless exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("headless pages exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
 	var got struct {
-		OK                  bool     `json:"ok"`
-		Code                string   `json:"code"`
-		Message             string   `json:"message"`
-		RemediationCommands []string `json:"remediation_commands"`
+		OK    bool `json:"ok"`
+		Pages []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"pages"`
+		Budget struct {
+			BrowserMode    string `json:"browser_mode"`
+			ConnectionMode string `json:"connection_mode"`
+		} `json:"budget"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("pages error output is invalid JSON: %v", err)
+		t.Fatalf("headless pages output is invalid JSON: %v; output=%s", err, out.String())
 	}
-	if got.OK || got.Code != "connection_not_configured" || !strings.Contains(got.Message, "running headless cdp daemon") {
-		t.Fatalf("pages error = %+v, want daemon-required failure without direct managed endpoint fallback", got)
+	if !got.OK || len(got.Pages) != 1 || got.Pages[0].ID != "auto-repaired-page" || got.Budget.BrowserMode != "headless" || got.Budget.ConnectionMode != "browser_url" {
+		t.Fatalf("headless pages = %+v, want auto-repaired daemon-backed page list", got)
 	}
-	if !containsString(got.RemediationCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
-		t.Fatalf("pages remediation commands = %+v, want headless repair command", got.RemediationCommands)
+	runtimeState, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil {
+		t.Fatalf("LoadRuntimeForMode returned error: %v", err)
 	}
-	for _, command := range got.RemediationCommands {
-		if strings.Contains(command, "daemon keepalive --auto-connect") {
-			t.Fatalf("pages remediation commands = %+v, must not suggest headed auto-connect repair for headless", got.RemediationCommands)
-		}
+	if !ok || !daemon.RuntimeRunning(runtimeState) || !daemon.RuntimeSocketReady(context.Background(), runtimeState) || runtimeState.ReconnectInterval != "30s" || runtimeState.ChromePort != port || runtimeState.ManagedBrowser == nil {
+		t.Fatalf("runtime = %+v ok=%v, want running managed headless daemon with 30s reconnect", runtimeState, ok)
 	}
 }

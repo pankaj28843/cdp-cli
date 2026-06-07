@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -441,6 +442,9 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 	if err != nil {
 		return ManagedLaunch{}, err
 	}
+	if err := os.Remove(filepath.Join(metadata.UserDataDir, "DevToolsActivePort")); err != nil && !os.IsNotExist(err) {
+		return ManagedLaunch{}, fmt.Errorf("remove stale managed active port file: %w", err)
+	}
 
 	cmd := exec.Command(chromePath, ManagedLaunchArgs(chromePath, metadata.UserDataDir)[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -503,13 +507,6 @@ func ReuseManagedChrome(ctx context.Context, stateDir string) (ManagedLaunch, bo
 	if metadata.BrowserMode != "headless" || metadata.ChromePID <= 0 || strings.TrimSpace(metadata.UserDataDir) == "" {
 		return ManagedLaunch{}, false, nil
 	}
-	process, err := os.FindProcess(metadata.ChromePID)
-	if err != nil {
-		return ManagedLaunch{}, false, nil
-	}
-	if err := process.Signal(syscall.Signal(0)); err != nil {
-		return ManagedLaunch{}, false, nil
-	}
 	select {
 	case <-ctx.Done():
 		return ManagedLaunch{}, false, ctx.Err()
@@ -524,7 +521,31 @@ func ReuseManagedChrome(ctx context.Context, stateDir string) (ManagedLaunch, bo
 	if err := ValidateLoopbackEndpoint(endpoint); err != nil {
 		return ManagedLaunch{}, false, err
 	}
+	if !managedEndpointReachable(ctx, endpoint) {
+		return ManagedLaunch{}, false, nil
+	}
 	return ManagedLaunch{Endpoint: endpoint, Metadata: metadata}, true, nil
+}
+
+func managedEndpointReachable(ctx context.Context, endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	u.Scheme = "http"
+	u.Path = "/json/version"
+	u.RawQuery = ""
+	u.Fragment = ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 func WaitManagedActivePort(ctx context.Context, userDataDir string) (string, string, error) {

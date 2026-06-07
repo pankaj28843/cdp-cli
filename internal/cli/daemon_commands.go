@@ -963,6 +963,14 @@ func (a *app) newDaemonRestartCommand() *cobra.Command {
 				)
 			}
 
+			if a.browserModeName() == string(config.BrowserModeHeadless) {
+				result, err := a.runHeadlessDaemonRestart(ctx, stop, reconnect, connectionName, remember)
+				if err != nil {
+					return err
+				}
+				return a.render(ctx, result.human, result.data)
+			}
+
 			result, err := a.runDaemonStart(ctx, daemonStartConfig{
 				prime:          prime,
 				reconnect:      reconnect,
@@ -995,6 +1003,71 @@ func (a *app) newDaemonRestartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&connectionName, "connection-name", "default", "connection name to save when --browser-url or --auto-connect is supplied")
 	cmd.Flags().BoolVar(&remember, "remember", true, "save supplied connection metadata for future on-demand commands")
 	return cmd
+}
+
+func (a *app) runHeadlessDaemonRestart(ctx context.Context, stop daemonStopResult, reconnect time.Duration, connectionName string, remember bool) (daemonStartResult, error) {
+	if reconnect < 0 {
+		return daemonStartResult{}, commandError(
+			"invalid_reconnect_interval",
+			"usage",
+			"--reconnect must be a non-negative duration",
+			ExitUsage,
+			[]string{"cdp --browser-mode headless daemon restart --reconnect 30s --json"},
+		)
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return daemonStartResult{}, err
+	}
+	if strings.TrimSpace(connectionName) == "" || connectionName == "default" {
+		connectionName = defaultConnectionNameForBrowserMode("headless")
+	}
+	managed, chrome, err := a.ensureManagedChromeForKeepalive(ctx, store.Dir, defaultChromeCommand())
+	if err != nil {
+		return daemonStartResult{}, commandError(
+			"chrome_start_failed",
+			"connection",
+			fmt.Sprintf("start managed headless Chrome: %v", err),
+			ExitConnection,
+			[]string{
+				"cdp --browser-mode headless browser profile status --json",
+				"cdp --browser-mode headless daemon keepalive --repair --json",
+			},
+		)
+	}
+	a.opts.browserURL = managedHTTPURL(managed.Endpoint)
+	a.opts.autoConnect = false
+	a.opts.userDataDir = managed.Metadata.UserDataDir
+
+	result, err := a.runDaemonStart(ctx, daemonStartConfig{
+		reconnect:         reconnect,
+		connectionName:    connectionName,
+		remember:          remember,
+		managedKeepAlive:  managed,
+		skipSelectedApply: true,
+	})
+	if err != nil {
+		return daemonStartResult{}, err
+	}
+	restart := map[string]any{
+		"stopped":                 stop.DaemonStopped,
+		"daemon_stopped":          stop.DaemonStopped,
+		"managed_browser_stopped": stop.ManagedBrowserStopped,
+		"managed_browser":         stop.ManagedBrowser,
+		"managed_restart":         true,
+		"chrome":                  chrome,
+	}
+	if stop.Runtime.PID > 0 {
+		restart["previous_runtime"] = stop.Runtime
+	}
+	result.data["restart"] = restart
+	result.data["chrome"] = chrome
+	if stop.DaemonStopped {
+		result.human = fmt.Sprintf("daemon process %d stopped\n%s", stop.Runtime.PID, result.human)
+	} else {
+		result.human = fmt.Sprintf("daemon was not running\n%s", result.human)
+	}
+	return result, nil
 }
 
 type keepaliveChromeStatus struct {
@@ -1546,14 +1619,6 @@ func keepaliveRuntimeCheck(ctx context.Context, status daemon.Status) (bool, map
 		check["result"] = "daemon_socket_unready"
 		return false, check
 	}
-	if ok, managed := managedRuntimeProcessCheck(status.Runtime); managed != nil {
-		check["managed_browser_health"] = managed
-		if !ok {
-			check["ok"] = false
-			check["result"] = "managed_chrome_process_not_running"
-			return false, check
-		}
-	}
 	var result struct {
 		TargetInfos []cdp.TargetInfo `json:"targetInfos"`
 	}
@@ -1561,7 +1626,17 @@ func keepaliveRuntimeCheck(ctx context.Context, status daemon.Status) (bool, map
 		check["ok"] = false
 		check["result"] = "target_list_failed"
 		check["error"] = err.Error()
+		if _, managed := managedRuntimeProcessCheck(status.Runtime); managed != nil {
+			check["managed_browser_health"] = managed
+		}
 		return false, check
+	}
+	if ok, managed := managedRuntimeProcessCheck(status.Runtime); managed != nil {
+		if !ok {
+			managed["state"] = "daemon_rpc_ready_pid_not_running"
+			managed["daemon_rpc_ready"] = true
+		}
+		check["managed_browser_health"] = managed
 	}
 	check["ok"] = true
 	check["result"] = "target_list_ok"

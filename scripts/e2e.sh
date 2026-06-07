@@ -159,9 +159,18 @@ SHELL=/bin/sh
 # End cdp-cli managed browser runtime tasks
 EOF_CRONTAB
 mkdir -p "$state_dir/locks"
-: >"$state_dir/locks/keepalive-headless.lock"
+(sh -c 'exit 0') &
+dead_lock_pid=$!
+wait "$dead_lock_pid" || true
+cat >"$state_dir/locks/keepalive-headless.lock" <<EOF_LOCK
+{"name":"keepalive-headless","pid":$dead_lock_pid,"started_at":"2020-01-01T00:00:00Z","phase":"checking"}
+EOF_LOCK
 touch -d '20 minutes ago' "$state_dir/locks/keepalive-headless.lock" 2>/dev/null || touch -t 202001010000 "$state_dir/locks/keepalive-headless.lock"
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "needs_update" and .health.state == "needs_update" and .health.status == "warn" and .health.recommended_command == "cdp cron install --profile agent --json" and .matches_intended == false and .health.stale_lock_count == 1 and (.health.stale_locks | index("keepalive-headless")) and (.health.issues | any(.state == "stale_locks" and .recommended_command == "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json"))' >/dev/null
+rm -f "$state_dir/locks/keepalive-headless.lock"
+: >"$state_dir/locks/keepalive-headless.lock"
+touch -d '20 minutes ago' "$state_dir/locks/keepalive-headless.lock" 2>/dev/null || touch -t 202001010000 "$state_dir/locks/keepalive-headless.lock"
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .matches_intended == false and .health.stale_lock_count == 0 and .locks["keepalive-headless"].exists == true and .locks["keepalive-headless"].stale == false and .locks["keepalive-headless"].marker == "flock_lockfile"' >/dev/null
 rm -f "$state_dir/locks/keepalive-headless.lock"
 cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh

@@ -427,6 +427,39 @@ func TestCronStatusClassifiesDeadDaemonKeepaliveLock(t *testing.T) {
 	}
 }
 
+func TestCronStatusIgnoresOldEmptyFlockLockMarkers(t *testing.T) {
+	crontab := strings.Join([]string{
+		"# cdp-cli managed browser runtime tasks",
+		"* * * * * cdp_lock=$HOME/.cdp-cli/locks/keepalive-headless.lock; flock -n \"$cdp_lock\" true",
+		"# End cdp-cli managed browser runtime tasks",
+	}, "\n")
+	_, crontabBin := fakeCrontab(t, crontab)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+	writeOldFlockMarker(t, stateDir, "keepalive-headless")
+
+	var status struct {
+		OK    bool `json:"ok"`
+		Locks map[string]struct {
+			Exists bool   `json:"exists"`
+			Stale  bool   `json:"stale"`
+			Marker string `json:"marker"`
+		} `json:"locks"`
+		Health struct {
+			StaleLockCount int      `json:"stale_lock_count"`
+			StaleLocks     []string `json:"stale_locks"`
+		} `json:"health"`
+	}
+	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	lock := status.Locks["keepalive-headless"]
+	if !status.OK || !lock.Exists || lock.Stale || lock.Marker != "flock_lockfile" {
+		t.Fatalf("cron lock = %+v statusOK=%v, want old empty flock marker without stale warning", lock, status.OK)
+	}
+	if status.Health.StaleLockCount != 0 || len(status.Health.StaleLocks) != 0 {
+		t.Fatalf("cron health = %+v, want no stale locks for empty flock marker", status.Health)
+	}
+}
+
 type cronInstallResult struct {
 	OK        bool   `json:"ok"`
 	Action    string `json:"action"`
@@ -480,12 +513,37 @@ func writeStaleCronLock(t *testing.T, stateDir, name string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir lock dir: %v", err)
 	}
-	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+	body, err := json.Marshal(map[string]any{
+		"name":       name,
+		"pid":        exitedProcessPID(t),
+		"started_at": time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339),
+		"phase":      "checking",
+	})
+	if err != nil {
+		t.Fatalf("marshal stale cron lock: %v", err)
+	}
+	body = append(body, '\n')
+	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatalf("write stale cron lock: %v", err)
 	}
 	old := time.Now().Add(-20 * time.Minute)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatalf("age stale cron lock: %v", err)
+	}
+}
+
+func writeOldFlockMarker(t *testing.T, stateDir, name string) {
+	t.Helper()
+	path := filepath.Join(stateDir, "locks", name+".lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+		t.Fatalf("write flock marker: %v", err)
+	}
+	old := time.Now().Add(-20 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("age flock marker: %v", err)
 	}
 }
 

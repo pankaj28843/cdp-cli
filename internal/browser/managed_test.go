@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -324,6 +328,13 @@ func TestStartManagedChromeOutlivesCallerContext(t *testing.T) {
 		t.Skip("fake shell chrome test is unix-only")
 	}
 	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "DevToolsActivePort"), []byte("1\n/devtools/browser/stale\n"), 0o600); err != nil {
+		t.Fatalf("write stale active port: %v", err)
+	}
 	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
 	script := `#!/usr/bin/env sh
 set -eu
@@ -345,6 +356,9 @@ sleep 30
 	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromePath})
 	if err != nil {
 		t.Fatalf("StartManagedChrome returned error: %v", err)
+	}
+	if launch.Metadata.DebuggingPort != "12345" {
+		t.Fatalf("StartManagedChrome reused stale active port %q, want fake Chrome port", launch.Metadata.DebuggingPort)
 	}
 	t.Cleanup(func() {
 		process, findErr := os.FindProcess(launch.Metadata.ChromePID)
@@ -440,12 +454,28 @@ sleep 30
 }
 
 func TestReuseManagedChromeUsesExistingActivePort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Chrome/144.0"})
+	}))
+	defer server.Close()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	_, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split server host: %v", err)
+	}
 	stateDir := filepath.Join(t.TempDir(), "state")
 	userDataDir := browser.ManagedProfileDir(stateDir)
 	if err := os.MkdirAll(userDataDir, 0o700); err != nil {
 		t.Fatalf("create managed profile: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte("34567\n/devtools/browser/reused\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte(port+"\n/devtools/browser/reused\n"), 0o600); err != nil {
 		t.Fatalf("write active port: %v", err)
 	}
 	metadata := browser.ManagedMetadata{
@@ -466,10 +496,101 @@ func TestReuseManagedChromeUsesExistingActivePort(t *testing.T) {
 	if !ok {
 		t.Fatalf("ReuseManagedChrome ok = false, want true")
 	}
-	wantEndpoint := "ws://" + net.JoinHostPort("127.0.0.1", "34567") + "/devtools/browser/reused"
-	if launch.Endpoint != wantEndpoint || launch.Metadata.DebuggingPort != "34567" {
+	wantEndpoint := "ws://" + net.JoinHostPort("127.0.0.1", port) + "/devtools/browser/reused"
+	if launch.Endpoint != wantEndpoint || launch.Metadata.DebuggingPort != port {
 		t.Fatalf("ReuseManagedChrome = %+v, want endpoint from active port", launch)
 	}
+}
+
+func TestReuseManagedChromeRejectsUnreachableActivePortEvenWhenPIDLooksAlive(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	userDataDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(userDataDir, 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte("1\n/devtools/browser/stale\n"), 0o600); err != nil {
+		t.Fatalf("write active port: %v", err)
+	}
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           os.Getpid(),
+		UserDataDir:         userDataDir,
+		DebuggingPort:       "12345",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+
+	launch, ok, err := browser.ReuseManagedChrome(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("ReuseManagedChrome returned error: %v", err)
+	}
+	if ok {
+		t.Fatalf("ReuseManagedChrome = %+v ok=true, want stale active port rejected", launch)
+	}
+}
+
+func TestReuseManagedChromeUsesReachableEndpointWhenSavedPIDExited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"Browser": "Chrome/144.0"})
+	}))
+	defer server.Close()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	_, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split server host: %v", err)
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	userDataDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(userDataDir, 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte(port+"\n/devtools/browser/reused\n"), 0o600); err != nil {
+		t.Fatalf("write active port: %v", err)
+	}
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           exitedPID(t),
+		UserDataDir:         userDataDir,
+		DebuggingPort:       "12345",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+
+	launch, ok, err := browser.ReuseManagedChrome(context.Background(), stateDir)
+	if err != nil {
+		t.Fatalf("ReuseManagedChrome returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ReuseManagedChrome ok = false, want true from reachable endpoint")
+	}
+	wantEndpoint := "ws://" + net.JoinHostPort("127.0.0.1", port) + "/devtools/browser/reused"
+	if launch.Endpoint != wantEndpoint || launch.Metadata.DebuggingPort != port {
+		t.Fatalf("ReuseManagedChrome = %+v, want reachable endpoint despite stale PID", launch)
+	}
+}
+
+func exitedPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait helper process: %v", err)
+	}
+	return pid
 }
 
 func TestValidateLoopbackEndpoint(t *testing.T) {
