@@ -122,10 +122,10 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				})
 			}
 
-			ctx, cancel := a.browserCommandContext(cmd)
-			defer cancel()
+			probeCtx, probeCancel := a.browserCommandContext(cmd)
+			defer probeCancel()
 
-			probe, err := a.browserProbe(ctx)
+			probe, err := a.browserProbe(probeCtx)
 			if err != nil {
 				return commandError(
 					"invalid_browser_url",
@@ -136,8 +136,10 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				)
 			}
 			browserStatus := browserDoctorStatus(a.opts.autoConnect, &probe)
-			daemonStatus := a.daemonStatus(ctx, probe)
-			processesByMode := a.daemonProcessesByMode(ctx)
+			statusCtx, statusCancel := a.browserCommandContext(cmd)
+			defer statusCancel()
+			daemonStatus := a.daemonStatus(statusCtx, probe)
+			processesByMode := a.daemonProcessesByMode(statusCtx)
 			daemonCheckStatus := daemonDoctorStatus(daemonStatus.State)
 			browserMessage := probe.Message
 			browserRemediation := probe.RemediationCommands
@@ -203,10 +205,10 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				}
 			}
 			if checkName == "" || checkName == "scheduled-tasks" {
-				checks = append(checks, scheduledTasksDoctorCheck(ctx))
+				checks = append(checks, scheduledTasksDoctorCheck(statusCtx))
 			}
 			if checkName == "" || checkName == "headless-security" {
-				checks = append(checks, a.headlessSecurityDoctorCheck(ctx))
+				checks = append(checks, a.headlessSecurityDoctorCheck(statusCtx))
 			}
 			if checkName != "" {
 				checks = filterChecksByName(checks, checkName)
@@ -226,7 +228,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				"checks": checks,
 			}
 			human := fmt.Sprintf("cli: pass\ndaemon: %s\nbrowser: %s", daemonStatus.State, browserStatus)
-			return a.render(ctx, human, data)
+			return a.render(statusCtx, human, data)
 		},
 	}
 	cmd.Flags().StringVar(&checkName, "check", "", "only return one check by name")

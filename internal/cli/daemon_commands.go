@@ -1183,14 +1183,9 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 			probeResult := map[string]any{"mode": probeMode, "result": probe.State, "repair_requested": repair}
 			runtimeHealthy, runtimeCheck := keepaliveRuntimeCheck(ctx, status)
 			if runtimeHealthy && reconnect > 0 && status.Runtime != nil && status.Runtime.ReconnectInterval != reconnect.String() {
-				runtimeHealthy = false
-				runtimeCheck = map[string]any{
-					"ok":                false,
-					"result":            "reconnect_interval_mismatch",
-					"runtime_state":     status.State,
-					"current_reconnect": status.Runtime.ReconnectInterval,
-					"wanted_reconnect":  reconnect.String(),
-				}
+				runtimeCheck["reconnect_interval_mismatch"] = true
+				runtimeCheck["current_reconnect"] = status.Runtime.ReconnectInterval
+				runtimeCheck["wanted_reconnect"] = reconnect.String()
 			}
 			if status.State == "running" && runtimeHealthy {
 				return a.render(ctx, fmt.Sprintf("keepalive\t%s\thealthy", connectionName), map[string]any{

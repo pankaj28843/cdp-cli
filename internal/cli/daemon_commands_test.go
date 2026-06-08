@@ -187,7 +187,7 @@ func TestDaemonHealthReportsRecentCrashLogsJSON(t *testing.T) {
 }
 
 func TestDaemonHealthCheckHeadlessHealthyJSON(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := shortCLIStateDir(t)
 	artifactDir := filepath.Join(stateDir, "health-artifacts")
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -915,6 +915,7 @@ func TestDaemonKeepaliveRepairsHeadedFromStaleApprovedEndpointWithoutActiveProbe
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	stateDir := shortCLIStateDir(t)
+	userDataDir := t.TempDir()
 	staleRuntime := daemon.Runtime{
 		PID:               999999999,
 		StartedAt:         time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
@@ -923,6 +924,7 @@ func TestDaemonKeepaliveRepairsHeadedFromStaleApprovedEndpointWithoutActiveProbe
 		ReconnectInterval: "30s",
 		SocketPath:        daemon.RuntimeSocketPathForMode(stateDir, "headed"),
 		Endpoint:          fakeWebSocketEndpoint(t, server.URL),
+		UserDataDir:       userDataDir,
 	}
 	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headed", staleRuntime); err != nil {
 		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
@@ -933,7 +935,7 @@ func TestDaemonKeepaliveRepairsHeadedFromStaleApprovedEndpointWithoutActiveProbe
 	})
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headed", "daemon", "keepalive", "--auto-connect", "--repair", "--probe", "passive", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headed", "daemon", "keepalive", "--auto-connect", "--user-data-dir", userDataDir, "--repair", "--probe", "passive", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon keepalive exit code = %d, want %d; stderr=%s stdout=%s", code, cli.ExitOK, errOut.String(), out.String())
 	}
@@ -968,6 +970,84 @@ func TestDaemonKeepaliveRepairsHeadedFromStaleApprovedEndpointWithoutActiveProbe
 	}
 	if got.Daemon.State != "running" || got.Daemon.Runtime.ConnectionMode != "auto_connect" {
 		t.Fatalf("daemon keepalive daemon = %+v, want running runtime on last approved endpoint", got.Daemon)
+	}
+}
+
+func TestDaemonKeepalivePassiveDoesNotKillHealthyRuntimeForReconnectMismatch(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	userDataDir := t.TempDir()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse fake server URL: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(userDataDir, "DevToolsActivePort"), []byte(u.Port()+"\n/devtools/browser/test\n"), 0o600); err != nil {
+		t.Fatalf("write DevToolsActivePort: %v", err)
+	}
+	t.Setenv("CDP_DAEMON_USER_DATA_DIR", userDataDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "auto_connect", 0)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headed")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	runtimeBefore, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headed")
+	if err != nil || !ok {
+		t.Fatalf("LoadRuntimeForMode before keepalive ok=%v err=%v, want headed runtime", ok, err)
+	}
+	if runtimeBefore.ReconnectInterval != "" {
+		t.Fatalf("runtime reconnect interval = %q, want empty initial interval", runtimeBefore.ReconnectInterval)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headed", "daemon", "keepalive", "--auto-connect", "--user-data-dir", userDataDir, "--repair", "--probe", "passive", "--reconnect", "30s", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon keepalive exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		State  string `json:"state"`
+		Action string `json:"action"`
+		Health struct {
+			OK                        bool   `json:"ok"`
+			Result                    string `json:"result"`
+			ReconnectIntervalMismatch bool   `json:"reconnect_interval_mismatch"`
+			CurrentReconnect          string `json:"current_reconnect"`
+			WantedReconnect           string `json:"wanted_reconnect"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon keepalive output is invalid JSON: %v\n%s", err, out.String())
+	}
+	if !got.OK || got.State != "healthy" || got.Action != "none" || !got.Health.OK || got.Health.Result != "target_list_ok" {
+		t.Fatalf("daemon keepalive = %+v, want healthy no-op output for reconnect mismatch", got)
+	}
+	if !got.Health.ReconnectIntervalMismatch || got.Health.CurrentReconnect != "" || got.Health.WantedReconnect != "30s" {
+		t.Fatalf("health = %+v, want reconnect mismatch reported without daemon teardown", got.Health)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	runtimeAfter, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headed")
+	if err != nil || !ok {
+		t.Fatalf("LoadRuntimeForMode after keepalive ok=%v err=%v, want headed runtime still present", ok, err)
+	}
+	if runtimeAfter.PID != runtimeBefore.PID || !daemon.RuntimeRunning(runtimeAfter) || !daemon.RuntimeSocketReady(context.Background(), runtimeAfter) {
+		t.Fatalf("runtime after keepalive = %+v, want same healthy runtime still running", runtimeAfter)
 	}
 }
 
