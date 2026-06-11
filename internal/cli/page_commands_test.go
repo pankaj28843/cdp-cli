@@ -1111,6 +1111,39 @@ func TestTextCommandJSON(t *testing.T) {
 	}
 }
 
+func TestTextRetriesTargetLookupRaceJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "fakeListTargetsErrorOnce": true},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"text", "main", "--retry", "transient", "--max-attempts", "2", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("text retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK           bool   `json:"ok"`
+		RetryPolicy  string `json:"retry_policy"`
+		AttemptCount int    `json:"attempt_count"`
+		Text         struct {
+			Text string `json:"text"`
+		} `json:"text"`
+		Attempts []struct {
+			Retry bool   `json:"retry"`
+			Code  string `json:"code"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("text retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Text.Text != "Synthetic main text" || got.RetryPolicy != "transient" || got.AttemptCount != 2 || len(got.Attempts) != 2 || !got.Attempts[0].Retry || got.Attempts[0].Code != "connection_failed" {
+		t.Fatalf("text retry output = %+v, want target-list retry before success", got)
+	}
+}
+
 func TestHTMLCommandJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -1778,6 +1811,46 @@ func TestOpenJSON(t *testing.T) {
 	}
 }
 
+func TestOpenRetriesCreateTargetRaceJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "seed-page", "type": "page", "title": "Seed", "url": "about:blank", "attached": false, "fakeCreateTargetErrorOnce": true},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/retry-open", "--retry", "transient", "--max-attempts", "2", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("open retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK           bool   `json:"ok"`
+		Action       string `json:"action"`
+		RetryPolicy  string `json:"retry_policy"`
+		AttemptCount int    `json:"attempt_count"`
+		MaxAttempts  int    `json:"max_attempts"`
+		Page         struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"page"`
+		Attempts []struct {
+			Attempt int    `json:"attempt"`
+			Retry   bool   `json:"retry"`
+			Code    string `json:"code"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "created" || got.Page.ID != "created-page" || got.Page.URL != "https://example.test/retry-open" {
+		t.Fatalf("open retry output = %+v, want created page", got)
+	}
+	if got.RetryPolicy != "transient" || got.AttemptCount != 2 || got.MaxAttempts != 2 || len(got.Attempts) != 2 || !got.Attempts[0].Retry || got.Attempts[0].Code != "connection_failed" {
+		t.Fatalf("open retry attempts = %+v, want one transient retry before success", got)
+	}
+}
+
 func TestEvalJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -1806,6 +1879,75 @@ func TestEvalJSON(t *testing.T) {
 	}
 	if !got.OK || got.Target.ID != "page-1" || got.Result.Type != "string" || got.Result.Value != "Example App" {
 		t.Fatalf("eval output = %+v, want document title result", got)
+	}
+}
+
+func TestEvalRetriesAttachRaceJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "fakeAttachErrorOnce": true},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--retry", "transient", "--max-attempts", "2", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("eval attach retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                 bool   `json:"ok"`
+		RetryPolicy        string `json:"retry_policy"`
+		AttemptCount       int    `json:"attempt_count"`
+		LastObservedTarget struct {
+			ID string `json:"id"`
+		} `json:"last_observed_target"`
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+		Attempts []struct {
+			Retry bool   `json:"retry"`
+			Code  string `json:"code"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("eval attach retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Result.Value != "Example App" || got.RetryPolicy != "transient" || got.AttemptCount != 2 || len(got.Attempts) != 2 || !got.Attempts[0].Retry || got.Attempts[0].Code != "connection_failed" || got.LastObservedTarget.ID != "page-1" {
+		t.Fatalf("eval attach retry output = %+v, want target evidence and one retry before success", got)
+	}
+}
+
+func TestEvalRetriesExecutionContextLossJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "fakeRuntimeEvaluateErrorOnce": true},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"eval", "document.title", "--retry", "transient", "--max-attempts", "2", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("eval runtime retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK           bool   `json:"ok"`
+		RetryPolicy  string `json:"retry_policy"`
+		AttemptCount int    `json:"attempt_count"`
+		Result       struct {
+			Value string `json:"value"`
+		} `json:"result"`
+		Attempts []struct {
+			Retry bool   `json:"retry"`
+			Code  string `json:"code"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("eval runtime retry output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Result.Value != "Example App" || got.RetryPolicy != "transient" || got.AttemptCount != 2 || len(got.Attempts) != 2 || !got.Attempts[0].Retry || got.Attempts[0].Code != "connection_failed" {
+		t.Fatalf("eval runtime retry output = %+v, want execution-context retry before success", got)
 	}
 }
 

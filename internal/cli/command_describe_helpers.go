@@ -247,10 +247,12 @@ func commandExamples(path string) []string {
 		},
 		"cdp open": {
 			"cdp open https://example.com --json",
+			"cdp open https://example.com --retry transient --max-attempts 3 --json",
 			"cdp open https://example.com --new-tab=false --target <target-id> --json",
 		},
 		"cdp eval": {
 			"cdp eval 'document.title' --json",
+			"cdp eval 'document.title' --retry transient --max-attempts 3 --json",
 			"cdp eval 'Array.from(document.querySelectorAll(\"article\"), el => el.innerText)' --url-contains x.com --json",
 			"cdp eval 'document.title' --title-contains Example --json",
 		},
@@ -276,6 +278,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp text": {
 			"cdp text main --json",
+			"cdp text main --retry transient --max-attempts 3 --json",
 			"cdp text article --limit 10 --url-contains localhost --json",
 		},
 		"cdp locator": {

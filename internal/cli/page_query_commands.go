@@ -212,6 +212,7 @@ func (a *app) newTextCommand() *cobra.Command {
 	var titleContains string
 	var limit int
 	var minChars int
+	var retryOpts commandRetryOptions
 	cmd := &cobra.Command{
 		Use:   "text <selector>",
 		Short: "Extract compact visible text for a CSS selector",
@@ -223,25 +224,39 @@ func (a *app) newTextCommand() *cobra.Command {
 			if limit < 0 || minChars < 0 {
 				return commandError("usage", "usage", "--limit and --min-chars must be non-negative", ExitUsage, []string{"cdp text main --limit 20 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
+				session, target, err := a.attachPageSession(attemptCtx, targetID, urlContains, titleContains)
+				if err != nil {
+					if target.TargetID != "" {
+						return commandRetryResult{Target: &target}, err
+					}
+					return commandRetryResult{}, err
+				}
+				defer session.Close(attemptCtx)
+
+				var text textResult
+				if err := evaluateJSONValue(attemptCtx, session, textExpression(args[0], limit, minChars), "text", &text); err != nil {
+					return commandRetryResult{Target: &target}, err
+				}
+				if text.Error != nil {
+					return commandRetryResult{Target: &target}, invalidSelectorError(args[0], text.Error, "cdp text body --json")
+				}
+				return commandRetryResult{
+					Human:  text.Text,
+					Target: &target,
+					Data: map[string]any{
+						"ok":     true,
+						"target": pageRow(target),
+						"text":   text,
+						"items":  text.Items,
+					},
+				}, nil
+			})
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
-
-			var result textResult
-			if err := evaluateJSONValue(ctx, session, textExpression(args[0], limit, minChars), "text", &result); err != nil {
-				return err
-			}
-			if result.Error != nil {
-				return invalidSelectorError(args[0], result.Error, "cdp text body --json")
-			}
-			return a.render(ctx, result.Text, map[string]any{
-				"ok":     true,
-				"target": pageRow(target),
-				"text":   result,
-				"items":  result.Items,
-			})
+			attachCommandRetryReport(result.Data, retryReport)
+			return a.render(ctx, result.Human, result.Data)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -249,6 +264,7 @@ func (a *app) newTextCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().IntVar(&limit, "limit", 20, "maximum number of text elements to return; use 0 for no limit")
 	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")
+	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd
 }
 

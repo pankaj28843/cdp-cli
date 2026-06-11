@@ -1519,7 +1519,7 @@ func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titl
 	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
 	if err != nil {
 		_ = closeClient(ctx)
-		return nil, cdp.TargetInfo{}, commandError(
+		return nil, target, commandError(
 			"connection_failed",
 			"connection",
 			fmt.Sprintf("attach target %s: %v", target.TargetID, err),
@@ -1543,7 +1543,7 @@ func (a *app) attachExactPageSession(ctx context.Context, client cdp.CommandClie
 	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
 	if err != nil {
 		_ = closeClient(ctx)
-		return nil, cdp.TargetInfo{}, true, commandError(
+		return nil, target, true, commandError(
 			"connection_failed",
 			"connection",
 			fmt.Sprintf("attach target %s: %v", target.TargetID, err),
@@ -1662,7 +1662,7 @@ func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClie
 	if strings.TrimSpace(createdBy) != "" {
 		if err := a.recordCreatedPageTarget(ctx, targetID, rawURL, createdBy, workflow); err != nil {
 			closeCtx, cancel := context.WithTimeout(ctx, pageCloseAttemptTimeout(a.browserModeName()))
-			_ = closePageTargetSettled(closeCtx, client, cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}, pageCloseOptions{
+			closeReport := closePageTargetSettled(closeCtx, client, cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}, pageCloseOptions{
 				WaitGone:     true,
 				MaxAttempts:  defaultPageCloseMaxAttempts,
 				AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
@@ -1670,12 +1670,20 @@ func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClie
 				RetryBackoff: defaultPageCloseRetryBackoff,
 			})
 			cancel()
-			return "", commandError(
-				"internal",
+			recoveredTarget := pageRow(cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL})
+			return targetID, commandErrorWithData(
+				"page_record_failed",
 				"internal",
 				fmt.Sprintf("record workflow-created page %s: %v", targetID, err),
 				ExitInternal,
 				[]string{"cdp page cleanup --json", "cdp daemon status --json"},
+				map[string]any{
+					"created":          true,
+					"target_id":        targetID,
+					"recovered_target": recoveredTarget,
+					"record_error":     err.Error(),
+					"close":            closeReport,
+				},
 			)
 		}
 	}

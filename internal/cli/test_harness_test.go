@@ -145,6 +145,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	var server *httptest.Server
 	targetInfos := append([]map[string]any(nil), targets...)
 	var createdTargets atomic.Int64
+	var listTargetsErrors atomic.Int64
+	var createTargetErrors atomic.Int64
+	var attachTargetErrors sync.Map
+	var runtimeEvaluateErrors sync.Map
 	var scrolledSelectors sync.Map
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		if server == nil {
@@ -216,7 +220,11 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["sessionId"] = req.SessionID
 			}
 			if req.Method == "Target.getTargets" {
-				resp["result"] = map[string]any{"targetInfos": targetInfos}
+				if fakeAnyTargetBool(targetInfos, "fakeListTargetsErrorOnce") && listTargetsErrors.Add(1) == 1 {
+					resp["error"] = map[string]any{"code": -32000, "message": "target list race: target closed"}
+				} else {
+					resp["result"] = map[string]any{"targetInfos": targetInfos}
+				}
 			} else if req.Method == "Target.setDiscoverTargets" {
 				resp["result"] = map[string]any{}
 				events = append(events, map[string]any{
@@ -252,29 +260,41 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Target.createTarget" {
 				fakeTargetCreateCount.Add(1)
-				createIndex := createdTargets.Add(1)
-				targetID := "created-page"
-				if createIndex > 1 {
-					targetID = fmt.Sprintf("created-page-%d", createIndex)
+				if fakeAnyTargetBool(targetInfos, "fakeCreateTargetErrorOnce") && createTargetErrors.Add(1) == 1 {
+					resp["error"] = map[string]any{"code": -32000, "message": "target create race: target closed"}
+				} else {
+					createIndex := createdTargets.Add(1)
+					targetID := "created-page"
+					if createIndex > 1 {
+						targetID = fmt.Sprintf("created-page-%d", createIndex)
+					}
+					var params struct {
+						URL string `json:"url"`
+					}
+					_ = json.Unmarshal(req.Params, &params)
+					targetInfos = append(targetInfos, map[string]any{
+						"targetId": targetID,
+						"type":     "page",
+						"title":    "Created",
+						"url":      params.URL,
+						"attached": false,
+					})
+					resp["result"] = map[string]any{"targetId": targetID}
 				}
-				var params struct {
-					URL string `json:"url"`
-				}
-				_ = json.Unmarshal(req.Params, &params)
-				targetInfos = append(targetInfos, map[string]any{
-					"targetId": targetID,
-					"type":     "page",
-					"title":    "Created",
-					"url":      params.URL,
-					"attached": false,
-				})
-				resp["result"] = map[string]any{"targetId": targetID}
 			} else if req.Method == "Target.attachToTarget" {
 				var params struct {
 					TargetID string `json:"targetId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
-				resp["result"] = map[string]any{"sessionId": "session-" + params.TargetID}
+				if fakeTargetBool(targetInfos, params.TargetID, "fakeAttachErrorOnce") {
+					if _, loaded := attachTargetErrors.LoadOrStore(params.TargetID, true); !loaded {
+						resp["error"] = map[string]any{"code": -32000, "message": "attach race: target closed"}
+					} else {
+						resp["result"] = map[string]any{"sessionId": "session-" + params.TargetID}
+					}
+				} else {
+					resp["result"] = map[string]any{"sessionId": "session-" + params.TargetID}
+				}
 			} else if req.Method == "Target.detachFromTarget" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Target.activateTarget" {
@@ -702,6 +722,18 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						state = "hidden"
 					}
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
+				} else if targetID := strings.TrimPrefix(req.SessionID, "session-"); fakeTargetBool(targetInfos, targetID, "fakeRuntimeEvaluateErrorOnce") {
+					if _, loaded := runtimeEvaluateErrors.LoadOrStore(targetID, true); !loaded {
+						resp["error"] = map[string]any{"code": -32000, "message": "execution context was destroyed"}
+					} else {
+						resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
+						events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
+						events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
+						events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
+						events = append(events, syntheticDialogEventsForClick(req.SessionID, req.Params, targetInfos)...)
+						events = append(events, syntheticFileChooserEventsForClick(req.SessionID, req.Params, targetInfos)...)
+						applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
+					}
 				} else {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
 					events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -1001,6 +1033,29 @@ func syntheticStringValue(values map[string]any, key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func fakeAnyTargetBool(targetInfos []map[string]any, key string) bool {
+	for _, target := range targetInfos {
+		if fakeMapBool(target, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func fakeTargetBool(targetInfos []map[string]any, targetID, key string) bool {
+	for _, target := range targetInfos {
+		if target["targetId"] == targetID && fakeMapBool(target, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func fakeMapBool(values map[string]any, key string) bool {
+	value, ok := values[key].(bool)
+	return ok && value
 }
 
 func syntheticTargetInfoExists(targetInfos []map[string]any, targetID string) bool {
