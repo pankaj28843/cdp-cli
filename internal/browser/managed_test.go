@@ -240,6 +240,62 @@ func TestStopOwnedManagedChromeRequiresOwnershipMetadata(t *testing.T) {
 	}
 }
 
+func TestStopManagedChromeForceRecoversIncompleteOwnershipFromCommandLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process command-line recovery test is unix-only")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		UserDataDir:         profileDir,
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := `#!/usr/bin/env sh
+trap 'exit 0' INT TERM
+while :; do sleep 1; done
+`
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake chrome: %v", err)
+	}
+	cmd := exec.Command(chromePath, "--headless", "--remote-debugging-port=0", "--user-data-dir="+profileDir)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start fake managed chrome: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+
+	var signaled []int
+	result, err := browser.StopManagedChrome(context.Background(), stateDir, browser.ManagedStopOptions{
+		Force: true,
+		Signal: func(pid int) error {
+			signaled = append(signaled, pid)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StopManagedChrome returned error: %v", err)
+	}
+	if !result.Checked || !result.Force || result.Skipped || !result.Stopped || len(signaled) == 0 {
+		t.Fatalf("StopManagedChrome = %+v signaled=%+v, want forced recovered process", result, signaled)
+	}
+	if signaled[0] != cmd.Process.Pid || !containsInt(result.PIDs, cmd.Process.Pid) {
+		t.Fatalf("StopManagedChrome pids = result %+v signaled=%+v, want fake chrome pid %d", result.PIDs, signaled, cmd.Process.Pid)
+	}
+	if !containsString(result.SafetyChecks, "managed_profile_path_matches_state_dir") || !containsString(result.SafetyChecks, "process_command_line_matches_managed_profile") {
+		t.Fatalf("safety checks = %+v, want managed profile and command-line checks", result.SafetyChecks)
+	}
+}
+
 func TestStopOwnedManagedChromeSignalsOwnedProcess(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	metadata := browser.ManagedMetadata{
@@ -273,6 +329,24 @@ func TestStopOwnedManagedChromeSignalsOwnedProcess(t *testing.T) {
 	if strings.Contains(string(encoded), "owned-token") || strings.Contains(string(encoded), "process_start_time") {
 		t.Fatalf("ManagedStopResult leaked internal ownership fields: %s", string(encoded))
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInt(values []int, want int) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadManagedMetadataMissing(t *testing.T) {

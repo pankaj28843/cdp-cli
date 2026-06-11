@@ -298,9 +298,12 @@ func schemaCatalog() map[string]schemaInfo {
 			Name:        "daemon-health",
 			Description: "Safe daemon/browser health telemetry for the selected daemon-backed connection.",
 			Fields: []schemaField{
-				{Name: "ok", Type: "boolean", Required: true, Description: "True when health telemetry was assembled."},
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the selected runtime is healthy; headless returns false for degraded runtime gates."},
+				{Name: "code", Type: "string", Required: false, Description: "Machine-actionable first blocking health failure code when ok is false."},
+				{Name: "state", Type: "string", Required: false, Description: "Health state such as healthy or degraded when ok is false."},
 				{Name: "daemon", Type: "daemon_status", Required: true, Description: "Daemon status with embedded health."},
 				{Name: "health", Type: "browser_health", Required: true, Description: "Safe tab/window/resource and daemon RPC health summary including browser_mode."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Safe remediation commands when ok is false."},
 			},
 		},
 		"pages": {

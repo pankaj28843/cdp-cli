@@ -126,12 +126,12 @@ The managed path is available through first-class cron commands:
 ```bash
 cdp cron status --json
 cdp cron diff --json
-cdp cron install --profile agent --json
+cdp cron install --json
 cdp cron remove --json
 cdp cron heal headed --json
 ```
 
-`cdp cron install --profile agent --json` renders and installs the full managed
+`cdp cron install --json` renders and installs the full managed
 block, including mode-explicit headed daemon keepalive, headless keepalive, health,
 profile seeding, and page cleanup entries. Use `cdp cron diff --json` or
 `cdp cron install --dry-run --json` before installing to inspect the intended
@@ -149,7 +149,7 @@ records cannot be confused. Verify the current Linux user's scheduled tasks with
 ```bash
 cdp cron status --json
 cdp cron diff --json
-cdp cron install --profile agent --json
+cdp cron install --json
 cdp doctor --check scheduled-tasks --json
 ```
 

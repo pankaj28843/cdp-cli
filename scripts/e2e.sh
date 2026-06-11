@@ -29,10 +29,10 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect")))' >/dev/null
-"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("cdp cron install --profile agent")))' >/dev/null
+"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(. == "cdp cron install --json"))' >/dev/null
 "$binary" describe --command "daemon health-check" --json | jq -e '.ok == true and .commands.name == "health-check" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--repair"))) and (.commands.flags[] | select(.name == "repair")) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
-"$binary" describe --command "cron install" --json | jq -e '.ok == true and .commands.name == "install" and (.commands.examples | any(contains("--profile agent"))) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run"))' >/dev/null
+"$binary" describe --command "cron install" --json | jq -e '.ok == true and .commands.name == "install" and (.commands.examples | any(. == "cdp cron install --json")) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run"))' >/dev/null
 "$binary" describe --command "cron migrate pages-polling" --json | jq -e '.ok == true and .commands.name == "pages-polling" and (.commands.examples | any(contains("migrate pages-polling --json"))) and (.commands.examples | any(contains("--apply"))) and (.commands.flags[] | select(.name == "apply"))' >/dev/null
 "$binary" describe --command "cron heal headed" --json | jq -e '.ok == true and .commands.name == "headed" and (.commands.examples | any(contains("--reconnect 30s")))' >/dev/null
 "$binary" describe --command "doctor" --json | jq -e '.ok == true and .commands.name == "doctor" and (.commands.examples | any(contains("scheduled-tasks")))' >/dev/null
@@ -45,7 +45,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
-"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_pages_polling_keepalive | type == "boolean") and (.[0].details.pages_polling_count | type == "number") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].details.has_unflocked_cdp_task | type == "boolean") and (.[0].next_commands | index("cdp cron status --json")) and (.[0].next_commands | index("cdp cron diff --json")) and (.[0].next_commands | index("cdp cron install --profile agent --json"))' >/dev/null
+"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_pages_polling_keepalive | type == "boolean") and (.[0].details.pages_polling_count | type == "number") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].details.has_unflocked_cdp_task | type == "boolean") and (.[0].next_commands | index("cdp cron status --json")) and (.[0].next_commands | index("cdp cron diff --json")) and (.[0].next_commands | index("cdp cron install --json"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities | map(.name) | index("raw_protocol"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "advanced_storage" and .status == "implemented"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "raw_protocol" and (.verify_commands | index("cdp protocol metadata --json"))))' >/dev/null
@@ -140,7 +140,7 @@ EOF_CRONTAB
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].status == "warn" and (.[0].message | contains("cdp pages polling")) and .[0].details.has_pages_polling_keepalive == true and .[0].details.has_headed_pages_polling == true and .[0].details.pages_polling_count == 1' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and (.warnings | any(contains("unmanaged cdp pages polling")))' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron migrate pages-polling --state-dir "$state_dir" --json | jq -e '.ok == true and .action == "would_remove" and .dry_run == true and .applied == false and .candidate_count == 1 and .removed_count == 0 and .managed_keepalive_installed == false and (.warnings | any(contains("managed daemon keepalive is not installed")))' >/dev/null
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.warnings | any(contains("unmanaged cdp pages polling"))) and (.managed_block.entries | length == 5)' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.warnings | any(contains("unmanaged cdp pages polling"))) and (.managed_block.entries | length == 5)' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron migrate pages-polling --apply --state-dir "$state_dir" --json | jq -e '.ok == true and .action == "removed" and .dry_run == false and .applied == true and .candidate_count == 1 and .removed_count == 1 and .managed_keepalive_installed == true and (.removed_entries | length == 1)' >/dev/null
 rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
 rg -q 'cdp-cli managed browser runtime tasks' "$fake_crontab_store"
@@ -150,7 +150,7 @@ cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup
 EOF_CRONTAB
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "not_installed" and .health.state == "not_installed" and .health.status == "warn" and .health.recommended_command == "cdp cron install --profile agent --json" and .installed == false and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and (.intended_block.entries | length == 5) and (.locks | type == "object") and (.daemon_locks | type == "object")' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "not_installed" and .health.state == "not_installed" and .health.status == "warn" and .health.recommended_command == "cdp cron install --json" and .installed == false and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and (.intended_block.entries | length == 5) and (.locks | type == "object") and (.daemon_locks | type == "object")' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron diff --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and .actions[0].action == "append_managed_block"' >/dev/null
 cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
@@ -166,7 +166,7 @@ cat >"$state_dir/locks/keepalive-headless.lock" <<EOF_LOCK
 {"name":"keepalive-headless","pid":$dead_lock_pid,"started_at":"2020-01-01T00:00:00Z","phase":"checking"}
 EOF_LOCK
 touch -d '20 minutes ago' "$state_dir/locks/keepalive-headless.lock" 2>/dev/null || touch -t 202001010000 "$state_dir/locks/keepalive-headless.lock"
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "needs_update" and .health.state == "needs_update" and .health.status == "warn" and .health.recommended_command == "cdp cron install --profile agent --json" and .matches_intended == false and .health.stale_lock_count == 1 and (.health.stale_locks | index("keepalive-headless")) and (.health.issues | any(.state == "stale_locks" and .recommended_command == "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json"))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "needs_update" and .health.state == "needs_update" and .health.status == "warn" and .health.recommended_command == "cdp cron install --json" and .matches_intended == false and .health.stale_lock_count == 1 and (.health.stale_locks | index("keepalive-headless")) and (.health.issues | any(.state == "stale_locks" and .recommended_command == "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json"))' >/dev/null
 rm -f "$state_dir/locks/keepalive-headless.lock"
 : >"$state_dir/locks/keepalive-headless.lock"
 touch -d '20 minutes ago' "$state_dir/locks/keepalive-headless.lock" 2>/dev/null || touch -t 202001010000 "$state_dir/locks/keepalive-headless.lock"
@@ -176,14 +176,14 @@ cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup
 EOF_CRONTAB
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --profile agent --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 1) and (.intended_block.entries[0] | contains("daemon keepalive --auto-connect --repair --probe passive"))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 1) and (.intended_block.entries[0] | contains("daemon keepalive --auto-connect --repair --probe passive"))' >/dev/null
 cron_seed_config="$state_dir/cron-seed-config.json"
 cat >"$cron_seed_config" <<'EOF_CRON_SEED_CONFIG'
 {"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"30m"}}}
 EOF_CRON_SEED_CONFIG
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --config "$cron_seed_config" cron install --profile agent --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .profile_seed.strategy == "copy-default" and .profile_seed.if_older_than == "30m" and .profile_seed.if_older_than_seconds == 1800 and .profile_seed.schedule == "*/15 * * * *" and (.intended_block.entries | any(contains("--browser-mode headless browser profile seed --strategy copy-default --if-older-than 30m --json")))' >/dev/null
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.managed_block.entries | length == 5)' >/dev/null
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --profile agent --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == false and .action == "unchanged"' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --config "$cron_seed_config" cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .profile_seed.strategy == "copy-default" and .profile_seed.if_older_than == "30m" and .profile_seed.if_older_than_seconds == 1800 and .profile_seed.schedule == "*/15 * * * *" and (.intended_block.entries | any(contains("--browser-mode headless browser profile seed --strategy copy-default --if-older-than 30m --json")))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.managed_block.entries | length == 5)' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == false and .action == "unchanged"' >/dev/null
 rg -q '^SHELL=/bin/sh$' "$fake_crontab_store"
 rg -q -- '--browser-mode headed daemon keepalive --auto-connect --repair --probe passive' "$fake_crontab_store"
 ! rg -q 'cron heal headed' "$fake_crontab_store"
@@ -624,7 +624,16 @@ cat > "$socket_unready_dir/headless/daemon.json" <<JSON
   "socket_path": "$socket_unready_dir/headless/missing.sock"
 }
 JSON
-"$binary" --browser-mode headless daemon health --state-dir "$socket_unready_dir" --json | jq -e '.ok == true and .daemon.state == "runtime_socket_unready" and .daemon.process_running == true and .daemon.runtime_socket_ready == false and .health.state == "daemon_socket_unready" and .health.daemon_rpc_ready == false and (.health.reasons | index("daemon_socket_unready")) and (.health.next_commands | index("cdp --browser-mode headless daemon keepalive --repair --json"))' >/dev/null
+set +e
+socket_unready_health="$("$binary" --browser-mode headless daemon health --state-dir "$socket_unready_dir" --json 2>/tmp/cdp-cli-socket-unready-health.err)"
+socket_unready_code=$?
+set -e
+if [[ "$socket_unready_code" -ne 1 ]]; then
+  echo "headless daemon health exit code = $socket_unready_code, want 1 for socket-unready runtime" >&2
+  cat /tmp/cdp-cli-socket-unready-health.err >&2
+  exit 1
+fi
+printf '%s\n' "$socket_unready_health" | jq -e '.ok == false and .code == "headless_daemon_rpc_not_ready" and .state == "degraded" and .daemon.state == "runtime_socket_unready" and .daemon.process_running == true and .daemon.runtime_socket_ready == false and .health.state == "degraded" and .health.daemon_rpc_ready == false and (.health.reasons | index("daemon_socket_unready")) and (.next_commands | index("cdp --browser-mode headless daemon keepalive --repair --json"))' >/dev/null
 
 crash_log_dir="$state_dir/crash-log"
 mkdir -p "$crash_log_dir/headless"
@@ -633,7 +642,16 @@ cat > "$crash_log_dir/headless/daemon.log" <<'JSONL'
 {"time":"2026-06-05T00:00:01Z","level":"warn","event":"hold_connection_ended","message":"failed to get reader: failed to read frame header: EOF","pid":101}
 {"time":"2026-06-05T00:00:02Z","level":"error","event":"rpc_listen_failed","message":"listen daemon rpc socket: bind failed","pid":102}
 JSONL
-"$binary" --browser-mode headless daemon health --state-dir "$crash_log_dir" --json | jq -e '.ok == true and .health.crash_capture == "daemon_logs" and .health.recent_log_warnings == 1 and .health.recent_log_errors == 1 and (.health.recent_crashes | length == 2) and .health.recent_crashes[0].type == "browser_connection_ended" and .health.recent_crashes[1].type == "daemon_rpc_listen_failed" and (.health.last_browser_keepalive_error | contains("hold_connection_ended"))' >/dev/null
+set +e
+crash_health="$("$binary" --browser-mode headless daemon health --state-dir "$crash_log_dir" --json 2>/tmp/cdp-cli-crash-health.err)"
+crash_health_code=$?
+set -e
+if [[ "$crash_health_code" -ne 1 ]]; then
+  echo "headless daemon crash health exit code = $crash_health_code, want 1 for degraded runtime" >&2
+  cat /tmp/cdp-cli-crash-health.err >&2
+  exit 1
+fi
+printf '%s\n' "$crash_health" | jq -e '.ok == false and .code == "headless_daemon_not_running" and .health.crash_capture == "daemon_logs" and .health.recent_log_warnings == 1 and .health.recent_log_errors == 1 and (.health.recent_crashes | length == 2) and .health.recent_crashes[0].type == "browser_connection_ended" and .health.recent_crashes[1].type == "daemon_rpc_listen_failed" and (.health.last_browser_keepalive_error | contains("hold_connection_ended"))' >/dev/null
 
 set +e
 snapshot_output="$("$binary" snapshot --state-dir "$state_dir" --json 2>/tmp/cdp-cli-snapshot.err)"

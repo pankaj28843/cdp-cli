@@ -488,6 +488,18 @@ func liftErrorEnvelopeData(env *output.Envelope, data any) {
 	if value, ok := fields["human_action"].(string); ok {
 		env.HumanAction = value
 	}
+	if value, ok := fields["state"].(string); ok {
+		env.State = value
+	}
+	if value, ok := fields["daemon"]; ok {
+		env.Daemon = value
+	}
+	if value, ok := fields["health"]; ok {
+		env.Health = value
+	}
+	if value, ok := stringSliceField(fields["next_commands"]); ok {
+		env.NextCommands = value
+	}
 	if value, ok := stringSliceField(fields["safe_diagnostics"]); ok {
 		env.SafeDiagnostics = value
 	}

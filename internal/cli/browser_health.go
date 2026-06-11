@@ -128,14 +128,17 @@ func (a *app) enforceBrowserBudgetForNewPage(ctx context.Context, client cdp.Com
 
 func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, includeProcessInfo bool) map[string]any {
 	health := map[string]any{
-		"state":                  daemonHealthState(status),
-		"reasons":                []string{},
-		"browser_mode":           status.BrowserMode,
-		"connection_mode":        status.ConnectionMode,
-		"daemon_process_running": status.ProcessRunning,
-		"daemon_rpc_ready":       false,
-		"recent_crashes":         []map[string]any{},
-		"crash_capture":          "not_enabled",
+		"state":                      daemonHealthState(status),
+		"reasons":                    []string{},
+		"browser_mode":               status.BrowserMode,
+		"connection_mode":            status.ConnectionMode,
+		"browser_endpoint_reachable": status.BrowserProbe.State == "cdp_available",
+		"daemon_process_running":     status.ProcessRunning,
+		"daemon_rpc_ready":           false,
+		"managed_chrome_owned":       false,
+		"recent_crashes":             []map[string]any{},
+		"crash_capture":              "not_enabled",
+		"next_commands":              status.NextCommands,
 	}
 	health["daemon_processes_by_mode"] = a.daemonProcessesByMode(ctx)
 	if status.Runtime != nil {
@@ -152,6 +155,11 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	}
 	if status.Runtime == nil || !status.ProcessRunning {
 		a.applyManagedBrowserHealth(health, status.Runtime)
+		if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
+			health["state"] = "degraded"
+			health["code"] = headlessHealthFailureCode(status, health)
+			health["next_commands"] = uniqueCommands(a.connectionRemediationCommands(), []string{modeScopedCommand(a.browserModeName(), "daemon logs --tail 50 --json")})
+		}
 		health["reasons"] = appendStringReasons(health["reasons"], daemonHealthState(status))
 		return health
 	}
@@ -159,6 +167,10 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		a.applyManagedBrowserHealth(health, status.Runtime)
 		health["reasons"] = appendStringReasons(health["reasons"], daemonHealthState(status))
 		health["next_commands"] = uniqueCommands(toStringSlice(health["next_commands"]), status.NextCommands, a.connectionRemediationCommands())
+		if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
+			health["state"] = "degraded"
+			health["code"] = headlessHealthFailureCode(status, health)
+		}
 		return health
 	}
 	client := daemon.RuntimeClient{Runtime: *status.Runtime}
@@ -168,10 +180,12 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	budget, err := cdp.BrowserBudget(ctx, client, budgetOpts)
 	if err != nil {
 		health["state"] = "degraded"
+		health["code"] = headlessHealthFailureCode(status, health)
 		health["reasons"] = appendStringReasons(health["reasons"], "target_list_failed")
 		health["target_list_error"] = err.Error()
 		return health
 	}
+	health["browser_endpoint_reachable"] = true
 	health["daemon_rpc_ready"] = true
 	applyBudgetToHealth(health, budget)
 	a.applyManagedBrowserHealth(health, status.Runtime)
@@ -186,6 +200,9 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	if len(toStringSlice(health["reasons"])) > 0 && health["state"] == "healthy" {
 		health["state"] = "degraded"
 	}
+	if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) && health["state"] != "healthy" {
+		health["code"] = headlessHealthFailureCode(status, health)
+	}
 	return health
 }
 
@@ -195,6 +212,7 @@ func (a *app) applyManagedBrowserHealth(health map[string]any, runtime *daemon.R
 		return
 	}
 	health["managed_browser_health"] = detail
+	health["managed_chrome_owned"] = true
 	if ok {
 		return
 	}
@@ -206,6 +224,27 @@ func (a *app) applyManagedBrowserHealth(health map[string]any, runtime *daemon.R
 	health["state"] = "degraded"
 	health["reasons"] = appendStringReasons(health["reasons"], "managed_chrome_process_not_running")
 	health["next_commands"] = uniqueCommands(toStringSlice(health["next_commands"]), a.connectionRemediationCommands(), []string{modeScopedCommand(a.browserModeName(), "daemon logs --tail 50 --json")})
+}
+
+func headlessHealthFailureCode(status daemon.Status, health map[string]any) string {
+	if !strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
+		return ""
+	}
+	if !status.ProcessRunning {
+		return "headless_daemon_not_running"
+	}
+	if ready, _ := health["daemon_rpc_ready"].(bool); !ready {
+		return "headless_daemon_rpc_not_ready"
+	}
+	if reachable, _ := health["browser_endpoint_reachable"].(bool); !reachable {
+		return "headless_browser_endpoint_unreachable"
+	}
+	if managed, ok := health["managed_browser_health"].(map[string]any); ok {
+		if running, _ := managed["running"].(bool); !running {
+			return "managed_chrome_not_running"
+		}
+	}
+	return "headless_runtime_degraded"
 }
 
 func managedRuntimeProcessCheck(runtime *daemon.Runtime) (bool, map[string]any) {

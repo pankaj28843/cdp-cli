@@ -15,7 +15,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp daemon restart", want: []string{"--autoConnect"}},
 		{path: "cdp daemon keepalive", want: []string{"--browser-mode headed", "--browser-mode headless"}},
 		{path: "cdp daemon logs", want: []string{"--tail"}},
-		{path: "cdp cron install", want: []string{"--profile agent"}},
+		{path: "cdp cron install", want: []string{"cdp cron install --json"}},
 		{path: "cdp cron heal headed", want: []string{"--reconnect 30s"}},
 		{path: "cdp pages", want: []string{"--title-contains"}},
 		{path: "cdp page cleanup", want: []string{"--browser-mode headed", "--browser-mode headless", "--close"}},

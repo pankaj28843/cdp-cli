@@ -25,8 +25,12 @@ type Envelope struct {
 	Code                string     `json:"code,omitempty"`
 	ErrClass            string     `json:"err_class,omitempty"`
 	Message             string     `json:"message,omitempty"`
+	State               string     `json:"state,omitempty"`
+	Daemon              any        `json:"daemon,omitempty"`
+	Health              any        `json:"health,omitempty"`
 	Data                any        `json:"data,omitempty"`
 	Artifacts           []Artifact `json:"artifacts,omitempty"`
+	NextCommands        []string   `json:"next_commands,omitempty"`
 	RemediationCommands []string   `json:"remediation_commands,omitempty"`
 	HumanRequired       bool       `json:"human_required,omitempty"`
 	AgentShouldStop     bool       `json:"agent_should_stop,omitempty"`

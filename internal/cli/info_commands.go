@@ -415,7 +415,7 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 		"next_commands": []string{
 			"cdp cron status --json",
 			"cdp cron diff --json",
-			"cdp cron install --profile agent --json",
+			"cdp cron install --json",
 			"cdp cron remove --json",
 			"cdp doctor --check scheduled-tasks --json",
 		},

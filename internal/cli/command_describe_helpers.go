@@ -102,12 +102,14 @@ func commandExamples(path string) []string {
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect 30s --display :0 --json",
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --reconnect 30s --display :0 --json",
 			"cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json",
-			"cdp cron install --profile agent --json",
+			"cdp --browser-mode headless daemon keepalive --repair --force --json",
+			"cdp cron install --json",
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp --connection default daemon keepalive --probe auto --json",
 		},
 		"cdp daemon health-check": {
 			"cdp --browser-mode headless daemon health-check --repair --json",
+			"cdp --browser-mode headless daemon health-check --repair --force --json",
 			"cdp --browser-mode headless daemon health-check --repair --failure-threshold 1 --json",
 			"cdp --browser-mode headless daemon health-check --out-dir tmp/headless-health --json",
 		},
@@ -117,7 +119,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp cron": {
 			"cdp cron status --json",
-			"cdp cron install --profile agent --json",
+			"cdp cron install --json",
 			"cdp cron migrate pages-polling --json",
 		},
 		"cdp cron status": {
@@ -125,10 +127,10 @@ func commandExamples(path string) []string {
 			"cdp cron diff --json",
 		},
 		"cdp cron install": {
-			"cdp cron install --profile agent --json",
+			"cdp cron install --json",
 			"cdp --browser-mode headed cron install --dry-run --json",
 			"cdp --browser-mode headless cron install --dry-run --json",
-			"cdp cron install --profile agent --cdp-bin $HOME/.local/bin/cdp --json",
+			"cdp cron install --cdp-bin $HOME/.local/bin/cdp --json",
 		},
 		"cdp cron remove": {
 			"cdp cron remove --json",

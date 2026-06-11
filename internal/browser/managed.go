@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -68,11 +69,19 @@ type ManagedLaunch struct {
 }
 
 type ManagedStopResult struct {
-	Checked bool          `json:"checked"`
-	Stopped bool          `json:"stopped"`
-	Skipped bool          `json:"skipped"`
-	Reason  string        `json:"reason,omitempty"`
-	Browser ManagedStatus `json:"browser,omitempty"`
+	Checked      bool          `json:"checked"`
+	Stopped      bool          `json:"stopped"`
+	Skipped      bool          `json:"skipped"`
+	Force        bool          `json:"force,omitempty"`
+	Reason       string        `json:"reason,omitempty"`
+	PIDs         []int         `json:"pids,omitempty"`
+	SafetyChecks []string      `json:"safety_checks,omitempty"`
+	Browser      ManagedStatus `json:"browser,omitempty"`
+}
+
+type ManagedStopOptions struct {
+	Force  bool
+	Signal func(int) error
 }
 
 func ManagedProfileDir(stateDir string) string {
@@ -378,24 +387,167 @@ func ManagedMetadataStatus(metadata ManagedMetadata) ManagedStatus {
 }
 
 func StopOwnedManagedChrome(ctx context.Context, stateDir string, signal func(int) error) (ManagedStopResult, error) {
+	return StopManagedChrome(ctx, stateDir, ManagedStopOptions{Signal: signal})
+}
+
+func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOptions) (ManagedStopResult, error) {
 	metadata, ok, err := LoadManagedMetadata(stateDir)
 	if err != nil || !ok {
-		return ManagedStopResult{Checked: true, Skipped: true, Reason: "managed metadata missing"}, err
+		return ManagedStopResult{Checked: true, Force: opts.Force, Skipped: true, Reason: "managed metadata missing"}, err
 	}
-	result := ManagedStopResult{Checked: true, Browser: ManagedMetadataStatus(metadata)}
+	result := ManagedStopResult{Checked: true, Force: opts.Force, Browser: ManagedMetadataStatus(metadata)}
 	if metadata.BrowserMode != "headless" || metadata.ChromePID <= 0 || strings.TrimSpace(metadata.OwnedMarker) == "" || strings.TrimSpace(metadata.ProcessStartTime) == "" {
-		result.Skipped = true
-		result.Reason = "managed ownership metadata incomplete"
+		if !opts.Force {
+			result.Skipped = true
+			result.Reason = "managed ownership metadata incomplete"
+			return result, nil
+		}
+		pids, checks, err := forceManagedStopCandidates(ctx, stateDir, metadata)
+		result.PIDs = pids
+		result.SafetyChecks = checks
+		if err != nil {
+			return result, err
+		}
+		if len(pids) == 0 {
+			result.Skipped = true
+			result.Reason = "no cdp-owned managed headless Chrome process candidates found"
+			return result, nil
+		}
+		if opts.Signal == nil {
+			opts.Signal = signalProcess
+		}
+		for _, pid := range pids {
+			if err := opts.Signal(pid); err != nil {
+				return result, err
+			}
+		}
+		result.Stopped = true
+		result.Reason = "forced managed headless cleanup"
 		return result, nil
 	}
-	if signal == nil {
-		signal = signalProcess
+	if opts.Signal == nil {
+		opts.Signal = signalProcess
 	}
-	if err := signal(metadata.ChromePID); err != nil {
+	if err := opts.Signal(metadata.ChromePID); err != nil {
 		return result, err
 	}
 	result.Stopped = true
+	result.PIDs = []int{metadata.ChromePID}
+	result.SafetyChecks = []string{"managed_metadata_complete", "browser_mode=headless", "ownership_marker_present", "start_time_present"}
 	return result, nil
+}
+
+func forceManagedStopCandidates(ctx context.Context, stateDir string, metadata ManagedMetadata) ([]int, []string, error) {
+	managedProfile := filepath.Clean(ManagedProfileDir(stateDir))
+	userDataDir := filepath.Clean(strings.TrimSpace(metadata.UserDataDir))
+	if userDataDir == "." || userDataDir == "" {
+		userDataDir = managedProfile
+	}
+	checks := []string{"force_requested", "browser_mode=headless"}
+	if metadata.BrowserMode != "headless" {
+		return nil, checks, nil
+	}
+	if userDataDir != managedProfile {
+		checks = append(checks, "managed_profile_path_mismatch")
+		return nil, checks, nil
+	}
+	checks = append(checks, "managed_profile_path_matches_state_dir")
+	seen := map[int]bool{}
+	var pids []int
+	add := func(pid int) {
+		if pid <= 0 || seen[pid] {
+			return
+		}
+		seen[pid] = true
+		pids = append(pids, pid)
+	}
+	processes, err := managedChromeProcesses(ctx, managedProfile)
+	if err != nil {
+		return pids, checks, err
+	}
+	if len(processes) > 0 {
+		checks = append(checks, "process_command_line_matches_managed_profile")
+	}
+	for _, pid := range processes {
+		add(pid)
+	}
+	return pids, checks, nil
+}
+
+func managedChromeProcesses(ctx context.Context, managedProfile string) ([]int, error) {
+	switch runtime.GOOS {
+	case "linux":
+		return managedChromeProcessesLinux(ctx, managedProfile)
+	case "darwin":
+		return managedChromeProcessesPS(ctx, managedProfile)
+	default:
+		return nil, nil
+	}
+}
+
+func managedChromeProcessesLinux(ctx context.Context, managedProfile string) ([]int, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, nil
+	}
+	var pids []int
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return pids, ctx.Err()
+		default:
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		cmdline := strings.ReplaceAll(string(raw), "\x00", " ")
+		if managedChromeCommandLine(cmdline, managedProfile) {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+func managedChromeProcessesPS(ctx context.Context, managedProfile string) ([]int, error) {
+	cmd := exec.CommandContext(ctx, "ps", "-axo", "pid=,command=")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, nil
+	}
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid == os.Getpid() {
+			continue
+		}
+		cmdline := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
+		if managedChromeCommandLine(cmdline, managedProfile) {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+func managedChromeCommandLine(cmdline, managedProfile string) bool {
+	if strings.TrimSpace(cmdline) == "" {
+		return false
+	}
+	return strings.Contains(cmdline, "--headless") &&
+		strings.Contains(cmdline, "--remote-debugging-port") &&
+		(strings.Contains(cmdline, "--user-data-dir="+managedProfile) || strings.Contains(cmdline, "--user-data-dir "+managedProfile))
 }
 
 func signalProcess(pid int) error {

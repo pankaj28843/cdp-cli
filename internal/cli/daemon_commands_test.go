@@ -104,10 +104,13 @@ func TestDaemonHealthClassifiesRuntimeSocketUnreadyJSON(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitOK {
-		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitCheckFailed, errOut.String())
 	}
 	var got struct {
+		OK     bool   `json:"ok"`
+		Code   string `json:"code"`
+		State  string `json:"state"`
 		Daemon struct {
 			State              string `json:"state"`
 			ProcessRunning     bool   `json:"process_running"`
@@ -115,6 +118,7 @@ func TestDaemonHealthClassifiesRuntimeSocketUnreadyJSON(t *testing.T) {
 		} `json:"daemon"`
 		Health struct {
 			State        string   `json:"state"`
+			Code         string   `json:"code"`
 			Reasons      []string `json:"reasons"`
 			DaemonRPC    bool     `json:"daemon_rpc_ready"`
 			NextCommands []string `json:"next_commands"`
@@ -126,8 +130,8 @@ func TestDaemonHealthClassifiesRuntimeSocketUnreadyJSON(t *testing.T) {
 	if got.Daemon.State != "runtime_socket_unready" || !got.Daemon.ProcessRunning || got.Daemon.RuntimeSocketReady {
 		t.Fatalf("daemon = %+v, want live process with unready runtime socket", got.Daemon)
 	}
-	if got.Health.State != "daemon_socket_unready" || got.Health.DaemonRPC || !containsString(got.Health.Reasons, "daemon_socket_unready") {
-		t.Fatalf("health = %+v, want daemon_socket_unready", got.Health)
+	if got.OK || got.Code != "headless_daemon_rpc_not_ready" || got.State != "degraded" || got.Health.State != "degraded" || got.Health.Code != "headless_daemon_rpc_not_ready" || got.Health.DaemonRPC || !containsString(got.Health.Reasons, "daemon_socket_unready") {
+		t.Fatalf("health = %+v, envelope code=%s state=%s ok=%v; want degraded daemon_rpc_not_ready", got.Health, got.Code, got.State, got.OK)
 	}
 	if !containsString(got.Health.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --json") {
 		t.Fatalf("next_commands = %+v, want headless keepalive repair", got.Health.NextCommands)
@@ -151,8 +155,8 @@ func TestDaemonHealthReportsRecentCrashLogsJSON(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
-	if code != cli.ExitOK {
-		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitCheckFailed, errOut.String())
 	}
 	var got struct {
 		Health struct {
@@ -368,7 +372,7 @@ func TestDaemonHealthCheckRepairUsesKeepaliveForStaleHeadlessRuntime(t *testing.
 	if !got.OK || got.State != "healthy" || got.Action != "validated" {
 		t.Fatalf("daemon health-check repair = %+v, want healthy validated result", got)
 	}
-	if got.Repair.RepairSource != "daemon_keepalive" || got.Repair.PreviousState != "stale_state" || got.Repair.Classification != "stale_runtime" || got.Repair.State != "repaired" || got.Repair.Action != "repaired" {
+	if got.Repair.RepairSource != "daemon_keepalive" || got.Repair.PreviousState != "stale_state" || got.Repair.Classification != "headless_daemon_not_running" || got.Repair.State != "repaired" || got.Repair.Action != "repaired" {
 		t.Fatalf("repair = %+v, want daemon_keepalive repair from stale runtime", got.Repair)
 	}
 	if got.Repair.Keepalive.State != "repaired" || got.Repair.Keepalive.Action != "repaired" || got.Repair.Keepalive.Previous.State != "stale_state" || !got.Repair.Keepalive.Chrome.Running {

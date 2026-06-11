@@ -73,7 +73,7 @@ func SnapshotForMode(browserMode, connectionMode string, autoConnect bool, probe
 			status.NextCommands = safeAutoConnectStatusCommands(browserMode)
 			status.HumanRepairCommands = []string{commandPrefix(browserMode) + " daemon start --auto-connect --json"}
 		} else if browserMode == "headless" {
-			status.NextCommands = []string{commandPrefix(browserMode) + " daemon keepalive --repair --json", commandPrefix(browserMode) + " pages --json"}
+			status.NextCommands = []string{commandPrefix(browserMode) + " daemon keepalive --repair --json", commandPrefix(browserMode) + " daemon health-check --repair --json"}
 		} else {
 			status.NextCommands = []string{"cdp daemon start --help", "cdp pages --help"}
 		}

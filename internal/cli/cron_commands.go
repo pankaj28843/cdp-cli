@@ -145,7 +145,7 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 				"current_block":    installed,
 				"intended_block":   intended,
 				"actions":          cronDiffActions(current, wanted, installed.Installed),
-				"next_commands":    []string{"cdp cron install --profile agent --json", "cdp cron remove --json"},
+				"next_commands":    []string{"cdp cron install --json", "cdp cron remove --json"},
 			}
 			human := "cdp cron block differs"
 			if data["matches_intended"] == true {
@@ -204,7 +204,7 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 			}
 			if dryRun {
 				data["action"] = actionString(changed, "would_install", "unchanged")
-				data["next_commands"] = []string{"cdp cron install --profile agent --json", "cdp cron diff --json"}
+				data["next_commands"] = []string{"cdp cron install --json", "cdp cron diff --json"}
 			}
 			return a.render(ctx, fmt.Sprintf("cdp cron block %s", data["action"]), data)
 		},
@@ -240,7 +240,7 @@ func (a *app) newCronRemoveCommand() *cobra.Command {
 				"changed":       changed,
 				"removed":       installed.Installed,
 				"removed_block": installed,
-				"next_commands": []string{"cdp cron status --json", "cdp cron install --profile agent --json"},
+				"next_commands": []string{"cdp cron status --json", "cdp cron install --json"},
 			}
 			return a.render(ctx, fmt.Sprintf("cdp cron block %s", data["action"]), data)
 		},
@@ -283,9 +283,9 @@ func (a *app) newCronMigratePagesPollingCommand() *cobra.Command {
 				return commandError(
 					"managed_keepalive_required",
 					"usage",
-					"managed daemon keepalive is not installed; run cdp cron install --profile agent --json and verify cdp cron status before removing legacy pages polling entries",
+					"managed daemon keepalive is not installed; run cdp cron install --json and verify cdp cron status before removing legacy pages polling entries",
 					ExitUsage,
-					[]string{"cdp cron install --profile agent --json", "cdp cron status --json", "cdp cron migrate pages-polling --apply --json"},
+					[]string{"cdp cron install --json", "cdp cron status --json", "cdp cron migrate pages-polling --apply --json"},
 				)
 			}
 			if apply && changed {
@@ -524,8 +524,8 @@ func managedCronBlock(opts cronRenderOptions) string {
 	}
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headless" {
 		lines = append(lines,
-			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
-			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health-check --repair --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
+			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --force --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
+			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health-check --repair --force --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
 			fmt.Sprintf("%s %s", seedSchedule, cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy %s --if-older-than %s --json >> %s/profile-seed-headless.log 2>&1", cdpBin, seedStrategy, seedAfter, logDir))),
 			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
 		)
@@ -812,7 +812,7 @@ func cronStatusHealth(available, installed, matchesIntended bool, locks, daemonL
 		state = "not_installed"
 		status = "warn"
 		message = "cdp cron managed block is not installed"
-		recommendedCommand = "cdp cron install --profile agent --json"
+		recommendedCommand = "cdp cron install --json"
 		nextCommands = []string{recommendedCommand, "cdp cron diff --json", "cdp doctor --check scheduled-tasks --json"}
 		issues = append(issues, map[string]any{
 			"state":               "not_installed",
@@ -823,7 +823,7 @@ func cronStatusHealth(available, installed, matchesIntended bool, locks, daemonL
 		state = "needs_update"
 		status = "warn"
 		message = "installed cdp cron managed block differs from the current intended block"
-		recommendedCommand = "cdp cron install --profile agent --json"
+		recommendedCommand = "cdp cron install --json"
 		nextCommands = []string{recommendedCommand, "cdp cron diff --json", "cdp doctor --check scheduled-tasks --json"}
 		issues = append(issues, map[string]any{
 			"state":               "needs_update",
@@ -913,7 +913,7 @@ func cronPagesPollingMigrationWarnings(changed, dryRun, managedKeepaliveInstalle
 		return nil
 	}
 	if !managedKeepaliveInstalled {
-		return []string{"managed daemon keepalive is not installed; run cdp cron install --profile agent --json and verify cdp cron status before applying this migration"}
+		return []string{"managed daemon keepalive is not installed; run cdp cron install --json and verify cdp cron status before applying this migration"}
 	}
 	if dryRun {
 		return []string{"dry-run only; rerun with --apply after reviewing candidate entries"}
@@ -926,7 +926,7 @@ func cronPagesPollingMigrationNextCommands(changed, dryRun, managedKeepaliveInst
 		return []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"}
 	}
 	if !managedKeepaliveInstalled {
-		return []string{"cdp cron install --profile agent --json", "cdp cron status --json", "cdp cron migrate pages-polling --apply --json"}
+		return []string{"cdp cron install --json", "cdp cron status --json", "cdp cron migrate pages-polling --apply --json"}
 	}
 	if dryRun {
 		return []string{"cdp cron migrate pages-polling --apply --json", "cdp doctor --check scheduled-tasks --json"}

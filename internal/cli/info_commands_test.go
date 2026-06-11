@@ -37,7 +37,7 @@ func TestScheduledTasksDoctorCheckReportsCleanupTask(t *testing.T) {
 		t.Fatalf("scheduled task check = %+v, want pass message for flocked mode-explicit keepalive and cleanup", check)
 	}
 	next, ok := check["next_commands"].([]string)
-	if !ok || !testContainsString(next, "cdp cron status --json") || !testContainsString(next, "cdp cron install --profile agent --json") {
+	if !ok || !testContainsString(next, "cdp cron status --json") || !testContainsString(next, "cdp cron install --json") {
 		t.Fatalf("scheduled task next_commands = %+v, want built-in cdp cron management commands", check["next_commands"])
 	}
 }

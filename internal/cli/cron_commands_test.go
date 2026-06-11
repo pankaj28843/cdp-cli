@@ -172,10 +172,10 @@ func TestCronMigratePagesPollingDryRunReportsCandidatesAndPreservesCrontab(t *te
 	if len(got.RemovedEntries) != 0 {
 		t.Fatalf("removed entries = %+v, want none on dry-run", got.RemovedEntries)
 	}
-	if !containsString(got.Warnings, "managed daemon keepalive is not installed; run cdp cron install --profile agent --json and verify cdp cron status before applying this migration") {
+	if !containsString(got.Warnings, "managed daemon keepalive is not installed; run cdp cron install --json and verify cdp cron status before applying this migration") {
 		t.Fatalf("warnings = %+v, want managed keepalive prerequisite", got.Warnings)
 	}
-	if !containsString(got.NextCommands, "cdp cron install --profile agent --json") {
+	if !containsString(got.NextCommands, "cdp cron install --json") {
 		t.Fatalf("next commands = %+v, want cron install guidance", got.NextCommands)
 	}
 	if after := readFileString(t, crontabPath); after != initial {
@@ -204,10 +204,10 @@ func TestCronMigratePagesPollingApplyRequiresManagedKeepalive(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("decode apply error output: %v\n%s", err, stdout.String())
 	}
-	if got.OK || got.Code != "managed_keepalive_required" || got.ErrClass != "usage" || !strings.Contains(got.Message, "cdp cron install --profile agent --json") {
+	if got.OK || got.Code != "managed_keepalive_required" || got.ErrClass != "usage" || !strings.Contains(got.Message, "cdp cron install --json") {
 		t.Fatalf("error envelope = %+v, want managed_keepalive_required usage guidance", got)
 	}
-	if !containsString(got.RemediationCommands, "cdp cron install --profile agent --json") {
+	if !containsString(got.RemediationCommands, "cdp cron install --json") {
 		t.Fatalf("remediation commands = %+v, want cron install", got.RemediationCommands)
 	}
 	if after := readFileString(t, crontabPath); after != initial {
@@ -313,7 +313,7 @@ func TestCronStatusAndDiffUseFakeCrontab(t *testing.T) {
 	if !status.OK || status.Installed || status.State != "not_installed" || status.Health.State != "not_installed" || status.Health.Status != "warn" || status.Health.IssueCount != 1 {
 		t.Fatalf("cron status = %+v, want ok not_installed warning", status)
 	}
-	if status.Health.RecommendedCommand != "cdp cron install --profile agent --json" || !containsString(status.NextCommands, "cdp cron install --profile agent --json") {
+	if status.Health.RecommendedCommand != "cdp cron install --json" || !containsString(status.NextCommands, "cdp cron install --json") {
 		t.Fatalf("cron status next commands = %+v health=%+v, want install guidance", status.NextCommands, status.Health)
 	}
 
@@ -373,7 +373,7 @@ func TestCronStatusSummarizesManagedBlockMismatchAndStaleLocks(t *testing.T) {
 	if status.Health.IssueCount != 2 || status.Health.StaleLockCount != 1 || !containsString(status.Health.StaleLocks, "keepalive-headless") || status.Health.StaleDaemonLockCount != 0 || len(status.Health.StaleDaemonLocks) != 0 {
 		t.Fatalf("cron status health = %+v, want one stale wrapper lock plus needs_update issue", status.Health)
 	}
-	if status.Health.RecommendedCommand != "cdp cron install --profile agent --json" || status.NextCommands[0] != "cdp cron install --profile agent --json" {
+	if status.Health.RecommendedCommand != "cdp cron install --json" || status.NextCommands[0] != "cdp cron install --json" {
 		t.Fatalf("cron status recommended command = %q next=%+v, want install first for stale managed block", status.Health.RecommendedCommand, status.NextCommands)
 	}
 	var staleIssue struct {
