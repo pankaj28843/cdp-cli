@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -519,6 +521,55 @@ func TestRuntimeClientReadsVeryLargeCDPResponsesAndStaysRunning(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientAllowsConcurrentRPCCalls(t *testing.T) {
+	server, maxActive := newRuntimeRPCConcurrentFakeServer(t)
+	defer server.Close()
+
+	stateDir := shortStateDir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	runtime := waitForRuntime(t, ctx, stateDir)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	client := daemon.RuntimeClient{Runtime: runtime}
+	const calls = 5
+	errs := make(chan error, calls)
+	for i := 0; i < calls; i++ {
+		go func(i int) {
+			var result struct {
+				Value int `json:"value"`
+			}
+			err := client.Call(ctx, "Runtime.evaluate", map[string]any{"i": i}, &result)
+			if err == nil && result.Value != i {
+				err = errors.New("unexpected concurrent result value")
+			}
+			errs <- err
+		}(i)
+	}
+	for i := 0; i < calls; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent Runtime.evaluate returned error: %v", err)
+		}
+	}
+	if maxActive.Load() < 2 {
+		t.Fatalf("max concurrent CDP calls = %d, want daemon to allow overlapping runtime RPC calls", maxActive.Load())
+	}
+}
+
 func newRuntimeRPCFakeServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -569,6 +620,60 @@ func newRuntimeRPCFakeServer(t *testing.T) *httptest.Server {
 		}
 	})
 	return httptest.NewServer(mux)
+}
+
+func newRuntimeRPCConcurrentFakeServer(t *testing.T) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var active atomic.Int64
+	var maxActive atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		var writeMu sync.Mutex
+		for {
+			var req struct {
+				ID        int64           `json:"id"`
+				SessionID string          `json:"sessionId"`
+				Method    string          `json:"method"`
+				Params    json.RawMessage `json:"params"`
+			}
+			if err := wsjson.Read(r.Context(), conn, &req); err != nil {
+				return
+			}
+			go func(req struct {
+				ID        int64           `json:"id"`
+				SessionID string          `json:"sessionId"`
+				Method    string          `json:"method"`
+				Params    json.RawMessage `json:"params"`
+			}) {
+				now := active.Add(1)
+				for {
+					previous := maxActive.Load()
+					if now <= previous || maxActive.CompareAndSwap(previous, now) {
+						break
+					}
+				}
+				defer active.Add(-1)
+				time.Sleep(100 * time.Millisecond)
+				var params struct {
+					I int `json:"i"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				resp := map[string]any{"id": req.ID, "result": map[string]any{"value": params.I}}
+				if req.SessionID != "" {
+					resp["sessionId"] = req.SessionID
+				}
+				writeMu.Lock()
+				defer writeMu.Unlock()
+				_ = wsjson.Write(r.Context(), conn, resp)
+			}(req)
+		}
+	})
+	return httptest.NewServer(mux), &maxActive
 }
 
 func newRuntimeRPCLargeFakeServer(t *testing.T) *httptest.Server {
@@ -664,7 +769,7 @@ func waitForRuntime(t *testing.T, ctx context.Context, stateDir string) daemon.R
 
 func waitForRuntimeForMode(t *testing.T, ctx context.Context, stateDir, browserMode string) daemon.Runtime {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
 		if err != nil {

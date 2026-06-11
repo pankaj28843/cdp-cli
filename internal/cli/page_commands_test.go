@@ -110,6 +110,55 @@ func TestPagesJSON(t *testing.T) {
 	}
 }
 
+func TestPageCloseWaitsUntilTargetGoneJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-close", "type": "page", "title": "Close Me", "url": "https://example.test/close", "attached": false},
+	})
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "close", "--target", "page-close", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("page close exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK           bool `json:"ok"`
+		Closed       bool `json:"closed"`
+		TargetGone   bool `json:"target_gone"`
+		AttemptCount int  `json:"attempt_count"`
+		MaxAttempts  int  `json:"max_attempts"`
+		Attempts     []struct {
+			CloseSent  bool `json:"close_sent"`
+			TargetGone bool `json:"target_gone"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("page close output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Closed || !got.TargetGone || got.AttemptCount != 1 || got.MaxAttempts != 3 || len(got.Attempts) != 1 || !got.Attempts[0].CloseSent || !got.Attempts[0].TargetGone {
+		t.Fatalf("page close = %+v, want one settled close attempt with target_gone", got)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages after close exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var pages struct {
+		Pages []struct {
+			ID string `json:"id"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &pages); err != nil {
+		t.Fatalf("pages output is invalid JSON: %v", err)
+	}
+	if len(pages.Pages) != 0 {
+		t.Fatalf("pages after close = %+v, want target gone", pages.Pages)
+	}
+}
+
 func TestPageCleanupJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-visible", "type": "page", "title": "Visible Page", "url": "https://example.test/visible", "attached": false},
@@ -177,6 +226,54 @@ func TestPageCleanupJSON(t *testing.T) {
 	}
 	if closed.Cleanup.DryRun || closed.Cleanup.WouldCloseCount != 0 || closed.Cleanup.CloseRequired || closed.Cleanup.ClosedCount != 1 || len(closed.Closed) != 1 || closed.Closed[0].Target.ID != "page-hidden" {
 		t.Fatalf("page cleanup close = %+v, want hidden page closed", closed)
+	}
+}
+
+func TestPageCleanupRecoversEmptyStateJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-empty-state", "type": "page", "title": "Empty State", "url": "https://example.test/empty-state", "attached": false},
+	})
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll state dir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "page-cleanup.json"), nil, 0o600); err != nil {
+		t.Fatalf("write empty cleanup state: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "cleanup", "--include-url", "example.test", "--idle-for", "0s", "--force", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("page cleanup exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK      bool `json:"ok"`
+		Cleanup struct {
+			StateWarnings []string `json:"state_warnings"`
+			ReadyCount    int      `json:"ready_count"`
+		} `json:"cleanup"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("page cleanup output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Cleanup.ReadyCount != 1 || len(got.Cleanup.StateWarnings) != 1 || !strings.Contains(got.Cleanup.StateWarnings[0], "empty") {
+		t.Fatalf("page cleanup = %+v, want recovered empty state warning and ready candidate", got)
+	}
+	b, err := os.ReadFile(filepath.Join(stateDir, "page-cleanup.json"))
+	if err != nil {
+		t.Fatalf("read cleanup state: %v", err)
+	}
+	var saved struct {
+		Pages []struct {
+			TargetID string `json:"target_id"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(b, &saved); err != nil {
+		t.Fatalf("saved cleanup state is invalid JSON after recovery: %v\n%s", err, string(b))
+	}
+	if len(saved.Pages) != 1 || saved.Pages[0].TargetID != "page-empty-state" {
+		t.Fatalf("saved cleanup state = %+v, want recovered page record", saved.Pages)
 	}
 }
 

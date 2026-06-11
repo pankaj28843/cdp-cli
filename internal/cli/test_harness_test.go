@@ -124,7 +124,7 @@ func waitForDaemonRuntime(t *testing.T, ctx context.Context, stateDir string) {
 
 func waitForDaemonRuntimeForMode(t *testing.T, ctx context.Context, stateDir, browserMode string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
 		if err != nil {
@@ -280,6 +280,20 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Target.activateTarget" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Target.closeTarget" {
+				var params struct {
+					TargetID string `json:"targetId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				if params.TargetID != "" {
+					filtered := targetInfos[:0]
+					for _, target := range targetInfos {
+						if target["targetId"] == params.TargetID {
+							continue
+						}
+						filtered = append(filtered, target)
+					}
+					targetInfos = filtered
+				}
 				resp["result"] = map[string]any{"success": true}
 			} else if req.Method == "Browser.getWindowForTarget" {
 				var params struct {

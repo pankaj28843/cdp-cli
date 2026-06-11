@@ -30,7 +30,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect")))' >/dev/null
 "$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(. == "cdp cron install --json"))' >/dev/null
-"$binary" describe --command "daemon health-check" --json | jq -e '.ok == true and .commands.name == "health-check" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--repair"))) and (.commands.flags[] | select(.name == "repair")) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
+"$binary" describe --command "daemon health-check" --json | jq -e '.ok == true and .commands.name == "health-check" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--repair"))) and (.commands.examples | any(contains("--require-healthy"))) and (.commands.flags[] | select(.name == "repair")) and (.commands.flags[] | select(.name == "require-healthy")) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
 "$binary" describe --command "cron install" --json | jq -e '.ok == true and .commands.name == "install" and (.commands.examples | any(. == "cdp cron install --json")) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run"))' >/dev/null
 "$binary" describe --command "cron migrate pages-polling" --json | jq -e '.ok == true and .commands.name == "pages-polling" and (.commands.examples | any(contains("migrate pages-polling --json"))) and (.commands.examples | any(contains("--apply"))) and (.commands.flags[] | select(.name == "apply"))' >/dev/null
@@ -94,7 +94,7 @@ trap 'rm -rf "$state_dir"' EXIT
 "$binary" schema protocol-describe --json | jq -e '.ok == true and .schema.name == "protocol-describe"' >/dev/null
 "$binary" schema daemon-restart --json | jq -e '.ok == true and .schema.name == "daemon-restart" and (.schema.fields | map(.name) | index("restart"))' >/dev/null
 "$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("lock"))' >/dev/null
-"$binary" schema daemon-health-check --json | jq -e '.ok == true and .schema.name == "daemon-health-check" and (.schema.fields | map(.name) | index("steps")) and (.schema.fields | map(.name) | index("repair")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("failure_count"))' >/dev/null
+"$binary" schema daemon-health-check --json | jq -e '.ok == true and .schema.name == "daemon-health-check" and (.schema.fields | map(.name) | index("status")) and (.schema.fields | map(.name) | index("usable")) and (.schema.fields | map(.name) | index("degraded_reasons")) and (.schema.fields | map(.name) | index("recommended_action")) and (.schema.fields | map(.name) | index("steps")) and (.schema.fields | map(.name) | index("repair")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("failure_count"))' >/dev/null
 "$binary" schema daemon-status --json | jq -e '.ok == true and .schema.name == "daemon-status" and (.schema.fields | map(.name) | index("daemon"))' >/dev/null
 "$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("entries"))' >/dev/null
 health_state_dir="$(mktemp -d)"
@@ -229,7 +229,7 @@ rg -q "cleanup routine|page cleanup|clean" <<<"$help_output"
 page_cleanup_describe="$("$binary" describe --command "page cleanup" --json)"
 page_cleanup_examples="$(jq -r '.commands.examples[]' <<<"$page_cleanup_describe")"
 rg -q -- '--browser-mode headed page cleanup' <<<"$page_cleanup_examples"
-rg -q -- '--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25' <<<"$page_cleanup_examples"
+rg -q -- '--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25' <<<"$page_cleanup_examples"
 page_cleanup_short="$(jq -r '.commands.short' <<<"$page_cleanup_describe")"
 rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "page cleanup" --json | jq -e '.commands.flags[] | select(.name == "max")' >/dev/null

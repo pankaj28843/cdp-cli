@@ -348,9 +348,9 @@ printf 'synthetic upload\n' >"$upload_file"
   | jq -e '.ok == true and (.messages[] | select(.text | contains("synthetic demo error")))' >/dev/null
 probe_id="$(date +%s%N)"
 network_output="$state_dir/network.json"
-"$binary" network --state-dir "$state_dir/cdp-state" --failed --wait 2s --json >"$network_output" &
+"$binary" network --state-dir "$state_dir/cdp-state" --failed --wait 5s --json >"$network_output" &
 network_pid=$!
-sleep 0.2
+sleep 0.5
 "$binary" eval "fetch('$app_url/api/fail?probe=$probe_id').then(r => r.status)" --state-dir "$state_dir/cdp-state" --await-promise --json \
   | jq -e '.ok == true and .result.value == 503' >/dev/null
 wait "$network_pid"

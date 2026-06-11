@@ -190,6 +190,185 @@ func TestDaemonHealthReportsRecentCrashLogsJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonHealthReportsUsableDegradedKeepaliveReadErrorJSON(t *testing.T) {
+	stateDir := shortCLIStateDir(t)
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	daemon.AppendLogForMode(context.Background(), stateDir, "headless", daemon.LogEntry{
+		Time:    "2026-06-11T16:50:02Z",
+		Level:   "warn",
+		Event:   "hold_connection_ended",
+		Message: "failed to read JSON message: failed to get reader: use of closed network connection",
+	})
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK     bool `json:"ok"`
+		Health struct {
+			State                     string   `json:"state"`
+			Usable                    bool     `json:"usable"`
+			DegradedReasons           []string `json:"degraded_reasons"`
+			LastBrowserKeepaliveError string   `json:"last_browser_keepalive_error"`
+			RecommendedRepair         struct {
+				Command string `json:"command"`
+				Urgency string `json:"urgency"`
+			} `json:"recommended_repair"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon health output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Health.State != "degraded" || !got.Health.Usable || !containsString(got.Health.DegradedReasons, "recent_keepalive_read_error") {
+		t.Fatalf("daemon health = %+v, want usable degraded keepalive read error", got.Health)
+	}
+	if !strings.Contains(got.Health.LastBrowserKeepaliveError, "hold_connection_ended") {
+		t.Fatalf("last_browser_keepalive_error = %q, want hold_connection_ended", got.Health.LastBrowserKeepaliveError)
+	}
+	if got.Health.RecommendedRepair.Command != "cdp --browser-mode headless daemon health-check --repair --json" || got.Health.RecommendedRepair.Urgency != "before_long_crawl" {
+		t.Fatalf("recommended_repair = %+v, want health-check before long crawl", got.Health.RecommendedRepair)
+	}
+}
+
+func TestDaemonHealthCheckClearsKeepaliveReadErrorDegradationJSON(t *testing.T) {
+	stateDir := shortCLIStateDir(t)
+	artifactDir := filepath.Join(stateDir, "health-artifacts")
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	runtime, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil || !ok {
+		t.Fatalf("LoadRuntimeForMode headless ok=%v err=%v, want runtime", ok, err)
+	}
+	runtime.ManagedProfilePath = browser.ManagedProfileDir(stateDir)
+	runtime.ProfileSeedStrategy = "managed"
+	runtime.ChromePort = "9222"
+	runtime.ManagedBrowser = &browser.ManagedStatus{BrowserMode: "headless", UserDataDir: browser.ManagedProfileDir(stateDir), DebuggingPort: "9222", ProfileSeedStrategy: "managed"}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", runtime); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	daemon.AppendLogForMode(context.Background(), stateDir, "headless", daemon.LogEntry{
+		Time:    "2026-06-11T16:50:02Z",
+		Level:   "warn",
+		Event:   "hold_connection_ended",
+		Message: "failed to read JSON message: failed to get reader: use of closed network connection",
+	})
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health before health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var before struct {
+		Health struct {
+			State           string   `json:"state"`
+			Usable          bool     `json:"usable"`
+			DegradedReasons []string `json:"degraded_reasons"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &before); err != nil {
+		t.Fatalf("daemon health before health-check output is invalid JSON: %v", err)
+	}
+	if before.Health.State != "degraded" || !before.Health.Usable || !containsString(before.Health.DegradedReasons, "recent_keepalive_read_error") {
+		t.Fatalf("daemon health before health-check = %+v, want usable keepalive degradation", before.Health)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--require-healthy", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("daemon health-check --require-healthy exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var check struct {
+		OK                bool     `json:"ok"`
+		State             string   `json:"state"`
+		Status            string   `json:"status"`
+		Usable            bool     `json:"usable"`
+		DegradedReasons   []string `json:"degraded_reasons"`
+		RecommendedAction string   `json:"recommended_action"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &check); err != nil {
+		t.Fatalf("daemon health-check output is invalid JSON: %v", err)
+	}
+	if !check.OK || check.State != "usable_degraded" || check.Status != "warn" || !check.Usable || !containsString(check.DegradedReasons, "recent_keepalive_read_error") || check.RecommendedAction != "safe_for_single_command_but_repair_before_long_crawl" {
+		t.Fatalf("daemon health-check = %+v, want usable degraded warning success", check)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health after health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var after struct {
+		Health struct {
+			State           string   `json:"state"`
+			Usable          bool     `json:"usable"`
+			DegradedReasons []string `json:"degraded_reasons"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &after); err != nil {
+		t.Fatalf("daemon health after health-check output is invalid JSON: %v", err)
+	}
+	if after.Health.State != "healthy" || !after.Health.Usable || containsString(after.Health.DegradedReasons, "recent_keepalive_read_error") {
+		t.Fatalf("daemon health after health-check = %+v, want cleared keepalive degradation", after.Health)
+	}
+}
+
 func TestDaemonHealthCheckHeadlessHealthyJSON(t *testing.T) {
 	stateDir := shortCLIStateDir(t)
 	artifactDir := filepath.Join(stateDir, "health-artifacts")

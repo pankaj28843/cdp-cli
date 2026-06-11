@@ -505,7 +505,7 @@ func (a *app) newDaemonHealthCommand() *cobra.Command {
 			status := a.daemonStatus(ctx, probe)
 			health := a.browserHealthSnapshot(ctx, status, processInfo)
 			status.Health = health
-			if a.browserModeName() == string(config.BrowserModeHeadless) && healthState(health) != "healthy" {
+			if a.browserModeName() == string(config.BrowserModeHeadless) && healthState(health) != "healthy" && !healthUsable(health) {
 				code, _ := stringMapField(health, "code")
 				if code == "" {
 					code = "headless_runtime_degraded"
@@ -533,11 +533,17 @@ func (a *app) newDaemonHealthCommand() *cobra.Command {
 	return cmd
 }
 
+func healthUsable(health map[string]any) bool {
+	usable, ok := health["usable"].(bool)
+	return ok && usable
+}
+
 const defaultHeadlessHealthCheckURL = "data:text/html,%3Cmain%20data-cdp-health%3D%22ok%22%3Ecdp-headless-health%3C%2Fmain%3E"
 
 type daemonHealthCheckOptions struct {
 	Repair           bool
 	Force            bool
+	RequireHealthy   bool
 	HealthURL        string
 	OutDir           string
 	FailureThreshold int
@@ -573,6 +579,7 @@ func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.Repair, "repair", false, "start or replace the managed headless daemon before validation when health is not healthy")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "when used with --repair, clear stale managed headless runtime state before relaunching")
+	cmd.Flags().BoolVar(&opts.RequireHealthy, "require-healthy", false, "fail when health is usable but degraded instead of returning a warning success")
 	cmd.Flags().StringVar(&opts.HealthURL, "health-url", opts.HealthURL, "synthetic URL used for navigation/DOM/JS/screenshot validation")
 	cmd.Flags().StringVar(&opts.OutDir, "out-dir", "", "directory for health-check JSON and screenshot artifacts; defaults under the cdp state directory")
 	cmd.Flags().IntVar(&opts.FailureThreshold, "failure-threshold", opts.FailureThreshold, "write a feature-request candidate after this many consecutive failures")
@@ -599,12 +606,15 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	}
 	if !acquired {
 		return a.render(ctx, "headless health-check locked", map[string]any{
-			"ok":           true,
-			"browser_mode": a.browserModeName(),
-			"state":        "locked",
-			"action":       "skipped",
-			"locked":       true,
-			"lock":         existingLock,
+			"ok":               true,
+			"browser_mode":     a.browserModeName(),
+			"state":            "locked",
+			"status":           "skipped",
+			"usable":           false,
+			"degraded_reasons": []string{},
+			"action":           "skipped",
+			"locked":           true,
+			"lock":             existingLock,
 			"next_commands": []string{
 				"cdp --browser-mode headless daemon health --json",
 				"cdp cron status --json",
@@ -619,14 +629,17 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	screenshotPath := filepath.Join(runDir, "screenshot.png")
 	steps := []map[string]any{}
 	report := map[string]any{
-		"ok":           false,
-		"browser_mode": a.browserModeName(),
-		"state":        "failed",
-		"action":       "diagnosed",
-		"run_id":       runID,
-		"locked":       false,
-		"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
-		"steps":        steps,
+		"ok":               false,
+		"browser_mode":     a.browserModeName(),
+		"state":            "failed",
+		"status":           "fail",
+		"usable":           false,
+		"action":           "diagnosed",
+		"run_id":           runID,
+		"locked":           false,
+		"lock":             map[string]any{"name": lock.Metadata.Name, "acquired": true},
+		"steps":            steps,
+		"degraded_reasons": []string{},
 		"artifacts": map[string]any{
 			"run_dir":    runDir,
 			"summary":    summaryPath,
@@ -662,10 +675,10 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 			return fail("health_failed", err)
 		}
 	} else {
-		addStep("health", healthState(health) == "healthy", map[string]any{"state": healthState(health)})
+		addStep("health", healthState(health) == "healthy" || healthUsable(health), map[string]any{"state": healthState(health), "usable": healthUsable(health)})
 	}
 
-	if (err != nil || healthState(health) != "healthy") && opts.Repair {
+	if (err != nil || !healthUsable(health)) && opts.Repair {
 		if err := lock.Update(ctx, "repairing"); err != nil {
 			return err
 		}
@@ -682,9 +695,14 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 		}
 		report["daemon"] = status
 		report["health"] = health
-		addStep("health_after_repair", healthState(health) == "healthy", map[string]any{"state": healthState(health)})
+		addStep("health_after_repair", healthState(health) == "healthy" || healthUsable(health), map[string]any{"state": healthState(health), "usable": healthUsable(health)})
 	}
-	if healthState(health) != "healthy" {
+	if healthState(health) != "healthy" && !healthUsable(health) {
+		return fail("health_not_healthy", nil)
+	}
+	if opts.RequireHealthy && healthState(health) != "healthy" {
+		report["usable"] = healthUsable(health)
+		report["degraded_reasons"] = toStringSlice(health["degraded_reasons"])
 		return fail("health_not_healthy", nil)
 	}
 
@@ -730,7 +748,17 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	addStep("screenshot", true, map[string]any{"path": writtenScreenshot, "bytes": len(shot.Data)})
 
 	report["ok"] = true
-	report["state"] = "healthy"
+	report["usable"] = true
+	if healthState(health) == "degraded" && healthUsable(health) {
+		report["state"] = "usable_degraded"
+		report["status"] = "warn"
+		report["degraded_reasons"] = toStringSlice(health["degraded_reasons"])
+		report["recommended_action"] = "safe_for_single_command_but_repair_before_long_crawl"
+	} else {
+		report["state"] = "healthy"
+		report["status"] = "pass"
+		report["degraded_reasons"] = []string{}
+	}
 	report["action"] = "validated"
 	report["failure"] = nil
 	report["failure_count"] = a.updateHeadlessHealthCheckFailure(ctx, outDir, runDir, summaryPath, opts.FailureThreshold, false)
@@ -740,6 +768,11 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	if err := writeJSONArtifact(summaryPath, report); err != nil {
 		return err
 	}
+	daemon.AppendLogForMode(ctx, store.Dir, a.browserModeName(), daemon.LogEntry{
+		Level:   "info",
+		Event:   "health_check_validated",
+		Message: "managed headless health-check passed",
+	})
 	return a.render(ctx, fmt.Sprintf("headless-health-check\t%s", report["state"]), report)
 }
 
@@ -817,25 +850,49 @@ func (a *app) openHealthCheckTarget(ctx context.Context, rawURL string) (cdp.Tar
 	if err != nil {
 		return cdp.TargetInfo{}, nil, nil, err
 	}
-	targetID, err := a.createPageTarget(ctx, client, rawURL)
+	targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "headless-health-check")
 	if err != nil {
 		_ = closeClient(ctx)
 		return cdp.TargetInfo{}, nil, nil, err
 	}
 	target, err := cdp.TargetInfoWithClient(ctx, client, targetID)
 	if err != nil {
-		_ = cdp.CloseTargetWithClient(ctx, client, targetID)
+		closeCtx, cancel := context.WithTimeout(ctx, pageCloseAttemptTimeout(a.browserModeName()))
+		_ = closePageTargetSettled(closeCtx, client, cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}, pageCloseOptions{
+			WaitGone:     true,
+			MaxAttempts:  defaultPageCloseMaxAttempts,
+			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+			PollInterval: defaultPageClosePollInterval,
+			RetryBackoff: defaultPageCloseRetryBackoff,
+		})
+		cancel()
 		_ = closeClient(ctx)
 		return cdp.TargetInfo{}, nil, nil, err
 	}
 	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 	if err != nil {
-		_ = cdp.CloseTargetWithClient(ctx, client, targetID)
+		closeCtx, cancel := context.WithTimeout(ctx, pageCloseAttemptTimeout(a.browserModeName()))
+		_ = closePageTargetSettled(closeCtx, client, target, pageCloseOptions{
+			WaitGone:     true,
+			MaxAttempts:  defaultPageCloseMaxAttempts,
+			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+			PollInterval: defaultPageClosePollInterval,
+			RetryBackoff: defaultPageCloseRetryBackoff,
+		})
+		cancel()
 		_ = closeClient(ctx)
 		return cdp.TargetInfo{}, nil, nil, err
 	}
 	closeSession := func() {
-		_ = cdp.CloseTargetWithClient(context.Background(), client, targetID)
+		closeCtx, cancel := context.WithTimeout(context.Background(), pageCloseDefaultTimeout(a.browserModeName(), defaultPageCloseMaxAttempts))
+		defer cancel()
+		_ = closePageTargetSettled(closeCtx, client, target, pageCloseOptions{
+			WaitGone:     true,
+			MaxAttempts:  defaultPageCloseMaxAttempts,
+			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+			PollInterval: defaultPageClosePollInterval,
+			RetryBackoff: defaultPageCloseRetryBackoff,
+		})
 		_ = session.Close(context.Background())
 	}
 	return target, session, closeSession, nil

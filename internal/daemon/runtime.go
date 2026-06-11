@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -621,6 +620,13 @@ func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string,
 		TimeoutMillis: timeoutMillis(ctx),
 	}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, context.DeadlineExceeded
+		}
 		return nil, fmt.Errorf("write daemon rpc request %s: %w", method, err)
 	}
 	var resp RPCResponse
@@ -752,9 +758,8 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 
 	cycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var mu sync.Mutex
-	go serveRPC(cycleCtx, listener, client, &mu, opts)
-	return keepAlive(cycleCtx, client, reconnect, &mu)
+	go serveRPC(cycleCtx, listener, client, opts)
+	return keepAlive(cycleCtx, client, reconnect)
 }
 
 func managedBrowserFromEnv() *browser.ManagedStatus {
@@ -793,7 +798,7 @@ func listenRuntimeSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, mu *sync.Mutex, opts holdOptions) {
+func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, opts holdOptions) {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -803,11 +808,11 @@ func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, mu
 		if err != nil {
 			return
 		}
-		go handleRPC(ctx, conn, client, mu, opts)
+		go handleRPC(ctx, conn, client, opts)
 	}
 }
 
-func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.Mutex, opts holdOptions) {
+func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts holdOptions) {
 	defer conn.Close()
 	var req RPCRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
@@ -870,9 +875,7 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, mu *sync.
 	if len(req.Params) == 0 {
 		params = map[string]any{}
 	}
-	mu.Lock()
 	err := client.CallSession(callCtx, req.SessionID, req.Method, params, &result)
-	mu.Unlock()
 	if err != nil {
 		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
 		return
@@ -917,7 +920,7 @@ func rpcErrorResponse(code, class, message string) RPCResponse {
 	}
 }
 
-func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration, mu *sync.Mutex) error {
+func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration) error {
 	defer client.Close(websocket.StatusNormalClosure, "done")
 	tick := 30 * time.Second
 	if reconnect > 0 && reconnect < tick {
@@ -934,9 +937,7 @@ func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration,
 			return ctx.Err()
 		case <-ticker.C:
 			var result json.RawMessage
-			mu.Lock()
 			err := client.Call(ctx, "Browser.getVersion", map[string]any{}, &result)
-			mu.Unlock()
 			if err != nil {
 				return err
 			}
@@ -946,6 +947,10 @@ func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration,
 
 func appendLog(ctx context.Context, stateDir string, entry LogEntry) {
 	appendLogForMode(ctx, stateDir, "headed", entry)
+}
+
+func AppendLogForMode(ctx context.Context, stateDir, browserMode string, entry LogEntry) {
+	appendLogForMode(ctx, stateDir, browserMode, entry)
 }
 
 func appendLogForMode(ctx context.Context, stateDir, browserMode string, entry LogEntry) {

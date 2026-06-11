@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +21,13 @@ import (
 )
 
 var pageCleanupRecordsMu sync.Mutex
+
+const (
+	defaultPageCloseMaxAttempts        = 3
+	defaultPageClosePollInterval       = 100 * time.Millisecond
+	defaultPageCloseRetryBackoff       = 200 * time.Millisecond
+	defaultPageCleanupCloseConcurrency = 4
+)
 
 func (a *app) newTargetsCommand() *cobra.Command {
 	var limit int
@@ -418,21 +427,104 @@ func (a *app) newPageActivateCommand() *cobra.Command {
 }
 
 func (a *app) newPageCloseCommand() *cobra.Command {
-	return a.newPageTargetCommand("close", "Close a page target", "closed", cdp.CloseTargetWithClient)
+	var targetID string
+	var urlContains string
+	var titleContains string
+	waitGone := true
+	maxAttempts := defaultPageCloseMaxAttempts
+	cmd := &cobra.Command{
+		Use:   "close",
+		Short: "Close a page target and wait until it is gone",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if maxAttempts <= 0 {
+				return commandError("invalid_argument", "usage", "--max-attempts must be positive", ExitUsage, []string{"cdp page close --target <target-id> --max-attempts 3 --json"})
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, pageCloseDefaultTimeout(a.browserModeName(), maxAttempts))
+			defer cancel()
+
+			client, closeClient, err := a.browserCDPClient(ctx)
+			if err != nil {
+				return commandError(
+					"connection_not_configured",
+					"connection",
+					err.Error(),
+					ExitConnection,
+					a.connectionRemediationCommands(),
+				)
+			}
+			defer closeClient(ctx)
+
+			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			closeReport := closePageTargetSettled(ctx, client, target, pageCloseOptions{
+				WaitGone:      waitGone,
+				MaxAttempts:   maxAttempts,
+				AttemptWait:   pageCloseAttemptTimeout(a.browserModeName()),
+				PollInterval:  defaultPageClosePollInterval,
+				RetryBackoff:  defaultPageCloseRetryBackoff,
+				FinalPageList: true,
+			})
+			data := map[string]any{
+				"ok":               closeReport.Closed && (!waitGone || closeReport.TargetGone),
+				"action":           "closed",
+				"target":           pageRow(target),
+				"closed":           closeReport.Closed,
+				"target_gone":      closeReport.TargetGone,
+				"attempts":         closeReport.Attempts,
+				"attempt_count":    closeReport.AttemptCount,
+				"max_attempts":     closeReport.MaxAttempts,
+				"elapsed_ms":       closeReport.ElapsedMS,
+				"wait_gone":        waitGone,
+				"final_page_count": closeReport.FinalPageCount,
+				"last_observed":    closeReport.LastObservedTarget,
+				"last_error":       closeReport.LastError,
+				"retry_policy":     closeReport.RetryPolicy,
+				"next_commands":    []string{"cdp pages --json", "cdp daemon health --json"},
+			}
+			if closeReport.Closed && (!waitGone || closeReport.TargetGone) {
+				return a.render(ctx, fmt.Sprintf("closed\t%s", target.TargetID), data)
+			}
+			code := "page_close_failed"
+			exit := ExitConnection
+			if errorsIsTimeout(ctx.Err()) || closeReport.TimedOut {
+				code = "timeout"
+				exit = ExitTimeout
+			}
+			return commandErrorWithData(
+				code,
+				"connection",
+				fmt.Sprintf("close target %s did not settle after %d attempt(s)", target.TargetID, closeReport.AttemptCount),
+				exit,
+				[]string{"cdp pages --json", "cdp page cleanup --close --force --json", "cdp daemon health --json"},
+				data,
+			)
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().BoolVar(&waitGone, "wait-gone", true, "wait until target listing no longer contains the page")
+	cmd.Flags().IntVar(&maxAttempts, "max-attempts", defaultPageCloseMaxAttempts, "maximum close attempts before reporting failure")
+	return cmd
 }
 
 type cleanupCandidate struct {
-	Target          cdp.TargetInfo `json:"target"`
-	VisibilityState string         `json:"visibility_state,omitempty"`
-	Hidden          bool           `json:"hidden,omitempty"`
-	Prerendering    bool           `json:"prerendering,omitempty"`
-	FirstSeen       string         `json:"first_seen,omitempty"`
-	LastSeen        string         `json:"last_seen,omitempty"`
-	IdleFor         string         `json:"idle_for,omitempty"`
-	EligibleAt      string         `json:"eligible_at,omitempty"`
-	Ready           bool           `json:"ready"`
-	KeepReason      string         `json:"keep_reason,omitempty"`
-	CloseError      string         `json:"close_error,omitempty"`
+	Target          cdp.TargetInfo   `json:"target"`
+	VisibilityState string           `json:"visibility_state,omitempty"`
+	Hidden          bool             `json:"hidden,omitempty"`
+	Prerendering    bool             `json:"prerendering,omitempty"`
+	FirstSeen       string           `json:"first_seen,omitempty"`
+	LastSeen        string           `json:"last_seen,omitempty"`
+	IdleFor         string           `json:"idle_for,omitempty"`
+	EligibleAt      string           `json:"eligible_at,omitempty"`
+	Ready           bool             `json:"ready"`
+	KeepReason      string           `json:"keep_reason,omitempty"`
+	CloseError      string           `json:"close_error,omitempty"`
+	TargetGone      bool             `json:"target_gone,omitempty"`
+	Close           *pageCloseReport `json:"close,omitempty"`
 }
 
 type pageCleanupRecord struct {
@@ -460,6 +552,9 @@ func (a *app) newPageCleanupCommand() *cobra.Command {
 	var workflowCreated bool
 	var force bool
 	var forceTarget string
+	waitGone := true
+	maxAttempts := defaultPageCloseMaxAttempts
+	closeConcurrency := defaultPageCleanupCloseConcurrency
 	var since time.Duration
 	var idleFor time.Duration
 	var max int
@@ -478,14 +573,18 @@ headless agent tabs that should be closed even when visible, selected, or
 attached.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if max < 0 || since < 0 {
-				return commandError("usage", "usage", "--max and --since must be non-negative", ExitUsage, []string{"cdp page cleanup --max 10 --json"})
+			if max < 0 || since < 0 || maxAttempts <= 0 || closeConcurrency <= 0 {
+				return commandError("usage", "usage", "--max and --since must be non-negative, and --max-attempts/--close-concurrency must be positive", ExitUsage, []string{"cdp page cleanup --max 10 --json"})
 			}
 			if strings.TrimSpace(forceTarget) != "" {
 				force = true
 				closePages = true
 			}
-			ctx, cancel := a.browserCommandContext(cmd)
+			timeoutFallback := 10 * time.Second
+			if closePages {
+				timeoutFallback = pageCloseDefaultTimeout(a.browserModeName(), maxAttempts)
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, timeoutFallback)
 			defer cancel()
 
 			client, closeClient, err := a.browserCDPClient(ctx)
@@ -518,7 +617,7 @@ attached.`,
 			effectiveMax, maxSource := pageCleanupEffectiveMax(browserMode, max, cmd.Flags().Changed("max"))
 			connectionName := a.connectionStateName(ctx)
 			selectedID := a.selectedPageID(ctx)
-			records, err := loadPageCleanupRecords(ctx, store.Dir)
+			records, stateWarnings, err := loadPageCleanupRecords(ctx, store.Dir)
 			if err != nil {
 				return commandError("internal", "internal", fmt.Sprintf("read page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
 			}
@@ -543,16 +642,28 @@ attached.`,
 			})
 			closed := []cleanupCandidate{}
 			if closePages {
+				closeReadyCleanupCandidates(ctx, client, candidates, pageCloseOptions{
+					WaitGone:      waitGone,
+					MaxAttempts:   maxAttempts,
+					AttemptWait:   pageCloseAttemptTimeout(browserMode),
+					PollInterval:  defaultPageClosePollInterval,
+					RetryBackoff:  defaultPageCloseRetryBackoff,
+					FinalPageList: false,
+				}, closeConcurrency)
 				for i := range candidates {
-					if !candidates[i].Ready {
+					if candidates[i].Close == nil {
 						continue
 					}
-					if err := cdp.CloseTargetWithClient(ctx, client, candidates[i].Target.TargetID); err != nil {
-						candidates[i].CloseError = err.Error()
+					if candidates[i].Close.Closed && (!waitGone || candidates[i].Close.TargetGone) {
+						delete(records, pageCleanupKey(browserMode, connectionName, candidates[i].Target.TargetID))
+						closed = append(closed, candidates[i])
 						continue
 					}
-					delete(records, pageCleanupKey(browserMode, connectionName, candidates[i].Target.TargetID))
-					closed = append(closed, candidates[i])
+					if candidates[i].Close.LastError != "" {
+						candidates[i].CloseError = candidates[i].Close.LastError
+					} else {
+						candidates[i].CloseError = "target close did not settle"
+					}
 				}
 			}
 
@@ -597,14 +708,18 @@ attached.`,
 					"workflow_created":  workflowCreated,
 					"force":             force,
 					"force_target":      strings.TrimSpace(forceTarget),
+					"wait_gone":         waitGone,
+					"max_attempts":      maxAttempts,
+					"close_concurrency": closeConcurrency,
 					"since":             durationString(since),
 					"max":               effectiveMax,
 					"max_source":        maxSource,
 					"max_unlimited":     effectiveMax == 0,
 					"selected_page":     selectedID,
+					"state_warnings":    stateWarnings,
 					"next_commands": []string{
 						"cdp page cleanup --json",
-						modeScopedCommand(browserMode, fmt.Sprintf("page cleanup --close --max %d --json", pageCleanupDefaultMaxForMode(browserMode))),
+						modeScopedCommand(browserMode, fmt.Sprintf("page cleanup --close --wait-gone --max %d --json", pageCleanupDefaultMaxForMode(browserMode))),
 						"cdp cron status --json",
 					},
 				},
@@ -621,6 +736,9 @@ attached.`,
 	cmd.Flags().BoolVar(&workflowCreated, "workflow-created", false, "close pages tagged as created by cdp workflows without waiting for --idle-for")
 	cmd.Flags().BoolVar(&force, "force", false, "allow cleanup to bypass selected, attached, and visible protections; with --target it also bypasses idle checks")
 	cmd.Flags().StringVar(&forceTarget, "target", "", "force-close a specific page target id or unique prefix when used with --force")
+	cmd.Flags().BoolVar(&waitGone, "wait-gone", true, "wait until each closed target disappears from target listing")
+	cmd.Flags().IntVar(&maxAttempts, "max-attempts", defaultPageCloseMaxAttempts, "maximum close attempts per target before reporting failure")
+	cmd.Flags().IntVar(&closeConcurrency, "close-concurrency", defaultPageCleanupCloseConcurrency, "maximum page targets to close concurrently")
 	cmd.Flags().DurationVar(&since, "since", 0, "only consider cleanup records first seen within this duration; 0 disables the filter")
 	cmd.Flags().DurationVar(&idleFor, "idle-for", 30*time.Minute, "minimum duration a page must remain inactive before --close can close it")
 	cmd.Flags().IntVar(&max, "max", 0, "maximum ready candidate pages to close or report; use 0 for no limit; default is 10 headed or 25 headless")
@@ -772,6 +890,255 @@ func countReadyCandidates(candidates []cleanupCandidate) int {
 	return count
 }
 
+type pageCloseOptions struct {
+	WaitGone      bool
+	MaxAttempts   int
+	AttemptWait   time.Duration
+	PollInterval  time.Duration
+	RetryBackoff  time.Duration
+	FinalPageList bool
+}
+
+type pageCloseReport struct {
+	Closed             bool               `json:"closed"`
+	TargetGone         bool               `json:"target_gone"`
+	AttemptCount       int                `json:"attempt_count"`
+	MaxAttempts        int                `json:"max_attempts"`
+	ElapsedMS          int64              `json:"elapsed_ms"`
+	FinalPageCount     int                `json:"final_page_count,omitempty"`
+	LastObservedTarget *cdp.TargetInfo    `json:"last_observed_target,omitempty"`
+	LastError          string             `json:"last_error,omitempty"`
+	TimedOut           bool               `json:"timed_out,omitempty"`
+	RetryPolicy        string             `json:"retry_policy"`
+	Attempts           []pageCloseAttempt `json:"attempts"`
+}
+
+type pageCloseAttempt struct {
+	Attempt            int             `json:"attempt"`
+	CloseSent          bool            `json:"close_sent"`
+	Closed             bool            `json:"closed"`
+	TargetGone         bool            `json:"target_gone"`
+	ElapsedMS          int64           `json:"elapsed_ms"`
+	PageCount          int             `json:"page_count,omitempty"`
+	LastObservedTarget *cdp.TargetInfo `json:"last_observed_target,omitempty"`
+	Error              string          `json:"error,omitempty"`
+	Retryable          bool            `json:"retryable,omitempty"`
+}
+
+func closeReadyCleanupCandidates(ctx context.Context, client cdp.CommandClient, candidates []cleanupCandidate, opts pageCloseOptions, concurrency int) {
+	if concurrency <= 0 {
+		concurrency = defaultPageCleanupCloseConcurrency
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i := range candidates {
+		if !candidates[i].Ready {
+			continue
+		}
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				candidates[i].CloseError = ctx.Err().Error()
+				return
+			case sem <- struct{}{}:
+			}
+			defer func() { <-sem }()
+			report := closePageTargetSettled(ctx, client, candidates[i].Target, opts)
+			candidates[i].Close = &report
+			candidates[i].TargetGone = report.TargetGone
+			if report.LastError != "" {
+				candidates[i].CloseError = report.LastError
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func closePageTargetSettled(ctx context.Context, client cdp.CommandClient, target cdp.TargetInfo, opts pageCloseOptions) pageCloseReport {
+	start := time.Now()
+	if opts.MaxAttempts <= 0 {
+		opts.MaxAttempts = 1
+	}
+	if opts.PollInterval <= 0 {
+		opts.PollInterval = defaultPageClosePollInterval
+	}
+	if opts.AttemptWait <= 0 {
+		opts.AttemptWait = pageCloseAttemptTimeout("")
+	}
+	report := pageCloseReport{
+		MaxAttempts: opts.MaxAttempts,
+		RetryPolicy: "target_gone",
+		Attempts:    []pageCloseAttempt{},
+	}
+	for attempt := 1; attempt <= opts.MaxAttempts; attempt++ {
+		attemptStart := time.Now()
+		attemptReport := pageCloseAttempt{Attempt: attempt}
+		err := cdp.CloseTargetWithClient(ctx, client, target.TargetID)
+		if err == nil {
+			attemptReport.CloseSent = true
+			attemptReport.Closed = true
+			report.Closed = true
+		} else if targetGoneError(err) {
+			attemptReport.Closed = true
+			attemptReport.TargetGone = true
+			attemptReport.Error = err.Error()
+			report.Closed = true
+			report.TargetGone = true
+			report.LastError = ""
+			attemptReport.ElapsedMS = time.Since(attemptStart).Milliseconds()
+			report.Attempts = append(report.Attempts, attemptReport)
+			report.AttemptCount = len(report.Attempts)
+			report.ElapsedMS = time.Since(start).Milliseconds()
+			return report
+		} else {
+			attemptReport.Error = err.Error()
+			attemptReport.Retryable = true
+			report.LastError = err.Error()
+		}
+
+		if opts.WaitGone {
+			waitCtx, cancel := context.WithTimeout(ctx, opts.AttemptWait)
+			gone, last, pageCount, waitErr := waitForTargetGone(waitCtx, client, target.TargetID, opts.PollInterval)
+			cancel()
+			attemptReport.TargetGone = gone
+			attemptReport.PageCount = pageCount
+			if last != nil {
+				attemptReport.LastObservedTarget = last
+				report.LastObservedTarget = last
+			}
+			if gone {
+				report.TargetGone = true
+				report.LastError = ""
+			} else if waitErr != nil {
+				attemptReport.Error = waitErr.Error()
+				attemptReport.Retryable = retryablePageCloseError(waitErr)
+				report.LastError = waitErr.Error()
+				if errors.Is(waitErr, context.DeadlineExceeded) {
+					report.TimedOut = true
+				}
+			}
+		}
+		attemptReport.ElapsedMS = time.Since(attemptStart).Milliseconds()
+		report.Attempts = append(report.Attempts, attemptReport)
+		report.AttemptCount = len(report.Attempts)
+		report.ElapsedMS = time.Since(start).Milliseconds()
+		if report.Closed && (!opts.WaitGone || report.TargetGone) {
+			break
+		}
+		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				report.TimedOut = true
+			}
+			break
+		}
+		if opts.RetryBackoff > 0 && attempt < opts.MaxAttempts {
+			select {
+			case <-ctx.Done():
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					report.TimedOut = true
+				}
+				return report
+			case <-time.After(opts.RetryBackoff):
+			}
+		}
+	}
+	if opts.FinalPageList {
+		if targets, err := cdp.ListTargetsWithClient(ctx, client); err == nil {
+			report.FinalPageCount = pageTargetCount(targets)
+		}
+	}
+	return report
+}
+
+func waitForTargetGone(ctx context.Context, client cdp.CommandClient, targetID string, poll time.Duration) (bool, *cdp.TargetInfo, int, error) {
+	if poll <= 0 {
+		poll = defaultPageClosePollInterval
+	}
+	for {
+		targets, err := cdp.ListTargetsWithClient(ctx, client)
+		if err != nil {
+			return false, nil, 0, err
+		}
+		pageCount := pageTargetCount(targets)
+		var last *cdp.TargetInfo
+		for _, target := range targets {
+			if target.TargetID == targetID {
+				copy := target
+				last = &copy
+				break
+			}
+		}
+		if last == nil {
+			return true, nil, pageCount, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, last, pageCount, ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+func pageTargetCount(targets []cdp.TargetInfo) int {
+	count := 0
+	for _, target := range targets {
+		if target.Type == "page" {
+			count++
+		}
+	}
+	return count
+}
+
+func pageCloseAttemptTimeout(browserMode string) time.Duration {
+	if cleanupBrowserMode(browserMode) == "headless" {
+		return 60 * time.Second
+	}
+	return 10 * time.Second
+}
+
+func pageCloseDefaultTimeout(browserMode string, maxAttempts int) time.Duration {
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	return time.Duration(maxAttempts) * pageCloseAttemptTimeout(browserMode)
+}
+
+func targetGoneError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, needle := range []string{"target not found", "no target", "cannot find target", "target closed", "target id is not found"} {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func retryablePageCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, needle := range []string{"closed network connection", "failed to get reader", "i/o timeout", "context canceled", "target closed", "target not found"} {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return true
+}
+
+func errorsIsTimeout(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
 func pageVisibility(ctx context.Context, client cdp.CommandClient, targetID string) (string, bool, bool) {
 	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, nil)
 	if err != nil {
@@ -820,30 +1187,33 @@ func pruneLegacyHeadlessCleanupRecords(records map[string]pageCleanupRecord, bro
 	}
 }
 
-func loadPageCleanupRecords(ctx context.Context, stateDir string) (map[string]pageCleanupRecord, error) {
+func loadPageCleanupRecords(ctx context.Context, stateDir string) (map[string]pageCleanupRecord, []string, error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	default:
 	}
 	path := pageCleanupStatePath(stateDir)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]pageCleanupRecord{}, nil
+			return map[string]pageCleanupRecord{}, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return map[string]pageCleanupRecord{}, []string{"page cleanup state was empty and was recovered as empty state"}, nil
 	}
 	var file pageCleanupState
 	if err := json.Unmarshal(b, &file); err != nil {
-		return nil, err
+		return map[string]pageCleanupRecord{}, []string{"page cleanup state was invalid JSON and was recovered as empty state"}, nil
 	}
 	records := map[string]pageCleanupRecord{}
 	for _, record := range file.Pages {
 		record.BrowserMode = cleanupBrowserMode(record.BrowserMode)
 		records[pageCleanupKey(record.BrowserMode, record.Connection, record.TargetID)] = record
 	}
-	return records, nil
+	return records, nil, nil
 }
 
 func savePageCleanupRecords(ctx context.Context, stateDir string, records map[string]pageCleanupRecord) error {
@@ -872,7 +1242,41 @@ func savePageCleanupRecords(ctx context.Context, stateDir string, records map[st
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(pageCleanupStatePath(stateDir), append(b, '\n'), 0o600)
+	return writeLocalFileAtomic(pageCleanupStatePath(stateDir), append(b, '\n'), 0o600)
+}
+
+func writeLocalFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func (a *app) selectedPageID(ctx context.Context) string {
@@ -1257,6 +1661,15 @@ func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClie
 	}
 	if strings.TrimSpace(createdBy) != "" {
 		if err := a.recordCreatedPageTarget(ctx, targetID, rawURL, createdBy, workflow); err != nil {
+			closeCtx, cancel := context.WithTimeout(ctx, pageCloseAttemptTimeout(a.browserModeName()))
+			_ = closePageTargetSettled(closeCtx, client, cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}, pageCloseOptions{
+				WaitGone:     true,
+				MaxAttempts:  defaultPageCloseMaxAttempts,
+				AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+				PollInterval: defaultPageClosePollInterval,
+				RetryBackoff: defaultPageCloseRetryBackoff,
+			})
+			cancel()
 			return "", commandError(
 				"internal",
 				"internal",
@@ -1276,7 +1689,7 @@ func (a *app) recordCreatedPageTarget(ctx context.Context, targetID, rawURL, cre
 	}
 	pageCleanupRecordsMu.Lock()
 	defer pageCleanupRecordsMu.Unlock()
-	records, err := loadPageCleanupRecords(ctx, store.Dir)
+	records, _, err := loadPageCleanupRecords(ctx, store.Dir)
 	if err != nil {
 		return err
 	}

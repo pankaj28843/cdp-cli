@@ -110,6 +110,7 @@ func commandExamples(path string) []string {
 		"cdp daemon health-check": {
 			"cdp --browser-mode headless daemon health-check --repair --json",
 			"cdp --browser-mode headless daemon health-check --repair --force --json",
+			"cdp --browser-mode headless daemon health-check --require-healthy --json",
 			"cdp --browser-mode headless daemon health-check --repair --failure-threshold 1 --json",
 			"cdp --browser-mode headless daemon health-check --out-dir tmp/headless-health --json",
 		},
@@ -235,11 +236,11 @@ func commandExamples(path string) []string {
 			"cdp page activate --target <target-id> --json",
 		},
 		"cdp page close": {
-			"cdp page close --target <target-id> --json",
+			"cdp page close --target <target-id> --wait-gone --max-attempts 3 --json",
 		},
 		"cdp page cleanup": {
 			"cdp --browser-mode headed page cleanup --json",
-			"cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --max 25 --json",
+			"cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25 --json",
 			"cdp page cleanup --workflow-created --close --include-url localhost --json",
 			"cdp page cleanup --target <target-id> --force --json",
 			"cdp page cleanup --close --max 10 --exclude-url localhost --json",

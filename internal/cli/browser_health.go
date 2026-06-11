@@ -129,7 +129,9 @@ func (a *app) enforceBrowserBudgetForNewPage(ctx context.Context, client cdp.Com
 func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, includeProcessInfo bool) map[string]any {
 	health := map[string]any{
 		"state":                      daemonHealthState(status),
+		"usable":                     false,
 		"reasons":                    []string{},
+		"degraded_reasons":           []string{},
 		"browser_mode":               status.BrowserMode,
 		"connection_mode":            status.ConnectionMode,
 		"browser_endpoint_reachable": status.BrowserProbe.State == "cdp_available",
@@ -161,7 +163,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 			health["next_commands"] = uniqueCommands(a.connectionRemediationCommands(), []string{modeScopedCommand(a.browserModeName(), "daemon logs --tail 50 --json")})
 		}
 		health["reasons"] = appendStringReasons(health["reasons"], daemonHealthState(status))
-		return health
+		return finalizeBrowserHealth(a.browserModeName(), health)
 	}
 	if !status.RuntimeSocketReady {
 		a.applyManagedBrowserHealth(health, status.Runtime)
@@ -171,7 +173,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 			health["state"] = "degraded"
 			health["code"] = headlessHealthFailureCode(status, health)
 		}
-		return health
+		return finalizeBrowserHealth(a.browserModeName(), health)
 	}
 	client := daemon.RuntimeClient{Runtime: *status.Runtime}
 	budgetOpts := a.browserResourceBudgetOptions()
@@ -183,10 +185,11 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		health["code"] = headlessHealthFailureCode(status, health)
 		health["reasons"] = appendStringReasons(health["reasons"], "target_list_failed")
 		health["target_list_error"] = err.Error()
-		return health
+		return finalizeBrowserHealth(a.browserModeName(), health)
 	}
 	health["browser_endpoint_reachable"] = true
 	health["daemon_rpc_ready"] = true
+	health["usable"] = true
 	applyBudgetToHealth(health, budget)
 	a.applyManagedBrowserHealth(health, status.Runtime)
 	if includeProcessInfo {
@@ -203,7 +206,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) && health["state"] != "healthy" {
 		health["code"] = headlessHealthFailureCode(status, health)
 	}
-	return health
+	return finalizeBrowserHealth(a.browserModeName(), health)
 }
 
 func (a *app) applyManagedBrowserHealth(health map[string]any, runtime *daemon.Runtime) {
@@ -370,10 +373,17 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 	if err != nil {
 		return out
 	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(entries[i].Event), "health_check_validated") {
+			entries = entries[i+1:]
+			break
+		}
+	}
 	warns := 0
 	errs := 0
 	lastDisconnect := ""
 	recentCrashes := []map[string]any{}
+	reasons := []string{}
 	for _, entry := range entries {
 		level := strings.ToLower(strings.TrimSpace(entry.Level))
 		if level == "warn" || level == "warning" {
@@ -388,12 +398,21 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 				lastDisconnect = strings.TrimSpace(entry.Time + " " + entry.Event + " " + entry.Message)
 			}
 		}
+		if strings.Contains(text, "failed to get reader") || strings.Contains(text, "failed to read json message") || strings.Contains(text, "use of closed network connection") {
+			reasons = appendStringReasons(reasons, "recent_keepalive_read_error")
+		}
 		if crash, ok := daemonCrashLogEntry(entry); ok {
 			recentCrashes = append(recentCrashes, crash)
 			if len(recentCrashes) > 5 {
 				recentCrashes = recentCrashes[1:]
 			}
 		}
+	}
+	if warns >= 3 {
+		reasons = appendStringReasons(reasons, "high_warning_count")
+	}
+	if len(recentCrashes) >= 2 {
+		reasons = appendStringReasons(reasons, "repeated_connection_churn")
 	}
 	out["recent_log_warnings"] = warns
 	out["recent_log_errors"] = errs
@@ -403,6 +422,9 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 	if len(recentCrashes) > 0 {
 		out["crash_capture"] = "daemon_logs"
 		out["recent_crashes"] = recentCrashes
+	}
+	if len(reasons) > 0 {
+		out["degraded_reasons"] = reasons
 	}
 	return out
 }
@@ -470,6 +492,33 @@ func applyBudgetToHealth(health map[string]any, budget cdp.BrowserResourceBudget
 	health["attached_page_count"] = budget.AttachedPageCount
 	health["resource_budget"] = budget
 	health["reasons"] = appendStringReasons(health["reasons"], budget.Reasons()...)
+}
+
+func finalizeBrowserHealth(browserMode string, health map[string]any) map[string]any {
+	degradedReasons := appendStringReasons(health["degraded_reasons"], toStringSlice(health["reasons"])...)
+	degradedReasons = appendStringReasons(degradedReasons, toStringSlice(health["degraded_reasons"])...)
+	health["degraded_reasons"] = degradedReasons
+	if len(degradedReasons) > 0 && health["state"] == "healthy" {
+		health["state"] = "degraded"
+	}
+	usable, _ := health["usable"].(bool)
+	if health["state"] == "healthy" {
+		health["usable"] = true
+		usable = true
+	}
+	if health["state"] == "degraded" {
+		urgency := "required"
+		command := modeScopedCommand(browserMode, "daemon keepalive --repair --json")
+		if usable {
+			urgency = "before_long_crawl"
+			command = modeScopedCommand(browserMode, "daemon health-check --repair --json")
+		}
+		health["recommended_repair"] = map[string]any{
+			"command": command,
+			"urgency": urgency,
+		}
+	}
+	return health
 }
 
 type browserProcessRow struct {
