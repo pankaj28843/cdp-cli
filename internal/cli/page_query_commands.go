@@ -141,6 +141,8 @@ type waitResult struct {
 	LastValue    json.RawMessage    `json:"last_value,omitempty"`
 	Condition    string             `json:"condition,omitempty"`
 	Evidence     map[string]any     `json:"evidence,omitempty"`
+	StopState    *stopStateResult   `json:"stop_state_result,omitempty"`
+	StopStateErr string             `json:"stop_state_error,omitempty"`
 	Locator      *locatorFindResult `json:"locator,omitempty"`
 	AttemptCount int                `json:"attempt_count,omitempty"`
 	Attempts     []waitEvalAttempt  `json:"attempts,omitempty"`
@@ -151,10 +153,12 @@ type waitResult struct {
 }
 
 type waitEvalOptions struct {
-	ReadyExpression string
-	ReadyField      string
-	OutDir          string
-	ArtifactPrefix  string
+	ReadyExpression   string
+	ReadyField        string
+	OutDir            string
+	ArtifactPrefix    string
+	ClassifyStopState bool
+	StopStateRules    []stopStateRule
 }
 
 type waitEvalAttempt struct {
@@ -777,6 +781,8 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	var readyField string
 	var outDir string
 	var artifactPrefix string
+	var classifyStopState bool
+	var ruleOpts stopStateRuleOptions
 	var retryOpts commandRetryOptions
 	cmd := &cobra.Command{
 		Use:   "eval <expression>",
@@ -790,14 +796,20 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait eval 'window.__rendered === true' --poll 250ms --json"})
 			}
 			readyOpts := waitEvalOptions{
-				ReadyExpression: strings.TrimSpace(readyExpr),
-				ReadyField:      strings.TrimSpace(readyField),
-				OutDir:          strings.TrimSpace(outDir),
-				ArtifactPrefix:  strings.TrimSpace(artifactPrefix),
+				ReadyExpression:   strings.TrimSpace(readyExpr),
+				ReadyField:        strings.TrimSpace(readyField),
+				OutDir:            strings.TrimSpace(outDir),
+				ArtifactPrefix:    strings.TrimSpace(artifactPrefix),
+				ClassifyStopState: classifyStopState,
 			}
 			if readyOpts.ReadyExpression != "" && readyOpts.ReadyField != "" {
 				return commandError("usage", "usage", "--ready-expr and --ready-field are mutually exclusive", ExitUsage, []string{"cdp wait eval 'window.__stageState()' --ready-expr 'value.ready === true' --json", "cdp wait eval 'window.__stageState()' --ready-field ready --json"})
 			}
+			stopRules, err := parseConfiguredStopStateRules(ruleOpts)
+			if err != nil {
+				return err
+			}
+			readyOpts.StopStateRules = stopRules
 			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
 				session, target, err := a.attachPageSession(attemptCtx, targetID, urlContains, titleContains)
 				if err != nil {
@@ -821,6 +833,11 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 					report["artifacts"] = wait.Artifacts
 				}
 				if err != nil {
+					var cmdErr *CommandError
+					if errors.As(err, &cmdErr) && cmdErr.Code == "stop_state" && wait.StopState != nil {
+						attachStopStateResultToReport(report, wait.StopState)
+						return commandRetryResult{Target: &target, Data: report}, commandErrorWithData("stop_state", wait.StopState.StopStateClass, fmt.Sprintf("wait eval %q stopped on %s for target %s", args[0], wait.StopState.StopState, session.TargetID), ExitCheckFailed, wait.StopState.Remediation, report)
+					}
 					if attemptCtx.Err() == nil && exitCode(err) != ExitTimeout {
 						return commandRetryResult{Target: &target, Data: report}, err
 					}
@@ -855,6 +872,8 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	cmd.Flags().StringVar(&readyField, "ready-field", "", "dot-separated field path in the expression result to treat as the readiness value")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "optional directory for per-attempt eval readiness artifacts")
 	cmd.Flags().StringVar(&artifactPrefix, "artifact-prefix", "wait-eval", "filename prefix for --out-dir attempt artifacts")
+	cmd.Flags().BoolVar(&classifyStopState, "classify-stop-state", false, "classify the current page for conservative stop states before returning a timeout")
+	addStopStateRuleFlags(cmd, &ruleOpts)
 	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd
 }
@@ -971,6 +990,17 @@ func waitForEvalCondition(ctx context.Context, session *cdp.PageSession, express
 		if result.Matched || result.Error != nil {
 			result.addEvidence()
 			return result, nil
+		}
+		if opts.ClassifyStopState {
+			stopState, err := classifyStopStateForSession(ctx, session, opts.StopStateRules)
+			if err != nil {
+				result.StopStateErr = err.Error()
+				last = result
+			} else if stopState.AgentShouldStop {
+				result.StopState = stopState
+				result.Evidence = evalWaitEvidence(result)
+				return result, commandError("stop_state", stopState.StopStateClass, fmt.Sprintf("classified stop state %s", stopState.StopState), ExitCheckFailed, stopState.Remediation)
+			}
 		}
 
 		timer := time.NewTimer(poll)

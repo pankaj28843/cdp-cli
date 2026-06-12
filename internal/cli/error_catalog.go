@@ -135,6 +135,28 @@ func errorCatalog() []errorInfo {
 			},
 		},
 		{
+			Code:     "stop_state",
+			Class:    "stop_state",
+			ExitCode: ExitCheckFailed,
+			Message:  "a conservative browser stop state was reached",
+			Meaning:  "A browser page reached a login, bot-check, access-denied, payment, personal-data, permission, or configured app-specific boundary. Agents should stop automated follow-up instead of trying to bypass it.",
+			RemediationCommands: []string{
+				"cdp stop-state classify --target <target-id> --json",
+				"cdp pages --json",
+			},
+		},
+		{
+			Code:     "invalid_stop_state_rule",
+			Class:    "usage",
+			ExitCode: ExitUsage,
+			Message:  "a stop-state rule is invalid",
+			Meaning:  "A configured stop-state rule was not in state=pattern form or supplied an invalid regular expression.",
+			RemediationCommands: []string{
+				"cdp stop-state classify --rule-text-contains app_block='Something went wrong' --json",
+				"cdp stop-state classify --rule-text-regex app_block='blocked|unavailable' --json",
+			},
+		},
+		{
 			Code:     "not_implemented",
 			Class:    "not_implemented",
 			ExitCode: ExitNotImplemented,

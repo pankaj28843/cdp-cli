@@ -265,6 +265,17 @@ func commandExamples(path string) []string {
 			"cdp open https://example.com --retry transient --max-attempts 3 --json",
 			"cdp open https://example.com --new-tab=false --target <target-id> --json",
 		},
+		"cdp stop-state": {
+			"cdp stop-state classify --text 'Sign in to continue' --json",
+			"cdp stop-state classify --target <target-id> --json",
+		},
+		"cdp stop-state classify": {
+			"cdp stop-state classify --text 'Sign in to continue' --json",
+			"cdp stop-state classify --title 'Access denied' --json",
+			"cdp stop-state classify --url https://www.google.com/sorry/index --json",
+			"cdp stop-state classify --text 'Oops, something went wrong' --rule-text-contains google_page_error='Something went wrong' --json",
+			"cdp stop-state classify --target <target-id> --json",
+		},
 		"cdp eval": {
 			"cdp eval 'document.title' --json",
 			"cdp eval 'document.title' --retry transient --max-attempts 3 --json",
@@ -383,6 +394,7 @@ func commandExamples(path string) []string {
 			"cdp wait eval 'document.readyState === \"complete\"' --poll 500ms --json",
 			"cdp wait eval 'window.__rendered === true' --retry transient --max-attempts 3 --json",
 			"cdp wait eval 'window.__stageState()' --ready-expr 'value.terminalCondition === \"fare_rows\"' --out-dir tmp/stage-ready --json",
+			"cdp wait eval 'window.__stageState()' --ready-field ready --classify-stop-state --rule-text-contains google_page_error='Something went wrong' --json",
 		},
 		"cdp wait load-state": {
 			"cdp wait load-state load --timeout 10s --json",

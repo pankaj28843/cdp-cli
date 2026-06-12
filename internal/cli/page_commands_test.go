@@ -1801,6 +1801,68 @@ func TestWaitEvalSemanticReadinessTimeoutIncludesLastValueJSON(t *testing.T) {
 	}
 }
 
+func TestWaitEvalClassifyStopStateJSON(t *testing.T) {
+	fakeDelayedWaitEvalAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"wait", "eval", "window.__semanticNeverReady",
+		"--ready-expr", `value.terminalCondition === "fare_rows"`,
+		"--classify-stop-state",
+		"--poll", "10ms",
+		"--timeout", "1s",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("wait eval stop-state exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK              bool     `json:"ok"`
+		Code            string   `json:"code"`
+		ErrClass        string   `json:"err_class"`
+		StopState       string   `json:"stop_state"`
+		StopStateClass  string   `json:"stop_state_class"`
+		AgentShouldStop bool     `json:"agent_should_stop"`
+		HumanRequired   bool     `json:"human_required"`
+		NextCommands    []string `json:"next_commands"`
+		Data            struct {
+			StopState      string `json:"stop_state"`
+			StopStateClass string `json:"stop_state_class"`
+			Wait           struct {
+				Kind      string `json:"kind"`
+				Matched   bool   `json:"matched"`
+				StopState struct {
+					StopState      string `json:"stop_state"`
+					StopStateClass string `json:"stop_state_class"`
+				} `json:"stop_state_result"`
+			} `json:"wait"`
+			StopStateResult struct {
+				StopState      string `json:"stop_state"`
+				StopStateClass string `json:"stop_state_class"`
+			} `json:"stop_state_result"`
+		} `json:"data"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait eval stop-state output is invalid JSON: %v; stdout=%s", err, out.String())
+	}
+	if got.OK || got.Code != "stop_state" || got.ErrClass != "auth" || got.StopState != "login_required" || got.StopStateClass != "auth" || !got.AgentShouldStop || !got.HumanRequired {
+		t.Fatalf("wait eval stop-state envelope = %+v, want lifted login-required stop state", got)
+	}
+	if got.Data.StopState != "login_required" || got.Data.StopStateClass != "auth" || got.Data.StopStateResult.StopState != "login_required" || got.Data.Wait.StopState.StopState != "login_required" || got.Data.Wait.Kind != "eval" || got.Data.Wait.Matched {
+		t.Fatalf("wait eval stop-state data = %+v, want stop evidence and not matched wait", got.Data)
+	}
+	if !containsString(got.NextCommands, "cdp --browser-mode headed daemon status --json") || !containsString(got.RemediationCommands, "cdp --browser-mode headed daemon status --json") {
+		t.Fatalf("wait eval stop-state commands next=%v remediation=%v, want safe auth diagnostics", got.NextCommands, got.RemediationCommands)
+	}
+}
+
 func TestWaitLoadStateJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

@@ -163,6 +163,21 @@ if [[ "$semantic_timeout_code" -ne 5 ]]; then
   exit 1
 fi
 jq -e '.ok == false and .code == "timeout" and .data.wait.kind == "eval" and .data.wait.ready == false and .data.wait.matched == false and .data.wait.last_value.terminalCondition == "loading" and .data.wait.attempt_count >= 1 and .data.wait.evidence.ready == false' <<<"$semantic_timeout_output" >/dev/null
+stop_url="$app_url/stop-login"
+"$binary" open "$stop_url" --reuse --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg url "$stop_url" '.ok == true and .reused == true and .created == false and (.page.url | contains($url))' >/dev/null
+set +e
+stop_state_wait_output="$("$binary" wait eval '({ready:false})' --ready-field ready --classify-stop-state --poll 100ms --timeout 2s --state-dir "$state_dir/cdp-state" --json)"
+stop_state_wait_code=$?
+set -e
+if [[ "$stop_state_wait_code" -ne 1 ]]; then
+  echo "wait eval stop-state exit code: $stop_state_wait_code" >&2
+  printf '%s\n' "$stop_state_wait_output" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "stop_state" and .stop_state == "login_required" and .stop_state_class == "auth" and .agent_should_stop == true and .human_required == true and .data.wait.kind == "eval" and .data.wait.matched == false and .data.stop_state_result.stop_state == "login_required" and (.next_commands | any(contains("daemon status"))) and (.remediation_commands | any(contains("daemon status")))' <<<"$stop_state_wait_output" >/dev/null
+"$binary" open "$app_url" --reuse --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg url "$app_url" '.ok == true and .reused == true and .created == false and (.page.url | contains($url))' >/dev/null
 "$binary" assert url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \
   | jq -e --arg url "$app_url" '.ok == true and .assertion.field == "url" and .assertion.passed == true and (.assertion.actual | contains($url)) and (.assertion.url | contains($url)) and .assertion.title == "cdp-cli demo app" and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and (.target.url | contains($url))' >/dev/null
 "$binary" wait url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \

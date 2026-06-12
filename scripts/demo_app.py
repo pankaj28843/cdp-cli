@@ -38,6 +38,9 @@ class DemoHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/popup"):
             self.wfile.write(POPUP_HTML.encode())
             return
+        if self.path.startswith("/stop-login"):
+            self.wfile.write(STOP_LOGIN_HTML.encode())
+            return
         self.wfile.write(DEMO_HTML.encode())
 
     def log_message(self, format, *args):
@@ -241,6 +244,21 @@ POPUP_HTML = """<!doctype html>
 <body>
   <main>
     <h1>Popup target ready</h1>
+  </main>
+</body>
+</html>
+"""
+
+STOP_LOGIN_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Example Login Required</title>
+</head>
+<body>
+  <main>
+    <h1>Sign in required</h1>
+    <p>Please sign in to continue.</p>
   </main>
 </body>
 </html>

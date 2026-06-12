@@ -132,6 +132,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newPagesCommand())
 	root.AddCommand(a.newPageCommand())
 	root.AddCommand(a.newOpenCommand())
+	root.AddCommand(a.newStopStateCommand())
 	root.AddCommand(a.newEvalCommand())
 	root.AddCommand(a.newFramesCommand())
 	root.AddCommand(a.newObserveCommand())
@@ -506,6 +507,12 @@ func liftErrorEnvelopeData(env *output.Envelope, data any) {
 	if value, ok := fields["resource_budget"]; ok {
 		env.ResourceBudget = value
 	}
+	if value, ok := fields["stop_state"].(string); ok {
+		env.StopState = value
+	}
+	if value, ok := fields["stop_state_class"].(string); ok {
+		env.StopStateClass = value
+	}
 }
 
 func stringSliceField(value any) ([]string, bool) {
@@ -547,6 +554,17 @@ func (a *app) renderError(ctx context.Context, err error) error {
 		RemediationCommands: cmdErr.RemediationCommands,
 	}
 	liftErrorEnvelopeData(&env, cmdErr.Data)
+	if stopState := stopStateForCommandError(cmdErr); stopState != nil {
+		env.StopState = stopState.StopState
+		env.StopStateClass = stopState.StopStateClass
+		env.AgentShouldStop = stopState.AgentShouldStop
+		env.HumanRequired = stopState.HumanRequired
+		env.HumanAction = stopState.HumanAction
+		env.NextCommands = stopState.NextCommands
+		if len(env.RemediationCommands) == 0 {
+			env.RemediationCommands = stopState.Remediation
+		}
+	}
 	if a.opts.autoConnect && cmdErr.Code == "permission_pending" {
 		env.RemediationCommands = permissionRemediationCommands()
 		env.HumanRequired = true

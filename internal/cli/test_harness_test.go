@@ -1105,6 +1105,18 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 	if strings.Contains(req.Expression, "prefers-color-scheme") {
 		return map[string]any{"result": map[string]any{"type": "string", "value": "dark"}}
 	}
+	if strings.Contains(req.Expression, `(document.body && document.body.innerText || "").slice(0, 20000)`) {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":   "https://example.test/login",
+					"title": "Example Login",
+					"text":  "Please sign in to continue.",
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_locator_find__") {
 		by := expressionStringArg(req.Expression, "const by = ")
 		query := expressionStringArg(req.Expression, "const query = ")

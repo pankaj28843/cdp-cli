@@ -61,6 +61,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"daemon-logs",
 		"pages",
 		"page-cleanup",
+		"stop-state-classify",
 		"protocol-examples",
 		"storage",
 		"workflow-rendered-extract",
@@ -90,6 +91,7 @@ func TestSchemaCatalogBrowserModeContracts(t *testing.T) {
 		"cron-migrate-pages-polling": {"action", "dry_run", "applied", "candidate_count", "managed_keepalive_installed", "next_commands"},
 		"scheduled-tasks":            {"details", "next_commands"},
 		"headless-security":          {"browser_mode", "details", "next_commands"},
+		"stop-state-classify":        {"stop_state", "stop_state_class", "agent_should_stop", "next_commands"},
 	}
 	for schemaName, fieldNames := range cases {
 		info, ok := catalog[schemaName]

@@ -32,6 +32,8 @@ type Envelope struct {
 	Artifacts           []Artifact `json:"artifacts,omitempty"`
 	NextCommands        []string   `json:"next_commands,omitempty"`
 	RemediationCommands []string   `json:"remediation_commands,omitempty"`
+	StopState           string     `json:"stop_state,omitempty"`
+	StopStateClass      string     `json:"stop_state_class,omitempty"`
 	HumanRequired       bool       `json:"human_required,omitempty"`
 	AgentShouldStop     bool       `json:"agent_should_stop,omitempty"`
 	HumanAction         string     `json:"human_action,omitempty"`
