@@ -516,6 +516,12 @@ type cleanupCandidate struct {
 	VisibilityState string           `json:"visibility_state,omitempty"`
 	Hidden          bool             `json:"hidden,omitempty"`
 	Prerendering    bool             `json:"prerendering,omitempty"`
+	RunID           string           `json:"run_id,omitempty"`
+	TaskID          string           `json:"task_id,omitempty"`
+	RootTaskID      string           `json:"root_task_id,omitempty"`
+	ParentTaskID    string           `json:"parent_task_id,omitempty"`
+	CreatedBy       string           `json:"created_by,omitempty"`
+	Workflow        string           `json:"workflow,omitempty"`
 	FirstSeen       string           `json:"first_seen,omitempty"`
 	LastSeen        string           `json:"last_seen,omitempty"`
 	IdleFor         string           `json:"idle_for,omitempty"`
@@ -528,15 +534,19 @@ type cleanupCandidate struct {
 }
 
 type pageCleanupRecord struct {
-	BrowserMode string `json:"browser_mode,omitempty"`
-	Connection  string `json:"connection"`
-	TargetID    string `json:"target_id"`
-	URL         string `json:"url,omitempty"`
-	Title       string `json:"title,omitempty"`
-	CreatedBy   string `json:"created_by,omitempty"`
-	Workflow    string `json:"workflow,omitempty"`
-	FirstSeen   string `json:"first_seen"`
-	LastSeen    string `json:"last_seen"`
+	BrowserMode  string `json:"browser_mode,omitempty"`
+	Connection   string `json:"connection"`
+	TargetID     string `json:"target_id"`
+	URL          string `json:"url,omitempty"`
+	Title        string `json:"title,omitempty"`
+	CreatedBy    string `json:"created_by,omitempty"`
+	Workflow     string `json:"workflow,omitempty"`
+	RunID        string `json:"run_id,omitempty"`
+	TaskID       string `json:"task_id,omitempty"`
+	RootTaskID   string `json:"root_task_id,omitempty"`
+	ParentTaskID string `json:"parent_task_id,omitempty"`
+	FirstSeen    string `json:"first_seen"`
+	LastSeen     string `json:"last_seen"`
 }
 
 type pageCleanupState struct {
@@ -550,6 +560,7 @@ type pageCleanupRunOptions struct {
 	ExcludeURL       string
 	CreatedBy        string
 	WorkflowCreated  bool
+	OwnershipFilter  targetOwnershipFilter
 	Force            bool
 	ForceTarget      string
 	WaitGone         bool
@@ -568,6 +579,7 @@ func (a *app) newPageCleanupCommand() *cobra.Command {
 	var excludeURL string
 	var createdBy string
 	var workflowCreated bool
+	var ownershipFilter targetOwnershipFilter
 	var force bool
 	var forceTarget string
 	waitGone := true
@@ -612,6 +624,7 @@ attached.`,
 				ExcludeURL:       excludeURL,
 				CreatedBy:        createdBy,
 				WorkflowCreated:  workflowCreated,
+				OwnershipFilter:  normalizeTargetOwnershipFilter(ownershipFilter),
 				Force:            force,
 				ForceTarget:      forceTarget,
 				WaitGone:         waitGone,
@@ -634,6 +647,7 @@ attached.`,
 	cmd.Flags().StringVar(&excludeURL, "exclude-url", "", "exclude pages whose URL contains this text")
 	cmd.Flags().StringVar(&createdBy, "created-by", "", "only consider pages tagged with this creator, such as cdp")
 	cmd.Flags().BoolVar(&workflowCreated, "workflow-created", false, "close pages tagged as created by cdp workflows without waiting for --idle-for")
+	addTargetOwnershipFilterFlags(cmd, &ownershipFilter)
 	cmd.Flags().BoolVar(&force, "force", false, "allow cleanup to bypass selected, attached, and visible protections; with --target it also bypasses idle checks")
 	cmd.Flags().StringVar(&forceTarget, "target", "", "force-close a specific page target id or unique prefix when used with --force")
 	cmd.Flags().BoolVar(&waitGone, "wait-gone", true, "wait until each closed target disappears from target listing")
@@ -681,6 +695,7 @@ func (a *app) runPageCleanup(ctx context.Context, opts pageCleanupRunOptions) (s
 		return "", nil, commandError("internal", "internal", fmt.Sprintf("read page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
 	}
 	pruneLegacyHeadlessCleanupRecords(records, browserMode, connectionName)
+	recordCountBefore := len(records)
 	now := time.Now().UTC()
 	candidates := cleanupCandidates(ctx, client, targets, cleanupOptions{
 		BrowserMode:     browserMode,
@@ -691,6 +706,7 @@ func (a *app) runPageCleanup(ctx context.Context, opts pageCleanupRunOptions) (s
 		ExcludeURL:      opts.ExcludeURL,
 		CreatedBy:       opts.CreatedBy,
 		WorkflowCreated: opts.WorkflowCreated,
+		OwnershipFilter: opts.OwnershipFilter,
 		Force:           opts.Force,
 		ForceTarget:     opts.ForceTarget,
 		Since:           opts.Since,
@@ -750,32 +766,39 @@ func (a *app) runPageCleanup(ctx context.Context, opts pageCleanupRunOptions) (s
 	return strings.Join(lines, "\n"), map[string]any{
 		"ok": true,
 		"cleanup": map[string]any{
-			"browser_mode":      browserMode,
-			"dry_run":           !opts.Close,
-			"close":             opts.Close,
-			"candidate_count":   readyCount,
-			"ready_count":       readyCount,
-			"would_close_count": wouldCloseCount,
-			"close_required":    !opts.Close && readyCount > 0,
-			"closed_count":      len(closed),
-			"idle_for":          opts.IdleFor.String(),
-			"state_path":        pageCleanupStatePath(store.Dir),
-			"include_attached":  opts.IncludeAttached,
-			"include_url":       strings.TrimSpace(opts.IncludeURL),
-			"exclude_url":       strings.TrimSpace(opts.ExcludeURL),
-			"created_by":        strings.TrimSpace(opts.CreatedBy),
-			"workflow_created":  opts.WorkflowCreated,
-			"force":             opts.Force,
-			"force_target":      strings.TrimSpace(opts.ForceTarget),
-			"wait_gone":         opts.WaitGone,
-			"max_attempts":      opts.MaxAttempts,
-			"close_concurrency": opts.CloseConcurrency,
-			"since":             durationString(opts.Since),
-			"max":               effectiveMax,
-			"max_source":        maxSource,
-			"max_unlimited":     effectiveMax == 0,
-			"selected_page":     selectedID,
-			"state_warnings":    stateWarnings,
+			"browser_mode":        browserMode,
+			"dry_run":             !opts.Close,
+			"close":               opts.Close,
+			"candidate_count":     readyCount,
+			"ready_count":         readyCount,
+			"would_close_count":   wouldCloseCount,
+			"close_required":      !opts.Close && readyCount > 0,
+			"closed_count":        len(closed),
+			"idle_for":            opts.IdleFor.String(),
+			"state_path":          pageCleanupStatePath(store.Dir),
+			"include_attached":    opts.IncludeAttached,
+			"include_url":         strings.TrimSpace(opts.IncludeURL),
+			"exclude_url":         strings.TrimSpace(opts.ExcludeURL),
+			"created_by":          strings.TrimSpace(opts.CreatedBy),
+			"workflow_created":    opts.WorkflowCreated,
+			"run_id":              strings.TrimSpace(opts.OwnershipFilter.RunID),
+			"task_id":             strings.TrimSpace(opts.OwnershipFilter.TaskID),
+			"root_task_id":        strings.TrimSpace(opts.OwnershipFilter.RootTaskID),
+			"task_scope":          opts.OwnershipFilter.isSet(),
+			"target_task_ids":     targetTaskIDsForCandidates(candidates),
+			"record_count_before": recordCountBefore,
+			"record_count_after":  len(records),
+			"force":               opts.Force,
+			"force_target":        strings.TrimSpace(opts.ForceTarget),
+			"wait_gone":           opts.WaitGone,
+			"max_attempts":        opts.MaxAttempts,
+			"close_concurrency":   opts.CloseConcurrency,
+			"since":               durationString(opts.Since),
+			"max":                 effectiveMax,
+			"max_source":          maxSource,
+			"max_unlimited":       effectiveMax == 0,
+			"selected_page":       selectedID,
+			"state_warnings":      stateWarnings,
 			"next_commands": []string{
 				"cdp page cleanup --json",
 				modeScopedCommand(browserMode, fmt.Sprintf("page cleanup --close --wait-gone --max %d --json", pageCleanupDefaultMaxForMode(browserMode))),
@@ -810,6 +833,7 @@ type cleanupOptions struct {
 	ExcludeURL      string
 	CreatedBy       string
 	WorkflowCreated bool
+	OwnershipFilter targetOwnershipFilter
 	Force           bool
 	ForceTarget     string
 	Since           time.Duration
@@ -841,6 +865,11 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 		record, hasRecord := opts.Records[key]
 		if forceTarget != "" && target.TargetID != forceTarget && !strings.HasPrefix(target.TargetID, forceTarget) {
 			continue
+		}
+		if opts.OwnershipFilter.isSet() {
+			if !hasRecord || !opts.OwnershipFilter.matches(record) {
+				continue
+			}
 		}
 		if createdBy != "" && strings.ToLower(record.CreatedBy) != createdBy {
 			continue
@@ -882,6 +911,9 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 	}
 	for key := range opts.Records {
 		if strings.HasPrefix(key, pageCleanupScopePrefix(opts.BrowserMode, opts.Connection)) && !seen[key] {
+			if opts.OwnershipFilter.isSet() && !opts.OwnershipFilter.matches(opts.Records[key]) {
+				continue
+			}
 			delete(opts.Records, key)
 		}
 	}
@@ -890,7 +922,7 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 
 func updateCleanupRecord(candidate *cleanupCandidate, opts cleanupOptions, key string) {
 	record, ok := opts.Records[key]
-	if !ok || candidate.KeepReason != "" {
+	if !ok {
 		record = pageCleanupRecord{
 			BrowserMode: cleanupBrowserMode(opts.BrowserMode),
 			Connection:  opts.Connection,
@@ -899,12 +931,20 @@ func updateCleanupRecord(candidate *cleanupCandidate, opts cleanupOptions, key s
 			Title:       candidate.Target.Title,
 			FirstSeen:   opts.Now.Format(time.RFC3339),
 		}
+	} else if candidate.KeepReason != "" {
+		record.FirstSeen = opts.Now.Format(time.RFC3339)
 	}
 	record.BrowserMode = cleanupBrowserMode(opts.BrowserMode)
 	record.LastSeen = opts.Now.Format(time.RFC3339)
 	record.URL = candidate.Target.URL
 	record.Title = candidate.Target.Title
 	opts.Records[key] = record
+	candidate.RunID = record.RunID
+	candidate.TaskID = record.TaskID
+	candidate.RootTaskID = record.RootTaskID
+	candidate.ParentTaskID = record.ParentTaskID
+	candidate.CreatedBy = record.CreatedBy
+	candidate.Workflow = record.Workflow
 	candidate.FirstSeen = record.FirstSeen
 	candidate.LastSeen = record.LastSeen
 	firstSeen, err := time.Parse(time.RFC3339, record.FirstSeen)
@@ -1680,14 +1720,14 @@ func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) 
 }
 
 func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, rawURL string) (string, error) {
-	return a.createPageTargetTagged(ctx, client, rawURL, "cdp", "")
+	return a.createPageTargetWithOwnership(ctx, client, rawURL, targetOwnershipMetadata{CreatedBy: "cdp"})
 }
 
 func (a *app) createWorkflowPageTarget(ctx context.Context, client cdp.CommandClient, rawURL, workflow string) (string, error) {
-	return a.createPageTargetTagged(ctx, client, rawURL, "cdp", workflow)
+	return a.createPageTargetWithOwnership(ctx, client, rawURL, targetOwnershipMetadata{CreatedBy: "cdp", Workflow: workflow})
 }
 
-func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClient, rawURL, createdBy, workflow string) (string, error) {
+func (a *app) createPageTargetWithOwnership(ctx context.Context, client cdp.CommandClient, rawURL string, ownership targetOwnershipMetadata) (string, error) {
 	if _, err := a.enforceBrowserBudgetForNewPage(ctx, client); err != nil {
 		return "", err
 	}
@@ -1701,8 +1741,8 @@ func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClie
 			[]string{"cdp doctor --json", "cdp pages --json"},
 		)
 	}
-	if strings.TrimSpace(createdBy) != "" {
-		if err := a.recordCreatedPageTarget(ctx, targetID, rawURL, createdBy, workflow); err != nil {
+	if strings.TrimSpace(ownership.CreatedBy) != "" || ownership.hasRunOrTask() {
+		if err := a.recordPageTargetOwnership(ctx, targetID, rawURL, ownership); err != nil {
 			closeCtx, cancel := context.WithTimeout(ctx, pageCloseAttemptTimeout(a.browserModeName()))
 			closeReport := closePageTargetSettled(closeCtx, client, cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}, pageCloseOptions{
 				WaitGone:     true,
@@ -1725,6 +1765,7 @@ func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClie
 					"recovered_target": recoveredTarget,
 					"record_error":     err.Error(),
 					"close":            closeReport,
+					"ownership":        ownership.summary(targetID),
 				},
 			)
 		}
@@ -1732,7 +1773,7 @@ func (a *app) createPageTargetTagged(ctx context.Context, client cdp.CommandClie
 	return targetID, nil
 }
 
-func (a *app) recordCreatedPageTarget(ctx context.Context, targetID, rawURL, createdBy, workflow string) error {
+func (a *app) recordPageTargetOwnership(ctx context.Context, targetID, rawURL string, ownership targetOwnershipMetadata) error {
 	store, err := a.stateStore()
 	if err != nil {
 		return err
@@ -1747,7 +1788,20 @@ func (a *app) recordCreatedPageTarget(ctx context.Context, targetID, rawURL, cre
 	browserMode := a.browserModeName()
 	connection := a.connectionStateName(ctx)
 	key := pageCleanupKey(browserMode, connection, targetID)
-	records[key] = pageCleanupRecord{BrowserMode: cleanupBrowserMode(browserMode), Connection: connection, TargetID: targetID, URL: rawURL, CreatedBy: createdBy, Workflow: workflow, FirstSeen: now, LastSeen: now}
+	records[key] = pageCleanupRecord{
+		BrowserMode:  cleanupBrowserMode(browserMode),
+		Connection:   connection,
+		TargetID:     targetID,
+		URL:          rawURL,
+		CreatedBy:    ownership.CreatedBy,
+		Workflow:     ownership.Workflow,
+		RunID:        ownership.RunID,
+		TaskID:       ownership.TaskID,
+		RootTaskID:   ownership.RootTaskID,
+		ParentTaskID: ownership.ParentTaskID,
+		FirstSeen:    now,
+		LastSeen:     now,
+	}
 	return savePageCleanupRecords(ctx, store.Dir, records)
 }
 

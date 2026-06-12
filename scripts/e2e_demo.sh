@@ -132,6 +132,13 @@ fi
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
+task_open_output="$("$binary" open "$app_url?cdp_task_owned=1" --run-id demo-run --task-id demo-child --root-task-id demo-root --parent-task-id demo-root --state-dir "$state_dir/cdp-state" --json)"
+jq -e '.ok == true and .run_id == "demo-run" and .task_id == "demo-child" and .root_task_id == "demo-root" and .parent_task_id == "demo-root" and .created_by == "cdp" and (.target_task_ids[.page.id] == "demo-child")' <<<"$task_open_output" >/dev/null
+task_target_id="$(jq -r '.page.id' <<<"$task_open_output")"
+"$binary" page cleanup --root-task-id demo-root --idle-for 0s --close --force --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$task_target_id" '.ok == true and .cleanup.task_scope == true and .cleanup.root_task_id == "demo-root" and .cleanup.closed_count == 1 and (.cleanup.target_task_ids[$id] == "demo-child") and (.closed[] | select(.target.targetId == $id and .task_id == "demo-child"))' >/dev/null
+"$binary" pages --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$task_target_id" '.ok == true and all(.pages[]; .id != $id)' >/dev/null
 "$binary" wait text "Ready from demo app" --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
 "$binary" assert url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \

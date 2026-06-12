@@ -251,12 +251,14 @@ func commandExamples(path string) []string {
 		"cdp page cleanup": {
 			"cdp --browser-mode headed page cleanup --json",
 			"cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25 --json",
+			"cdp page cleanup --root-task-id research-run --close --force --json",
 			"cdp page cleanup --workflow-created --close --include-url localhost --json",
 			"cdp page cleanup --target <target-id> --force --json",
 			"cdp page cleanup --close --max 10 --exclude-url localhost --json",
 		},
 		"cdp open": {
 			"cdp open https://example.com --json",
+			"cdp open https://example.com --run-id run-20260612 --task-id search-01 --root-task-id search --json",
 			"cdp open https://example.com --retry transient --max-attempts 3 --json",
 			"cdp open https://example.com --new-tab=false --target <target-id> --json",
 		},

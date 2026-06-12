@@ -1811,6 +1811,192 @@ func TestOpenJSON(t *testing.T) {
 	}
 }
 
+func TestOpenRecordsRootAndChildTaskOwnershipJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/root", "--run-id", "run-1", "--task-id", "task-root", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("root open exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var root struct {
+		RunID         string            `json:"run_id"`
+		TaskID        string            `json:"task_id"`
+		RootTaskID    string            `json:"root_task_id"`
+		ParentTaskID  string            `json:"parent_task_id"`
+		CreatedBy     string            `json:"created_by"`
+		TargetTaskIDs map[string]string `json:"target_task_ids"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &root); err != nil {
+		t.Fatalf("root open output is invalid JSON: %v", err)
+	}
+	if root.RunID != "run-1" || root.TaskID != "task-root" || root.RootTaskID != "task-root" || root.ParentTaskID != "" || root.CreatedBy != "cdp" || root.TargetTaskIDs["created-page"] != "task-root" {
+		t.Fatalf("root ownership = %+v, want root task ownership for created-page", root)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"open", "https://example.test/child", "--run-id", "run-1", "--task-id", "task-child", "--root-task-id", "task-root", "--parent-task-id", "task-root", "--created-by", "gflights", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("child open exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var child struct {
+		RunID         string            `json:"run_id"`
+		TaskID        string            `json:"task_id"`
+		RootTaskID    string            `json:"root_task_id"`
+		ParentTaskID  string            `json:"parent_task_id"`
+		CreatedBy     string            `json:"created_by"`
+		TargetTaskIDs map[string]string `json:"target_task_ids"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &child); err != nil {
+		t.Fatalf("child open output is invalid JSON: %v", err)
+	}
+	if child.RunID != "run-1" || child.TaskID != "task-child" || child.RootTaskID != "task-root" || child.ParentTaskID != "task-root" || child.CreatedBy != "gflights" || child.TargetTaskIDs["created-page-2"] != "task-child" {
+		t.Fatalf("child ownership = %+v, want child task ownership for created-page-2", child)
+	}
+
+	b, err := os.ReadFile(filepath.Join(stateDir, "page-cleanup.json"))
+	if err != nil {
+		t.Fatalf("read page cleanup state: %v", err)
+	}
+	var saved struct {
+		Pages []struct {
+			BrowserMode  string `json:"browser_mode"`
+			Connection   string `json:"connection"`
+			TargetID     string `json:"target_id"`
+			CreatedBy    string `json:"created_by"`
+			RunID        string `json:"run_id"`
+			TaskID       string `json:"task_id"`
+			RootTaskID   string `json:"root_task_id"`
+			ParentTaskID string `json:"parent_task_id"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(b, &saved); err != nil {
+		t.Fatalf("page cleanup state is invalid JSON: %v", err)
+	}
+	if len(saved.Pages) != 2 {
+		t.Fatalf("saved pages = %+v, want root and child ownership records", saved.Pages)
+	}
+	if saved.Pages[0].BrowserMode != "headed" || saved.Pages[0].Connection != "default" || saved.Pages[0].TargetID != "created-page" || saved.Pages[0].RunID != "run-1" || saved.Pages[0].TaskID != "task-root" || saved.Pages[0].RootTaskID != "task-root" {
+		t.Fatalf("root saved ownership = %+v, want mode-scoped root task record", saved.Pages[0])
+	}
+	if saved.Pages[1].BrowserMode != "headed" || saved.Pages[1].Connection != "default" || saved.Pages[1].TargetID != "created-page-2" || saved.Pages[1].CreatedBy != "gflights" || saved.Pages[1].RunID != "run-1" || saved.Pages[1].TaskID != "task-child" || saved.Pages[1].RootTaskID != "task-root" || saved.Pages[1].ParentTaskID != "task-root" {
+		t.Fatalf("child saved ownership = %+v, want mode-scoped child task record", saved.Pages[1])
+	}
+}
+
+func TestPageCleanupRootTaskClosesOnlyOwnedTargetsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	commands := [][]string{
+		{"open", "https://example.test/root", "--run-id", "run-1", "--task-id", "task-root", "--json"},
+		{"open", "https://example.test/child", "--run-id", "run-1", "--task-id", "task-child", "--root-task-id", "task-root", "--parent-task-id", "task-root", "--json"},
+		{"open", "https://example.test/unowned", "--json"},
+	}
+	for _, args := range commands {
+		var out, errOut bytes.Buffer
+		code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+		if code != cli.ExitOK {
+			t.Fatalf("%v exit code = %d, want %d; stdout=%s stderr=%s", args, code, cli.ExitOK, out.String(), errOut.String())
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "cleanup", "--root-task-id", "task-root", "--idle-for", "0s", "--close", "--force", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("task cleanup exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		Cleanup struct {
+			TaskScope         bool              `json:"task_scope"`
+			RootTaskID        string            `json:"root_task_id"`
+			ClosedCount       int               `json:"closed_count"`
+			RecordCountBefore int               `json:"record_count_before"`
+			RecordCountAfter  int               `json:"record_count_after"`
+			TargetTaskIDs     map[string]string `json:"target_task_ids"`
+		} `json:"cleanup"`
+		Closed []struct {
+			TaskID string `json:"task_id"`
+			Target struct {
+				ID string `json:"targetId"`
+			} `json:"target"`
+		} `json:"closed"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("task cleanup output is invalid JSON: %v", err)
+	}
+	if !got.Cleanup.TaskScope || got.Cleanup.RootTaskID != "task-root" || got.Cleanup.ClosedCount != 2 || got.Cleanup.RecordCountBefore != 3 || got.Cleanup.RecordCountAfter != 1 {
+		t.Fatalf("task cleanup summary = %+v, want two owned targets closed and unowned record preserved", got.Cleanup)
+	}
+	if got.Cleanup.TargetTaskIDs["created-page"] != "task-root" || got.Cleanup.TargetTaskIDs["created-page-2"] != "task-child" {
+		t.Fatalf("task cleanup target map = %+v, want root and child target ownership", got.Cleanup.TargetTaskIDs)
+	}
+	if len(got.Closed) != 2 || got.Closed[0].Target.ID != "created-page" || got.Closed[0].TaskID != "task-root" || got.Closed[1].Target.ID != "created-page-2" || got.Closed[1].TaskID != "task-child" {
+		t.Fatalf("closed task targets = %+v, want root and child targets only", got.Closed)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages after task cleanup exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var pages struct {
+		Pages []struct {
+			ID string `json:"id"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &pages); err != nil {
+		t.Fatalf("pages output is invalid JSON: %v", err)
+	}
+	if len(pages.Pages) != 1 || pages.Pages[0].ID != "created-page-3" {
+		t.Fatalf("remaining pages = %+v, want only unowned target left", pages.Pages)
+	}
+}
+
+func TestPageCleanupTaskScopeDoesNotInferMissingOwnershipJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-unrecorded", "type": "page", "title": "Unrecorded", "url": "https://example.test/unrecorded", "attached": false},
+	})
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll state dir returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "page-cleanup.json"), nil, 0o600); err != nil {
+		t.Fatalf("write empty cleanup state: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"page", "cleanup", "--task-id", "task-missing", "--idle-for", "0s", "--force", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("task cleanup missing-state exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		Cleanup struct {
+			TaskScope     bool     `json:"task_scope"`
+			TaskID        string   `json:"task_id"`
+			ReadyCount    int      `json:"ready_count"`
+			StateWarnings []string `json:"state_warnings"`
+		} `json:"cleanup"`
+		Candidates []struct {
+			Target struct {
+				ID string `json:"targetId"`
+			} `json:"target"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("task cleanup output is invalid JSON: %v", err)
+	}
+	if !got.Cleanup.TaskScope || got.Cleanup.TaskID != "task-missing" || got.Cleanup.ReadyCount != 0 || len(got.Candidates) != 0 || len(got.Cleanup.StateWarnings) != 1 || !strings.Contains(got.Cleanup.StateWarnings[0], "empty") {
+		t.Fatalf("task cleanup missing-state = %+v candidates=%+v, want no inferred ownership and empty-state warning", got.Cleanup, got.Candidates)
+	}
+}
+
 func TestOpenRetriesCreateTargetRaceJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "seed-page", "type": "page", "title": "Seed", "url": "about:blank", "attached": false, "fakeCreateTargetErrorOnce": true},

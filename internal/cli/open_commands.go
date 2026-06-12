@@ -15,6 +15,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 	var titleContains string
 	var newTab bool
 	var retryOpts commandRetryOptions
+	var ownershipFlags targetOwnershipMetadata
 	cmd := &cobra.Command{
 		Use:   "open <url>",
 		Short: "Open a URL in a new tab or navigate a selected page",
@@ -24,6 +25,11 @@ func (a *app) newOpenCommand() *cobra.Command {
 			defer cancel()
 
 			rawURL := strings.TrimSpace(args[0])
+			ownership, err := normalizeTargetOwnership(ownershipFlags, "cdp")
+			if err != nil {
+				return err
+			}
+			recordNavigatedOwnership := ownership.hasRunOrTask() || cmd.Flags().Changed("created-by")
 			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
 				client, closeClient, err := a.browserCDPClient(attemptCtx)
 				if err != nil {
@@ -46,7 +52,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 				frameID := ""
 				target := cdp.TargetInfo{Type: "page", URL: rawURL}
 				if newTab || (targetID == "" && urlContains == "") {
-					createdID, err := a.createPageTarget(attemptCtx, client, rawURL)
+					createdID, err := a.createPageTargetWithOwnership(attemptCtx, client, rawURL, ownership)
 					if err != nil {
 						if createdID != "" {
 							target.TargetID = createdID
@@ -85,19 +91,32 @@ func (a *app) newOpenCommand() *cobra.Command {
 					target = selected
 					target.URL = rawURL
 					pageAction = "navigated"
+					if recordNavigatedOwnership {
+						if err := a.recordPageTargetOwnership(attemptCtx, target.TargetID, rawURL, ownership); err != nil {
+							return commandRetryResult{Target: &target}, commandError(
+								"page_record_failed",
+								"internal",
+								fmt.Sprintf("record task-owned page %s: %v", target.TargetID, err),
+								ExitInternal,
+								[]string{"cdp page cleanup --json", "cdp daemon status --json"},
+							)
+						}
+					}
 				}
 
 				page := pageRow(target)
 				page["action"] = pageAction
 				page["frame_id"] = frameID
+				data := map[string]any{
+					"ok":     true,
+					"action": pageAction,
+					"page":   page,
+				}
+				ownership.addTo(data, target.TargetID)
 				return commandRetryResult{
 					Human:  fmt.Sprintf("%s\t%s\t%s", pageAction, target.TargetID, rawURL),
 					Target: &target,
-					Data: map[string]any{
-						"ok":     true,
-						"action": pageAction,
-						"page":   page,
-					},
+					Data:   data,
 				}, nil
 			})
 			if err != nil {
@@ -111,6 +130,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "navigate a page target by exact id or unique prefix when --new-tab=false")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "navigate the first page whose URL contains this text when --new-tab=false")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "navigate the first page whose title contains this text when --new-tab=false")
+	addTargetOwnershipFlags(cmd, &ownershipFlags, true)
 	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd
 }
