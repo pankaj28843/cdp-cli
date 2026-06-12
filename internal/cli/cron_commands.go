@@ -1285,7 +1285,7 @@ func cronFlockOwnerFromProcLocks(path string) (cronFlockOwner, bool) {
 	if !ok {
 		return cronFlockOwner{}, false
 	}
-	device := procLocksDevice(stat.Dev)
+	device := procLocksDevice(uint64(stat.Dev))
 	inode := strconv.FormatUint(stat.Ino, 10)
 	file, err := os.Open("/proc/locks")
 	if err != nil {

@@ -1,4 +1,4 @@
-.PHONY: build clean cron-install cron-remove cron-show e2e e2e-demo e2e-demo-installed e2e-installed fmt fmt-check install leak-check test verify vet
+.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
 PREFIX ?= $(HOME)/.local
@@ -6,6 +6,10 @@ PREFIX ?= $(HOME)/.local
 build:
 	mkdir -p bin
 	go build -o $(BINARY) ./cmd/cdp
+
+cross-build:
+	mkdir -p bin
+	GOOS=darwin GOARCH=arm64 go build -o bin/cdp-darwin-arm64 ./cmd/cdp
 
 test:
 	go test ./...
@@ -65,7 +69,7 @@ cron-show:
 cron-remove:
 	cdp cron remove --json
 
-verify: fmt-check test vet build e2e leak-check
+verify: fmt-check test vet cross-build build e2e leak-check
 
 clean:
 	rm -rf bin coverage.out
