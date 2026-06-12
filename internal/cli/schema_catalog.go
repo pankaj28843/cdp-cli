@@ -374,8 +374,12 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Page open or navigation result.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page was opened or navigated."},
-				{Name: "action", Type: "string", Required: true, Description: "Either created or navigated."},
+				{Name: "action", Type: "string", Required: true, Description: "Created, navigated, or reused."},
+				{Name: "created", Type: "boolean", Required: true, Description: "True when the command created a new page target."},
+				{Name: "reused", Type: "boolean", Required: true, Description: "True when the command navigated an existing page target."},
 				{Name: "page", Type: "page", Required: true, Description: "Page target metadata with id, url, and action fields."},
+				{Name: "reuse", Type: "object", Required: false, Description: "Reuse policy, filters, match state, fallback-created flag, and reused target id when --reuse is enabled."},
+				{Name: "tab_budget", Type: "tab_budget_summary", Required: false, Description: "Before/after browser budget snapshots, policy, max tabs, managed tab id, created/reused flags, cleanup status, and suggested cleanup commands when --budget-summary is enabled."},
 				{Name: "run_id", Type: "string", Required: false, Description: "Caller-supplied run id recorded with the target ownership metadata."},
 				{Name: "task_id", Type: "string", Required: false, Description: "Caller-supplied task id that owns the opened or explicitly reused target."},
 				{Name: "root_task_id", Type: "string", Required: false, Description: "Root task id for task-tree cleanup; defaults to task_id when omitted."},

@@ -21,7 +21,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp targets", want: []string{"--retry transient"}},
 		{path: "cdp pages", want: []string{"--title-contains", "--retry transient"}},
 		{path: "cdp page cleanup", want: []string{"--browser-mode headed", "--browser-mode headless", "--close", "--root-task-id"}},
-		{path: "cdp open", want: []string{"--task-id"}},
+		{path: "cdp open", want: []string{"--task-id", "--reuse", "--budget-summary"}},
 		{path: "cdp eval", want: []string{"--title-contains"}},
 		{path: "cdp wait eval", want: []string{"--ready-expr", "--out-dir", "--retry transient"}},
 		{path: "cdp html", want: []string{"--diagnose-empty"}},

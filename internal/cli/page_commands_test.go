@@ -2044,6 +2044,114 @@ func TestOpenJSON(t *testing.T) {
 	}
 }
 
+func TestOpenReuseURLFilterNavigatesExistingWithBudgetSummaryJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-flights", "type": "page", "title": "Flights", "url": "https://www.google.com/travel/flights", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/reused", "--reuse", "--url-contains", "google.com/travel/flights", "--budget-summary", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("open reuse exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Action  string `json:"action"`
+		Created bool   `json:"created"`
+		Reused  bool   `json:"reused"`
+		Page    struct {
+			ID      string `json:"id"`
+			URL     string `json:"url"`
+			FrameID string `json:"frame_id"`
+		} `json:"page"`
+		Reuse struct {
+			Requested       bool   `json:"requested"`
+			Policy          string `json:"policy"`
+			URLContains     string `json:"url_contains"`
+			Matched         bool   `json:"matched"`
+			FallbackCreated bool   `json:"fallback_created"`
+			TargetID        string `json:"target_id"`
+		} `json:"reuse"`
+		TabBudget struct {
+			Policy            string `json:"policy"`
+			ReuseTarget       string `json:"reuse_target"`
+			ManagedTabID      string `json:"managed_tab_id"`
+			ManagedTabCreated bool   `json:"managed_tab_created"`
+			CleanupStatus     string `json:"cleanup_status"`
+			Before            struct {
+				TabCount int `json:"tab_count"`
+			} `json:"before"`
+			After struct {
+				TabCount int `json:"tab_count"`
+			} `json:"after"`
+		} `json:"tab_budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open reuse output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "reused" || got.Created || !got.Reused || got.Page.ID != "page-flights" || got.Page.URL != "https://example.test/reused" || got.Page.FrameID != "frame-1" {
+		t.Fatalf("open reuse output = %+v, want reused existing target", got)
+	}
+	if !got.Reuse.Requested || got.Reuse.Policy != "reuse_url_contains" || got.Reuse.URLContains != "google.com/travel/flights" || !got.Reuse.Matched || got.Reuse.FallbackCreated || got.Reuse.TargetID != "page-flights" {
+		t.Fatalf("open reuse report = %+v, want matched URL reuse", got.Reuse)
+	}
+	if got.TabBudget.Policy != "reuse_url_contains" || got.TabBudget.ReuseTarget != "url:google.com/travel/flights" || got.TabBudget.ManagedTabID != "page-flights" || got.TabBudget.ManagedTabCreated || got.TabBudget.CleanupStatus != "skipped_reused_tab" || got.TabBudget.Before.TabCount != 1 || got.TabBudget.After.TabCount != 1 {
+		t.Fatalf("open reuse tab budget = %+v, want before/after reused summary", got.TabBudget)
+	}
+}
+
+func TestOpenReuseURLFilterFallsBackToCreatedWithBudgetSummaryJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-docs", "type": "page", "title": "Docs", "url": "https://docs.example.test/", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"open", "https://example.test/new", "--reuse", "--url-contains", "missing.example", "--budget-summary", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("open reuse fallback exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Action  string `json:"action"`
+		Created bool   `json:"created"`
+		Reused  bool   `json:"reused"`
+		Page    struct {
+			ID string `json:"id"`
+		} `json:"page"`
+		Reuse struct {
+			Matched         bool `json:"matched"`
+			FallbackCreated bool `json:"fallback_created"`
+		} `json:"reuse"`
+		TabBudget struct {
+			ManagedTabID      string   `json:"managed_tab_id"`
+			ManagedTabCreated bool     `json:"managed_tab_created"`
+			CleanupStatus     string   `json:"cleanup_status"`
+			CleanupCommands   []string `json:"cleanup_commands"`
+			Before            struct {
+				TabCount int `json:"tab_count"`
+			} `json:"before"`
+			After struct {
+				TabCount int `json:"tab_count"`
+			} `json:"after"`
+		} `json:"tab_budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open reuse fallback output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "created" || !got.Created || got.Reused || got.Page.ID != "created-page" || got.Reuse.Matched || !got.Reuse.FallbackCreated {
+		t.Fatalf("open reuse fallback output = %+v, want created fallback", got)
+	}
+	if got.TabBudget.ManagedTabID != "created-page" || !got.TabBudget.ManagedTabCreated || got.TabBudget.CleanupStatus != "not_run" || got.TabBudget.Before.TabCount != 1 || got.TabBudget.After.TabCount != 2 || len(got.TabBudget.CleanupCommands) == 0 {
+		t.Fatalf("open reuse fallback tab budget = %+v, want created before/after summary", got.TabBudget)
+	}
+}
+
 func TestOpenRecordsRootAndChildTaskOwnershipJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()

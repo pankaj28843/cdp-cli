@@ -136,6 +136,8 @@ fi
   | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
+reuse_open_output="$("$binary" open "$app_url?cdp_reused=1" --reuse --url-contains "$app_url" --budget-summary --state-dir "$state_dir/cdp-state" --json)"
+jq -e '.ok == true and .action == "reused" and .reused == true and .created == false and .reuse.matched == true and .tab_budget.policy == "reuse_url_contains" and .tab_budget.cleanup_status == "skipped_reused_tab" and .tab_budget.managed_tab_created == false and (.tab_budget.before.tab_count >= 1) and (.tab_budget.after.tab_count == .tab_budget.before.tab_count)' <<<"$reuse_open_output" >/dev/null
 task_open_output="$("$binary" open "$app_url?cdp_task_owned=1" --run-id demo-run --task-id demo-child --root-task-id demo-root --parent-task-id demo-root --state-dir "$state_dir/cdp-state" --json)"
 jq -e '.ok == true and .run_id == "demo-run" and .task_id == "demo-child" and .root_task_id == "demo-root" and .parent_task_id == "demo-root" and .created_by == "cdp" and (.target_task_ids[.page.id] == "demo-child")' <<<"$task_open_output" >/dev/null
 task_target_id="$(jq -r '.page.id' <<<"$task_open_output")"

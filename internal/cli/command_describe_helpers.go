@@ -261,6 +261,7 @@ func commandExamples(path string) []string {
 		"cdp open": {
 			"cdp open https://example.com --json",
 			"cdp open https://example.com --run-id run-20260612 --task-id search-01 --root-task-id search --json",
+			"cdp open https://example.com --reuse --url-contains example.com --budget-summary --json",
 			"cdp open https://example.com --retry transient --max-attempts 3 --json",
 			"cdp open https://example.com --new-tab=false --target <target-id> --json",
 		},
