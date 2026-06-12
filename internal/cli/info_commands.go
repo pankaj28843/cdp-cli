@@ -205,7 +205,7 @@ func (a *app) newDoctorCommand() *cobra.Command {
 				}
 			}
 			if checkName == "" || checkName == "scheduled-tasks" {
-				checks = append(checks, scheduledTasksDoctorCheck(statusCtx))
+				checks = append(checks, a.scheduledTasksDoctorCheck(statusCtx))
 			}
 			if checkName == "" || checkName == "headless-security" {
 				checks = append(checks, a.headlessSecurityDoctorCheck(statusCtx))
@@ -338,25 +338,48 @@ func agentBootstrapPath() map[string]any {
 }
 
 type crontabSummary struct {
-	EntryCount                 int
-	HasDaemonKeepalive         bool
-	HasHeadedDaemonKeepalive   bool
-	HasHeadlessDaemonKeepalive bool
-	HasPagesPollingKeepalive   bool
-	HasHeadedPagesPolling      bool
-	HasHeadlessPagesPolling    bool
-	PagesPollingCount          int
-	HasPageCleanup             bool
-	HasModeExplicitPageCleanup bool
-	HasAmbiguousPageCleanup    bool
-	HasUnflockedCDPTask        bool
+	EntryCount                                  int
+	HasDaemonKeepalive                          bool
+	HasHeadedDaemonKeepalive                    bool
+	HasHeadlessDaemonKeepalive                  bool
+	HasPagesPollingKeepalive                    bool
+	HasHeadedPagesPolling                       bool
+	HasHeadlessPagesPolling                     bool
+	PagesPollingCount                           int
+	HasPageCleanup                              bool
+	HasModeExplicitPageCleanup                  bool
+	HasAmbiguousPageCleanup                     bool
+	HasUnflockedCDPTask                         bool
+	ExpectedManagedTaskIDs                      []string
+	InstalledManagedTaskIDs                     []string
+	MissingManagedTaskIDs                       []string
+	StaleManagedTaskIDs                         []string
+	BlockedManagedTaskIDs                       []string
+	HasManagedProcessSweep                      bool
+	HasHeadlessLaunchWithoutManagedProcessSweep bool
+	TaskStatuses                                []cronTaskStatus
 }
 
-func scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
+func (a *app) scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
 	output, err := exec.CommandContext(ctx, crontabBinary(), "-l").CombinedOutput()
 	available := !isCrontabMissing(err)
 	summary := summarizeCrontab(string(output))
-	return scheduledTasksStatusForSummary(available, err, summary)
+	check := scheduledTasksStatusForSummary(available, err, summary)
+	details, _ := check["details"].(map[string]any)
+	if details == nil {
+		return check
+	}
+	store, storeErr := a.stateStore()
+	if storeErr != nil {
+		return check
+	}
+	details["last_run_artifacts"] = cronLastRunArtifacts(store.Dir)
+	if lifecycle, lifecycleErr := browser.ReconcileManagedProcesses(ctx, store.Dir, browser.ManagedProcessReconcileOptions{ReadOnly: true}); lifecycleErr == nil {
+		details["managed_processes"] = lifecycle
+	} else {
+		details["managed_processes"] = map[string]any{"checked": true, "state": "error", "reason": lifecycleErr.Error()}
+	}
+	return check
 }
 
 func scheduledTasksStatusForSummary(available bool, err error, summary crontabSummary) map[string]any {
@@ -379,6 +402,9 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 			status = "warn"
 			message = "current user crontab has cdp entries but no daemon keepalive task"
 		}
+	} else if summary.HasHeadlessLaunchWithoutManagedProcessSweep {
+		status = "warn"
+		message = "current user crontab has launch-capable headless tasks without managed process sweep"
 	} else if !summary.HasPageCleanup {
 		status = "warn"
 		message = "current user crontab has cdp daemon keepalive but no page cleanup task"
@@ -389,33 +415,42 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 		status = "warn"
 		message = "current user crontab has cdp daemon or cleanup tasks without flock"
 	} else {
-		message = "user crontab includes flocked cdp daemon keepalive and mode-explicit page cleanup"
+		message = "user crontab includes flocked cdp daemon maintenance/keepalive and mode-explicit cleanup"
 	}
 	return map[string]any{
 		"name":    "scheduled-tasks",
 		"status":  status,
 		"message": message,
 		"details": map[string]any{
-			"source":                         "crontab -l",
-			"user_level":                     true,
-			"crontab_available":              available,
-			"cdp_entries_count":              summary.EntryCount,
-			"has_daemon_keepalive":           summary.HasDaemonKeepalive,
-			"has_headed_daemon_keepalive":    summary.HasHeadedDaemonKeepalive,
-			"has_headless_daemon_keepalive":  summary.HasHeadlessDaemonKeepalive,
-			"has_pages_polling_keepalive":    summary.HasPagesPollingKeepalive,
-			"has_headed_pages_polling":       summary.HasHeadedPagesPolling,
-			"has_headless_pages_polling":     summary.HasHeadlessPagesPolling,
-			"pages_polling_count":            summary.PagesPollingCount,
-			"has_page_cleanup":               summary.HasPageCleanup,
-			"has_mode_explicit_page_cleanup": summary.HasModeExplicitPageCleanup,
-			"has_ambiguous_page_cleanup":     summary.HasAmbiguousPageCleanup,
-			"has_unflocked_cdp_task":         summary.HasUnflockedCDPTask,
+			"source":                                            "crontab -l",
+			"user_level":                                        true,
+			"crontab_available":                                 available,
+			"cdp_entries_count":                                 summary.EntryCount,
+			"has_daemon_keepalive":                              summary.HasDaemonKeepalive,
+			"has_headed_daemon_keepalive":                       summary.HasHeadedDaemonKeepalive,
+			"has_headless_daemon_keepalive":                     summary.HasHeadlessDaemonKeepalive,
+			"has_pages_polling_keepalive":                       summary.HasPagesPollingKeepalive,
+			"has_headed_pages_polling":                          summary.HasHeadedPagesPolling,
+			"has_headless_pages_polling":                        summary.HasHeadlessPagesPolling,
+			"pages_polling_count":                               summary.PagesPollingCount,
+			"has_page_cleanup":                                  summary.HasPageCleanup,
+			"has_mode_explicit_page_cleanup":                    summary.HasModeExplicitPageCleanup,
+			"has_ambiguous_page_cleanup":                        summary.HasAmbiguousPageCleanup,
+			"has_unflocked_cdp_task":                            summary.HasUnflockedCDPTask,
+			"expected_managed_task_ids":                         stringSliceOrEmpty(summary.ExpectedManagedTaskIDs),
+			"installed_managed_task_ids":                        stringSliceOrEmpty(summary.InstalledManagedTaskIDs),
+			"missing_managed_task_ids":                          stringSliceOrEmpty(summary.MissingManagedTaskIDs),
+			"stale_managed_task_ids":                            stringSliceOrEmpty(summary.StaleManagedTaskIDs),
+			"blocked_managed_task_ids":                          stringSliceOrEmpty(summary.BlockedManagedTaskIDs),
+			"tasks":                                             cronTaskStatusSliceOrEmpty(summary.TaskStatuses),
+			"has_managed_process_sweep":                         summary.HasManagedProcessSweep,
+			"has_headless_launch_without_managed_process_sweep": summary.HasHeadlessLaunchWithoutManagedProcessSweep,
 		},
 		"next_commands": []string{
 			"cdp cron status --json",
 			"cdp cron diff --json",
 			"cdp cron install --json",
+			"cdp --browser-mode headless daemon maintenance --dry-run --json",
 			"cdp cron remove --json",
 			"cdp doctor --check scheduled-tasks --json",
 		},
@@ -424,6 +459,22 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 
 func summarizeCrontab(text string) crontabSummary {
 	var summary crontabSummary
+	tasks := managedCronTasks(defaultCronRenderOptions())
+	taskStatuses := cronTaskStatuses(extractCronManagedBlock(text).Entries, tasks)
+	summary.TaskStatuses = taskStatuses
+	summary.ExpectedManagedTaskIDs = cronTaskIDs(tasks)
+	summary.InstalledManagedTaskIDs = cronTaskIDsByStatus(taskStatuses, "installed", "stale", "blocked")
+	summary.MissingManagedTaskIDs = cronTaskIDsByStatus(taskStatuses, "missing")
+	summary.StaleManagedTaskIDs = cronTaskIDsByStatus(taskStatuses, "stale")
+	summary.BlockedManagedTaskIDs = cronTaskIDsByStatus(taskStatuses, "blocked")
+	for _, taskStatus := range taskStatuses {
+		if taskStatus.RequiresManagedProcessSweep && taskStatus.ManagedProcessSweepInstalled {
+			summary.HasManagedProcessSweep = true
+		}
+		if taskStatus.Status == "blocked" {
+			summary.HasHeadlessLaunchWithoutManagedProcessSweep = true
+		}
+	}
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.Contains(line, "grep cdp") {
@@ -434,12 +485,29 @@ func summarizeCrontab(text string) crontabSummary {
 		}
 		summary.EntryCount++
 		mode := scheduledTaskBrowserMode(line)
+		if strings.Contains(line, cronManagedProcessSweepFlag) {
+			summary.HasManagedProcessSweep = true
+		}
 		if scheduledTaskContainsCDPCommand(line, "cron", "heal", "headed") {
 			summary.HasDaemonKeepalive = true
 			if !scheduledTaskUsesFlock(line) {
 				summary.HasUnflockedCDPTask = true
 			}
 			summary.HasHeadedDaemonKeepalive = true
+		}
+		if scheduledTaskContainsCDPCommand(line, "daemon", "maintenance") {
+			summary.HasDaemonKeepalive = true
+			summary.HasPageCleanup = true
+			summary.HasManagedProcessSweep = true
+			if !scheduledTaskUsesFlock(line) {
+				summary.HasUnflockedCDPTask = true
+			}
+			if mode == "headless" {
+				summary.HasHeadlessDaemonKeepalive = true
+				summary.HasModeExplicitPageCleanup = true
+			} else {
+				summary.HasAmbiguousPageCleanup = true
+			}
 		}
 		if scheduledTaskContainsCDPCommand(line, "daemon", "keepalive") {
 			summary.HasDaemonKeepalive = true
@@ -451,6 +519,14 @@ func summarizeCrontab(text string) crontabSummary {
 				summary.HasHeadedDaemonKeepalive = true
 			case "headless":
 				summary.HasHeadlessDaemonKeepalive = true
+			}
+			if mode == "headless" && !strings.Contains(line, cronManagedProcessSweepFlag) {
+				summary.HasHeadlessLaunchWithoutManagedProcessSweep = true
+			}
+		}
+		if scheduledTaskContainsCDPCommand(line, "daemon", "health-check") {
+			if mode == "headless" && !strings.Contains(line, cronManagedProcessSweepFlag) {
+				summary.HasHeadlessLaunchWithoutManagedProcessSweep = true
 			}
 		}
 		if scheduledTaskContainsCDPCommand(line, "pages") {

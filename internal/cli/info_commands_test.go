@@ -33,12 +33,39 @@ func TestSummarizeCrontabDetectsPagesPollingKeepaliveHack(t *testing.T) {
 
 func TestScheduledTasksDoctorCheckReportsCleanupTask(t *testing.T) {
 	check := scheduledTasksStatusForSummary(true, nil, crontabSummary{EntryCount: 2, HasDaemonKeepalive: true, HasHeadlessDaemonKeepalive: true, HasPageCleanup: true, HasModeExplicitPageCleanup: true})
-	if check["status"] != "pass" || check["message"] != "user crontab includes flocked cdp daemon keepalive and mode-explicit page cleanup" {
+	if check["status"] != "pass" || check["message"] != "user crontab includes flocked cdp daemon maintenance/keepalive and mode-explicit cleanup" {
 		t.Fatalf("scheduled task check = %+v, want pass message for flocked mode-explicit keepalive and cleanup", check)
 	}
 	next, ok := check["next_commands"].([]string)
-	if !ok || !testContainsString(next, "cdp cron status --json") || !testContainsString(next, "cdp cron install --json") {
+	if !ok || !testContainsString(next, "cdp cron status --json") || !testContainsString(next, "cdp cron install --json") || !testContainsString(next, "cdp --browser-mode headless daemon maintenance --dry-run --json") {
 		t.Fatalf("scheduled task next_commands = %+v, want built-in cdp cron management commands", check["next_commands"])
+	}
+	details, ok := check["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("scheduled task details = %+v, want details map", check["details"])
+	}
+	tasks, ok := details["tasks"].([]cronTaskStatus)
+	if !ok || len(tasks) != 0 {
+		t.Fatalf("scheduled task details tasks = %+v, want empty task array for hand-built summary", details["tasks"])
+	}
+}
+
+func TestSummarizeCrontabDetectsHeadlessMaintenance(t *testing.T) {
+	got := summarizeCrontab(`
+* * * * * flock -n $HOME/.cdp-cli/locks/headless-maintenance.lock $HOME/.local/bin/cdp --browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h --json
+`)
+	if got.EntryCount != 1 ||
+		!got.HasDaemonKeepalive ||
+		!got.HasHeadlessDaemonKeepalive ||
+		!got.HasPageCleanup ||
+		!got.HasModeExplicitPageCleanup ||
+		!got.HasManagedProcessSweep ||
+		got.HasHeadlessLaunchWithoutManagedProcessSweep ||
+		got.HasUnflockedCDPTask {
+		t.Fatalf("summarizeCrontab = %+v, want flocked headless maintenance as keepalive, cleanup, and sweep", got)
+	}
+	if len(got.TaskStatuses) != 2 || got.TaskStatuses[1].ID != "headless-maintenance" || !got.TaskStatuses[1].RequiresManagedProcessSweep {
+		t.Fatalf("summarizeCrontab task statuses = %+v, want headless maintenance task model with sweep requirement", got.TaskStatuses)
 	}
 }
 

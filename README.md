@@ -14,7 +14,8 @@ geolocation/timezone/locale/CPU/network, browser permissions,
 accessibility/performance/memory probes, raw CDP
 discovery/examples/exec, Web Storage/cookie/IndexedDB/Cache Storage/service
 worker controls, headed/default-profile and managed-headless browser runtime
-modes, and cron-safe `daemon keepalive` plus page cleanup commands are in place.
+modes, cron-safe `daemon keepalive`, and managed headless maintenance commands
+are in place.
 
 ## Intended Shape
 
@@ -28,6 +29,7 @@ cdp doctor --check headless-security --json
 cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --display :0 --json
 cdp --browser-mode headless browser profile seed --strategy managed --json
 cdp --browser-mode headless daemon keepalive --repair --json
+cdp --browser-mode headless daemon maintenance --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
 cdp page select --url-contains example.com --json
 cdp open https://example.com --json
@@ -85,8 +87,10 @@ cdp browser mode get --json
 CDP_BROWSER_MODE=headless cdp browser mode get --json
 cdp --browser-mode headless browser profile seed --strategy managed --json
 cdp --browser-mode headless browser profile seed --strategy copy-default --json
+cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json
 cdp --browser-mode headless browser profile status --json
 cdp --browser-mode headless daemon keepalive --repair --json
+cdp --browser-mode headless daemon maintenance --json
 cdp doctor --check headless-security --json
 ```
 
@@ -107,7 +111,7 @@ cdp --browser-mode headless pages --json
 or project overrides for cases with multiple browser URLs or explicit debugging
 setups; they are not the normal headed/headless selector.
 
-## Daemon Keepalive
+## Daemon Keepalive And Maintenance
 
 `cdp daemon keepalive` is safe to run from cron or a user timer. It acquires a
 mode-specific per-connection lock before any active probe, exits successfully when
@@ -125,6 +129,7 @@ The managed path is available through first-class cron commands:
 
 ```bash
 cdp cron status --json
+cdp cron status --json | jq '{state,tasks,managed_processes,last_run_artifacts}'
 cdp cron diff --json
 cdp cron install --json
 cdp cron remove --json
@@ -132,8 +137,11 @@ cdp cron heal headed --json
 ```
 
 `cdp cron install --json` renders and installs the full managed
-block, including mode-explicit headed daemon keepalive, headless keepalive, health,
-profile seeding, and page cleanup entries. Use `cdp cron diff --json` or
+block, including mode-explicit headed daemon keepalive and the canonical
+headless maintenance entry. The maintenance entry performs managed-process
+sweep, resource preflight, profile seeding, daemon repair, synthetic
+health-check, page cleanup, and summary artifact writes in one ordered flow.
+Use `cdp cron diff --json` or
 `cdp cron install --dry-run --json` before installing to inspect the intended
 block without mutating the current crontab. Add an explicit browser mode to render
 only one side:
@@ -141,10 +149,12 @@ only one side:
 ```bash
 cdp --browser-mode headed cron install --dry-run --json
 cdp --browser-mode headless cron install --dry-run --json
+cdp --config cdp.json cron install --dry-run --json
 ```
 
-Use explicit `--browser-mode` for scheduled cleanup so headed and headless page
-records cannot be confused. Verify the current Linux user's scheduled tasks with:
+Use explicit `--browser-mode` for scheduled maintenance and cleanup so headed and
+headless browser records cannot be confused. Verify the current Linux user's
+scheduled tasks with:
 
 ```bash
 cdp cron status --json
@@ -153,12 +163,22 @@ cdp cron install --json
 cdp doctor --check scheduled-tasks --json
 ```
 
+For unattended troubleshooting, start with the dry-run maintenance contract and
+then inspect cron status artifacts before running repair:
+
+```bash
+cdp --browser-mode headless daemon maintenance --dry-run --json
+cdp --browser-mode headless daemon maintenance --stale-lock-after 1s --json
+cdp --browser-mode headless daemon stop --force-managed --json
+cdp --browser-mode headless daemon maintenance --json
+```
+
 ## Principles
 
 - Agent-first help: the CLI should teach agents how to use it without source inspection.
 - Machine-readable by default when asked: `--json` and `--jq` are first-class.
 - Safe default-profile access: never silently expose browser data; make attachment explicit and inspectable.
-- Managed headless isolation: headless mode uses a cdp-owned empty profile and loopback-only debugging; default-profile copying is deferred unless a separate security review promotes it.
+- Managed headless isolation: headless mode uses a cdp-owned profile and loopback-only debugging; default-profile copying is explicit through `copy-default`, stays local, reports only metadata/counts, and should be used only for developer-controlled harness work.
 - Human-in-loop auto-connect: when Chrome approval is pending, agents should inspect `cdp daemon status --json`, `cdp doctor --check daemon --json`, and logs, then stop and report the required human Allow action instead of retrying start/stop loops.
 - Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
 - Browser resource budget: page creation is guarded by a default budget of 15 headed page tabs, 25 headless page tabs, and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; override deliberately with `--max-tabs` or `browser.resource_budget.max_tabs`, and prefer the direct headless cleanup fix: `cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25 --json`.

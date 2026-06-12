@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 const (
 	ManagedProfileDirName = "headless-profile"
 	ManagedMetadataName   = "managed-browser.json"
+	ManagedRegistryName   = "managed-processes.json"
 
 	ProfileSeedStrategyManaged     = "managed"
 	ProfileSeedStrategyCopyDefault = "copy-default"
@@ -84,12 +86,84 @@ type ManagedStopOptions struct {
 	Signal func(int) error
 }
 
+type ManagedProcessRegistry struct {
+	Version     int                    `json:"version"`
+	BrowserMode string                 `json:"browser_mode"`
+	Records     []ManagedProcessRecord `json:"records"`
+}
+
+type ManagedProcessRecord struct {
+	PID                 int    `json:"pid"`
+	BrowserMode         string `json:"browser_mode"`
+	UserDataDir         string `json:"user_data_dir"`
+	DebuggingPort       string `json:"debugging_port,omitempty"`
+	StartedAt           string `json:"started_at,omitempty"`
+	LastSeenAt          string `json:"last_seen_at,omitempty"`
+	ExitedAt            string `json:"exited_at,omitempty"`
+	State               string `json:"state,omitempty"`
+	CleanupAt           string `json:"cleanup_at,omitempty"`
+	CleanupReason       string `json:"cleanup_reason,omitempty"`
+	OwnershipMarker     string `json:"ownership_token,omitempty"`
+	ProcessStartTime    string `json:"process_start_time,omitempty"`
+	ProfileSeedStrategy string `json:"profile_seed_strategy,omitempty"`
+}
+
+type ManagedProcessRecordStatus struct {
+	PID                 int    `json:"pid"`
+	BrowserMode         string `json:"browser_mode"`
+	UserDataDir         string `json:"user_data_dir"`
+	DebuggingPort       string `json:"debugging_port,omitempty"`
+	StartedAt           string `json:"started_at,omitempty"`
+	LastSeenAt          string `json:"last_seen_at,omitempty"`
+	ExitedAt            string `json:"exited_at,omitempty"`
+	State               string `json:"state,omitempty"`
+	CleanupAt           string `json:"cleanup_at,omitempty"`
+	CleanupReason       string `json:"cleanup_reason,omitempty"`
+	ProfileSeedStrategy string `json:"profile_seed_strategy,omitempty"`
+}
+
+type ManagedProcessReconcileOptions struct {
+	ActivePID     int
+	ReapExtras    bool
+	ReadOnly      bool
+	Now           func() time.Time
+	Signal        func(int) error
+	ProcessLister func(context.Context, string) ([]int, error)
+}
+
+type ManagedProcessSignalFailure struct {
+	PID   int    `json:"pid"`
+	Error string `json:"error"`
+}
+
+type ManagedProcessReconcileResult struct {
+	Checked         bool                          `json:"checked"`
+	State           string                        `json:"state"`
+	BrowserMode     string                        `json:"browser_mode"`
+	ActivePID       int                           `json:"active_pid,omitempty"`
+	RegisteredCount int                           `json:"registered_count"`
+	LiveCount       int                           `json:"live_count"`
+	StaleCount      int                           `json:"stale_count"`
+	ReapedCount     int                           `json:"reaped_count"`
+	ReapedPIDs      []int                         `json:"reaped_pids,omitempty"`
+	SkippedPIDs     []int                         `json:"skipped_pids,omitempty"`
+	SignalFailures  []ManagedProcessSignalFailure `json:"signal_failures,omitempty"`
+	SafetyChecks    []string                      `json:"safety_checks,omitempty"`
+	Records         []ManagedProcessRecordStatus  `json:"records,omitempty"`
+	Reason          string                        `json:"reason,omitempty"`
+	NextCommands    []string                      `json:"next_commands,omitempty"`
+}
+
 func ManagedProfileDir(stateDir string) string {
 	return filepath.Join(stateDir, "browser", ManagedProfileDirName)
 }
 
 func ManagedMetadataPath(stateDir string) string {
 	return filepath.Join(stateDir, "browser", ManagedMetadataName)
+}
+
+func ManagedProcessRegistryPath(stateDir string) string {
+	return filepath.Join(stateDir, "browser", ManagedRegistryName)
 }
 
 func DiscoverChrome(explicit string) (string, error) {
@@ -184,6 +258,38 @@ func DefaultChromeUserDataDir() string {
 }
 
 func ReplaceManagedProfileFromDefault(dstRoot, srcRoot string) (int, error) {
+	return replaceManagedProfileFromDefault(dstRoot, srcRoot, profileReplaceOps{})
+}
+
+type profileReplaceOps struct {
+	copyProfileTree              func(string, string) (int, error)
+	removeChromeRuntimeArtifacts func(string) error
+	chmod                        func(string, os.FileMode) error
+	rename                       func(string, string) error
+	removeAll                    func(string) error
+}
+
+func (ops profileReplaceOps) withDefaults() profileReplaceOps {
+	if ops.copyProfileTree == nil {
+		ops.copyProfileTree = copyProfileTree
+	}
+	if ops.removeChromeRuntimeArtifacts == nil {
+		ops.removeChromeRuntimeArtifacts = removeChromeRuntimeArtifacts
+	}
+	if ops.chmod == nil {
+		ops.chmod = os.Chmod
+	}
+	if ops.rename == nil {
+		ops.rename = os.Rename
+	}
+	if ops.removeAll == nil {
+		ops.removeAll = removeAllWithRetry
+	}
+	return ops
+}
+
+func replaceManagedProfileFromDefault(dstRoot, srcRoot string, ops profileReplaceOps) (int, error) {
+	ops = ops.withDefaults()
 	if strings.TrimSpace(srcRoot) == "" {
 		return 0, fmt.Errorf("default Chrome profile directory is unavailable")
 	}
@@ -209,27 +315,66 @@ func ReplaceManagedProfileFromDefault(dstRoot, srcRoot string) (int, error) {
 	complete := false
 	defer func() {
 		if !complete {
-			_ = os.RemoveAll(tmpRoot)
+			_ = ops.removeAll(tmpRoot)
 		}
 	}()
-	copied, err := copyProfileTree(srcRoot, tmpRoot)
+	copied, err := ops.copyProfileTree(srcRoot, tmpRoot)
 	if err != nil {
 		return 0, err
 	}
-	if err := removeChromeRuntimeArtifacts(tmpRoot); err != nil {
+	if err := ops.removeChromeRuntimeArtifacts(tmpRoot); err != nil {
 		return 0, err
 	}
-	if err := os.Chmod(tmpRoot, 0o700); err != nil {
+	if err := ops.chmod(tmpRoot, 0o700); err != nil {
 		return 0, fmt.Errorf("secure managed profile copy: %w", err)
 	}
-	if err := removeAllWithRetry(dstRoot); err != nil {
-		return 0, fmt.Errorf("replace old managed profile: %w", err)
+	backupRoot := ""
+	if _, err := os.Stat(dstRoot); err == nil {
+		backupRoot, err = managedProfileBackupPath(filepath.Dir(dstRoot), filepath.Base(dstRoot))
+		if err != nil {
+			return 0, err
+		}
+		if err := ops.rename(dstRoot, backupRoot); err != nil {
+			return 0, fmt.Errorf("stage old managed profile backup: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return 0, fmt.Errorf("stat old managed profile: %w", err)
 	}
-	if err := os.Rename(tmpRoot, dstRoot); err != nil {
+	if err := ops.rename(tmpRoot, dstRoot); err != nil {
+		if rollbackErr := rollbackManagedProfileBackup(dstRoot, backupRoot, ops); rollbackErr != nil {
+			return 0, fmt.Errorf("install managed profile copy: %w; rollback old managed profile: %v", err, rollbackErr)
+		}
 		return 0, fmt.Errorf("install managed profile copy: %w", err)
 	}
 	complete = true
+	if backupRoot != "" {
+		_ = ops.removeAll(backupRoot)
+	}
 	return copied, nil
+}
+
+func managedProfileBackupPath(parent, base string) (string, error) {
+	for attempt := 0; attempt < 100; attempt++ {
+		path := filepath.Join(parent, fmt.Sprintf(".%s-backup-%d-%d-%d", base, os.Getpid(), time.Now().UnixNano(), attempt))
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			return path, nil
+		} else if err != nil {
+			return "", fmt.Errorf("stat managed profile backup path: %w", err)
+		}
+	}
+	return "", fmt.Errorf("allocate managed profile backup path")
+}
+
+func rollbackManagedProfileBackup(dstRoot, backupRoot string, ops profileReplaceOps) error {
+	if backupRoot == "" {
+		return nil
+	}
+	if _, err := os.Stat(dstRoot); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return ops.rename(backupRoot, dstRoot)
 }
 
 func copyProfileTree(srcRoot, dstRoot string) (int, error) {
@@ -372,6 +517,49 @@ func LoadManagedMetadata(stateDir string) (ManagedMetadata, bool, error) {
 	return metadata, true, nil
 }
 
+func SaveManagedProcessRegistry(stateDir string, registry ManagedProcessRegistry) error {
+	if registry.Version <= 0 {
+		registry.Version = 1
+	}
+	if strings.TrimSpace(registry.BrowserMode) == "" {
+		registry.BrowserMode = "headless"
+	}
+	sortManagedProcessRecords(registry.Records)
+	if err := os.MkdirAll(filepath.Dir(ManagedProcessRegistryPath(stateDir)), 0o700); err != nil {
+		return fmt.Errorf("create managed process registry directory: %w", err)
+	}
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal managed process registry: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(ManagedProcessRegistryPath(stateDir), data, 0o600); err != nil {
+		return fmt.Errorf("write managed process registry: %w", err)
+	}
+	return nil
+}
+
+func LoadManagedProcessRegistry(stateDir string) (ManagedProcessRegistry, bool, error) {
+	data, err := os.ReadFile(ManagedProcessRegistryPath(stateDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ManagedProcessRegistry{}, false, nil
+		}
+		return ManagedProcessRegistry{}, false, fmt.Errorf("read managed process registry: %w", err)
+	}
+	var registry ManagedProcessRegistry
+	if err := json.Unmarshal(data, &registry); err != nil {
+		return ManagedProcessRegistry{}, false, fmt.Errorf("parse managed process registry: %w", err)
+	}
+	if registry.Version <= 0 {
+		registry.Version = 1
+	}
+	if strings.TrimSpace(registry.BrowserMode) == "" {
+		registry.BrowserMode = "headless"
+	}
+	return registry, true, nil
+}
+
 func ManagedMetadataStatus(metadata ManagedMetadata) ManagedStatus {
 	return ManagedStatus{
 		BrowserMode:          metadata.BrowserMode,
@@ -386,14 +574,426 @@ func ManagedMetadataStatus(metadata ManagedMetadata) ManagedStatus {
 	}
 }
 
+func ManagedProcessStatus(record ManagedProcessRecord) ManagedProcessRecordStatus {
+	return ManagedProcessRecordStatus{
+		PID:                 record.PID,
+		BrowserMode:         record.BrowserMode,
+		UserDataDir:         record.UserDataDir,
+		DebuggingPort:       record.DebuggingPort,
+		StartedAt:           record.StartedAt,
+		LastSeenAt:          record.LastSeenAt,
+		ExitedAt:            record.ExitedAt,
+		State:               record.State,
+		CleanupAt:           record.CleanupAt,
+		CleanupReason:       record.CleanupReason,
+		ProfileSeedStrategy: record.ProfileSeedStrategy,
+	}
+}
+
+func ManagedProcessStatuses(records []ManagedProcessRecord) []ManagedProcessRecordStatus {
+	statuses := make([]ManagedProcessRecordStatus, 0, len(records))
+	for _, record := range records {
+		statuses = append(statuses, ManagedProcessStatus(record))
+	}
+	return statuses
+}
+
+func RegisterManagedProcessLaunch(stateDir string, metadata ManagedMetadata) error {
+	if metadata.ChromePID <= 0 {
+		return fmt.Errorf("register managed process launch: missing Chrome PID")
+	}
+	registry, ok, err := LoadManagedProcessRegistry(stateDir)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		registry = ManagedProcessRegistry{Version: 1, BrowserMode: "headless"}
+	}
+	registry.Records = upsertManagedProcessRecord(registry.Records, managedProcessRecordFromMetadata(metadata, "live"))
+	return SaveManagedProcessRegistry(stateDir, registry)
+}
+
+func ReconcileManagedProcesses(ctx context.Context, stateDir string, opts ManagedProcessReconcileOptions) (ManagedProcessReconcileResult, error) {
+	now := time.Now().UTC()
+	if opts.Now != nil {
+		now = opts.Now().UTC()
+	}
+	nowText := now.Format(time.RFC3339)
+	managedProfile := filepath.Clean(ManagedProfileDir(stateDir))
+	result := ManagedProcessReconcileResult{
+		Checked:      true,
+		State:        "healthy",
+		BrowserMode:  "headless",
+		SafetyChecks: []string{"browser_mode=headless", "managed_profile_path_matches_state_dir"},
+	}
+
+	registry, ok, err := LoadManagedProcessRegistry(stateDir)
+	if err != nil {
+		result.State = "error"
+		result.Reason = err.Error()
+		return result, err
+	}
+	if !ok {
+		registry = ManagedProcessRegistry{Version: 1, BrowserMode: "headless"}
+	}
+	metadata, metadataOK, err := LoadManagedMetadata(stateDir)
+	if err != nil {
+		result.State = "error"
+		result.Reason = err.Error()
+		return result, err
+	}
+	if metadataOK && metadata.ChromePID > 0 && metadata.BrowserMode == "headless" && cleanPath(metadata.UserDataDir) == managedProfile {
+		registry.Records = upsertManagedProcessRecord(registry.Records, managedProcessRecordFromMetadata(metadata, "metadata"))
+		if opts.ActivePID <= 0 {
+			opts.ActivePID = metadata.ChromePID
+		}
+	}
+	result.ActivePID = opts.ActivePID
+
+	lister := opts.ProcessLister
+	if lister == nil {
+		lister = managedChromeProcesses
+	}
+	livePIDs, err := lister(ctx, managedProfile)
+	if err != nil {
+		result.State = "error"
+		result.Reason = err.Error()
+		return result, err
+	}
+	livePIDs = uniqueSortedPIDs(livePIDs)
+	liveSet := map[int]bool{}
+	for _, pid := range livePIDs {
+		liveSet[pid] = true
+	}
+	if len(livePIDs) > 0 {
+		result.SafetyChecks = append(result.SafetyChecks, "process_command_line_matches_managed_profile")
+	}
+
+	for _, pid := range livePIDs {
+		if findManagedProcessRecord(registry.Records, pid) >= 0 {
+			continue
+		}
+		registry.Records = upsertManagedProcessRecord(registry.Records, ManagedProcessRecord{
+			PID:         pid,
+			BrowserMode: "headless",
+			UserDataDir: managedProfile,
+			LastSeenAt:  nowText,
+			State:       "live_unregistered",
+		})
+	}
+
+	for i := range registry.Records {
+		record := &registry.Records[i]
+		if record.PID <= 0 || record.BrowserMode != "headless" || cleanPath(record.UserDataDir) != managedProfile {
+			continue
+		}
+		if liveSet[record.PID] {
+			record.State = "live"
+			record.LastSeenAt = nowText
+			record.ExitedAt = ""
+			continue
+		}
+		if record.State != "reaped" && record.State != "signal_failed" {
+			record.State = "exited"
+			if record.ExitedAt == "" {
+				record.ExitedAt = nowText
+			}
+		}
+	}
+
+	if opts.ReapExtras && len(livePIDs) > 1 {
+		retainPID := opts.ActivePID
+		if retainPID <= 0 || !liveSet[retainPID] {
+			retainPID = managedProcessPIDToRetain(registry.Records, liveSet)
+			if retainPID > 0 {
+				result.ActivePID = retainPID
+				result.Reason = "retained one live managed Chrome because no active runtime PID was supplied"
+			}
+		}
+		if retainPID > 0 {
+			if opts.Signal == nil {
+				opts.Signal = signalProcess
+			}
+			for _, pid := range livePIDs {
+				if pid == retainPID {
+					continue
+				}
+				if err := opts.Signal(pid); err != nil {
+					result.SignalFailures = append(result.SignalFailures, ManagedProcessSignalFailure{PID: pid, Error: err.Error()})
+					result.SkippedPIDs = append(result.SkippedPIDs, pid)
+					markManagedProcessRecordCleanup(registry.Records, pid, "signal_failed", nowText, err.Error())
+					continue
+				}
+				delete(liveSet, pid)
+				result.ReapedPIDs = append(result.ReapedPIDs, pid)
+				markManagedProcessRecordCleanup(registry.Records, pid, "reaped", nowText, "duplicate cdp-owned managed headless Chrome process")
+			}
+		}
+	}
+
+	result.LiveCount = 0
+	result.StaleCount = 0
+	for _, record := range registry.Records {
+		if record.PID <= 0 || record.BrowserMode != "headless" || cleanPath(record.UserDataDir) != managedProfile {
+			continue
+		}
+		if liveSet[record.PID] {
+			result.LiveCount++
+			continue
+		}
+		result.StaleCount++
+	}
+	result.RegisteredCount = len(registry.Records)
+	result.ReapedCount = len(result.ReapedPIDs)
+	sort.Ints(result.ReapedPIDs)
+	sort.Ints(result.SkippedPIDs)
+	sortManagedProcessRecords(registry.Records)
+	result.Records = ManagedProcessStatuses(registry.Records)
+
+	switch {
+	case len(result.SignalFailures) > 0:
+		result.State = "degraded"
+		result.NextCommands = []string{"cdp --browser-mode headless daemon stop --force-managed --json", "cdp --browser-mode headless daemon keepalive --repair --force --json"}
+	case result.LiveCount > 1:
+		result.State = "over_budget"
+		result.Reason = "more than one cdp-owned managed headless Chrome process is live for this state directory"
+		result.NextCommands = []string{"cdp --browser-mode headless daemon keepalive --managed-process-sweep --repair --force --json"}
+	case result.ReapedCount > 0:
+		result.State = "reaped"
+	default:
+		result.State = "healthy"
+	}
+	if !opts.ReadOnly {
+		if err := SaveManagedProcessRegistry(stateDir, registry); err != nil {
+			result.State = "error"
+			result.Reason = err.Error()
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func managedProcessRecordFromMetadata(metadata ManagedMetadata, state string) ManagedProcessRecord {
+	return ManagedProcessRecord{
+		PID:                 metadata.ChromePID,
+		BrowserMode:         metadata.BrowserMode,
+		UserDataDir:         metadata.UserDataDir,
+		DebuggingPort:       metadata.DebuggingPort,
+		StartedAt:           metadata.StartedAt,
+		LastSeenAt:          metadata.ProcessStartTime,
+		State:               state,
+		OwnershipMarker:     metadata.OwnedMarker,
+		ProcessStartTime:    metadata.ProcessStartTime,
+		ProfileSeedStrategy: metadata.ProfileSeedStrategy,
+	}
+}
+
+func upsertManagedProcessRecord(records []ManagedProcessRecord, record ManagedProcessRecord) []ManagedProcessRecord {
+	if record.PID <= 0 {
+		return records
+	}
+	if strings.TrimSpace(record.BrowserMode) == "" {
+		record.BrowserMode = "headless"
+	}
+	idx := findManagedProcessRecord(records, record.PID)
+	if idx < 0 {
+		return append(records, record)
+	}
+	existing := records[idx]
+	if strings.TrimSpace(record.BrowserMode) == "" {
+		record.BrowserMode = existing.BrowserMode
+	}
+	if strings.TrimSpace(record.UserDataDir) == "" {
+		record.UserDataDir = existing.UserDataDir
+	}
+	if strings.TrimSpace(record.DebuggingPort) == "" {
+		record.DebuggingPort = existing.DebuggingPort
+	}
+	if strings.TrimSpace(record.StartedAt) == "" {
+		record.StartedAt = existing.StartedAt
+	}
+	if strings.TrimSpace(record.LastSeenAt) == "" {
+		record.LastSeenAt = existing.LastSeenAt
+	}
+	if strings.TrimSpace(record.ExitedAt) == "" {
+		record.ExitedAt = existing.ExitedAt
+	}
+	if strings.TrimSpace(record.State) == "" {
+		record.State = existing.State
+	}
+	if strings.TrimSpace(record.CleanupAt) == "" {
+		record.CleanupAt = existing.CleanupAt
+	}
+	if strings.TrimSpace(record.CleanupReason) == "" {
+		record.CleanupReason = existing.CleanupReason
+	}
+	if strings.TrimSpace(record.OwnershipMarker) == "" {
+		record.OwnershipMarker = existing.OwnershipMarker
+	}
+	if strings.TrimSpace(record.ProcessStartTime) == "" {
+		record.ProcessStartTime = existing.ProcessStartTime
+	}
+	if strings.TrimSpace(record.ProfileSeedStrategy) == "" {
+		record.ProfileSeedStrategy = existing.ProfileSeedStrategy
+	}
+	records[idx] = record
+	return records
+}
+
+func findManagedProcessRecord(records []ManagedProcessRecord, pid int) int {
+	for i, record := range records {
+		if record.PID == pid {
+			return i
+		}
+	}
+	return -1
+}
+
+func markManagedProcessRecordCleanup(records []ManagedProcessRecord, pid int, state, at, reason string) {
+	idx := findManagedProcessRecord(records, pid)
+	if idx < 0 {
+		return
+	}
+	records[idx].State = state
+	records[idx].CleanupAt = at
+	records[idx].CleanupReason = reason
+	if state == "reaped" {
+		records[idx].ExitedAt = at
+	}
+}
+
+func markManagedProcessesStopped(stateDir string, pids []int, state, reason string) {
+	if len(pids) == 0 {
+		return
+	}
+	registry, ok, err := LoadManagedProcessRegistry(stateDir)
+	if err != nil || !ok {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, pid := range pids {
+		markManagedProcessRecordCleanup(registry.Records, pid, state, now, reason)
+	}
+	_ = SaveManagedProcessRegistry(stateDir, registry)
+}
+
+func managedProcessPIDToRetain(records []ManagedProcessRecord, liveSet map[int]bool) int {
+	var best ManagedProcessRecord
+	for _, record := range records {
+		if !liveSet[record.PID] {
+			continue
+		}
+		if best.PID == 0 {
+			best = record
+			continue
+		}
+		if managedProcessRecordNewer(record, best) {
+			best = record
+		}
+	}
+	if best.PID > 0 {
+		return best.PID
+	}
+	for pid := range liveSet {
+		if best.PID == 0 || pid > best.PID {
+			best.PID = pid
+		}
+	}
+	return best.PID
+}
+
+func managedProcessRecordNewer(a, b ManagedProcessRecord) bool {
+	aTime := managedProcessRecordTime(a)
+	bTime := managedProcessRecordTime(b)
+	if !aTime.IsZero() || !bTime.IsZero() {
+		return aTime.After(bTime)
+	}
+	return a.PID > b.PID
+}
+
+func managedProcessRecordTime(record ManagedProcessRecord) time.Time {
+	for _, value := range []string{record.ProcessStartTime, record.StartedAt, record.LastSeenAt} {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func sortManagedProcessRecords(records []ManagedProcessRecord) {
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].PID < records[j].PID
+	})
+}
+
+func uniqueSortedPIDs(pids []int) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, pid := range pids {
+		if pid <= 0 || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		out = append(out, pid)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func cleanPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
 func StopOwnedManagedChrome(ctx context.Context, stateDir string, signal func(int) error) (ManagedStopResult, error) {
 	return StopManagedChrome(ctx, stateDir, ManagedStopOptions{Signal: signal})
 }
 
 func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOptions) (ManagedStopResult, error) {
 	metadata, ok, err := LoadManagedMetadata(stateDir)
-	if err != nil || !ok {
-		return ManagedStopResult{Checked: true, Force: opts.Force, Skipped: true, Reason: "managed metadata missing"}, err
+	if err != nil {
+		return ManagedStopResult{Checked: true, Force: opts.Force, Skipped: true, Reason: "managed metadata unavailable"}, err
+	}
+	if !ok {
+		result := ManagedStopResult{Checked: true, Force: opts.Force}
+		if !opts.Force {
+			result.Skipped = true
+			result.Reason = "managed metadata missing"
+			return result, nil
+		}
+		metadata = ManagedMetadata{
+			BrowserMode:         "headless",
+			UserDataDir:         ManagedProfileDir(stateDir),
+			ProfileSeedStrategy: ProfileSeedStrategyManaged,
+		}
+		pids, checks, err := forceManagedStopCandidates(ctx, stateDir, metadata)
+		result.PIDs = pids
+		result.SafetyChecks = checks
+		if err != nil {
+			return result, err
+		}
+		if len(pids) == 0 {
+			result.Skipped = true
+			result.Reason = "no cdp-owned managed headless Chrome process candidates found"
+			return result, nil
+		}
+		if opts.Signal == nil {
+			opts.Signal = signalProcess
+		}
+		for _, pid := range pids {
+			if err := opts.Signal(pid); err != nil {
+				return result, err
+			}
+		}
+		result.Stopped = true
+		result.Reason = "forced managed headless cleanup"
+		return result, nil
 	}
 	result := ManagedStopResult{Checked: true, Force: opts.Force, Browser: ManagedMetadataStatus(metadata)}
 	if metadata.BrowserMode != "headless" || metadata.ChromePID <= 0 || strings.TrimSpace(metadata.OwnedMarker) == "" || strings.TrimSpace(metadata.ProcessStartTime) == "" {
@@ -423,6 +1023,7 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 		}
 		result.Stopped = true
 		result.Reason = "forced managed headless cleanup"
+		markManagedProcessesStopped(stateDir, pids, "stopped", result.Reason)
 		return result, nil
 	}
 	if opts.Signal == nil {
@@ -434,6 +1035,7 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 	result.Stopped = true
 	result.PIDs = []int{metadata.ChromePID}
 	result.SafetyChecks = []string{"managed_metadata_complete", "browser_mode=headless", "ownership_marker_present", "start_time_present"}
+	markManagedProcessesStopped(stateDir, result.PIDs, "stopped", "owned managed headless cleanup")
 	return result, nil
 }
 
@@ -577,6 +1179,13 @@ func signalProcess(pid int) error {
 }
 
 func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch, error) {
+	reconcile, err := ReconcileManagedProcesses(ctx, opts.StateDir, ManagedProcessReconcileOptions{ReapExtras: true})
+	if err != nil {
+		return ManagedLaunch{}, err
+	}
+	if reconcile.LiveCount > 0 {
+		return ManagedLaunch{}, fmt.Errorf("managed headless Chrome already running for this state directory; reconcile state %s has %d live process(es)", reconcile.State, reconcile.LiveCount)
+	}
 	chromePath, err := DiscoverChrome(opts.Chrome)
 	if err != nil {
 		return ManagedLaunch{}, err
@@ -620,6 +1229,11 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 		return ManagedLaunch{}, err
 	}
 	if err := SaveManagedMetadata(opts.StateDir, metadata); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return ManagedLaunch{}, err
+	}
+	if err := RegisterManagedProcessLaunch(opts.StateDir, metadata); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		return ManagedLaunch{}, err

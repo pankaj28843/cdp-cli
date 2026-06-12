@@ -49,7 +49,10 @@ type BrowserConfig struct {
 type HeadedConfig struct{}
 
 type ResourceBudgetConfig struct {
-	MaxTabs int `json:"max_tabs,omitempty"`
+	MaxTabs         int     `json:"max_tabs,omitempty"`
+	MinFreeMemoryMB int     `json:"min_free_memory_mb,omitempty"`
+	MinFreeDiskMB   int     `json:"min_free_disk_mb,omitempty"`
+	MaxLoadPerCPU   float64 `json:"max_load_per_cpu,omitempty"`
 }
 
 type HeadlessConfig struct {
@@ -197,7 +200,10 @@ type fileHeadlessConfig struct {
 }
 
 type fileResourceBudgetConfig struct {
-	MaxTabs int `json:"max_tabs,omitempty"`
+	MaxTabs         int     `json:"max_tabs,omitempty"`
+	MinFreeMemoryMB int     `json:"min_free_memory_mb,omitempty"`
+	MinFreeDiskMB   int     `json:"min_free_disk_mb,omitempty"`
+	MaxLoadPerCPU   float64 `json:"max_load_per_cpu,omitempty"`
 }
 
 func decode(data []byte) (Config, error) {
@@ -228,7 +234,11 @@ func decode(data []byte) (Config, error) {
 			cfg.browserModeSet = true
 		}
 		if raw.Browser.Headless != nil {
-			cfg.Browser.Headless.ProfileSeedStrategy = raw.Browser.Headless.ProfileSeedStrategy
+			strategy, err := parseHeadlessProfileSeedStrategy(raw.Browser.Headless.ProfileSeedStrategy)
+			if err != nil {
+				return Config{}, err
+			}
+			cfg.Browser.Headless.ProfileSeedStrategy = strategy
 			if raw.Browser.Headless.ProfileRefreshAfter != "" {
 				d, err := time.ParseDuration(raw.Browser.Headless.ProfileRefreshAfter)
 				if err != nil {
@@ -241,7 +251,19 @@ func decode(data []byte) (Config, error) {
 			if raw.Browser.ResourceBudget.MaxTabs < 0 {
 				return Config{}, fmt.Errorf("browser.resource_budget.max_tabs must be non-negative")
 			}
+			if raw.Browser.ResourceBudget.MinFreeMemoryMB < 0 {
+				return Config{}, fmt.Errorf("browser.resource_budget.min_free_memory_mb must be non-negative")
+			}
+			if raw.Browser.ResourceBudget.MinFreeDiskMB < 0 {
+				return Config{}, fmt.Errorf("browser.resource_budget.min_free_disk_mb must be non-negative")
+			}
+			if raw.Browser.ResourceBudget.MaxLoadPerCPU < 0 {
+				return Config{}, fmt.Errorf("browser.resource_budget.max_load_per_cpu must be non-negative")
+			}
 			cfg.Browser.ResourceBudget.MaxTabs = raw.Browser.ResourceBudget.MaxTabs
+			cfg.Browser.ResourceBudget.MinFreeMemoryMB = raw.Browser.ResourceBudget.MinFreeMemoryMB
+			cfg.Browser.ResourceBudget.MinFreeDiskMB = raw.Browser.ResourceBudget.MinFreeDiskMB
+			cfg.Browser.ResourceBudget.MaxLoadPerCPU = raw.Browser.ResourceBudget.MaxLoadPerCPU
 		}
 	}
 	return cfg, nil
@@ -260,7 +282,16 @@ func encode(cfg Config) ([]byte, error) {
 	if cfg.Browser.ResourceBudget.MaxTabs < 0 {
 		return nil, fmt.Errorf("browser.resource_budget.max_tabs must be non-negative")
 	}
-	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.ResourceBudget.MaxTabs > 0 {
+	if cfg.Browser.ResourceBudget.MinFreeMemoryMB < 0 {
+		return nil, fmt.Errorf("browser.resource_budget.min_free_memory_mb must be non-negative")
+	}
+	if cfg.Browser.ResourceBudget.MinFreeDiskMB < 0 {
+		return nil, fmt.Errorf("browser.resource_budget.min_free_disk_mb must be non-negative")
+	}
+	if cfg.Browser.ResourceBudget.MaxLoadPerCPU < 0 {
+		return nil, fmt.Errorf("browser.resource_budget.max_load_per_cpu must be non-negative")
+	}
+	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
 		raw.Browser = &fileBrowserConfig{}
 		if cfg.Browser.Mode != "" {
 			if !cfg.Browser.Mode.Valid() {
@@ -269,15 +300,24 @@ func encode(cfg Config) ([]byte, error) {
 			raw.Browser.Mode = string(cfg.Browser.Mode)
 		}
 		if cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 {
+			strategy, err := parseHeadlessProfileSeedStrategy(cfg.Browser.Headless.ProfileSeedStrategy)
+			if err != nil {
+				return nil, err
+			}
 			raw.Browser.Headless = &fileHeadlessConfig{
-				ProfileSeedStrategy: cfg.Browser.Headless.ProfileSeedStrategy,
+				ProfileSeedStrategy: strategy,
 			}
 			if cfg.Browser.Headless.ProfileRefreshAfter > 0 {
 				raw.Browser.Headless.ProfileRefreshAfter = cfg.Browser.Headless.ProfileRefreshAfter.String()
 			}
 		}
-		if cfg.Browser.ResourceBudget.MaxTabs > 0 {
-			raw.Browser.ResourceBudget = &fileResourceBudgetConfig{MaxTabs: cfg.Browser.ResourceBudget.MaxTabs}
+		if cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
+			raw.Browser.ResourceBudget = &fileResourceBudgetConfig{
+				MaxTabs:         cfg.Browser.ResourceBudget.MaxTabs,
+				MinFreeMemoryMB: cfg.Browser.ResourceBudget.MinFreeMemoryMB,
+				MinFreeDiskMB:   cfg.Browser.ResourceBudget.MinFreeDiskMB,
+				MaxLoadPerCPU:   cfg.Browser.ResourceBudget.MaxLoadPerCPU,
+			}
 		}
 	}
 
@@ -286,4 +326,17 @@ func encode(cfg Config) ([]byte, error) {
 		return nil, err
 	}
 	return append(data, '\n'), nil
+}
+
+func parseHeadlessProfileSeedStrategy(strategy string) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(strategy))
+	if normalized == "" {
+		return "", nil
+	}
+	switch normalized {
+	case "managed", "copy-default":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("browser.headless.profile_seed_strategy must be managed or copy-default")
+	}
 }

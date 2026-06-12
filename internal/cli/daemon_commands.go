@@ -31,6 +31,7 @@ func (a *app) newDaemonCommand() *cobra.Command {
 	cmd.AddCommand(a.newDaemonStopCommand())
 	cmd.AddCommand(a.newDaemonRestartCommand())
 	cmd.AddCommand(a.newDaemonKeepaliveCommand())
+	cmd.AddCommand(a.newDaemonMaintenanceCommand())
 	cmd.AddCommand(a.newDaemonHealthCommand())
 	cmd.AddCommand(a.newDaemonHealthCheckCommand())
 	cmd.AddCommand(a.newDaemonHoldCommand())
@@ -541,16 +542,17 @@ func healthUsable(health map[string]any) bool {
 const defaultHeadlessHealthCheckURL = "data:text/html,%3Cmain%20data-cdp-health%3D%22ok%22%3Ecdp-headless-health%3C%2Fmain%3E"
 
 type daemonHealthCheckOptions struct {
-	Repair           bool
-	Force            bool
-	RequireHealthy   bool
-	HealthURL        string
-	OutDir           string
-	FailureThreshold int
-	LockTimeout      time.Duration
-	StaleLockAfter   time.Duration
-	Reconnect        time.Duration
-	ChromeCommand    string
+	Repair              bool
+	Force               bool
+	ManagedProcessSweep bool
+	RequireHealthy      bool
+	HealthURL           string
+	OutDir              string
+	FailureThreshold    int
+	LockTimeout         time.Duration
+	StaleLockAfter      time.Duration
+	Reconnect           time.Duration
+	ChromeCommand       string
 }
 
 func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
@@ -579,6 +581,7 @@ func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.Repair, "repair", false, "start or replace the managed headless daemon before validation when health is not healthy")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "when used with --repair, clear stale managed headless runtime state before relaunching")
+	cmd.Flags().BoolVar(&opts.ManagedProcessSweep, "managed-process-sweep", false, "run managed headless process reconciliation before launch-capable repair work; lifecycle enforcement is expanded by cdp cron resilience")
 	cmd.Flags().BoolVar(&opts.RequireHealthy, "require-healthy", false, "fail when health is usable but degraded instead of returning a warning success")
 	cmd.Flags().StringVar(&opts.HealthURL, "health-url", opts.HealthURL, "synthetic URL used for navigation/DOM/JS/screenshot validation")
 	cmd.Flags().StringVar(&opts.OutDir, "out-dir", "", "directory for health-check JSON and screenshot artifacts; defaults under the cdp state directory")
@@ -591,9 +594,17 @@ func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
 }
 
 func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOptions) error {
-	store, err := a.stateStore()
+	human, report, err := a.runDaemonHealthCheckReport(ctx, opts)
 	if err != nil {
 		return err
+	}
+	return a.render(ctx, human, report)
+}
+
+func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthCheckOptions) (string, map[string]any, error) {
+	store, err := a.stateStore()
+	if err != nil {
+		return "", nil, err
 	}
 	outDir := strings.TrimSpace(opts.OutDir)
 	if outDir == "" {
@@ -602,10 +613,10 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	lockName := "daemon-health-check-headless"
 	lock, acquired, existingLock, err := daemon.AcquireLock(ctx, store.Dir, lockName, opts.LockTimeout, opts.StaleLockAfter, daemon.LockMetadata{Name: lockName, Phase: "checking"})
 	if err != nil {
-		return commandError("lock_failed", "connection", fmt.Sprintf("acquire health-check lock: %v", err), ExitConnection, []string{"cdp --browser-mode headless daemon health --json"})
+		return "", nil, commandError("lock_failed", "connection", fmt.Sprintf("acquire health-check lock: %v", err), ExitConnection, []string{"cdp --browser-mode headless daemon health --json"})
 	}
 	if !acquired {
-		return a.render(ctx, "headless health-check locked", map[string]any{
+		return "headless health-check locked", map[string]any{
 			"ok":               true,
 			"browser_mode":     a.browserModeName(),
 			"state":            "locked",
@@ -619,7 +630,7 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 				"cdp --browser-mode headless daemon health --json",
 				"cdp cron status --json",
 			},
-		})
+		}, nil
 	}
 	defer lock.Release()
 
@@ -647,7 +658,14 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 		},
 		"next_commands": headlessHealthCheckNextCommands(),
 	}
-	fail := func(failure string, cause error) error {
+	if opts.ManagedProcessSweep {
+		report["managed_process_sweep"] = map[string]any{
+			"requested": true,
+			"phase":     cronManagedProcessSweepPhaseName,
+			"state":     "pending_lifecycle_implementation",
+		}
+	}
+	fail := func(failure string, cause error) (string, map[string]any, error) {
 		if cause != nil {
 			report["error"] = cause.Error()
 		}
@@ -655,7 +673,7 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 		count := a.updateHeadlessHealthCheckFailure(ctx, outDir, runDir, summaryPath, opts.FailureThreshold, true)
 		report["failure_count"] = count
 		_ = writeJSONArtifact(summaryPath, report)
-		return commandErrorWithData("headless_health_check_failed", "check_failed", fmt.Sprintf("headless health-check failed: %s", failure), ExitCheckFailed, headlessHealthCheckNextCommands(), report)
+		return "", report, commandErrorWithData("headless_health_check_failed", "check_failed", fmt.Sprintf("headless health-check failed: %s", failure), ExitCheckFailed, headlessHealthCheckNextCommands(), report)
 	}
 	addStep := func(name string, ok bool, fields map[string]any) {
 		step := map[string]any{"name": name, "ok": ok}
@@ -669,6 +687,18 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	status, health, err := a.selectedDaemonHealth(ctx)
 	report["daemon"] = status
 	report["health"] = health
+	resourcePreflight := a.maintenanceResourcePreflightForState(ctx, store.Dir, status, health)
+	report["resource_preflight"] = resourcePreflight
+	skipForResources := func() (string, map[string]any, error) {
+		report["ok"] = true
+		report["state"] = "resource_blocked"
+		report["status"] = "skipped"
+		report["usable"] = false
+		report["action"] = "skipped"
+		report["next_commands"] = uniqueCommands(headlessHealthCheckNextCommands(), resourcePreflight.NextCommands)
+		_ = writeJSONArtifact(summaryPath, report)
+		return "headless-health-check\tresource-blocked", report, nil
+	}
 	if err != nil {
 		addStep("health", false, map[string]any{"error": err.Error()})
 		if !opts.Repair {
@@ -679,8 +709,12 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	}
 
 	if (err != nil || !healthUsable(health)) && opts.Repair {
+		if !resourcePreflight.HeavyWorkAllowed {
+			addStep("resource_preflight", false, map[string]any{"state": resourcePreflight.State, "status": resourcePreflight.Status})
+			return skipForResources()
+		}
 		if err := lock.Update(ctx, "repairing"); err != nil {
-			return err
+			return "", report, err
 		}
 		repair, err := a.repairManagedHeadlessForHealthCheck(ctx, store.Dir, opts, lock, status, health)
 		addStep("repair", err == nil, map[string]any{"repair": repair})
@@ -695,6 +729,8 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 		}
 		report["daemon"] = status
 		report["health"] = health
+		resourcePreflight = a.maintenanceResourcePreflightForState(ctx, store.Dir, status, health)
+		report["resource_preflight"] = resourcePreflight
 		addStep("health_after_repair", healthState(health) == "healthy" || healthUsable(health), map[string]any{"state": healthState(health), "usable": healthUsable(health)})
 	}
 	if healthState(health) != "healthy" && !healthUsable(health) {
@@ -704,6 +740,10 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 		report["usable"] = healthUsable(health)
 		report["degraded_reasons"] = toStringSlice(health["degraded_reasons"])
 		return fail("health_not_healthy", nil)
+	}
+	if !resourcePreflight.HeavyWorkAllowed {
+		addStep("resource_preflight", false, map[string]any{"state": resourcePreflight.State, "status": resourcePreflight.Status})
+		return skipForResources()
 	}
 
 	target, session, closeSession, err := a.openHealthCheckTarget(ctx, opts.HealthURL)
@@ -763,17 +803,17 @@ func (a *app) runDaemonHealthCheck(ctx context.Context, opts daemonHealthCheckOp
 	report["failure"] = nil
 	report["failure_count"] = a.updateHeadlessHealthCheckFailure(ctx, outDir, runDir, summaryPath, opts.FailureThreshold, false)
 	if err := lock.Update(ctx, "healthy"); err != nil {
-		return err
+		return "", report, err
 	}
 	if err := writeJSONArtifact(summaryPath, report); err != nil {
-		return err
+		return "", report, err
 	}
 	daemon.AppendLogForMode(ctx, store.Dir, a.browserModeName(), daemon.LogEntry{
 		Level:   "info",
 		Event:   "health_check_validated",
 		Message: "managed headless health-check passed",
 	})
-	return a.render(ctx, fmt.Sprintf("headless-health-check\t%s", report["state"]), report)
+	return fmt.Sprintf("headless-health-check\t%s", report["state"]), report, nil
 }
 
 func (a *app) selectedDaemonHealth(ctx context.Context) (daemon.Status, map[string]any, error) {
@@ -798,17 +838,18 @@ func (a *app) selectedDaemonHealth(ctx context.Context) (daemon.Status, map[stri
 
 func (a *app) repairManagedHeadlessForHealthCheck(ctx context.Context, storeDir string, opts daemonHealthCheckOptions, lock daemon.LockHandle, status daemon.Status, health map[string]any) (map[string]any, error) {
 	probeResult := map[string]any{
-		"mode":             "health-check",
-		"result":           healthFailureResult(health),
-		"repair_requested": true,
-		"force_requested":  opts.Force,
+		"mode":                            "health-check",
+		"result":                          healthFailureResult(health),
+		"repair_requested":                true,
+		"force_requested":                 opts.Force,
+		"managed_process_sweep_requested": opts.ManagedProcessSweep,
 	}
 	connectionName := a.connectionStateName(ctx)
 	mode := strings.TrimSpace(status.ConnectionMode)
 	if mode == "" {
 		mode = a.connectionMode()
 	}
-	human, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, status, probeResult, map[string]any{
+	human, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, opts.ManagedProcessSweep, status, probeResult, map[string]any{
 		"ok":            false,
 		"result":        healthFailureResult(health),
 		"runtime_state": status.State,
@@ -1219,6 +1260,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	var chromeArgs []string
 	var repair bool
 	var force bool
+	var managedProcessSweep bool
 
 	cmd := &cobra.Command{
 		Use:   "keepalive",
@@ -1302,8 +1344,21 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				)
 			}
 			status := a.daemonStatus(ctx, probe)
-			probeResult := map[string]any{"mode": probeMode, "result": probe.State, "repair_requested": repair, "force_requested": force}
+			probeResult := map[string]any{"mode": probeMode, "result": probe.State, "repair_requested": repair, "force_requested": force, "managed_process_sweep_requested": managedProcessSweep}
 			runtimeHealthy, runtimeCheck := keepaliveRuntimeCheck(ctx, status)
+			if managedProcessSweep && browserMode == "headless" {
+				sweep, err := a.runManagedProcessSweep(ctx, store.Dir, lock, status)
+				if err != nil {
+					return commandError(
+						"managed_process_sweep_failed",
+						"connection",
+						fmt.Sprintf("managed headless process sweep: %v", err),
+						ExitConnection,
+						[]string{"cdp --browser-mode headless daemon stop --force-managed --json", "cdp --browser-mode headless daemon keepalive --repair --force --json"},
+					)
+				}
+				runtimeCheck["managed_process_sweep"] = sweep
+			}
 			if runtimeHealthy && reconnect > 0 && status.Runtime != nil && status.Runtime.ReconnectInterval != reconnect.String() {
 				runtimeCheck["reconnect_interval_mismatch"] = true
 				runtimeCheck["current_reconnect"] = status.Runtime.ReconnectInterval
@@ -1391,7 +1446,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				})
 			}
 			if browserMode == "headless" {
-				human, data, err := a.runHeadlessKeepaliveStartOrRepair(ctx, store.Dir, lock, connectionName, mode, reconnect, chromeCommand, force, status, probeResult, runtimeCheck)
+				human, data, err := a.runHeadlessKeepaliveStartOrRepair(ctx, store.Dir, lock, connectionName, mode, reconnect, chromeCommand, force, managedProcessSweep, status, probeResult, runtimeCheck)
 				if err != nil {
 					return err
 				}
@@ -1509,10 +1564,46 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&chromeArgs, "chrome-args", nil, "extra Chrome argument; repeat for multiple arguments")
 	cmd.Flags().BoolVar(&repair, "repair", false, "human-managed repair mode: remove stale runtime state and restart the daemon when safe")
 	cmd.Flags().BoolVar(&force, "force", false, "for --browser-mode headless repair, clear stale managed runtime state before relaunching")
+	cmd.Flags().BoolVar(&managedProcessSweep, "managed-process-sweep", false, "run managed headless process reconciliation before launch-capable repair work; lifecycle enforcement is expanded by cdp cron resilience")
 	return cmd
 }
 
-func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir string, lock daemon.LockHandle, connectionName, mode string, reconnect time.Duration, chromeCommand string, force bool, status daemon.Status, probeResult map[string]any, runtimeCheck map[string]any) (string, map[string]any, error) {
+func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir string, lock daemon.LockHandle, connectionName, mode string, reconnect time.Duration, chromeCommand string, force bool, managedProcessSweep bool, status daemon.Status, probeResult map[string]any, runtimeCheck map[string]any) (string, map[string]any, error) {
+	if managedProcessSweep {
+		if _, ok := runtimeCheck["managed_process_sweep"]; !ok {
+			sweep, err := a.runManagedProcessSweep(ctx, storeDir, lock, status)
+			if err != nil {
+				return "", nil, err
+			}
+			runtimeCheck["managed_process_sweep"] = sweep
+		}
+	}
+	resourcePreflight := a.maintenanceResourcePreflightForState(ctx, storeDir, status, nil)
+	runtimeCheck["resource_preflight"] = resourcePreflight
+	if !resourcePreflight.HeavyWorkAllowed {
+		if err := lock.Update(ctx, "resource_blocked"); err != nil {
+			return "", nil, err
+		}
+		data := map[string]any{
+			"ok":                 true,
+			"browser_mode":       "headless",
+			"connection":         connectionName,
+			"mode":               mode,
+			"state":              "resource_blocked",
+			"status":             "skipped",
+			"action":             "skipped",
+			"locked":             false,
+			"daemon":             status,
+			"chrome":             keepaliveChromeStatus{Checked: true, Skipped: true, Reason: "resource preflight blocked heavy maintenance"},
+			"probe":              probeResult,
+			"previous":           status,
+			"health":             runtimeCheck,
+			"resource_preflight": resourcePreflight,
+			"next_commands":      resourcePreflight.NextCommands,
+			"lock":               map[string]any{"name": lock.Metadata.Name, "acquired": true},
+		}
+		return fmt.Sprintf("keepalive\t%s\tresource-blocked", connectionName), data, nil
+	}
 	if status.State == "running" {
 		if err := lock.Update(ctx, "repairing_daemon"); err != nil {
 			return "", nil, err
@@ -1603,6 +1694,29 @@ func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir st
 		data["connection_detail"] = conn
 	}
 	return fmt.Sprintf("keepalive\t%s\t%s", connectionName, state), data, nil
+}
+
+func (a *app) runManagedProcessSweep(ctx context.Context, storeDir string, lock daemon.LockHandle, status daemon.Status) (browser.ManagedProcessReconcileResult, error) {
+	if err := lock.Update(ctx, cronManagedProcessSweepPhaseName); err != nil {
+		return browser.ManagedProcessReconcileResult{}, err
+	}
+	return browser.ReconcileManagedProcesses(ctx, storeDir, browser.ManagedProcessReconcileOptions{
+		ActivePID:  managedChromeActivePID(status),
+		ReapExtras: true,
+	})
+}
+
+func managedChromeActivePID(status daemon.Status) int {
+	if status.Runtime == nil {
+		return 0
+	}
+	if status.Runtime.ChromePID > 0 {
+		return status.Runtime.ChromePID
+	}
+	if status.Runtime.ManagedBrowser != nil && status.Runtime.ManagedBrowser.ChromePID > 0 {
+		return status.Runtime.ManagedBrowser.ChromePID
+	}
+	return 0
 }
 
 func keepaliveRepairClassification(keepalive map[string]any, err error) string {
@@ -1704,7 +1818,9 @@ func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chr
 		return &managedKeepAlive{Endpoint: launch.Endpoint, Metadata: launch.Metadata, ManagedBrowser: &managedStatus}, status, nil
 	}
 	seedStrategy := ""
-	if cfg, cfgErr := config.Load(a.opts.config); cfgErr == nil {
+	if cfg, cfgErr := config.Load(a.opts.config); cfgErr != nil {
+		return nil, status, cfgErr
+	} else {
 		seedStrategy = cfg.Browser.Headless.ProfileSeedStrategy
 	}
 	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromeCommand, ProfileSeedStrategy: seedStrategy})

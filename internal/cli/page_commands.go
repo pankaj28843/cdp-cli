@@ -640,6 +640,8 @@ attached.`,
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, timeoutFallback)
 			defer cancel()
+			restoreHeadlessRepair := a.disableHeadlessRepair()
+			defer restoreHeadlessRepair()
 
 			human, data, err := a.runPageCleanup(ctx, pageCleanupRunOptions{
 				Close:            closePages,
@@ -1498,6 +1500,9 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 	if browserMode != string(config.BrowserModeHeadless) {
 		return daemon.Runtime{}, err
 	}
+	if a.opts.noHeadlessRepair {
+		return daemon.Runtime{}, err
+	}
 	if repairErr := a.repairHeadlessDaemonForBrowserCommand(ctx, store.Dir); repairErr != nil {
 		return daemon.Runtime{}, fmt.Errorf("%v; automatic headless daemon repair failed: %v", err, repairErr)
 	}
@@ -1506,6 +1511,14 @@ func (a *app) requiredDaemonRuntime(ctx context.Context) (daemon.Runtime, error)
 		return daemon.Runtime{}, fmt.Errorf("%v; automatic headless daemon repair completed but daemon runtime is still unavailable: %v", err, retryErr)
 	}
 	return runtime, nil
+}
+
+func (a *app) disableHeadlessRepair() func() {
+	previous := a.opts.noHeadlessRepair
+	a.opts.noHeadlessRepair = true
+	return func() {
+		a.opts.noHeadlessRepair = previous
+	}
 }
 
 func (a *app) loadRequiredDaemonRuntime(ctx context.Context, storeDir, browserMode string) (daemon.Runtime, error) {
@@ -1582,7 +1595,7 @@ func (a *app) repairHeadlessDaemonForBrowserCommand(ctx context.Context, storeDi
 		"result":           probe.State,
 		"repair_requested": true,
 	}
-	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, status, probeResult, runtimeCheck)
+	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, false, status, probeResult, runtimeCheck)
 	if err != nil {
 		return err
 	}

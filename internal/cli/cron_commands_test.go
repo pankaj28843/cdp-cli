@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,9 +32,14 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "--browser-mode headless daemon health-check --repair", "--browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25", "command -v flock", "--strategy managed", "--if-older-than 6h"} {
+	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h --repair --force --reconnect 30s --health-check --cleanup --cleanup-close --json", "headless-maintenance.log", "command -v flock", "--help 2>&1 | grep -q -- '--close'"} {
 		if !strings.Contains(afterFirst, want) {
 			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
+		}
+	}
+	for _, oldCommand := range []string{"--browser-mode headless daemon keepalive --managed-process-sweep", "--browser-mode headless daemon health-check --managed-process-sweep", "--browser-mode headless browser profile seed", "--browser-mode headless page cleanup"} {
+		if strings.Contains(afterFirst, oldCommand) {
+			t.Fatalf("crontab after install still has legacy headless task %q:\n%s", oldCommand, afterFirst)
 		}
 	}
 	if strings.Contains(afterFirst, " cdp pages ") || strings.Contains(afterFirst, " cdp pages --browser-mode") || strings.Contains(afterFirst, " pages --browser-mode headed") {
@@ -53,6 +60,121 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	afterSecond := readFileString(t, crontabPath)
 	if afterSecond != afterFirst {
 		t.Fatalf("idempotent install changed crontab:\nfirst:\n%s\nsecond:\n%s", afterFirst, afterSecond)
+	}
+}
+
+func TestCronStatusReportsManagedTaskIDsAndSweepHooks(t *testing.T) {
+	_, crontabBin := fakeCrontab(t, "")
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var install cronInstallResult
+	executeCronJSON(t, []string{"cron", "install", "--state-dir", stateDir, "--json"}, &install)
+	if !install.OK || !install.Changed {
+		t.Fatalf("cron install = %+v, want changed", install)
+	}
+
+	var status struct {
+		OK    bool `json:"ok"`
+		Tasks []struct {
+			ID                           string `json:"id"`
+			Status                       string `json:"status"`
+			Installed                    bool   `json:"installed"`
+			MatchesIntended              bool   `json:"matches_intended"`
+			LaunchCapable                bool   `json:"launch_capable"`
+			RequiresManagedProcessSweep  bool   `json:"requires_managed_process_sweep"`
+			ManagedProcessSweepInstalled bool   `json:"managed_process_sweep_installed"`
+		} `json:"tasks"`
+		ScheduledTasks struct {
+			Details struct {
+				ExpectedManagedTaskIDs                      []string `json:"expected_managed_task_ids"`
+				InstalledManagedTaskIDs                     []string `json:"installed_managed_task_ids"`
+				MissingManagedTaskIDs                       []string `json:"missing_managed_task_ids"`
+				BlockedManagedTaskIDs                       []string `json:"blocked_managed_task_ids"`
+				HasManagedProcessSweep                      bool     `json:"has_managed_process_sweep"`
+				HasHeadlessLaunchWithoutManagedProcessSweep bool     `json:"has_headless_launch_without_managed_process_sweep"`
+			} `json:"details"`
+		} `json:"scheduled_tasks"`
+	}
+	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	if !status.OK || len(status.Tasks) != 2 {
+		t.Fatalf("cron status tasks = %+v ok=%v, want two managed tasks", status.Tasks, status.OK)
+	}
+	taskIDs := map[string]bool{}
+	for _, task := range status.Tasks {
+		taskIDs[task.ID] = true
+	}
+	wantIDs := []string{"headed-daemon-keepalive", "headless-maintenance"}
+	for _, id := range wantIDs {
+		if !taskIDs[id] || !containsString(status.ScheduledTasks.Details.ExpectedManagedTaskIDs, id) || !containsString(status.ScheduledTasks.Details.InstalledManagedTaskIDs, id) {
+			t.Fatalf("cron status missing task id %q in tasks=%+v details=%+v", id, status.Tasks, status.ScheduledTasks.Details)
+		}
+	}
+	if len(status.ScheduledTasks.Details.MissingManagedTaskIDs) != 0 || len(status.ScheduledTasks.Details.BlockedManagedTaskIDs) != 0 || !status.ScheduledTasks.Details.HasManagedProcessSweep || status.ScheduledTasks.Details.HasHeadlessLaunchWithoutManagedProcessSweep {
+		t.Fatalf("scheduled task details = %+v, want all managed tasks installed with sweep hooks", status.ScheduledTasks.Details)
+	}
+	for _, task := range status.Tasks {
+		if !task.Installed || !task.MatchesIntended || task.Status != "installed" {
+			t.Fatalf("task %q = %+v, want installed and matching intended", task.ID, task)
+		}
+		if task.ID == "headless-maintenance" && (!task.LaunchCapable || !task.RequiresManagedProcessSweep || !task.ManagedProcessSweepInstalled) {
+			t.Fatalf("headless maintenance task %q = %+v, want sweep phase installed", task.ID, task)
+		}
+	}
+}
+
+func TestCronStatusIncludesProfileSeedLastStatusArtifact(t *testing.T) {
+	_, crontabBin := fakeCrontab(t, "")
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var install cronInstallResult
+	executeCronJSON(t, []string{"cron", "install", "--state-dir", stateDir, "--json"}, &install)
+	if !install.OK || !install.Changed {
+		t.Fatalf("cron install = %+v, want changed", install)
+	}
+
+	var seed struct {
+		OK             bool   `json:"ok"`
+		SeedAction     string `json:"seed_action"`
+		SeedStatusPath string `json:"seed_status_path"`
+		LastSeed       struct {
+			SchemaVersion string `json:"schema_version"`
+			SeedStrategy  string `json:"seed_strategy"`
+			SeedAction    string `json:"seed_action"`
+		} `json:"last_seed"`
+	}
+	executeCronJSON(t, []string{"--browser-mode", "headless", "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "managed", "--json"}, &seed)
+	if !seed.OK || seed.SeedAction != "seeded" || seed.SeedStatusPath == "" || seed.LastSeed.SchemaVersion != "cdp-profile-seed-status/v1" || seed.LastSeed.SeedStrategy != "managed" || seed.LastSeed.SeedAction != "seeded" {
+		t.Fatalf("profile seed = %+v, want persisted managed seed summary", seed)
+	}
+
+	var status struct {
+		OK          bool `json:"ok"`
+		ProfileSeed struct {
+			Strategy string `json:"strategy"`
+			LastSeed struct {
+				Path          string `json:"path"`
+				Exists        bool   `json:"exists"`
+				SchemaVersion string `json:"schema_version"`
+				Status        string `json:"status"`
+				State         string `json:"state"`
+				SeedStrategy  string `json:"seed_strategy"`
+				SeedAction    string `json:"seed_action"`
+			} `json:"last_seed"`
+		} `json:"profile_seed"`
+		LastRunArtifacts map[string]struct {
+			Path   string `json:"path"`
+			Exists bool   `json:"exists"`
+		} `json:"last_run_artifacts"`
+	}
+	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	artifact := status.LastRunArtifacts["headless_profile_seed_summary"]
+	if !status.OK || status.ProfileSeed.Strategy != "managed" || status.ProfileSeed.LastSeed.Path != seed.SeedStatusPath || !status.ProfileSeed.LastSeed.Exists || status.ProfileSeed.LastSeed.SchemaVersion != "cdp-profile-seed-status/v1" || status.ProfileSeed.LastSeed.Status != "pass" || status.ProfileSeed.LastSeed.State != "ready" || status.ProfileSeed.LastSeed.SeedStrategy != "managed" || status.ProfileSeed.LastSeed.SeedAction != "seeded" {
+		t.Fatalf("cron status profile seed = %+v, artifact=%+v, want last seed summary", status.ProfileSeed, artifact)
+	}
+	if artifact.Path != seed.SeedStatusPath || !artifact.Exists {
+		t.Fatalf("cron status last_run_artifacts = %+v, want profile seed summary at %s", status.LastRunArtifacts, seed.SeedStatusPath)
 	}
 }
 
@@ -84,13 +206,41 @@ func TestCronInstallUsesHeadlessSeedConfigDryRun(t *testing.T) {
 		t.Fatalf("cron install dry-run profile_seed = %+v, want copy-default 30m cadence", got.ProfileSeed)
 	}
 	block := strings.Join(got.IntendedBlock.Entries, "\n")
-	for _, want := range []string{"*/15 * * * *", "--browser-mode headless browser profile seed --strategy copy-default --if-older-than 30m --json"} {
+	for _, want := range []string{"--browser-mode headless daemon maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m", "--health-check --cleanup --cleanup-close --json"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("intended cron block missing %q:\n%s", want, block)
 		}
 	}
 	if after := readFileString(t, crontabPath); after != initial {
 		t.Fatalf("dry-run mutated crontab:\n%s", after)
+	}
+}
+
+func TestCronInstallRejectsMalformedProfileRefreshAfterConfig(t *testing.T) {
+	_, crontabBin := fakeCrontab(t, "SHELL=/bin/sh\n")
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"daily"}}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "cron", "install", "--dry-run", "--state-dir", stateDir, "--json"}, &stdout, &stderr, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("cron install malformed refresh exit = %d, want %d; stderr=%s stdout=%s", code, cli.ExitUsage, stderr.String(), stdout.String())
+	}
+	var got struct {
+		OK       bool   `json:"ok"`
+		Code     string `json:"code"`
+		ErrClass string `json:"err_class"`
+		Message  string `json:"message"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode malformed refresh error: %v\n%s", err, stdout.String())
+	}
+	if got.OK || got.Code != "invalid_config" || got.ErrClass != "usage" || !strings.Contains(got.Message, "browser.headless.profile_refresh_after") {
+		t.Fatalf("malformed refresh error = %+v, want invalid_config usage with refresh path", got)
 	}
 }
 
@@ -252,7 +402,7 @@ func TestCronMigratePagesPollingApplyRemovesOnlyLegacyAfterManagedInstalled(t *t
 	if !strings.Contains(after, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("migration did not preserve unmanaged backup line:\n%s", after)
 	}
-	for _, want := range []string{"# cdp-cli managed browser runtime tasks", "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon keepalive --repair", "# End cdp-cli managed browser runtime tasks"} {
+	for _, want := range []string{"# cdp-cli managed browser runtime tasks", "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h", "# End cdp-cli managed browser runtime tasks"} {
 		if !strings.Contains(after, want) {
 			t.Fatalf("migration did not preserve managed block content %q:\n%s", want, after)
 		}
@@ -330,6 +480,60 @@ func TestCronStatusAndDiffUseFakeCrontab(t *testing.T) {
 	}
 }
 
+func TestCronStatusBlocksHeadlessLaunchTasksWithoutManagedProcessSweep(t *testing.T) {
+	legacy := strings.Join([]string{
+		"SHELL=/bin/sh",
+		"# cdp-cli managed browser runtime tasks",
+		"* * * * * cdp_lock=$HOME/.cdp-cli/locks/keepalive-headless.lock; flock -n \"$cdp_lock\" $HOME/.local/bin/cdp --browser-mode headless daemon keepalive --repair --force --json",
+		"* * * * * cdp_lock=$HOME/.cdp-cli/locks/headless-health.lock; flock -n \"$cdp_lock\" $HOME/.local/bin/cdp --browser-mode headless daemon health-check --repair --force --json",
+		"# End cdp-cli managed browser runtime tasks",
+		"",
+	}, "\n")
+	_, crontabBin := fakeCrontab(t, legacy)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var status struct {
+		OK              bool   `json:"ok"`
+		State           string `json:"state"`
+		MatchesIntended bool   `json:"matches_intended"`
+		Tasks           []struct {
+			ID                           string `json:"id"`
+			Status                       string `json:"status"`
+			Installed                    bool   `json:"installed"`
+			MatchesIntended              bool   `json:"matches_intended"`
+			RequiresManagedProcessSweep  bool   `json:"requires_managed_process_sweep"`
+			ManagedProcessSweepInstalled bool   `json:"managed_process_sweep_installed"`
+		} `json:"tasks"`
+		ScheduledTasks struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Details struct {
+				BlockedManagedTaskIDs                       []string `json:"blocked_managed_task_ids"`
+				HasManagedProcessSweep                      bool     `json:"has_managed_process_sweep"`
+				HasHeadlessLaunchWithoutManagedProcessSweep bool     `json:"has_headless_launch_without_managed_process_sweep"`
+			} `json:"details"`
+		} `json:"scheduled_tasks"`
+	}
+	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	if !status.OK || status.MatchesIntended || status.State != "needs_update" {
+		t.Fatalf("cron status = %+v, want needs_update for legacy block without sweep", status)
+	}
+	for _, task := range status.Tasks {
+		if task.ID == "headless-maintenance" {
+			if task.Installed || task.Status != "missing" || !task.RequiresManagedProcessSweep || task.ManagedProcessSweepInstalled {
+				t.Fatalf("headless maintenance task = %+v, want missing current task with sweep requirement", task)
+			}
+		}
+	}
+	if len(status.ScheduledTasks.Details.BlockedManagedTaskIDs) != 0 {
+		t.Fatalf("blocked managed task ids = %+v, want none for legacy tasks outside current managed model", status.ScheduledTasks.Details.BlockedManagedTaskIDs)
+	}
+	if status.ScheduledTasks.Status != "warn" || !strings.Contains(status.ScheduledTasks.Message, "managed process sweep") || status.ScheduledTasks.Details.HasManagedProcessSweep || !status.ScheduledTasks.Details.HasHeadlessLaunchWithoutManagedProcessSweep {
+		t.Fatalf("scheduled tasks = %+v, want sweep warning", status.ScheduledTasks)
+	}
+}
+
 func TestCronStatusSummarizesManagedBlockMismatchAndStaleLocks(t *testing.T) {
 	oldBlock := strings.Join([]string{
 		"SHELL=/bin/sh",
@@ -386,7 +590,7 @@ func TestCronStatusSummarizesManagedBlockMismatchAndStaleLocks(t *testing.T) {
 			staleIssue.RecommendedCommand = issue.RecommendedCommand
 		}
 	}
-	if !staleIssue.Found || staleIssue.RecommendedCommand != "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json" {
+	if !staleIssue.Found || staleIssue.RecommendedCommand != "cdp --browser-mode headless daemon maintenance --stale-lock-after 1s --json" {
 		t.Fatalf("stale lock issue = %+v, want headless repair guidance", staleIssue)
 	}
 }
@@ -422,7 +626,7 @@ func TestCronStatusClassifiesDeadDaemonKeepaliveLock(t *testing.T) {
 	if status.Health.StaleDaemonLockCount != 1 || !containsString(status.Health.StaleDaemonLocks, lockName) {
 		t.Fatalf("cron status health = %+v, want stale daemon lock summary", status.Health)
 	}
-	if !containsString(lock.NextCommands, "cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json") {
+	if !containsString(lock.NextCommands, "cdp --browser-mode headless daemon maintenance --stale-lock-after 1s --json") {
 		t.Fatalf("next commands = %+v, want safe headless stale-lock repair", lock.NextCommands)
 	}
 }
@@ -457,6 +661,70 @@ func TestCronStatusIgnoresOldEmptyFlockLockMarkers(t *testing.T) {
 	}
 	if status.Health.StaleLockCount != 0 || len(status.Health.StaleLocks) != 0 {
 		t.Fatalf("cron health = %+v, want no stale locks for empty flock marker", status.Health)
+	}
+}
+
+func TestCronStatusDoesNotClassifyFreshHeldEmptyFlockMarkerAsStale(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock is not available")
+	}
+	crontab := strings.Join([]string{
+		"# cdp-cli managed browser runtime tasks",
+		"* * * * * cdp_lock=$HOME/.cdp-cli/locks/keepalive-headless.lock; flock --close -n \"$cdp_lock\" true",
+		"# End cdp-cli managed browser runtime tasks",
+	}, "\n")
+	_, crontabBin := fakeCrontab(t, crontab)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+	path := filepath.Join(stateDir, "locks", "keepalive-headless.lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+		t.Fatalf("write flock marker: %v", err)
+	}
+	old := time.Now().Add(-20 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("age flock marker: %v", err)
+	}
+	lockFile, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("open flock marker: %v", err)
+	}
+	defer func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+	}()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("hold flock marker: %v", err)
+	}
+
+	var status struct {
+		OK    bool `json:"ok"`
+		Locks map[string]struct {
+			Exists       bool     `json:"exists"`
+			Stale        bool     `json:"stale"`
+			Marker       string   `json:"marker"`
+			Locked       bool     `json:"locked"`
+			StaleReason  string   `json:"stale_reason"`
+			LockOwnerPID int      `json:"lock_owner_pid"`
+			NextCommands []string `json:"next_commands"`
+		} `json:"locks"`
+		Health struct {
+			StaleLockCount int      `json:"stale_lock_count"`
+			StaleLocks     []string `json:"stale_locks"`
+		} `json:"health"`
+	}
+	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	lock := status.Locks["keepalive-headless"]
+	if !status.OK || !lock.Exists || lock.Marker != "flock_lockfile" || !lock.Locked || lock.Stale || lock.StaleReason != "" {
+		t.Fatalf("cron lock = %+v statusOK=%v, want fresh active flock lock without stale warning", lock, status.OK)
+	}
+	if lock.LockOwnerPID != os.Getpid() {
+		t.Fatalf("lock owner pid = %d, want %d", lock.LockOwnerPID, os.Getpid())
+	}
+	if status.Health.StaleLockCount != 0 || len(status.Health.StaleLocks) != 0 {
+		t.Fatalf("cron health = %+v, want no stale lock summary", status.Health)
 	}
 }
 

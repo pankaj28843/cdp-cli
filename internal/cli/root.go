@@ -27,23 +27,24 @@ type BuildInfo struct {
 }
 
 type options struct {
-	json            bool
-	compact         bool
-	jq              string
-	debug           bool
-	timeout         time.Duration
-	profile         string
-	config          string
-	browserURL      string
-	autoConnect     bool
-	channel         string
-	userDataDir     string
-	stateDir        string
-	browserMode     string
-	activeProbe     bool
-	connection      string
-	allowOverBudget bool
-	maxTabs         int
+	json             bool
+	compact          bool
+	jq               string
+	debug            bool
+	timeout          time.Duration
+	profile          string
+	config           string
+	browserURL       string
+	autoConnect      bool
+	channel          string
+	userDataDir      string
+	stateDir         string
+	browserMode      string
+	activeProbe      bool
+	connection       string
+	allowOverBudget  bool
+	maxTabs          int
+	noHeadlessRepair bool
 }
 
 type app struct {

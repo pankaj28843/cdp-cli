@@ -2,15 +2,20 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
 )
+
+const profileSeedStatusSchemaVersion = "cdp-profile-seed-status/v1"
 
 func (a *app) newBrowserCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -166,10 +171,12 @@ func (a *app) runBrowserProfileSeed(ctx context.Context, opts browserProfileSeed
 	}
 	if opts.Strategy == browser.ProfileSeedStrategyCopyDefault && opts.IfOlderThan > 0 {
 		if existing, skipped, seedAgeSeconds, err := recentManagedProfileSeed(store.Dir, opts.Strategy, now, opts.IfOlderThan); err != nil {
+			a.recordBrowserProfileSeedFailure(ctx, store.Dir, opts, now, "freshness_check_failed")
 			return "", browserProfileStatus{}, err
 		} else if skipped {
 			status, err := browserProfileStatusForStore(ctx, store.Dir)
 			if err != nil {
+				a.recordBrowserProfileSeedFailure(ctx, store.Dir, opts, now, "status_failed")
 				return "", browserProfileStatus{}, err
 			}
 			status.Seeded = true
@@ -177,34 +184,66 @@ func (a *app) runBrowserProfileSeed(ctx context.Context, opts browserProfileSeed
 			status.SeedAction = "skipped"
 			status.SeedIntervalSeconds = int64(opts.IfOlderThan.Seconds())
 			status.SeedAgeSeconds = seedAgeSeconds
+			if err := recordBrowserProfileSeedStatus(ctx, store.Dir, &status, now); err != nil {
+				return "", browserProfileStatus{}, err
+			}
 			return "browser profile skipped", status, nil
 		}
 	}
 	var maintenance *profileSeedMaintenance
+	var seedResourcePreflight *resourcePreflightResult
 	if opts.Strategy == browser.ProfileSeedStrategyCopyDefault {
-		seedMaintenance, err := a.stopHeadlessForProfileSeed(ctx, store.Dir)
+		seedMaintenance, resourcePreflight, err := a.prepareCopyDefaultProfileSeedMaintenance(ctx, store.Dir)
 		if err != nil {
+			a.recordBrowserProfileSeedFailure(ctx, store.Dir, opts, now, "maintenance_preflight_failed")
 			return "", browserProfileStatus{}, err
 		}
 		maintenance = &seedMaintenance
+		seedResourcePreflight = &resourcePreflight
+		if !resourcePreflight.HeavyWorkAllowed {
+			status, err := browserProfileStatusForStore(ctx, store.Dir)
+			if err != nil {
+				return "", browserProfileStatus{}, err
+			}
+			status.State = "resource_blocked"
+			status.SeedStrategy = opts.Strategy
+			status.SeedAction = "skipped_resource_preflight"
+			status.ResourcePreflight = &resourcePreflight
+			status.Maintenance = maintenance
+			status.NextCommands = uniqueCommands(status.NextCommands, resourcePreflight.NextCommands, []string{"cdp --browser-mode headless browser profile seed --strategy copy-default --json"})
+			if err := recordBrowserProfileSeedStatus(ctx, store.Dir, &status, now); err != nil {
+				return "", browserProfileStatus{}, err
+			}
+			return "browser profile skipped", status, nil
+		}
+		if err := a.stopHeadlessForProfileSeed(ctx, store.Dir, maintenance); err != nil {
+			a.recordBrowserProfileSeedFailure(ctx, store.Dir, opts, now, "stop_failed")
+			return "", browserProfileStatus{}, err
+		}
 	}
 	metadata, skipped, seedAgeSeconds, err := prepareManagedProfileWithAgeGate(store.Dir, opts.Strategy, now, opts.IfOlderThan)
 	if err != nil {
+		a.recordBrowserProfileSeedFailure(ctx, store.Dir, opts, now, "seed_failed")
 		return "", browserProfileStatus{}, err
 	}
-	if maintenance != nil && maintenance.WasRunning && !skipped {
+	if maintenance != nil && maintenance.RestartRequested && !skipped {
 		if err := a.healHeadlessAfterProfileSeed(ctx, store.Dir, maintenance); err != nil {
+			a.recordBrowserProfileSeedFailure(ctx, store.Dir, opts, now, "heal_failed")
 			return "", browserProfileStatus{}, err
 		}
 	}
 	status, err := browserProfileStatusForStore(ctx, store.Dir)
 	if err != nil {
+		a.recordBrowserProfileSeedFailure(ctx, store.Dir, opts, now, "status_failed")
 		return "", browserProfileStatus{}, err
 	}
 	status.Seeded = true
 	status.ManagedBrowser = browser.ManagedMetadataStatus(metadata)
 	if maintenance != nil {
 		status.Maintenance = maintenance
+	}
+	if seedResourcePreflight != nil {
+		status.ResourcePreflight = seedResourcePreflight
 	}
 	if skipped {
 		status.SeedAction = "skipped"
@@ -214,6 +253,9 @@ func (a *app) runBrowserProfileSeed(ctx context.Context, opts browserProfileSeed
 	if opts.IfOlderThan > 0 {
 		status.SeedIntervalSeconds = int64(opts.IfOlderThan.Seconds())
 		status.SeedAgeSeconds = seedAgeSeconds
+	}
+	if err := recordBrowserProfileSeedStatus(ctx, store.Dir, &status, now); err != nil {
+		return "", browserProfileStatus{}, err
 	}
 	return "browser profile " + status.SeedAction, status, nil
 }
@@ -246,34 +288,70 @@ func recentManagedProfileSeed(stateDir, strategy string, now time.Time, ifOlderT
 	return browser.ManagedMetadata{}, false, 0, nil
 }
 
-func (a *app) stopHeadlessForProfileSeed(ctx context.Context, stateDir string) (profileSeedMaintenance, error) {
+func (a *app) prepareCopyDefaultProfileSeedMaintenance(ctx context.Context, stateDir string) (profileSeedMaintenance, resourcePreflightResult, error) {
 	maintenance := profileSeedMaintenance{}
-	if runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, "headless"); err != nil {
-		return maintenance, err
-	} else if ok && daemon.RuntimeRunning(runtime) {
+	status := daemon.Status{BrowserMode: string(config.BrowserModeHeadless)}
+	if runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, string(config.BrowserModeHeadless)); err != nil {
+		return maintenance, resourcePreflightResult{}, err
+	} else if ok {
+		status.Runtime = &runtime
+		if daemon.RuntimeRunning(runtime) {
+			maintenance.WasRunning = true
+			maintenance.RuntimeWasRunning = true
+			maintenance.RestartRequested = true
+		}
+	}
+	sweep, err := browser.ReconcileManagedProcesses(ctx, stateDir, browser.ManagedProcessReconcileOptions{
+		ActivePID:  managedChromeActivePID(status),
+		ReapExtras: true,
+	})
+	if err != nil {
+		sweep = browser.ManagedProcessReconcileResult{
+			Checked:      true,
+			State:        "error",
+			BrowserMode:  string(config.BrowserModeHeadless),
+			Reason:       err.Error(),
+			NextCommands: []string{"cdp --browser-mode headless daemon stop --force-managed --json", "cdp --browser-mode headless daemon keepalive --managed-process-sweep --repair --force --json"},
+		}
+	}
+	maintenance.ManagedProcessSweep = &sweep
+	if sweep.LiveCount > 0 {
 		maintenance.WasRunning = true
+		maintenance.ManagedBrowserWasRunning = true
 	}
 	if launch, ok, err := browser.ReuseManagedChrome(ctx, stateDir); err != nil {
-		return maintenance, err
+		return maintenance, resourcePreflightResult{}, err
 	} else if ok {
 		maintenance.WasRunning = true
+		maintenance.ManagedBrowserWasRunning = true
+		maintenance.RestartRequested = true
 		managed := browser.ManagedMetadataStatus(launch.Metadata)
 		maintenance.ManagedBrowser = &managed
 	}
-	if !maintenance.WasRunning {
-		return maintenance, nil
+	resourcePreflight := a.maintenanceResourcePreflightForStateWithManaged(ctx, stateDir, status, nil, &sweep)
+	return maintenance, resourcePreflight, nil
+}
+
+func (a *app) stopHeadlessForProfileSeed(ctx context.Context, stateDir string, maintenance *profileSeedMaintenance) error {
+	if maintenance == nil || !maintenance.WasRunning {
+		return nil
 	}
-	if _, stopped, err := daemon.StopRuntimeForMode(ctx, stateDir, "headless"); err != nil {
-		return maintenance, err
-	} else {
-		maintenance.DaemonStopped = stopped
+	if maintenance.RuntimeWasRunning {
+		if _, stopped, err := daemon.StopRuntimeForMode(ctx, stateDir, string(config.BrowserModeHeadless)); err != nil {
+			return err
+		} else {
+			maintenance.DaemonStopped = stopped
+		}
 	}
-	managedStop, err := browser.StopOwnedManagedChrome(ctx, stateDir, nil)
-	if err != nil {
-		return maintenance, err
+	if maintenance.ManagedBrowserWasRunning {
+		managedStop, err := browser.StopManagedChrome(ctx, stateDir, browser.ManagedStopOptions{Force: true})
+		if err != nil {
+			return err
+		}
+		maintenance.ManagedStop = &managedStop
+		maintenance.ManagedBrowserStopped = managedStop.Stopped
 	}
-	maintenance.ManagedBrowserStopped = managedStop.Stopped
-	return maintenance, nil
+	return nil
 }
 
 func (a *app) healHeadlessAfterProfileSeed(ctx context.Context, stateDir string, maintenance *profileSeedMaintenance) error {
@@ -309,35 +387,106 @@ func (a *app) healHeadlessAfterProfileSeed(ctx context.Context, stateDir string,
 }
 
 type browserProfileStatus struct {
-	OK                  bool                    `json:"ok"`
-	BrowserMode         string                  `json:"browser_mode"`
-	StateDir            string                  `json:"state_dir"`
-	ProfileDir          string                  `json:"profile_dir"`
-	MetadataPath        string                  `json:"metadata_path"`
-	State               string                  `json:"state"`
-	Exists              bool                    `json:"exists"`
-	Seeded              bool                    `json:"seeded"`
-	ProfilePerm         string                  `json:"profile_perm,omitempty"`
-	MetadataPerm        string                  `json:"metadata_perm,omitempty"`
-	SeedStrategy        string                  `json:"seed_strategy,omitempty"`
-	LastSeededAt        string                  `json:"last_seeded_at,omitempty"`
-	LastLaunchAt        string                  `json:"last_launch_at,omitempty"`
-	ManagedBrowser      browser.ManagedStatus   `json:"managed_browser,omitempty"`
-	Warnings            []string                `json:"warnings,omitempty"`
-	Maintenance         *profileSeedMaintenance `json:"maintenance,omitempty"`
-	SeedAction          string                  `json:"seed_action,omitempty"`
-	SeedAgeSeconds      int64                   `json:"seed_age_seconds,omitempty"`
-	SeedIntervalSeconds int64                   `json:"seed_interval_seconds,omitempty"`
-	NextCommands        []string                `json:"next_commands"`
+	OK                  bool                     `json:"ok"`
+	BrowserMode         string                   `json:"browser_mode"`
+	StateDir            string                   `json:"state_dir"`
+	ProfileDir          string                   `json:"profile_dir"`
+	MetadataPath        string                   `json:"metadata_path"`
+	State               string                   `json:"state"`
+	Exists              bool                     `json:"exists"`
+	Seeded              bool                     `json:"seeded"`
+	ProfilePerm         string                   `json:"profile_perm,omitempty"`
+	MetadataPerm        string                   `json:"metadata_perm,omitempty"`
+	SeedStrategy        string                   `json:"seed_strategy,omitempty"`
+	LastSeededAt        string                   `json:"last_seeded_at,omitempty"`
+	LastLaunchAt        string                   `json:"last_launch_at,omitempty"`
+	ManagedBrowser      browser.ManagedStatus    `json:"managed_browser,omitempty"`
+	Warnings            []string                 `json:"warnings,omitempty"`
+	Maintenance         *profileSeedMaintenance  `json:"maintenance,omitempty"`
+	SeedAction          string                   `json:"seed_action,omitempty"`
+	SeedAgeSeconds      int64                    `json:"seed_age_seconds,omitempty"`
+	SeedIntervalSeconds int64                    `json:"seed_interval_seconds,omitempty"`
+	ResourcePreflight   *resourcePreflightResult `json:"resource_preflight,omitempty"`
+	SeedStatusPath      string                   `json:"seed_status_path"`
+	LastSeed            *profileSeedStatus       `json:"last_seed,omitempty"`
+	NextCommands        []string                 `json:"next_commands"`
 }
 
 type profileSeedMaintenance struct {
-	WasRunning            bool                   `json:"was_running"`
-	DaemonStopped         bool                   `json:"daemon_stopped,omitempty"`
-	ManagedBrowserStopped bool                   `json:"managed_browser_stopped,omitempty"`
-	Healed                bool                   `json:"healed,omitempty"`
-	HealAction            string                 `json:"heal_action,omitempty"`
-	ManagedBrowser        *browser.ManagedStatus `json:"managed_browser,omitempty"`
+	WasRunning               bool                                   `json:"was_running"`
+	RuntimeWasRunning        bool                                   `json:"runtime_was_running,omitempty"`
+	ManagedBrowserWasRunning bool                                   `json:"managed_browser_was_running,omitempty"`
+	RestartRequested         bool                                   `json:"restart_requested,omitempty"`
+	DaemonStopped            bool                                   `json:"daemon_stopped,omitempty"`
+	ManagedBrowserStopped    bool                                   `json:"managed_browser_stopped,omitempty"`
+	ManagedProcessSweep      *browser.ManagedProcessReconcileResult `json:"managed_process_sweep,omitempty"`
+	ManagedStop              *browser.ManagedStopResult             `json:"managed_stop,omitempty"`
+	Healed                   bool                                   `json:"healed,omitempty"`
+	HealAction               string                                 `json:"heal_action,omitempty"`
+	ManagedBrowser           *browser.ManagedStatus                 `json:"managed_browser,omitempty"`
+}
+
+type profileSeedStatus struct {
+	Path                 string                        `json:"path,omitempty"`
+	Exists               bool                          `json:"exists,omitempty"`
+	ModifiedAt           string                        `json:"modified_at,omitempty"`
+	SchemaVersion        string                        `json:"schema_version"`
+	OK                   bool                          `json:"ok"`
+	BrowserMode          string                        `json:"browser_mode"`
+	Status               string                        `json:"status"`
+	State                string                        `json:"state"`
+	SeedStrategy         string                        `json:"seed_strategy"`
+	SeedAction           string                        `json:"seed_action"`
+	CheckedAt            string                        `json:"checked_at"`
+	LastSeededAt         string                        `json:"last_seeded_at,omitempty"`
+	SeedAgeSeconds       int64                         `json:"seed_age_seconds,omitempty"`
+	SeedIntervalSeconds  int64                         `json:"seed_interval_seconds,omitempty"`
+	Fresh                bool                          `json:"fresh,omitempty"`
+	DefaultProfileCopied bool                          `json:"default_profile_copied,omitempty"`
+	CopiedFileCount      int                           `json:"copied_file_count,omitempty"`
+	ResourcePreflight    *profileSeedResourceStatus    `json:"resource_preflight,omitempty"`
+	Maintenance          *profileSeedMaintenanceStatus `json:"maintenance,omitempty"`
+	Failure              string                        `json:"failure,omitempty"`
+	NextCommands         []string                      `json:"next_commands,omitempty"`
+}
+
+type profileSeedResourceStatus struct {
+	Checked          bool     `json:"checked"`
+	State            string   `json:"state"`
+	Status           string   `json:"status"`
+	HeavyWorkAllowed bool     `json:"heavy_work_allowed"`
+	Reasons          []string `json:"reasons,omitempty"`
+}
+
+type profileSeedMaintenanceStatus struct {
+	WasRunning               bool                            `json:"was_running"`
+	RuntimeWasRunning        bool                            `json:"runtime_was_running,omitempty"`
+	ManagedBrowserWasRunning bool                            `json:"managed_browser_was_running,omitempty"`
+	RestartRequested         bool                            `json:"restart_requested,omitempty"`
+	DaemonStopped            bool                            `json:"daemon_stopped,omitempty"`
+	ManagedBrowserStopped    bool                            `json:"managed_browser_stopped,omitempty"`
+	Healed                   bool                            `json:"healed,omitempty"`
+	HealAction               string                          `json:"heal_action,omitempty"`
+	ManagedProcessSweep      *profileSeedManagedProcessState `json:"managed_process_sweep,omitempty"`
+	ManagedStop              *profileSeedManagedStopState    `json:"managed_stop,omitempty"`
+}
+
+type profileSeedManagedProcessState struct {
+	Checked         bool   `json:"checked"`
+	State           string `json:"state"`
+	RegisteredCount int    `json:"registered_count"`
+	LiveCount       int    `json:"live_count"`
+	StaleCount      int    `json:"stale_count"`
+	ReapedCount     int    `json:"reaped_count"`
+	Reason          string `json:"reason,omitempty"`
+}
+
+type profileSeedManagedStopState struct {
+	Checked bool   `json:"checked"`
+	Stopped bool   `json:"stopped"`
+	Skipped bool   `json:"skipped"`
+	Force   bool   `json:"force,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 func (a *app) browserProfileStatus(ctx context.Context) (browserProfileStatus, error) {
@@ -356,14 +505,21 @@ func browserProfileStatusForStore(ctx context.Context, stateDir string) (browser
 	}
 
 	status := browserProfileStatus{
-		OK:           true,
-		BrowserMode:  "headless",
-		StateDir:     stateDir,
-		ProfileDir:   browser.ManagedProfileDir(stateDir),
-		MetadataPath: browser.ManagedMetadataPath(stateDir),
-		State:        "missing",
-		SeedStrategy: browser.ProfileSeedStrategyManaged,
-		NextCommands: browserProfileNextCommands(false),
+		OK:             true,
+		BrowserMode:    "headless",
+		StateDir:       stateDir,
+		ProfileDir:     browser.ManagedProfileDir(stateDir),
+		MetadataPath:   browser.ManagedMetadataPath(stateDir),
+		SeedStatusPath: profileSeedStatusPath(stateDir),
+		State:          "missing",
+		SeedStrategy:   browser.ProfileSeedStrategyManaged,
+		NextCommands:   browserProfileNextCommands(false),
+	}
+
+	if lastSeed, ok, err := loadProfileSeedStatus(stateDir); err == nil && ok {
+		status.LastSeed = &lastSeed
+	} else if err != nil {
+		status.Warnings = append(status.Warnings, "profile seed status artifact is unreadable")
 	}
 
 	profileInfo, profileErr := os.Stat(status.ProfileDir)
@@ -411,6 +567,218 @@ func browserProfileStatusForStore(ctx context.Context, stateDir string) (browser
 	}
 	status.NextCommands = browserProfileNextCommands(status.Seeded)
 	return status, nil
+}
+
+func profileSeedStatusPath(stateDir string) string {
+	return filepath.Join(stateDir, "profile-seed", "latest.json")
+}
+
+func recordBrowserProfileSeedStatus(ctx context.Context, stateDir string, status *browserProfileStatus, checkedAt time.Time) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	summary := profileSeedStatusFromProfileStatus(stateDir, *status, checkedAt)
+	if err := writeProfileSeedStatus(summary.Path, summary); err != nil {
+		return err
+	}
+	status.SeedStatusPath = summary.Path
+	status.LastSeed = &summary
+	return nil
+}
+
+func (a *app) recordBrowserProfileSeedFailure(ctx context.Context, stateDir string, opts browserProfileSeedOptions, checkedAt time.Time, failure string) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	if checkedAt.IsZero() {
+		checkedAt = time.Now().UTC()
+	}
+	strategy := browser.NormalizeProfileSeedStrategy(opts.Strategy)
+	if !browser.SupportedProfileSeedStrategy(strategy) {
+		strategy = browser.ProfileSeedStrategyManaged
+	}
+	summary := profileSeedStatus{
+		Path:          profileSeedStatusPath(stateDir),
+		Exists:        true,
+		SchemaVersion: profileSeedStatusSchemaVersion,
+		OK:            false,
+		BrowserMode:   "headless",
+		Status:        "fail",
+		State:         "failed",
+		SeedStrategy:  strategy,
+		SeedAction:    "failed",
+		CheckedAt:     checkedAt.UTC().Format(time.RFC3339),
+		Failure:       failure,
+		NextCommands:  browserProfileNextCommands(false),
+	}
+	if opts.IfOlderThan > 0 {
+		summary.SeedIntervalSeconds = int64(opts.IfOlderThan.Seconds())
+	}
+	_ = writeProfileSeedStatus(summary.Path, summary)
+}
+
+func profileSeedStatusFromProfileStatus(stateDir string, status browserProfileStatus, checkedAt time.Time) profileSeedStatus {
+	if checkedAt.IsZero() {
+		checkedAt = time.Now().UTC()
+	}
+	strategy := status.SeedStrategy
+	if strategy == "" {
+		strategy = status.ManagedBrowser.ProfileSeedStrategy
+	}
+	strategy = browser.NormalizeProfileSeedStrategy(strategy)
+	action := status.SeedAction
+	if action == "" {
+		action = "inspected"
+	}
+	lastSeededAt := status.LastSeededAt
+	if lastSeededAt == "" {
+		lastSeededAt = status.ManagedBrowser.LastSeededAt
+	}
+	summary := profileSeedStatus{
+		Path:                 profileSeedStatusPath(stateDir),
+		Exists:               true,
+		SchemaVersion:        profileSeedStatusSchemaVersion,
+		OK:                   status.OK,
+		BrowserMode:          status.BrowserMode,
+		Status:               profileSeedArtifactStatus(status),
+		State:                profileSeedArtifactState(status),
+		SeedStrategy:         strategy,
+		SeedAction:           action,
+		CheckedAt:            checkedAt.UTC().Format(time.RFC3339),
+		LastSeededAt:         lastSeededAt,
+		SeedAgeSeconds:       status.SeedAgeSeconds,
+		SeedIntervalSeconds:  status.SeedIntervalSeconds,
+		Fresh:                action == "skipped",
+		DefaultProfileCopied: status.ManagedBrowser.DefaultProfileCopied,
+		CopiedFileCount:      status.ManagedBrowser.CopiedFileCount,
+		NextCommands:         append([]string(nil), status.NextCommands...),
+	}
+	if status.ResourcePreflight != nil {
+		summary.ResourcePreflight = &profileSeedResourceStatus{
+			Checked:          status.ResourcePreflight.Checked,
+			State:            status.ResourcePreflight.State,
+			Status:           status.ResourcePreflight.Status,
+			HeavyWorkAllowed: status.ResourcePreflight.HeavyWorkAllowed,
+			Reasons:          append([]string(nil), status.ResourcePreflight.Reasons...),
+		}
+	}
+	if status.Maintenance != nil {
+		summary.Maintenance = profileSeedMaintenanceSummary(status.Maintenance)
+	}
+	return summary
+}
+
+func profileSeedArtifactStatus(status browserProfileStatus) string {
+	if !status.OK {
+		return "fail"
+	}
+	switch status.SeedAction {
+	case "seeded":
+		return "pass"
+	case "skipped", "skipped_resource_preflight":
+		return "skip"
+	default:
+		return "pass"
+	}
+}
+
+func profileSeedArtifactState(status browserProfileStatus) string {
+	if !status.OK {
+		return "failed"
+	}
+	switch status.SeedAction {
+	case "skipped":
+		return "fresh"
+	case "skipped_resource_preflight":
+		return "resource_blocked"
+	default:
+		if status.State != "" {
+			return status.State
+		}
+		return "unknown"
+	}
+}
+
+func profileSeedMaintenanceSummary(maintenance *profileSeedMaintenance) *profileSeedMaintenanceStatus {
+	if maintenance == nil {
+		return nil
+	}
+	summary := &profileSeedMaintenanceStatus{
+		WasRunning:               maintenance.WasRunning,
+		RuntimeWasRunning:        maintenance.RuntimeWasRunning,
+		ManagedBrowserWasRunning: maintenance.ManagedBrowserWasRunning,
+		RestartRequested:         maintenance.RestartRequested,
+		DaemonStopped:            maintenance.DaemonStopped,
+		ManagedBrowserStopped:    maintenance.ManagedBrowserStopped,
+		Healed:                   maintenance.Healed,
+		HealAction:               maintenance.HealAction,
+	}
+	if maintenance.ManagedProcessSweep != nil {
+		sweep := maintenance.ManagedProcessSweep
+		summary.ManagedProcessSweep = &profileSeedManagedProcessState{
+			Checked:         sweep.Checked,
+			State:           sweep.State,
+			RegisteredCount: sweep.RegisteredCount,
+			LiveCount:       sweep.LiveCount,
+			StaleCount:      sweep.StaleCount,
+			ReapedCount:     sweep.ReapedCount,
+			Reason:          sweep.Reason,
+		}
+	}
+	if maintenance.ManagedStop != nil {
+		stop := maintenance.ManagedStop
+		summary.ManagedStop = &profileSeedManagedStopState{
+			Checked: stop.Checked,
+			Stopped: stop.Stopped,
+			Skipped: stop.Skipped,
+			Force:   stop.Force,
+			Reason:  stop.Reason,
+		}
+	}
+	return summary
+}
+
+func writeProfileSeedStatus(path string, summary profileSeedStatus) error {
+	payload, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return commandError("artifact_write_failed", "internal", fmt.Sprintf("marshal profile seed status: %v", err), ExitInternal, []string{"cdp --browser-mode headless browser profile seed --strategy managed --json"})
+	}
+	payload = append(payload, '\n')
+	cleanPath := filepath.Clean(path)
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o700); err != nil {
+		return commandError("artifact_write_failed", "io", fmt.Sprintf("create profile seed status directory: %v", err), ExitInternal, []string{"cdp --browser-mode headless browser profile seed --strategy managed --json"})
+	}
+	if err := os.WriteFile(cleanPath, payload, 0o600); err != nil {
+		return commandError("artifact_write_failed", "io", fmt.Sprintf("write profile seed status %s: %v", cleanPath, err), ExitInternal, []string{"cdp --browser-mode headless browser profile seed --strategy managed --json"})
+	}
+	return nil
+}
+
+func loadProfileSeedStatus(stateDir string) (profileSeedStatus, bool, error) {
+	path := profileSeedStatusPath(stateDir)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return profileSeedStatus{}, false, nil
+		}
+		return profileSeedStatus{}, false, fmt.Errorf("stat profile seed status: %w", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return profileSeedStatus{}, false, fmt.Errorf("read profile seed status: %w", err)
+	}
+	var status profileSeedStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return profileSeedStatus{}, false, fmt.Errorf("parse profile seed status: %w", err)
+	}
+	status.Path = path
+	status.Exists = true
+	status.ModifiedAt = info.ModTime().UTC().Format(time.RFC3339)
+	return status, true, nil
 }
 
 func browserProfileNextCommands(seeded bool) []string {

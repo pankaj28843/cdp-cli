@@ -3,6 +3,7 @@ package browser_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -214,6 +215,170 @@ func TestManagedMetadataRoundTripAndStatusRedaction(t *testing.T) {
 	}
 }
 
+func TestManagedProcessRegistryRoundTripAndStatusRedaction(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	registry := browser.ManagedProcessRegistry{
+		Version:     1,
+		BrowserMode: "headless",
+		Records: []browser.ManagedProcessRecord{{
+			PID:                 123,
+			BrowserMode:         "headless",
+			UserDataDir:         browser.ManagedProfileDir(stateDir),
+			DebuggingPort:       "9222",
+			StartedAt:           "2026-05-21T12:00:00Z",
+			LastSeenAt:          "2026-05-21T12:00:01Z",
+			State:               "live",
+			OwnershipMarker:     "secret-token",
+			ProcessStartTime:    "2026-05-21T12:00:00Z",
+			ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+		}},
+	}
+	if err := browser.SaveManagedProcessRegistry(stateDir, registry); err != nil {
+		t.Fatalf("SaveManagedProcessRegistry returned error: %v", err)
+	}
+	info, err := os.Stat(browser.ManagedProcessRegistryPath(stateDir))
+	if err != nil {
+		t.Fatalf("stat registry: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("registry permissions = %o, want 600", got)
+	}
+	loaded, ok, err := browser.LoadManagedProcessRegistry(stateDir)
+	if err != nil {
+		t.Fatalf("LoadManagedProcessRegistry returned error: %v", err)
+	}
+	if !ok || len(loaded.Records) != 1 || loaded.Records[0].OwnershipMarker != "secret-token" || loaded.Records[0].ProcessStartTime == "" {
+		t.Fatalf("LoadManagedProcessRegistry() = %+v, %v, want private fields preserved", loaded, ok)
+	}
+	status := browser.ManagedProcessStatuses(loaded.Records)
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal statuses: %v", err)
+	}
+	if strings.Contains(string(encoded), "secret-token") || strings.Contains(string(encoded), "process_start_time") {
+		t.Fatalf("ManagedProcessStatuses leaked internal ownership fields: %s", string(encoded))
+	}
+}
+
+func TestLoadManagedProcessRegistryMissingAndMalformed(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	registry, ok, err := browser.LoadManagedProcessRegistry(stateDir)
+	if err != nil {
+		t.Fatalf("LoadManagedProcessRegistry missing returned error: %v", err)
+	}
+	if ok || registry.Version != 0 {
+		t.Fatalf("LoadManagedProcessRegistry missing = %+v, %v; want missing", registry, ok)
+	}
+	if err := os.MkdirAll(filepath.Dir(browser.ManagedProcessRegistryPath(stateDir)), 0o700); err != nil {
+		t.Fatalf("create registry parent: %v", err)
+	}
+	if err := os.WriteFile(browser.ManagedProcessRegistryPath(stateDir), []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("write malformed registry: %v", err)
+	}
+	if _, _, err := browser.LoadManagedProcessRegistry(stateDir); err == nil {
+		t.Fatalf("LoadManagedProcessRegistry malformed returned nil error")
+	}
+	result, err := browser.ReconcileManagedProcesses(context.Background(), stateDir, browser.ManagedProcessReconcileOptions{ReadOnly: true})
+	if err == nil || result.State != "error" {
+		t.Fatalf("ReconcileManagedProcesses malformed result=%+v err=%v, want error state", result, err)
+	}
+}
+
+func TestReconcileManagedProcessesReapsDuplicateAndRetainsActivePID(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := browser.SaveManagedProcessRegistry(stateDir, browser.ManagedProcessRegistry{
+		Version:     1,
+		BrowserMode: "headless",
+		Records: []browser.ManagedProcessRecord{
+			{PID: 101, BrowserMode: "headless", UserDataDir: profileDir, StartedAt: "2026-05-21T11:00:00Z", OwnershipMarker: "old-token", ProcessStartTime: "2026-05-21T11:00:00Z"},
+			{PID: 202, BrowserMode: "headless", UserDataDir: profileDir, StartedAt: "2026-05-21T12:00:00Z", OwnershipMarker: "new-token", ProcessStartTime: "2026-05-21T12:00:00Z"},
+		},
+	}); err != nil {
+		t.Fatalf("SaveManagedProcessRegistry returned error: %v", err)
+	}
+	var signaled []int
+	result, err := browser.ReconcileManagedProcesses(context.Background(), stateDir, browser.ManagedProcessReconcileOptions{
+		ActivePID:  202,
+		ReapExtras: true,
+		Now:        func() time.Time { return time.Date(2026, 5, 21, 12, 5, 0, 0, time.UTC) },
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return []int{101, 202}, nil
+		},
+		Signal: func(pid int) error {
+			signaled = append(signaled, pid)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileManagedProcesses returned error: %v", err)
+	}
+	if result.State != "reaped" || result.LiveCount != 1 || result.ReapedCount != 1 || !containsInt(result.ReapedPIDs, 101) || containsInt(signaled, 202) {
+		t.Fatalf("ReconcileManagedProcesses = %+v signaled=%+v, want only duplicate 101 reaped", result, signaled)
+	}
+	if !containsString(result.SafetyChecks, "process_command_line_matches_managed_profile") {
+		t.Fatalf("safety checks = %+v, want command-line ownership check", result.SafetyChecks)
+	}
+	loaded, ok, err := browser.LoadManagedProcessRegistry(stateDir)
+	if err != nil || !ok {
+		t.Fatalf("LoadManagedProcessRegistry ok=%v err=%v, want saved registry", ok, err)
+	}
+	if got := processRecordState(loaded.Records, 101); got != "reaped" {
+		t.Fatalf("record 101 state = %q, want reaped", got)
+	}
+	if got := processRecordState(loaded.Records, 202); got != "live" {
+		t.Fatalf("record 202 state = %q, want live", got)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(encoded), "old-token") || strings.Contains(string(encoded), "new-token") || strings.Contains(string(encoded), "process_start_time") {
+		t.Fatalf("ReconcileManagedProcesses leaked internal ownership fields: %s", string(encoded))
+	}
+}
+
+func TestReconcileManagedProcessesReportsSignalFailure(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := browser.SaveManagedProcessRegistry(stateDir, browser.ManagedProcessRegistry{
+		Version:     1,
+		BrowserMode: "headless",
+		Records: []browser.ManagedProcessRecord{
+			{PID: 101, BrowserMode: "headless", UserDataDir: profileDir},
+			{PID: 202, BrowserMode: "headless", UserDataDir: profileDir},
+		},
+	}); err != nil {
+		t.Fatalf("SaveManagedProcessRegistry returned error: %v", err)
+	}
+	result, err := browser.ReconcileManagedProcesses(context.Background(), stateDir, browser.ManagedProcessReconcileOptions{
+		ActivePID:  202,
+		ReapExtras: true,
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return []int{101, 202}, nil
+		},
+		Signal: func(pid int) error {
+			if pid == 101 {
+				return errors.New("synthetic signal failure")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileManagedProcesses returned error: %v", err)
+	}
+	if result.State != "degraded" || result.LiveCount != 2 || len(result.SignalFailures) != 1 || result.SignalFailures[0].PID != 101 || !containsInt(result.SkippedPIDs, 101) {
+		t.Fatalf("ReconcileManagedProcesses = %+v, want degraded signal failure for 101", result)
+	}
+	loaded, ok, err := browser.LoadManagedProcessRegistry(stateDir)
+	if err != nil || !ok {
+		t.Fatalf("LoadManagedProcessRegistry ok=%v err=%v, want saved registry", ok, err)
+	}
+	if got := processRecordState(loaded.Records, 101); got != "signal_failed" {
+		t.Fatalf("record 101 state = %q, want signal_failed", got)
+	}
+}
+
 func TestStopOwnedManagedChromeRequiresOwnershipMetadata(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	metadata := browser.ManagedMetadata{
@@ -287,6 +452,54 @@ while :; do sleep 1; done
 	}
 	if !result.Checked || !result.Force || result.Skipped || !result.Stopped || len(signaled) == 0 {
 		t.Fatalf("StopManagedChrome = %+v signaled=%+v, want forced recovered process", result, signaled)
+	}
+	if signaled[0] != cmd.Process.Pid || !containsInt(result.PIDs, cmd.Process.Pid) {
+		t.Fatalf("StopManagedChrome pids = result %+v signaled=%+v, want fake chrome pid %d", result.PIDs, signaled, cmd.Process.Pid)
+	}
+	if !containsString(result.SafetyChecks, "managed_profile_path_matches_state_dir") || !containsString(result.SafetyChecks, "process_command_line_matches_managed_profile") {
+		t.Fatalf("safety checks = %+v, want managed profile and command-line checks", result.SafetyChecks)
+	}
+}
+
+func TestStopManagedChromeForceRecoversWithoutMetadataFromCommandLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process command-line recovery test is unix-only")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := `#!/usr/bin/env sh
+trap 'exit 0' INT TERM
+while :; do sleep 1; done
+`
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake chrome: %v", err)
+	}
+	cmd := exec.Command(chromePath, "--headless", "--remote-debugging-port=0", "--user-data-dir="+profileDir)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start fake managed chrome: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+
+	var signaled []int
+	result, err := browser.StopManagedChrome(context.Background(), stateDir, browser.ManagedStopOptions{
+		Force: true,
+		Signal: func(pid int) error {
+			signaled = append(signaled, pid)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StopManagedChrome returned error: %v", err)
+	}
+	if !result.Checked || !result.Force || result.Skipped || !result.Stopped || len(signaled) == 0 {
+		t.Fatalf("StopManagedChrome = %+v signaled=%+v, want forced recovered process without metadata", result, signaled)
 	}
 	if signaled[0] != cmd.Process.Pid || !containsInt(result.PIDs, cmd.Process.Pid) {
 		t.Fatalf("StopManagedChrome pids = result %+v signaled=%+v, want fake chrome pid %d", result.PIDs, signaled, cmd.Process.Pid)
@@ -431,6 +644,13 @@ sleep 30
 	if err != nil {
 		t.Fatalf("StartManagedChrome returned error: %v", err)
 	}
+	registry, ok, err := browser.LoadManagedProcessRegistry(stateDir)
+	if err != nil {
+		t.Fatalf("LoadManagedProcessRegistry returned error: %v", err)
+	}
+	if !ok || len(registry.Records) != 1 || registry.Records[0].PID != launch.Metadata.ChromePID || registry.Records[0].OwnershipMarker == "" {
+		t.Fatalf("managed process registry = %+v ok=%v, want registered launch", registry, ok)
+	}
 	if launch.Metadata.DebuggingPort != "12345" {
 		t.Fatalf("StartManagedChrome reused stale active port %q, want fake Chrome port", launch.Metadata.DebuggingPort)
 	}
@@ -449,6 +669,44 @@ sleep 30
 	}
 	if err := process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("managed chrome died when caller context was canceled: %v", err)
+	}
+}
+
+func TestStartManagedChromeBlocksWhenManagedProcessAlreadyLive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell chrome test is unix-only")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("create managed profile: %v", err)
+	}
+	oldChromePath := filepath.Join(t.TempDir(), "old-fake-chrome")
+	oldScript := `#!/usr/bin/env sh
+trap 'exit 0' INT TERM
+while :; do sleep 1; done
+`
+	if err := os.WriteFile(oldChromePath, []byte(oldScript), 0o755); err != nil {
+		t.Fatalf("write old fake chrome: %v", err)
+	}
+	old := exec.Command(oldChromePath, "--headless", "--remote-debugging-port=0", "--user-data-dir="+profileDir)
+	if err := old.Start(); err != nil {
+		t.Fatalf("start old fake managed chrome: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = old.Process.Kill()
+		_, _ = old.Process.Wait()
+	})
+	newChromePath := filepath.Join(t.TempDir(), "new-fake-chrome")
+	newScript := `#!/usr/bin/env sh
+exit 99
+`
+	if err := os.WriteFile(newChromePath, []byte(newScript), 0o755); err != nil {
+		t.Fatalf("write new fake chrome: %v", err)
+	}
+	_, err := browser.StartManagedChrome(context.Background(), browser.ManagedOptions{StateDir: stateDir, Chrome: newChromePath})
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("StartManagedChrome error = %v, want already-running guard", err)
 	}
 }
 
@@ -665,6 +923,15 @@ func exitedPID(t *testing.T) int {
 		t.Fatalf("wait helper process: %v", err)
 	}
 	return pid
+}
+
+func processRecordState(records []browser.ManagedProcessRecord, pid int) string {
+	for _, record := range records {
+		if record.PID == pid {
+			return record.State
+		}
+	}
+	return ""
 }
 
 func TestValidateLoopbackEndpoint(t *testing.T) {

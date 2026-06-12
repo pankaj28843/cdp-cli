@@ -157,8 +157,15 @@ func (a *app) runBrowserPreflight(ctx context.Context, opts browserPreflightOpti
 	report["daemon"] = status
 	report["health"] = health
 	applyPreflightBudget(report, health)
+	resourcePreflight := a.maintenanceResourcePreflight(ctx, status, health)
+	report["resource_preflight"] = resourcePreflight
 	if healthErr != nil {
 		report["health_error"] = healthErr.Error()
+	}
+	if browserPreflightHeavyWorkRequested(opts) && !resourcePreflight.HeavyWorkAllowed {
+		report["state"] = "resource_blocked"
+		report["next_commands"] = uniqueCommands(toStringSlice(report["next_commands"]), resourcePreflight.NextCommands)
+		return fail("resource_preflight_blocked", "resource_budget", "browser preflight skipped heavy maintenance because host or browser resources are below policy", ExitCheckFailed)
 	}
 
 	if opts.ProfileSeed != "" {
@@ -182,10 +189,17 @@ func (a *app) runBrowserPreflight(ctx context.Context, opts browserPreflightOpti
 		report["daemon"] = status
 		report["health"] = health
 		applyPreflightBudget(report, health)
+		resourcePreflight = a.maintenanceResourcePreflight(ctx, status, health)
+		report["resource_preflight"] = resourcePreflight
 		if healthErr != nil {
 			report["health_error"] = healthErr.Error()
 		} else {
 			delete(report, "health_error")
+		}
+		if seedStatus.SeedAction == "skipped_resource_preflight" {
+			report["state"] = "resource_blocked"
+			report["next_commands"] = uniqueCommands(toStringSlice(report["next_commands"]), resourcePreflight.NextCommands)
+			return fail("resource_preflight_blocked", "resource_budget", "browser profile seed skipped because host or browser resources are below policy", ExitCheckFailed)
 		}
 	}
 
@@ -203,6 +217,8 @@ func (a *app) runBrowserPreflight(ctx context.Context, opts browserPreflightOpti
 				report["daemon"] = status
 				report["health"] = health
 				applyPreflightBudget(report, health)
+				resourcePreflight = a.maintenanceResourcePreflight(ctx, status, health)
+				report["resource_preflight"] = resourcePreflight
 				if healthErr != nil {
 					report["health_error"] = healthErr.Error()
 				} else {
@@ -266,6 +282,8 @@ func (a *app) runBrowserPreflight(ctx context.Context, opts browserPreflightOpti
 		report["daemon"] = status
 		report["health"] = health
 		applyPreflightBudget(report, health)
+		resourcePreflight = a.maintenanceResourcePreflight(ctx, status, health)
+		report["resource_preflight"] = resourcePreflight
 		if healthErr != nil {
 			report["health_error"] = healthErr.Error()
 		} else {
@@ -469,6 +487,10 @@ func healthOverBudget(health map[string]any) bool {
 	tabs, _ := health["tabs_over_budget"].(bool)
 	windows, _ := health["windows_over_budget"].(bool)
 	return tabs || windows
+}
+
+func browserPreflightHeavyWorkRequested(opts browserPreflightOptions) bool {
+	return opts.Repair || opts.OpenReadiness || browser.NormalizeProfileSeedStrategy(opts.ProfileSeed) == browser.ProfileSeedStrategyCopyDefault
 }
 
 func cleanupCloseRequired(data map[string]any) bool {

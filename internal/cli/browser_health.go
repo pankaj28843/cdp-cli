@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
@@ -143,6 +144,9 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		"next_commands":              status.NextCommands,
 	}
 	health["daemon_processes_by_mode"] = a.daemonProcessesByMode(ctx)
+	if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
+		health["managed_processes"] = a.managedProcessLifecycleStatus(ctx, status)
+	}
 	if status.Runtime != nil {
 		health["runtime"] = map[string]any{
 			"pid":          status.Runtime.PID,
@@ -207,6 +211,21 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		health["code"] = headlessHealthFailureCode(status, health)
 	}
 	return finalizeBrowserHealth(a.browserModeName(), health)
+}
+
+func (a *app) managedProcessLifecycleStatus(ctx context.Context, status daemon.Status) any {
+	store, err := a.stateStore()
+	if err != nil {
+		return map[string]any{"checked": true, "state": "error", "reason": err.Error()}
+	}
+	result, err := browser.ReconcileManagedProcesses(ctx, store.Dir, browser.ManagedProcessReconcileOptions{
+		ActivePID: managedChromeActivePID(status),
+		ReadOnly:  true,
+	})
+	if err != nil {
+		return map[string]any{"checked": true, "state": "error", "reason": err.Error()}
+	}
+	return result
 }
 
 func (a *app) applyManagedBrowserHealth(health map[string]any, runtime *daemon.Runtime) {

@@ -255,6 +255,151 @@ func TestDaemonHealthReportsUsableDegradedKeepaliveReadErrorJSON(t *testing.T) {
 	}
 }
 
+func TestDaemonMaintenanceDryRunContractJSON(t *testing.T) {
+	stateDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"30m"}}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"--browser-mode", "headless",
+		"--state-dir", stateDir,
+		"--config", configPath,
+		"daemon", "maintenance",
+		"--dry-run",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon maintenance dry-run exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK            bool   `json:"ok"`
+		SchemaVersion string `json:"schema_version"`
+		BrowserMode   string `json:"browser_mode"`
+		State         string `json:"state"`
+		Status        string `json:"status"`
+		Action        string `json:"action"`
+		DryRun        bool   `json:"dry_run"`
+		Options       struct {
+			ProfileSeedStrategy           string `json:"profile_seed_strategy"`
+			ProfileSeedIfOlderThan        string `json:"profile_seed_if_older_than"`
+			ProfileSeedIfOlderThanSeconds int64  `json:"profile_seed_if_older_than_seconds"`
+			Reconnect                     string `json:"reconnect"`
+			Repair                        bool   `json:"repair"`
+			Force                         bool   `json:"force"`
+			Cleanup                       bool   `json:"cleanup"`
+			CleanupClose                  bool   `json:"cleanup_close"`
+			CleanupMax                    int    `json:"cleanup_max"`
+		} `json:"options"`
+		Phases []struct {
+			Order         int    `json:"order"`
+			Name          string `json:"name"`
+			Status        string `json:"status"`
+			Required      bool   `json:"required"`
+			Mutates       bool   `json:"mutates"`
+			HeavyWork     bool   `json:"heavy_work"`
+			ResourceGated bool   `json:"resource_gated"`
+			Command       string `json:"command"`
+			ArtifactKey   string `json:"artifact_key"`
+		} `json:"phases"`
+		Artifacts struct {
+			Summary string `json:"summary"`
+		} `json:"artifacts"`
+		NextCommands []string `json:"next_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon maintenance dry-run output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.SchemaVersion != "cdp-headless-maintenance/v1" || got.BrowserMode != "headless" || got.State != "planned" || got.Status != "dry_run" || got.Action != "planned" || !got.DryRun {
+		t.Fatalf("daemon maintenance dry-run = %+v, want planned dry-run contract", got)
+	}
+	if got.Options.ProfileSeedStrategy != "copy-default" || got.Options.ProfileSeedIfOlderThan != "30m" || got.Options.ProfileSeedIfOlderThanSeconds != 1800 || got.Options.Reconnect != "30s" || !got.Options.Repair || !got.Options.Force || !got.Options.Cleanup || !got.Options.CleanupClose || got.Options.CleanupMax != 25 {
+		t.Fatalf("maintenance options = %+v, want cron-safe defaults with configured copy-default seed cadence", got.Options)
+	}
+	wantPhases := []string{
+		"acquire_lock",
+		"managed_process_sweep",
+		"resource_preflight",
+		"profile_seed",
+		"daemon_keepalive",
+		"daemon_health_check",
+		"page_cleanup",
+		"write_artifact",
+	}
+	if len(got.Phases) != len(wantPhases) {
+		t.Fatalf("maintenance phases = %+v, want %d phases", got.Phases, len(wantPhases))
+	}
+	for i, want := range wantPhases {
+		if got.Phases[i].Order != i+1 || got.Phases[i].Name != want || got.Phases[i].Status != "planned" {
+			t.Fatalf("phase[%d] = %+v, want %s order %d planned", i, got.Phases[i], want, i+1)
+		}
+	}
+	if !got.Phases[1].Required || !got.Phases[1].Mutates {
+		t.Fatalf("managed process sweep phase = %+v, want required mutating phase before launch work", got.Phases[1])
+	}
+	if !got.Phases[3].HeavyWork || !got.Phases[3].ResourceGated || !strings.Contains(got.Phases[3].Command, "browser profile seed --strategy copy-default --if-older-than 30m") {
+		t.Fatalf("profile seed phase = %+v, want resource-gated copy-default seed command", got.Phases[3])
+	}
+	if !strings.Contains(got.Phases[4].Command, "daemon keepalive --managed-process-sweep --repair --force") {
+		t.Fatalf("keepalive phase command = %q, want managed-process sweep repair command", got.Phases[4].Command)
+	}
+	wantSummary := filepath.Join(stateDir, "headless-maintenance", "latest.json")
+	if got.Artifacts.Summary != wantSummary {
+		t.Fatalf("summary artifact path = %q, want %q", got.Artifacts.Summary, wantSummary)
+	}
+	if _, err := os.Stat(wantSummary); !os.IsNotExist(err) {
+		t.Fatalf("dry-run summary artifact stat err = %v, want artifact not written", err)
+	}
+	if !containsString(got.NextCommands, "cdp --browser-mode headless daemon maintenance --json") || !containsString(got.NextCommands, "cdp cron install --json") {
+		t.Fatalf("next_commands = %+v, want maintenance and cron install commands", got.NextCommands)
+	}
+}
+
+func TestDaemonMaintenanceDescribeJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"describe", "--command", "daemon maintenance", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("describe daemon maintenance exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		OK       bool `json:"ok"`
+		Commands struct {
+			Name     string `json:"name"`
+			Short    string `json:"short"`
+			Examples []string
+			Flags    []struct {
+				Name string `json:"name"`
+			} `json:"flags"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("describe daemon maintenance output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Commands.Name != "maintenance" || !strings.Contains(got.Commands.Short, "unattended managed headless maintenance") {
+		t.Fatalf("describe daemon maintenance = %+v, want maintenance command metadata", got.Commands)
+	}
+	if !hasExampleContaining(got.Commands.Examples, "daemon maintenance --dry-run --json") || !hasExampleContaining(got.Commands.Examples, "daemon maintenance --json") {
+		t.Fatalf("daemon maintenance examples = %+v, want dry-run and run examples", got.Commands.Examples)
+	}
+	if !flagInfoContains(got.Commands.Flags, "dry-run") || !flagInfoContains(got.Commands.Flags, "profile-seed-strategy") || !flagInfoContains(got.Commands.Flags, "cleanup-close") {
+		t.Fatalf("daemon maintenance flags = %+v, want dry-run/profile-seed-strategy/cleanup-close", got.Commands.Flags)
+	}
+}
+
+func flagInfoContains(flags []struct {
+	Name string `json:"name"`
+}, want string) bool {
+	for _, flag := range flags {
+		if flag.Name == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDaemonHealthCheckClearsKeepaliveReadErrorDegradationJSON(t *testing.T) {
 	stateDir := shortCLIStateDir(t)
 	artifactDir := filepath.Join(stateDir, "health-artifacts")
@@ -1067,7 +1212,7 @@ func TestDaemonKeepaliveHeadlessDoesNotRepairWhenDaemonRPCReadyAndLauncherPIDExi
 	}
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "keepalive", "--repair", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "keepalive", "--managed-process-sweep", "--repair", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon keepalive exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -1076,7 +1221,12 @@ func TestDaemonKeepaliveHeadlessDoesNotRepairWhenDaemonRPCReadyAndLauncherPIDExi
 		State  string `json:"state"`
 		Action string `json:"action"`
 		Health struct {
-			Result               string `json:"result"`
+			Result              string `json:"result"`
+			ManagedProcessSweep struct {
+				Checked   bool   `json:"checked"`
+				State     string `json:"state"`
+				LiveCount int    `json:"live_count"`
+			} `json:"managed_process_sweep"`
 			ManagedBrowserHealth struct {
 				State          string `json:"state"`
 				DaemonRPCReady bool   `json:"daemon_rpc_ready"`
@@ -1091,6 +1241,9 @@ func TestDaemonKeepaliveHeadlessDoesNotRepairWhenDaemonRPCReadyAndLauncherPIDExi
 	}
 	if got.Health.ManagedBrowserHealth.State != "daemon_rpc_ready_pid_not_running" || !got.Health.ManagedBrowserHealth.DaemonRPCReady {
 		t.Fatalf("managed browser health = %+v, want launcher PID diagnostic only", got.Health.ManagedBrowserHealth)
+	}
+	if !got.Health.ManagedProcessSweep.Checked || got.Health.ManagedProcessSweep.State != "healthy" || got.Health.ManagedProcessSweep.LiveCount != 0 {
+		t.Fatalf("managed process sweep = %+v, want executed healthy sweep", got.Health.ManagedProcessSweep)
 	}
 }
 
@@ -1267,6 +1420,10 @@ func TestDaemonKeepaliveLockIsScopedByBrowserMode(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	stateDir := t.TempDir()
+	t.Cleanup(func() {
+		var stopOut, stopErr bytes.Buffer
+		_ = cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+	})
 	writeKeepaliveLock(t, stateDir, "daemon-keepalive-headless-browser_url-browser-url", os.Getpid(), "headless_active_probe")
 
 	var out, errOut bytes.Buffer

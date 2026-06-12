@@ -92,6 +92,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp daemon stop": {
 			"cdp daemon stop --json",
+			"cdp --browser-mode headless daemon stop --force-managed --json",
 		},
 		"cdp daemon restart": {
 			"cdp daemon restart --auto-connect --json",
@@ -106,6 +107,12 @@ func commandExamples(path string) []string {
 			"cdp cron install --json",
 			"cdp daemon keepalive --browser-url <browser-url> --json",
 			"cdp --connection default daemon keepalive --probe auto --json",
+		},
+		"cdp daemon maintenance": {
+			"cdp --browser-mode headless daemon maintenance --dry-run --json",
+			"cdp --browser-mode headless daemon maintenance --json",
+			"cdp --browser-mode headless daemon maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 6h --dry-run --json",
+			"cdp --browser-mode headless daemon maintenance --stale-lock-after 1s --json",
 		},
 		"cdp daemon health-check": {
 			"cdp --browser-mode headless daemon health-check --repair --json",
@@ -125,12 +132,14 @@ func commandExamples(path string) []string {
 		},
 		"cdp cron status": {
 			"cdp cron status --json",
+			"cdp cron status --json | jq '{state,tasks,managed_processes,last_run_artifacts}'",
 			"cdp cron diff --json",
 		},
 		"cdp cron install": {
 			"cdp cron install --json",
 			"cdp --browser-mode headed cron install --dry-run --json",
 			"cdp --browser-mode headless cron install --dry-run --json",
+			"cdp --config cdp.json cron install --dry-run --json",
 			"cdp cron install --cdp-bin $HOME/.local/bin/cdp --json",
 		},
 		"cdp cron remove": {

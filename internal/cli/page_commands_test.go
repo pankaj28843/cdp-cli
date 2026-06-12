@@ -471,9 +471,13 @@ func TestPageCleanupStateIsScopedByBrowserModeJSON(t *testing.T) {
 
 func TestPageCleanupHeadlessConnectionErrorUsesModeScopedRemediation(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "page", "cleanup", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
+	stateDir := t.TempDir()
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "page", "cleanup", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitConnection {
 		t.Fatalf("page cleanup exit code = %d, want %d; stderr=%s", code, cli.ExitConnection, errOut.String())
+	}
+	if runtimeState, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless"); err != nil || ok {
+		t.Fatalf("headless runtime after cleanup error = %+v ok=%v err=%v, want no daemon auto-repair side effect", runtimeState, ok, err)
 	}
 	var got struct {
 		OK                  bool     `json:"ok"`
@@ -1110,7 +1114,7 @@ func TestPageCloseAndActivateJSON(t *testing.T) {
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
 	})
 	defer server.Close()
-	startFakeDaemon(t, server, "browser_url")
+	stateDir := startFakeDaemon(t, server, "browser_url")
 
 	tests := []struct {
 		name   string
@@ -1124,7 +1128,8 @@ func TestPageCloseAndActivateJSON(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			code := cli.Execute(context.Background(), tt.args, &out, &errOut, cli.BuildInfo{})
+			args := append([]string{"--state-dir", stateDir}, tt.args...)
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
 			if code != cli.ExitOK {
 				t.Fatalf("%s exit code = %d, want %d; stderr=%s", tt.name, code, cli.ExitOK, errOut.String())
 			}

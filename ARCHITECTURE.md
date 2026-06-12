@@ -67,6 +67,14 @@ file count, and debugging port, but not ownership internals or copied file
 values. Headless tabs created by cdp workflows are self-managed and disposable;
 cron cleanup may force-close stale cdp-created headless pages.
 
+Managed headless scheduled work is centralized through `daemon maintenance`.
+The cron renderer installs one headless maintenance task that runs managed
+process reconciliation, resource preflight, profile seed freshness checks,
+daemon keepalive repair, synthetic health-check, page cleanup, and summary
+artifact writes as ordered phases. Phase results stay inside the maintenance
+phase array; top-level cron status links to task definitions, managed process
+lifecycle state, and recent artifact paths for troubleshooting.
+
 Runtime artifacts are mode-specific so headed and headless can coexist: headed
 keeps the historical singleton paths, while headless uses its own runtime file,
 socket, log, keepalive lock, selected page, and cleanup scope. Daemon lookup,

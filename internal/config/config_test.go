@@ -75,7 +75,10 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
     "browser": {
     "mode": "headless",
     "resource_budget": {
-      "max_tabs": 33
+      "max_tabs": 33,
+      "min_free_memory_mb": 2048,
+      "min_free_disk_mb": 4096,
+      "max_load_per_cpu": 1.5
     },
     "headless": {
       "profile_seed_strategy": "managed",
@@ -111,6 +114,15 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	if got := cfg.Browser.ResourceBudget.MaxTabs; got != 33 {
 		t.Fatalf("ResourceBudget.MaxTabs = %d, want 33", got)
 	}
+	if got := cfg.Browser.ResourceBudget.MinFreeMemoryMB; got != 2048 {
+		t.Fatalf("ResourceBudget.MinFreeMemoryMB = %d, want 2048", got)
+	}
+	if got := cfg.Browser.ResourceBudget.MinFreeDiskMB; got != 4096 {
+		t.Fatalf("ResourceBudget.MinFreeDiskMB = %d, want 4096", got)
+	}
+	if got := cfg.Browser.ResourceBudget.MaxLoadPerCPU; got != 1.5 {
+		t.Fatalf("ResourceBudget.MaxLoadPerCPU = %v, want 1.5", got)
+	}
 }
 
 func TestLoadRejectsMalformedConfig(t *testing.T) {
@@ -121,8 +133,12 @@ func TestLoadRejectsMalformedConfig(t *testing.T) {
 		{"bad json", `{`},
 		{"bad mode", `{"browser":{"mode":"hidden"}}`},
 		{"bad timeout", `{"timeout":"soon"}`},
+		{"bad profile seed strategy", `{"browser":{"headless":{"profile_seed_strategy":"mirror-default"}}}`},
 		{"bad refresh duration", `{"browser":{"headless":{"profile_refresh_after":"daily"}}}`},
 		{"bad max tabs", `{"browser":{"resource_budget":{"max_tabs":-1}}}`},
+		{"bad min free memory", `{"browser":{"resource_budget":{"min_free_memory_mb":-1}}}`},
+		{"bad min free disk", `{"browser":{"resource_budget":{"min_free_disk_mb":-1}}}`},
+		{"bad max load", `{"browser":{"resource_budget":{"max_load_per_cpu":-1}}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -149,7 +165,10 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 				ProfileRefreshAfter: 48 * time.Hour,
 			},
 			ResourceBudget: config.ResourceBudgetConfig{
-				MaxTabs: 33,
+				MaxTabs:         33,
+				MinFreeMemoryMB: 2048,
+				MinFreeDiskMB:   4096,
+				MaxLoadPerCPU:   1.5,
 			},
 		},
 	}
@@ -185,6 +204,15 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 	if loaded.Browser.ResourceBudget.MaxTabs != 33 {
 		t.Fatalf("loaded ResourceBudget.MaxTabs = %d, want 33", loaded.Browser.ResourceBudget.MaxTabs)
 	}
+	if loaded.Browser.ResourceBudget.MinFreeMemoryMB != 2048 {
+		t.Fatalf("loaded ResourceBudget.MinFreeMemoryMB = %d, want 2048", loaded.Browser.ResourceBudget.MinFreeMemoryMB)
+	}
+	if loaded.Browser.ResourceBudget.MinFreeDiskMB != 4096 {
+		t.Fatalf("loaded ResourceBudget.MinFreeDiskMB = %d, want 4096", loaded.Browser.ResourceBudget.MinFreeDiskMB)
+	}
+	if loaded.Browser.ResourceBudget.MaxLoadPerCPU != 1.5 {
+		t.Fatalf("loaded ResourceBudget.MaxLoadPerCPU = %v, want 1.5", loaded.Browser.ResourceBudget.MaxLoadPerCPU)
+	}
 }
 
 func TestSaveRejectsInvalidBrowserMode(t *testing.T) {
@@ -192,6 +220,14 @@ func TestSaveRejectsInvalidBrowserMode(t *testing.T) {
 	cfg := config.Config{Browser: config.BrowserConfig{Mode: config.BrowserMode("hidden")}}
 	if err := config.Save(path, cfg); err == nil {
 		t.Fatalf("Save returned nil error, want invalid mode failure")
+	}
+}
+
+func TestSaveRejectsInvalidProfileSeedStrategy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Config{Browser: config.BrowserConfig{Headless: config.HeadlessConfig{ProfileSeedStrategy: "mirror-default"}}}
+	if err := config.Save(path, cfg); err == nil {
+		t.Fatalf("Save returned nil error, want invalid profile seed strategy failure")
 	}
 }
 

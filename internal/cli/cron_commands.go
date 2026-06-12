@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -8,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
@@ -40,11 +43,63 @@ type cronBlockState struct {
 	Text      string   `json:"text,omitempty"`
 }
 
+const (
+	cronTaskHeadedDaemonKeepalive    = "headed-daemon-keepalive"
+	cronTaskHeadlessMaintenance      = "headless-maintenance"
+	cronTaskHeadlessDaemonKeepalive  = "headless-daemon-keepalive"
+	cronTaskHeadlessDaemonHealth     = "headless-daemon-health-check"
+	cronTaskHeadlessProfileSeed      = "headless-profile-seed"
+	cronTaskHeadlessPageCleanup      = "headless-page-cleanup"
+	cronManagedProcessSweepFlag      = "--managed-process-sweep"
+	cronManagedProcessSweepPhaseName = "managed-process-sweep"
+)
+
+type managedCronTask struct {
+	ID                          string
+	BrowserMode                 string
+	Schedule                    string
+	LockName                    string
+	LogName                     string
+	LogArtifactKey              string
+	Purpose                     string
+	Command                     string
+	ProbeWords                  []string
+	ConfigDependencies          []string
+	LaunchCapable               bool
+	RequiresManagedProcessSweep bool
+	ProvidesManagedProcessSweep bool
+	CronEntry                   string
+}
+
+type cronTaskStatus struct {
+	ID                           string   `json:"id"`
+	BrowserMode                  string   `json:"browser_mode"`
+	Schedule                     string   `json:"schedule"`
+	LockName                     string   `json:"lock_name"`
+	LogName                      string   `json:"log_name"`
+	Purpose                      string   `json:"purpose"`
+	ConfigDependencies           []string `json:"config_dependencies,omitempty"`
+	LaunchCapable                bool     `json:"launch_capable"`
+	RequiresManagedProcessSweep  bool     `json:"requires_managed_process_sweep"`
+	ManagedProcessSweepPhase     string   `json:"managed_process_sweep_phase,omitempty"`
+	ManagedProcessSweepInstalled bool     `json:"managed_process_sweep_installed"`
+	Installed                    bool     `json:"installed"`
+	MatchesIntended              bool     `json:"matches_intended"`
+	Status                       string   `json:"status"`
+}
+
+type cronFlockOwner struct {
+	PID int
+	Age time.Duration
+}
+
+var cronFlockOwnerForPath = cronFlockOwnerFromProcLocks
+
 func (a *app) newCronCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cron",
 		Short: "Manage cdp-managed browser runtime cron tasks",
-		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block for browser runtime keepalive tasks.",
+		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block for headed daemon keepalive and canonical unattended headless maintenance tasks.",
 	}
 	cmd.AddCommand(a.newCronStatusCommand())
 	cmd.AddCommand(a.newCronDiffCommand())
@@ -73,6 +128,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 				return cronCommandError("read crontab", err)
 			}
 			state := extractCronManagedBlock(current)
+			tasks := managedCronTasks(opts)
 			intended := managedCronBlock(opts)
 			matchesIntended := normalizeCronBlock(state.Text) == normalizeCronBlock(intended)
 			status := scheduledTasksStatusForSummary(available, err, summarizeCrontab(current))
@@ -80,27 +136,39 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 			locks := map[string]any{}
 			daemonLocks := map[string]any{}
 			artifacts := map[string]any{}
+			profileSeed := cronProfileSeedMetadata(opts)
+			managedProcesses := any(map[string]any{"checked": false, "state": "unknown"})
 			if storeErr == nil {
 				locks = cronLockStates(store.Dir)
 				daemonLocks = cronDaemonLockStates(store.Dir)
 				artifacts = cronLastRunArtifacts(store.Dir)
+				if lastSeed, ok, seedErr := loadProfileSeedStatus(store.Dir); seedErr == nil && ok {
+					profileSeed["last_seed"] = lastSeed
+				}
+				if lifecycle, lifecycleErr := browser.ReconcileManagedProcesses(ctx, store.Dir, browser.ManagedProcessReconcileOptions{ReadOnly: true}); lifecycleErr == nil {
+					managedProcesses = lifecycle
+				} else {
+					managedProcesses = map[string]any{"checked": true, "state": "error", "reason": lifecycleErr.Error()}
+				}
 			}
 			health := cronStatusHealth(available, state.Installed, matchesIntended, locks, daemonLocks)
 			data := map[string]any{
 				"ok":                 true,
 				"state":              health["state"],
 				"browser_mode":       opts.BrowserMode,
-				"profile_seed":       cronProfileSeedMetadata(opts),
+				"profile_seed":       profileSeed,
 				"available":          available,
 				"installed":          state.Installed,
 				"matches_intended":   matchesIntended,
 				"health":             health,
 				"managed_block":      state,
 				"intended_block":     extractCronManagedBlock(intended),
+				"tasks":              cronTaskStatuses(state.Entries, tasks),
 				"scheduled_tasks":    status,
 				"locks":              locks,
 				"daemon_locks":       daemonLocks,
 				"last_run_artifacts": artifacts,
+				"managed_processes":  managedProcesses,
 				"processes_by_mode":  a.daemonProcessesByMode(ctx),
 				"next_commands":      health["next_commands"],
 			}
@@ -132,6 +200,7 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 				return cronCommandError("read crontab", err)
 			}
 			installed := extractCronManagedBlock(current)
+			tasks := managedCronTasks(opts)
 			intendedText := managedCronBlock(opts)
 			intended := extractCronManagedBlock(intendedText)
 			without := withoutCronManagedBlock(current)
@@ -144,6 +213,7 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 				"matches_intended": normalizeCronBlock(installed.Text) == normalizeCronBlock(intendedText),
 				"current_block":    installed,
 				"intended_block":   intended,
+				"tasks":            cronTaskStatuses(installed.Entries, tasks),
 				"actions":          cronDiffActions(current, wanted, installed.Installed),
 				"next_commands":    []string{"cdp cron install --json", "cdp cron remove --json"},
 			}
@@ -176,6 +246,7 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 				return cronCommandError("read crontab", err)
 			}
 			summary := summarizeCrontab(current)
+			tasks := managedCronTasks(opts)
 			block := managedCronBlock(opts)
 			next := appendCronManagedBlock(withoutCronManagedBlock(current), block)
 			changed := current != next
@@ -199,6 +270,7 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 				"matches_intended": true,
 				"managed_block":    installed,
 				"intended_block":   extractCronManagedBlock(block),
+				"tasks":            cronTaskStatuses(installed.Entries, tasks),
 				"warnings":         cronInstallWarnings(opts, summary),
 				"next_commands":    []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"},
 			}
@@ -260,7 +332,7 @@ func (a *app) newCronMigratePagesPollingCommand() *cobra.Command {
 	var apply bool
 	cmd := &cobra.Command{
 		Use:   "pages-polling",
-		Short: "Remove unmanaged cdp pages polling entries after managed keepalive is installed",
+		Short: "Remove unmanaged cdp pages polling entries after the managed cron block is installed",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
@@ -317,7 +389,7 @@ func (a *app) newCronMigratePagesPollingCommand() *cobra.Command {
 			return a.render(ctx, fmt.Sprintf("legacy pages polling cron entries %s", action), data)
 		},
 	}
-	cmd.Flags().BoolVar(&apply, "apply", false, "write the crontab change after managed daemon keepalive is installed")
+	cmd.Flags().BoolVar(&apply, "apply", false, "write the crontab change after the managed cron block is installed")
 	return cmd
 }
 
@@ -507,6 +579,16 @@ func (a *app) applyCronBrowserMode(cmd *cobra.Command, opts *cronRenderOptions) 
 }
 
 func managedCronBlock(opts cronRenderOptions) string {
+	tasks := managedCronTasks(opts)
+	lines := []string{cronManagedBlockStart}
+	for _, task := range tasks {
+		lines = append(lines, task.CronEntry)
+	}
+	lines = append(lines, cronManagedBlockEnd)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 	cdpBin := cronValue(opts.CDPBin)
 	logDir := cronValue(opts.LogDir)
 	display := cronValue(opts.Display)
@@ -517,21 +599,139 @@ func managedCronBlock(opts cronRenderOptions) string {
 	}
 	seedStrategy := cronProfileSeedStrategy(opts)
 	seedAfter := cronDurationLiteral(cronProfileSeedAfter(opts))
-	seedSchedule := cronProfileSeedSchedule(cronProfileSeedAfter(opts))
-	lines := []string{cronManagedBlockStart}
+	var tasks []managedCronTask
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headed" {
-		lines = append(lines, fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headed.lock", logDir), fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir))))
+		tasks = append(tasks, newManagedCronTask(
+			managedCronTask{
+				ID:                 cronTaskHeadedDaemonKeepalive,
+				BrowserMode:        "headed",
+				Schedule:           "* * * * *",
+				LockName:           "keepalive-headed",
+				LogName:            "keepalive-headed.log",
+				LogArtifactKey:     "headed_keepalive_log",
+				Purpose:            "Keep the headed daemon healthy with passive probing and noninteractive repair when an approved endpoint already exists.",
+				Command:            fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir),
+				ProbeWords:         []string{"daemon", "keepalive"},
+				ConfigDependencies: []string{"display", "xdg_runtime_dir", "reconnect"},
+				LaunchCapable:      true,
+			},
+			logDir,
+		))
 	}
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headless" {
-		lines = append(lines,
-			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/keepalive-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon keepalive --repair --force --reconnect %s --json >> %s/keepalive-headless.log 2>&1", cdpBin, reconnect, logDir))),
-			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/headless-health.lock", logDir), fmt.Sprintf("%s --browser-mode headless daemon health-check --repair --force --json >> %s/headless-health.log 2>&1", cdpBin, logDir))),
-			fmt.Sprintf("%s %s", seedSchedule, cronLockedCommand(fmt.Sprintf("%s/locks/headless-profile-seed.lock", logDir), fmt.Sprintf("%s --browser-mode headless browser profile seed --strategy %s --if-older-than %s --json >> %s/profile-seed-headless.log 2>&1", cdpBin, seedStrategy, seedAfter, logDir))),
-			fmt.Sprintf("* * * * * %s", cronLockedCommand(fmt.Sprintf("%s/locks/page-cleanup-headless.lock", logDir), fmt.Sprintf("%s --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25 --json >> %s/page-cleanup-headless.log 2>&1", cdpBin, logDir))),
-		)
+		tasks = append(tasks, newManagedCronTask(
+			managedCronTask{
+				ID:                          cronTaskHeadlessMaintenance,
+				BrowserMode:                 "headless",
+				Schedule:                    "* * * * *",
+				LockName:                    "headless-maintenance",
+				LogName:                     "headless-maintenance.log",
+				LogArtifactKey:              "headless_maintenance_log",
+				Purpose:                     "Run the canonical managed headless maintenance flow: sweep, resource preflight, profile seed, daemon repair, health-check, cleanup, and summary artifact write.",
+				Command:                     fmt.Sprintf("%s --browser-mode headless daemon maintenance --profile-seed-strategy %s --profile-seed-if-older-than %s --repair --force --reconnect %s --health-check --cleanup --cleanup-close --json >> %s/headless-maintenance.log 2>&1", cdpBin, seedStrategy, seedAfter, reconnect, logDir),
+				ProbeWords:                  []string{"daemon", "maintenance"},
+				ConfigDependencies:          []string{"reconnect", "headless.profile_seed_strategy", "headless.profile_refresh_after"},
+				LaunchCapable:               true,
+				RequiresManagedProcessSweep: true,
+				ProvidesManagedProcessSweep: true,
+			},
+			logDir,
+		))
 	}
-	lines = append(lines, cronManagedBlockEnd)
-	return strings.Join(lines, "\n") + "\n"
+	return tasks
+}
+
+func newManagedCronTask(task managedCronTask, logDir string) managedCronTask {
+	task.CronEntry = fmt.Sprintf("%s %s", task.Schedule, cronLockedCommand(fmt.Sprintf("%s/locks/%s.lock", logDir, task.LockName), task.Command))
+	return task
+}
+
+func cronTaskStatuses(entries []string, tasks []managedCronTask) []cronTaskStatus {
+	statuses := make([]cronTaskStatus, 0, len(tasks))
+	for _, task := range tasks {
+		status := cronTaskStatus{
+			ID:                           task.ID,
+			BrowserMode:                  task.BrowserMode,
+			Schedule:                     task.Schedule,
+			LockName:                     task.LockName,
+			LogName:                      task.LogName,
+			Purpose:                      task.Purpose,
+			ConfigDependencies:           append([]string(nil), task.ConfigDependencies...),
+			LaunchCapable:                task.LaunchCapable,
+			RequiresManagedProcessSweep:  task.RequiresManagedProcessSweep,
+			ManagedProcessSweepInstalled: false,
+			Status:                       "missing",
+		}
+		if task.RequiresManagedProcessSweep {
+			status.ManagedProcessSweepPhase = cronManagedProcessSweepPhaseName
+		}
+		for _, entry := range entries {
+			if !managedCronTaskMatchesLine(task, entry) {
+				continue
+			}
+			status.Installed = true
+			status.MatchesIntended = normalizeCronBlock(entry) == normalizeCronBlock(task.CronEntry)
+			if task.RequiresManagedProcessSweep {
+				status.ManagedProcessSweepInstalled = cronTaskManagedProcessSweepInstalled(task, entry)
+			}
+			switch {
+			case status.MatchesIntended:
+				status.Status = "installed"
+			case status.RequiresManagedProcessSweep && !status.ManagedProcessSweepInstalled:
+				status.Status = "blocked"
+			default:
+				status.Status = "stale"
+			}
+			break
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses
+}
+
+func cronTaskManagedProcessSweepInstalled(task managedCronTask, entry string) bool {
+	if !task.RequiresManagedProcessSweep {
+		return false
+	}
+	return strings.Contains(entry, cronManagedProcessSweepFlag) || task.ProvidesManagedProcessSweep
+}
+
+func managedCronTaskMatchesLine(task managedCronTask, line string) bool {
+	if strings.TrimSpace(line) == "" {
+		return false
+	}
+	mode := scheduledTaskBrowserMode(line)
+	if task.BrowserMode != "" && mode != "" && mode != task.BrowserMode {
+		return false
+	}
+	if len(task.ProbeWords) == 0 {
+		return false
+	}
+	return scheduledTaskContainsCDPCommand(line, task.ProbeWords...)
+}
+
+func cronTaskIDs(tasks []managedCronTask) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func cronTaskIDsByStatus(statuses []cronTaskStatus, states ...string) []string {
+	wanted := map[string]bool{}
+	for _, state := range states {
+		wanted[state] = true
+	}
+	var ids []string
+	for _, status := range statuses {
+		if wanted[status.Status] {
+			ids = append(ids, status.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func cronProfileSeedStrategy(opts cronRenderOptions) string {
@@ -593,7 +793,7 @@ func cronDurationLiteral(d time.Duration) string {
 
 func cronLockedCommand(lockPath, command string) string {
 	quotedCommand := cronValue(command)
-	return fmt.Sprintf("cdp_lock=%s; mkdir -p \"$(dirname \"$cdp_lock\")\"; cdp_flock=$(command -v flock 2>/dev/null || true); if [ -n \"$cdp_flock\" ]; then \"$cdp_flock\" -n \"$cdp_lock\" sh -c %s; elif mkdir \"$cdp_lock.dir\" 2>/dev/null; then trap 'rmdir \"$cdp_lock.dir\"' EXIT; %s; fi", lockPath, quotedCommand, command)
+	return fmt.Sprintf("cdp_lock=%s; mkdir -p \"$(dirname \"$cdp_lock\")\"; cdp_flock=$(command -v flock 2>/dev/null || true); if [ -n \"$cdp_flock\" ]; then cdp_flock_close=''; \"$cdp_flock\" --help 2>&1 | grep -q -- '--close' && cdp_flock_close='--close'; \"$cdp_flock\" $cdp_flock_close -n \"$cdp_lock\" sh -c %s; elif mkdir \"$cdp_lock.dir\" 2>/dev/null; then trap 'rmdir \"$cdp_lock.dir\"' EXIT; %s; fi", lockPath, quotedCommand, command)
 }
 
 func cronValue(value string) string {
@@ -955,13 +1155,35 @@ func stringSliceOrEmpty(entries []string) []string {
 	return entries
 }
 
+func cronTaskStatusSliceOrEmpty(entries []cronTaskStatus) []cronTaskStatus {
+	if entries == nil {
+		return []cronTaskStatus{}
+	}
+	return entries
+}
+
 func cronLockStates(stateDir string) map[string]any {
 	locks := map[string]any{}
-	for _, name := range []string{"keepalive-headed", "cron-headed-heal", "keepalive-headless", "headless-health", "headless-profile-seed", "page-cleanup-headless"} {
+	for _, task := range managedCronTasks(defaultCronRenderOptions()) {
+		path := filepath.Join(stateDir, "locks", task.LockName+".lock")
+		locks[task.LockName] = cronLockStateEntry(task.LockName, path, 10*time.Minute)
+	}
+	for _, name := range legacyCronLockNames() {
+		if _, ok := locks[name]; ok {
+			continue
+		}
 		path := filepath.Join(stateDir, "locks", name+".lock")
 		locks[name] = cronLockStateEntry(name, path, 10*time.Minute)
 	}
+	if _, ok := locks["cron-headed-heal"]; !ok {
+		path := filepath.Join(stateDir, "locks", "cron-headed-heal.lock")
+		locks["cron-headed-heal"] = cronLockStateEntry("cron-headed-heal", path, 10*time.Minute)
+	}
 	return locks
+}
+
+func legacyCronLockNames() []string {
+	return []string{"keepalive-headless", "headless-health", "headless-profile-seed", "page-cleanup-headless"}
 }
 
 func cronDaemonLockStates(stateDir string) map[string]any {
@@ -993,6 +1215,24 @@ func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]
 		if info.ModifiedAt != "" {
 			entry["modified_at"] = info.ModifiedAt
 		}
+		if locked, known := cronFlockMarkerLocked(path); known {
+			entry["locked"] = locked
+			if locked {
+				if owner, ownerKnown := cronFlockOwnerForPath(path); ownerKnown {
+					if owner.PID > 0 {
+						entry["lock_owner_pid"] = owner.PID
+					}
+					if owner.Age > 0 {
+						entry["lock_owner_age_seconds"] = int64(owner.Age.Seconds())
+					}
+					if staleAfter > 0 && owner.Age > staleAfter {
+						entry["stale"] = true
+						entry["stale_reason"] = "flock_lock_held_too_long"
+						entry["next_commands"] = cronHeldFlockRepairCommands(name)
+					}
+				}
+			}
+		}
 		return entry
 	}
 	if info.ModifiedAt != "" {
@@ -1020,9 +1260,106 @@ func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]
 	return entry
 }
 
+func cronFlockMarkerLocked(path string) (bool, bool) {
+	flock, err := exec.LookPath("flock")
+	if err != nil {
+		return false, false
+	}
+	err = exec.Command(flock, "-n", path, "true").Run()
+	if err == nil {
+		return false, true
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return true, true
+	}
+	return false, false
+}
+
+func cronFlockOwnerFromProcLocks(path string) (cronFlockOwner, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return cronFlockOwner{}, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return cronFlockOwner{}, false
+	}
+	device := procLocksDevice(stat.Dev)
+	inode := strconv.FormatUint(stat.Ino, 10)
+	file, err := os.Open("/proc/locks")
+	if err != nil {
+		return cronFlockOwner{}, false
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 6 || fields[1] != "FLOCK" {
+			continue
+		}
+		lockRef := strings.Split(fields[5], ":")
+		if len(lockRef) != 3 || lockRef[0]+":"+lockRef[1] != device || lockRef[2] != inode {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[4])
+		if err != nil || pid <= 0 {
+			return cronFlockOwner{}, false
+		}
+		age, _ := processAge(pid)
+		return cronFlockOwner{PID: pid, Age: age}, true
+	}
+	return cronFlockOwner{}, false
+}
+
+func procLocksDevice(dev uint64) string {
+	major := (dev >> 8) & 0xfff
+	minor := (dev & 0xff) | ((dev >> 12) & 0xfff00)
+	return fmt.Sprintf("%x:%02x", major, minor)
+}
+
+func processAge(pid int) (time.Duration, bool) {
+	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
+	b, err := os.ReadFile(statPath)
+	if err != nil {
+		return 0, false
+	}
+	text := string(b)
+	end := strings.LastIndex(text, ")")
+	if end < 0 || end+2 >= len(text) {
+		return 0, false
+	}
+	fields := strings.Fields(text[end+2:])
+	if len(fields) < 20 {
+		return 0, false
+	}
+	startTicks, err := strconv.ParseFloat(fields[19], 64)
+	if err != nil {
+		return 0, false
+	}
+	uptimeBytes, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0, false
+	}
+	uptimeFields := strings.Fields(string(uptimeBytes))
+	if len(uptimeFields) == 0 {
+		return 0, false
+	}
+	uptimeSeconds, err := strconv.ParseFloat(uptimeFields[0], 64)
+	if err != nil {
+		return 0, false
+	}
+	const ticksPerSecond = 100
+	ageSeconds := uptimeSeconds - startTicks/ticksPerSecond
+	if ageSeconds <= 0 {
+		return 0, true
+	}
+	return time.Duration(ageSeconds * float64(time.Second)), true
+}
+
 func cronLockRepairCommands(name string) []string {
 	if strings.Contains(name, "headless") {
-		return []string{"cdp --browser-mode headless daemon keepalive --repair --stale-lock-after 1s --json", "cdp cron status --json"}
+		return []string{"cdp --browser-mode headless daemon maintenance --stale-lock-after 1s --json", "cdp cron status --json"}
 	}
 	if strings.Contains(name, "headed") {
 		return []string{"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --stale-lock-after 1s --json", "cdp cron status --json"}
@@ -1030,14 +1367,31 @@ func cronLockRepairCommands(name string) []string {
 	return []string{"cdp daemon keepalive --repair --stale-lock-after 1s --json", "cdp cron status --json"}
 }
 
+func cronHeldFlockRepairCommands(name string) []string {
+	if strings.Contains(name, "headless") {
+		return []string{"cdp --browser-mode headless daemon stop --json", "cdp --browser-mode headless daemon maintenance --json", "cdp cron status --json"}
+	}
+	if strings.Contains(name, "headed") {
+		return []string{"cdp --browser-mode headed daemon stop --json", "cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --json", "cdp cron status --json"}
+	}
+	return []string{"cdp daemon stop --json", "cdp daemon keepalive --repair --json", "cdp cron status --json"}
+}
+
 func cronLastRunArtifacts(stateDir string) map[string]any {
 	paths := map[string]string{
-		"headed_keepalive_log":      filepath.Join(stateDir, "keepalive-headed.log"),
-		"headed_heal_summary":       filepath.Join(stateDir, "headed-heal", "latest.json"),
-		"headless_keepalive_log":    filepath.Join(stateDir, "keepalive-headless.log"),
-		"headless_health_log":       filepath.Join(stateDir, "headless-health.log"),
-		"headless_profile_seed_log": filepath.Join(stateDir, "profile-seed-headless.log"),
-		"headless_page_cleanup_log": filepath.Join(stateDir, "page-cleanup-headless.log"),
+		"headed_heal_summary":           filepath.Join(stateDir, "headed-heal", "latest.json"),
+		"headless_maintenance_summary":  filepath.Join(stateDir, "headless-maintenance", "latest.json"),
+		"headless_profile_seed_summary": profileSeedStatusPath(stateDir),
+		"headless_keepalive_log":        filepath.Join(stateDir, "keepalive-headless.log"),
+		"headless_health_log":           filepath.Join(stateDir, "headless-health.log"),
+		"headless_profile_seed_log":     filepath.Join(stateDir, "profile-seed-headless.log"),
+		"headless_page_cleanup_log":     filepath.Join(stateDir, "page-cleanup-headless.log"),
+	}
+	for _, task := range managedCronTasks(defaultCronRenderOptions()) {
+		if strings.TrimSpace(task.LogArtifactKey) == "" || strings.TrimSpace(task.LogName) == "" {
+			continue
+		}
+		paths[task.LogArtifactKey] = filepath.Join(stateDir, task.LogName)
 	}
 	out := map[string]any{}
 	for name, path := range paths {

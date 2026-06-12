@@ -3123,8 +3123,20 @@ func (a *app) retryingAssertionCommandContext(cmd *cobra.Command, fallback time.
 }
 
 func isTimeoutCommandError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
 	var cmdErr *CommandError
-	return errors.As(err, &cmdErr) && cmdErr.Code == "timeout"
+	if !errors.As(err, &cmdErr) {
+		return false
+	}
+	if cmdErr.Code == "timeout" {
+		return true
+	}
+	message := strings.ToLower(cmdErr.Message)
+	return strings.Contains(message, "context deadline exceeded") ||
+		strings.Contains(message, "context canceled") ||
+		strings.Contains(message, "i/o timeout")
 }
 
 func waitForAttachmentAssertion(ctx context.Context, session *cdp.PageSession, query, expected string, opts locatorActionOptions, poll time.Duration, start time.Time) (assertAttachmentResult, *locatorFindResult, string, error) {
