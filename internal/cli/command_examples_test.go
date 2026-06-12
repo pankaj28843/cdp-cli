@@ -17,6 +17,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp daemon logs", want: []string{"--tail"}},
 		{path: "cdp cron install", want: []string{"cdp cron install --json"}},
 		{path: "cdp cron heal headed", want: []string{"--reconnect 30s"}},
+		{path: "cdp browser preflight", want: []string{"--repair", "--cleanup", "--profile-seed managed"}},
 		{path: "cdp pages", want: []string{"--title-contains"}},
 		{path: "cdp page cleanup", want: []string{"--browser-mode headed", "--browser-mode headless", "--close"}},
 		{path: "cdp eval", want: []string{"--title-contains"}},

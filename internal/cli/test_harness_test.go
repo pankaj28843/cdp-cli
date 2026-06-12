@@ -3252,6 +3252,20 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_browser_preflight__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"marker":           "__cdp_cli_browser_preflight__",
+					"ready_state":      "complete",
+					"title":            "Preflight",
+					"url":              "data:text/html,preflight",
+					"body_text_length": 21,
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_hn_frontpage__") {
 		return map[string]any{
 			"result": map[string]any{

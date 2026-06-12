@@ -154,9 +154,19 @@ func commandExamples(path string) []string {
 			"cdp cron heal headed --chrome-command google-chrome-stable --json",
 		},
 		"cdp browser": {
+			"cdp browser preflight --json",
+			"cdp --browser-mode headless browser preflight --repair --cleanup --json",
 			"cdp browser mode get --json",
 			"cdp browser profile status --json",
 			"CDP_BROWSER_MODE=headless cdp browser mode get --json",
+		},
+		"cdp browser preflight": {
+			"cdp browser preflight --json",
+			"cdp --browser-mode headless browser preflight --repair --json",
+			"cdp --browser-mode headless browser preflight --profile-seed managed --repair --json",
+			"cdp --browser-mode headless browser preflight --cleanup --include-url example.test --json",
+			"cdp --browser-mode headless browser preflight --cleanup --cleanup-close --created-by cdp --json",
+			"cdp browser preflight --open-readiness --json",
 		},
 		"cdp browser mode": {
 			"cdp browser mode get --json",

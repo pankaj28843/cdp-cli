@@ -17,6 +17,7 @@ func (a *app) newBrowserCommand() *cobra.Command {
 		Use:   "browser",
 		Short: "Inspect and prepare browser runtime modes",
 	}
+	cmd.AddCommand(a.newBrowserPreflightCommand())
 	cmd.AddCommand(a.newBrowserModeCommand())
 	cmd.AddCommand(a.newBrowserProfileCommand())
 	return cmd
@@ -132,68 +133,89 @@ func (a *app) newBrowserProfileSeedCommand() *cobra.Command {
 				)
 			}
 
-			store, err := a.stateStore()
+			human, status, err := a.runBrowserProfileSeed(ctx, browserProfileSeedOptions{
+				Strategy:    strategy,
+				IfOlderThan: ifOlderThan,
+				Now:         time.Now().UTC(),
+			})
 			if err != nil {
 				return err
 			}
-			now := time.Now().UTC()
-			if strategy == browser.ProfileSeedStrategyCopyDefault && ifOlderThan > 0 {
-				if existing, skipped, seedAgeSeconds, err := recentManagedProfileSeed(store.Dir, strategy, now, ifOlderThan); err != nil {
-					return err
-				} else if skipped {
-					status, err := browserProfileStatusForStore(ctx, store.Dir)
-					if err != nil {
-						return err
-					}
-					status.Seeded = true
-					status.ManagedBrowser = browser.ManagedMetadataStatus(existing)
-					status.SeedAction = "skipped"
-					status.SeedIntervalSeconds = int64(ifOlderThan.Seconds())
-					status.SeedAgeSeconds = seedAgeSeconds
-					return a.render(ctx, "browser profile skipped", status)
-				}
-			}
-			var maintenance *profileSeedMaintenance
-			if strategy == browser.ProfileSeedStrategyCopyDefault {
-				seedMaintenance, err := a.stopHeadlessForProfileSeed(ctx, store.Dir)
-				if err != nil {
-					return err
-				}
-				maintenance = &seedMaintenance
-			}
-			metadata, skipped, seedAgeSeconds, err := prepareManagedProfileWithAgeGate(store.Dir, strategy, now, ifOlderThan)
-			if err != nil {
-				return err
-			}
-			if maintenance != nil && maintenance.WasRunning && !skipped {
-				if err := a.healHeadlessAfterProfileSeed(ctx, store.Dir, maintenance); err != nil {
-					return err
-				}
-			}
-			status, err := browserProfileStatusForStore(ctx, store.Dir)
-			if err != nil {
-				return err
-			}
-			status.Seeded = true
-			status.ManagedBrowser = browser.ManagedMetadataStatus(metadata)
-			if maintenance != nil {
-				status.Maintenance = maintenance
-			}
-			if skipped {
-				status.SeedAction = "skipped"
-			} else {
-				status.SeedAction = "seeded"
-			}
-			if ifOlderThan > 0 {
-				status.SeedIntervalSeconds = int64(ifOlderThan.Seconds())
-				status.SeedAgeSeconds = seedAgeSeconds
-			}
-			return a.render(ctx, "browser profile "+status.SeedAction, status)
+			return a.render(ctx, human, status)
 		},
 	}
 	cmd.Flags().StringVar(&strategy, "strategy", "managed", "profile seed strategy: managed or copy-default")
 	cmd.Flags().DurationVar(&ifOlderThan, "if-older-than", 0, "skip seeding when existing metadata is newer than this duration")
 	return cmd
+}
+
+type browserProfileSeedOptions struct {
+	Strategy    string
+	IfOlderThan time.Duration
+	Now         time.Time
+}
+
+func (a *app) runBrowserProfileSeed(ctx context.Context, opts browserProfileSeedOptions) (string, browserProfileStatus, error) {
+	store, err := a.stateStore()
+	if err != nil {
+		return "", browserProfileStatus{}, err
+	}
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if opts.Strategy == browser.ProfileSeedStrategyCopyDefault && opts.IfOlderThan > 0 {
+		if existing, skipped, seedAgeSeconds, err := recentManagedProfileSeed(store.Dir, opts.Strategy, now, opts.IfOlderThan); err != nil {
+			return "", browserProfileStatus{}, err
+		} else if skipped {
+			status, err := browserProfileStatusForStore(ctx, store.Dir)
+			if err != nil {
+				return "", browserProfileStatus{}, err
+			}
+			status.Seeded = true
+			status.ManagedBrowser = browser.ManagedMetadataStatus(existing)
+			status.SeedAction = "skipped"
+			status.SeedIntervalSeconds = int64(opts.IfOlderThan.Seconds())
+			status.SeedAgeSeconds = seedAgeSeconds
+			return "browser profile skipped", status, nil
+		}
+	}
+	var maintenance *profileSeedMaintenance
+	if opts.Strategy == browser.ProfileSeedStrategyCopyDefault {
+		seedMaintenance, err := a.stopHeadlessForProfileSeed(ctx, store.Dir)
+		if err != nil {
+			return "", browserProfileStatus{}, err
+		}
+		maintenance = &seedMaintenance
+	}
+	metadata, skipped, seedAgeSeconds, err := prepareManagedProfileWithAgeGate(store.Dir, opts.Strategy, now, opts.IfOlderThan)
+	if err != nil {
+		return "", browserProfileStatus{}, err
+	}
+	if maintenance != nil && maintenance.WasRunning && !skipped {
+		if err := a.healHeadlessAfterProfileSeed(ctx, store.Dir, maintenance); err != nil {
+			return "", browserProfileStatus{}, err
+		}
+	}
+	status, err := browserProfileStatusForStore(ctx, store.Dir)
+	if err != nil {
+		return "", browserProfileStatus{}, err
+	}
+	status.Seeded = true
+	status.ManagedBrowser = browser.ManagedMetadataStatus(metadata)
+	if maintenance != nil {
+		status.Maintenance = maintenance
+	}
+	if skipped {
+		status.SeedAction = "skipped"
+	} else {
+		status.SeedAction = "seeded"
+	}
+	if opts.IfOlderThan > 0 {
+		status.SeedIntervalSeconds = int64(opts.IfOlderThan.Seconds())
+		status.SeedAgeSeconds = seedAgeSeconds
+	}
+	return "browser profile " + status.SeedAction, status, nil
 }
 
 func prepareManagedProfileWithAgeGate(stateDir, strategy string, now time.Time, ifOlderThan time.Duration) (browser.ManagedMetadata, bool, int64, error) {

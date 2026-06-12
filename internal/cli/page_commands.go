@@ -543,6 +543,24 @@ type pageCleanupState struct {
 	Pages []pageCleanupRecord `json:"pages"`
 }
 
+type pageCleanupRunOptions struct {
+	Close            bool
+	IncludeAttached  bool
+	IncludeURL       string
+	ExcludeURL       string
+	CreatedBy        string
+	WorkflowCreated  bool
+	Force            bool
+	ForceTarget      string
+	WaitGone         bool
+	MaxAttempts      int
+	CloseConcurrency int
+	Since            time.Duration
+	IdleFor          time.Duration
+	Max              int
+	MaxChanged       bool
+}
+
 func (a *app) newPageCleanupCommand() *cobra.Command {
 	var closePages bool
 	var includeAttached bool
@@ -587,145 +605,27 @@ attached.`,
 			ctx, cancel := a.commandContextWithDefault(cmd, timeoutFallback)
 			defer cancel()
 
-			client, closeClient, err := a.browserCDPClient(ctx)
-			if err != nil {
-				return commandError(
-					"connection_not_configured",
-					"connection",
-					err.Error(),
-					ExitConnection,
-					a.connectionRemediationCommands(),
-				)
-			}
-			defer closeClient(ctx)
-
-			targets, err := cdp.ListTargetsWithClient(ctx, client)
-			if err != nil {
-				return commandError(
-					"connection_failed",
-					"connection",
-					fmt.Sprintf("list targets: %v", err),
-					ExitConnection,
-					a.connectionRemediationCommands(),
-				)
-			}
-			store, err := a.stateStore()
+			human, data, err := a.runPageCleanup(ctx, pageCleanupRunOptions{
+				Close:            closePages,
+				IncludeAttached:  includeAttached,
+				IncludeURL:       includeURL,
+				ExcludeURL:       excludeURL,
+				CreatedBy:        createdBy,
+				WorkflowCreated:  workflowCreated,
+				Force:            force,
+				ForceTarget:      forceTarget,
+				WaitGone:         waitGone,
+				MaxAttempts:      maxAttempts,
+				CloseConcurrency: closeConcurrency,
+				Since:            since,
+				IdleFor:          idleFor,
+				Max:              max,
+				MaxChanged:       cmd.Flags().Changed("max"),
+			})
 			if err != nil {
 				return err
 			}
-			browserMode := a.browserModeName()
-			effectiveMax, maxSource := pageCleanupEffectiveMax(browserMode, max, cmd.Flags().Changed("max"))
-			connectionName := a.connectionStateName(ctx)
-			selectedID := a.selectedPageID(ctx)
-			records, stateWarnings, err := loadPageCleanupRecords(ctx, store.Dir)
-			if err != nil {
-				return commandError("internal", "internal", fmt.Sprintf("read page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
-			}
-			pruneLegacyHeadlessCleanupRecords(records, browserMode, connectionName)
-			now := time.Now().UTC()
-			candidates := cleanupCandidates(ctx, client, targets, cleanupOptions{
-				BrowserMode:     browserMode,
-				Connection:      connectionName,
-				SelectedID:      selectedID,
-				IncludeAttached: includeAttached,
-				IncludeURL:      includeURL,
-				ExcludeURL:      excludeURL,
-				CreatedBy:       createdBy,
-				WorkflowCreated: workflowCreated,
-				Force:           force,
-				ForceTarget:     forceTarget,
-				Since:           since,
-				IdleFor:         idleFor,
-				Max:             effectiveMax,
-				Now:             now,
-				Records:         records,
-			})
-			closed := []cleanupCandidate{}
-			if closePages {
-				closeReadyCleanupCandidates(ctx, client, candidates, pageCloseOptions{
-					WaitGone:      waitGone,
-					MaxAttempts:   maxAttempts,
-					AttemptWait:   pageCloseAttemptTimeout(browserMode),
-					PollInterval:  defaultPageClosePollInterval,
-					RetryBackoff:  defaultPageCloseRetryBackoff,
-					FinalPageList: false,
-				}, closeConcurrency)
-				for i := range candidates {
-					if candidates[i].Close == nil {
-						continue
-					}
-					if candidates[i].Close.Closed && (!waitGone || candidates[i].Close.TargetGone) {
-						delete(records, pageCleanupKey(browserMode, connectionName, candidates[i].Target.TargetID))
-						closed = append(closed, candidates[i])
-						continue
-					}
-					if candidates[i].Close.LastError != "" {
-						candidates[i].CloseError = candidates[i].Close.LastError
-					} else {
-						candidates[i].CloseError = "target close did not settle"
-					}
-				}
-			}
-
-			if err := savePageCleanupRecords(ctx, store.Dir, records); err != nil {
-				return commandError("internal", "internal", fmt.Sprintf("write page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
-			}
-
-			lines := make([]string, 0, len(candidates))
-			for _, candidate := range candidates {
-				status := "candidate"
-				if candidate.KeepReason != "" {
-					status = "kept:" + candidate.KeepReason
-				} else if candidate.CloseError != "" {
-					status = "error"
-				} else if closePages {
-					status = "closed"
-				}
-				lines = append(lines, fmt.Sprintf("%s\t%s\t%s", candidate.Target.TargetID, status, candidate.Target.Title))
-			}
-			readyCount := countReadyCandidates(candidates)
-			wouldCloseCount := 0
-			if !closePages {
-				wouldCloseCount = readyCount
-			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
-				"ok": true,
-				"cleanup": map[string]any{
-					"browser_mode":      browserMode,
-					"dry_run":           !closePages,
-					"close":             closePages,
-					"candidate_count":   readyCount,
-					"ready_count":       readyCount,
-					"would_close_count": wouldCloseCount,
-					"close_required":    !closePages && readyCount > 0,
-					"closed_count":      len(closed),
-					"idle_for":          idleFor.String(),
-					"state_path":        pageCleanupStatePath(store.Dir),
-					"include_attached":  includeAttached,
-					"include_url":       strings.TrimSpace(includeURL),
-					"exclude_url":       strings.TrimSpace(excludeURL),
-					"created_by":        strings.TrimSpace(createdBy),
-					"workflow_created":  workflowCreated,
-					"force":             force,
-					"force_target":      strings.TrimSpace(forceTarget),
-					"wait_gone":         waitGone,
-					"max_attempts":      maxAttempts,
-					"close_concurrency": closeConcurrency,
-					"since":             durationString(since),
-					"max":               effectiveMax,
-					"max_source":        maxSource,
-					"max_unlimited":     effectiveMax == 0,
-					"selected_page":     selectedID,
-					"state_warnings":    stateWarnings,
-					"next_commands": []string{
-						"cdp page cleanup --json",
-						modeScopedCommand(browserMode, fmt.Sprintf("page cleanup --close --wait-gone --max %d --json", pageCleanupDefaultMaxForMode(browserMode))),
-						"cdp cron status --json",
-					},
-				},
-				"candidates": candidates,
-				"closed":     closed,
-			})
+			return a.render(ctx, human, data)
 		},
 	}
 	cmd.Flags().BoolVar(&closePages, "close", false, "close matching inactive page targets; default is dry-run")
@@ -743,6 +643,148 @@ attached.`,
 	cmd.Flags().DurationVar(&idleFor, "idle-for", 30*time.Minute, "minimum duration a page must remain inactive before --close can close it")
 	cmd.Flags().IntVar(&max, "max", 0, "maximum ready candidate pages to close or report; use 0 for no limit; default is 10 headed or 25 headless")
 	return cmd
+}
+
+func (a *app) runPageCleanup(ctx context.Context, opts pageCleanupRunOptions) (string, map[string]any, error) {
+	client, closeClient, err := a.browserCDPClient(ctx)
+	if err != nil {
+		return "", nil, commandError(
+			"connection_not_configured",
+			"connection",
+			err.Error(),
+			ExitConnection,
+			a.connectionRemediationCommands(),
+		)
+	}
+	defer closeClient(ctx)
+
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
+		return "", nil, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("list targets: %v", err),
+			ExitConnection,
+			a.connectionRemediationCommands(),
+		)
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return "", nil, err
+	}
+	browserMode := a.browserModeName()
+	effectiveMax, maxSource := pageCleanupEffectiveMax(browserMode, opts.Max, opts.MaxChanged)
+	connectionName := a.connectionStateName(ctx)
+	selectedID := a.selectedPageID(ctx)
+	records, stateWarnings, err := loadPageCleanupRecords(ctx, store.Dir)
+	if err != nil {
+		return "", nil, commandError("internal", "internal", fmt.Sprintf("read page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
+	}
+	pruneLegacyHeadlessCleanupRecords(records, browserMode, connectionName)
+	now := time.Now().UTC()
+	candidates := cleanupCandidates(ctx, client, targets, cleanupOptions{
+		BrowserMode:     browserMode,
+		Connection:      connectionName,
+		SelectedID:      selectedID,
+		IncludeAttached: opts.IncludeAttached,
+		IncludeURL:      opts.IncludeURL,
+		ExcludeURL:      opts.ExcludeURL,
+		CreatedBy:       opts.CreatedBy,
+		WorkflowCreated: opts.WorkflowCreated,
+		Force:           opts.Force,
+		ForceTarget:     opts.ForceTarget,
+		Since:           opts.Since,
+		IdleFor:         opts.IdleFor,
+		Max:             effectiveMax,
+		Now:             now,
+		Records:         records,
+	})
+	closed := []cleanupCandidate{}
+	if opts.Close {
+		closeReadyCleanupCandidates(ctx, client, candidates, pageCloseOptions{
+			WaitGone:      opts.WaitGone,
+			MaxAttempts:   opts.MaxAttempts,
+			AttemptWait:   pageCloseAttemptTimeout(browserMode),
+			PollInterval:  defaultPageClosePollInterval,
+			RetryBackoff:  defaultPageCloseRetryBackoff,
+			FinalPageList: false,
+		}, opts.CloseConcurrency)
+		for i := range candidates {
+			if candidates[i].Close == nil {
+				continue
+			}
+			if candidates[i].Close.Closed && (!opts.WaitGone || candidates[i].Close.TargetGone) {
+				delete(records, pageCleanupKey(browserMode, connectionName, candidates[i].Target.TargetID))
+				closed = append(closed, candidates[i])
+				continue
+			}
+			if candidates[i].Close.LastError != "" {
+				candidates[i].CloseError = candidates[i].Close.LastError
+			} else {
+				candidates[i].CloseError = "target close did not settle"
+			}
+		}
+	}
+
+	if err := savePageCleanupRecords(ctx, store.Dir, records); err != nil {
+		return "", nil, commandError("internal", "internal", fmt.Sprintf("write page cleanup state: %v", err), ExitInternal, []string{"cdp page cleanup --json"})
+	}
+
+	lines := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		status := "candidate"
+		if candidate.KeepReason != "" {
+			status = "kept:" + candidate.KeepReason
+		} else if candidate.CloseError != "" {
+			status = "error"
+		} else if opts.Close {
+			status = "closed"
+		}
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s", candidate.Target.TargetID, status, candidate.Target.Title))
+	}
+	readyCount := countReadyCandidates(candidates)
+	wouldCloseCount := 0
+	if !opts.Close {
+		wouldCloseCount = readyCount
+	}
+	return strings.Join(lines, "\n"), map[string]any{
+		"ok": true,
+		"cleanup": map[string]any{
+			"browser_mode":      browserMode,
+			"dry_run":           !opts.Close,
+			"close":             opts.Close,
+			"candidate_count":   readyCount,
+			"ready_count":       readyCount,
+			"would_close_count": wouldCloseCount,
+			"close_required":    !opts.Close && readyCount > 0,
+			"closed_count":      len(closed),
+			"idle_for":          opts.IdleFor.String(),
+			"state_path":        pageCleanupStatePath(store.Dir),
+			"include_attached":  opts.IncludeAttached,
+			"include_url":       strings.TrimSpace(opts.IncludeURL),
+			"exclude_url":       strings.TrimSpace(opts.ExcludeURL),
+			"created_by":        strings.TrimSpace(opts.CreatedBy),
+			"workflow_created":  opts.WorkflowCreated,
+			"force":             opts.Force,
+			"force_target":      strings.TrimSpace(opts.ForceTarget),
+			"wait_gone":         opts.WaitGone,
+			"max_attempts":      opts.MaxAttempts,
+			"close_concurrency": opts.CloseConcurrency,
+			"since":             durationString(opts.Since),
+			"max":               effectiveMax,
+			"max_source":        maxSource,
+			"max_unlimited":     effectiveMax == 0,
+			"selected_page":     selectedID,
+			"state_warnings":    stateWarnings,
+			"next_commands": []string{
+				"cdp page cleanup --json",
+				modeScopedCommand(browserMode, fmt.Sprintf("page cleanup --close --wait-gone --max %d --json", pageCleanupDefaultMaxForMode(browserMode))),
+				"cdp cron status --json",
+			},
+		},
+		"candidates": candidates,
+		"closed":     closed,
+	}, nil
 }
 
 func pageCleanupEffectiveMax(browserMode string, flagMax int, flagChanged bool) (int, string) {
