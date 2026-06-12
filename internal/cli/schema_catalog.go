@@ -15,6 +15,21 @@ type schemaField struct {
 	Description string `json:"description"`
 }
 
+func withCommandRetrySchemaFields(fields []schemaField, includeLastObservedTarget bool) []schemaField {
+	fields = append(fields,
+		schemaField{Name: "attempts", Type: "array<command_retry_attempt>", Required: false, Description: "Per-attempt transient retry evidence when --retry transient is enabled."},
+		schemaField{Name: "attempt_count", Type: "number", Required: false, Description: "Number of attempts made when retry is enabled."},
+		schemaField{Name: "max_attempts", Type: "number", Required: false, Description: "Configured maximum attempts when retry is enabled."},
+		schemaField{Name: "retry_policy", Type: "string", Required: false, Description: "Retry policy used by the command, such as transient."},
+		schemaField{Name: "elapsed_ms", Type: "number", Required: false, Description: "Total command retry elapsed time in milliseconds."},
+		schemaField{Name: "last_error", Type: "string", Required: false, Description: "Last retryable error message observed before success or final failure."},
+	)
+	if includeLastObservedTarget {
+		fields = append(fields, schemaField{Name: "last_observed_target", Type: "page", Required: false, Description: "Last page target observed during retry attempts."})
+	}
+	return fields
+}
+
 func schemaCatalog() map[string]schemaInfo {
 	return map[string]schemaInfo{
 		"describe": {
@@ -340,19 +355,19 @@ func schemaCatalog() map[string]schemaInfo {
 		"pages": {
 			Name:        "pages",
 			Description: "Open page targets from the selected browser connection.",
-			Fields: []schemaField{
+			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when page targets were listed."},
 				{Name: "pages", Type: "array<page>", Required: true, Description: "Page rows with id, type, title, url, and attachment state."},
 				{Name: "budget", Type: "browser_resource_budget", Required: true, Description: "Safe tab/window budget summary computed from target metadata."},
-			},
+			}, false),
 		},
 		"targets": {
 			Name:        "targets",
 			Description: "Browser targets from the selected browser connection.",
-			Fields: []schemaField{
+			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when targets were listed."},
 				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with id, type, title, url, and attachment state."},
-			},
+			}, false),
 		},
 		"open": {
 			Name:        "open",
@@ -710,7 +725,7 @@ func schemaCatalog() map[string]schemaInfo {
 		"wait": {
 			Name:        "wait",
 			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks.",
-			Fields: []schemaField{
+			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
 				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, URL condition, CDP event method, load state and readyState when applicable, criteria, match status, eval ready predicate, last_value, attempt_count, attempts, optional attempt artifacts, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, file-chooser interception state, popup target discovery state, download progress state, elapsed time, timeout, and poll interval when applicable."},
@@ -724,7 +739,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "download", Type: "download_wait_summary", Required: false, Description: "Matched Browser download metadata with suggested filename, safe URL, completion state, received bytes, and optional file path."},
 				{Name: "last_event", Type: "network_dialog_file_chooser_popup_or_download_wait_event", Required: false, Description: "Last observed request/response candidate, network-idle lifecycle event, dialog event, file chooser event, popup target event, or download event."},
 				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Suggested follow-up commands, especially for unhandled dialogs."},
-			},
+			}, true),
 		},
 		"wait-url": {
 			Name:        "wait-url",

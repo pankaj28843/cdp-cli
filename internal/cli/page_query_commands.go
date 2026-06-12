@@ -777,6 +777,7 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	var readyField string
 	var outDir string
 	var artifactPrefix string
+	var retryOpts commandRetryOptions
 	cmd := &cobra.Command{
 		Use:   "eval <expression>",
 		Short: "Wait until a JavaScript expression reaches a semantic ready state",
@@ -797,38 +798,52 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 			if readyOpts.ReadyExpression != "" && readyOpts.ReadyField != "" {
 				return commandError("usage", "usage", "--ready-expr and --ready-field are mutually exclusive", ExitUsage, []string{"cdp wait eval 'window.__stageState()' --ready-expr 'value.ready === true' --json", "cdp wait eval 'window.__stageState()' --ready-field ready --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
+				session, target, err := a.attachPageSession(attemptCtx, targetID, urlContains, titleContains)
+				if err != nil {
+					if target.TargetID != "" {
+						return commandRetryResult{Target: &target}, err
+					}
+					return commandRetryResult{}, err
+				}
+				defer session.Close(attemptCtx)
+
+				start := time.Now()
+				wait, err := waitForEvalCondition(attemptCtx, session, args[0], poll, start, readyOpts)
+				wait.ElapsedMS = time.Since(start).Milliseconds()
+				wait.PollInterval = poll.String()
+				report := map[string]any{
+					"ok":     err == nil && wait.Error == nil,
+					"target": pageRow(target),
+					"wait":   wait,
+				}
+				if len(wait.Artifacts) > 0 {
+					report["artifacts"] = wait.Artifacts
+				}
+				if err != nil {
+					if attemptCtx.Err() == nil && exitCode(err) != ExitTimeout {
+						return commandRetryResult{Target: &target, Data: report}, err
+					}
+					cause := err
+					if attemptCtx.Err() != nil {
+						cause = attemptCtx.Err()
+					}
+					return commandRetryResult{Target: &target, Data: report}, commandErrorWithData("timeout", "timeout", fmt.Sprintf("wait eval %q not ready for target %s: %v", args[0], session.TargetID, cause), ExitTimeout, evalWaitRemediations(args[0], readyOpts), report)
+				}
+				if wait.Error != nil {
+					return commandRetryResult{Target: &target, Data: report}, commandErrorWithData("javascript_exception", "runtime", wait.Error.Message, ExitCheckFailed, evalWaitRemediations(args[0], readyOpts), report)
+				}
+				return commandRetryResult{
+					Human:  fmt.Sprintf("matched eval\t%s", args[0]),
+					Target: &target,
+					Data:   report,
+				}, nil
+			})
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
-
-			start := time.Now()
-			result, err := waitForEvalCondition(ctx, session, args[0], poll, start, readyOpts)
-			result.ElapsedMS = time.Since(start).Milliseconds()
-			result.PollInterval = poll.String()
-			report := map[string]any{
-				"ok":     err == nil && result.Error == nil,
-				"target": pageRow(target),
-				"wait":   result,
-			}
-			if len(result.Artifacts) > 0 {
-				report["artifacts"] = result.Artifacts
-			}
-			if err != nil {
-				if ctx.Err() == nil && exitCode(err) != ExitTimeout {
-					return err
-				}
-				cause := err
-				if ctx.Err() != nil {
-					cause = ctx.Err()
-				}
-				return commandErrorWithData("timeout", "timeout", fmt.Sprintf("wait eval %q not ready for target %s: %v", args[0], session.TargetID, cause), ExitTimeout, evalWaitRemediations(args[0], readyOpts), report)
-			}
-			if result.Error != nil {
-				return commandErrorWithData("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, evalWaitRemediations(args[0], readyOpts), report)
-			}
-			return a.render(ctx, fmt.Sprintf("matched eval\t%s", args[0]), report)
+			attachCommandRetryReport(result.Data, retryReport)
+			return a.render(ctx, result.Human, result.Data)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -840,6 +855,7 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	cmd.Flags().StringVar(&readyField, "ready-field", "", "dot-separated field path in the expression result to treat as the readiness value")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "optional directory for per-attempt eval readiness artifacts")
 	cmd.Flags().StringVar(&artifactPrefix, "artifact-prefix", "wait-eval", "filename prefix for --out-dir attempt artifacts")
+	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd
 }
 

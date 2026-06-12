@@ -219,11 +219,13 @@ func commandExamples(path string) []string {
 		},
 		"cdp targets": {
 			"cdp targets --json",
+			"cdp targets --retry transient --max-attempts 3 --json",
 			"cdp targets --limit 10 --json",
 			"cdp targets --type service_worker --json",
 		},
 		"cdp pages": {
 			"cdp pages --json",
+			"cdp pages --retry transient --max-attempts 3 --json",
 			"cdp pages --limit 10 --json",
 			"cdp pages --include-url localhost --exclude-url admin --json",
 			"cdp pages --title-contains Example --json",
@@ -378,6 +380,7 @@ func commandExamples(path string) []string {
 		"cdp wait eval": {
 			"cdp wait eval 'window.__rendered === true' --timeout 10s --json",
 			"cdp wait eval 'document.readyState === \"complete\"' --poll 500ms --json",
+			"cdp wait eval 'window.__rendered === true' --retry transient --max-attempts 3 --json",
 			"cdp wait eval 'window.__stageState()' --ready-expr 'value.terminalCondition === \"fare_rows\"' --out-dir tmp/stage-ready --json",
 		},
 		"cdp wait load-state": {

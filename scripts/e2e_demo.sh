@@ -128,8 +128,12 @@ fi
   | jq -e '.ok == true and .state == "healthy" and .action == "none"' >/dev/null
 "$binary" daemon logs --state-dir "$state_dir/cdp-state" --tail 20 --json \
   | jq -e '.ok == true and (.entries[] | select(.event == "rpc_listening"))' >/dev/null
+"$binary" targets --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.targets | type == "array")' >/dev/null
 "$binary" pages --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
+"$binary" pages --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
 task_open_output="$("$binary" open "$app_url?cdp_task_owned=1" --run-id demo-run --task-id demo-child --root-task-id demo-root --parent-task-id demo-root --state-dir "$state_dir/cdp-state" --json)"
@@ -144,8 +148,8 @@ task_target_id="$(jq -r '.page.id' <<<"$task_open_output")"
 "$binary" eval 'window.__cdpDemoStartSemanticDelay(600)' --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .result.value.terminalCondition == "loading"' >/dev/null
 semantic_dir="$state_dir/semantic-readiness"
-"$binary" wait eval 'window.__cdpDemoSemanticState' --ready-expr 'value.terminalCondition === "fare_rows"' --poll 50ms --timeout 3s --out-dir "$semantic_dir" --artifact-prefix demo-stage --state-dir "$state_dir/cdp-state" --json \
-  | jq -e --arg dir "$semantic_dir" '.ok == true and .wait.kind == "eval" and .wait.ready == true and .wait.matched == true and .wait.ready_expression == "value.terminalCondition === \"fare_rows\"" and .wait.last_value.terminalCondition == "fare_rows" and .wait.last_value.rowCount == 3 and .wait.attempt_count >= 2 and (.wait.attempts | length) == .wait.attempt_count and (.wait.artifacts | length) == .wait.attempt_count and (.artifacts | length) == .wait.attempt_count and (.wait.artifacts[0].path | startswith($dir))' >/dev/null
+"$binary" wait eval 'window.__cdpDemoSemanticState' --ready-expr 'value.terminalCondition === "fare_rows"' --retry transient --max-attempts 2 --poll 50ms --timeout 3s --out-dir "$semantic_dir" --artifact-prefix demo-stage --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg dir "$semantic_dir" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and .wait.kind == "eval" and .wait.ready == true and .wait.matched == true and .wait.ready_expression == "value.terminalCondition === \"fare_rows\"" and .wait.last_value.terminalCondition == "fare_rows" and .wait.last_value.rowCount == 3 and .wait.attempt_count >= 2 and (.wait.attempts | length) == .wait.attempt_count and (.wait.artifacts | length) == .wait.attempt_count and (.artifacts | length) == .wait.attempt_count and (.wait.artifacts[0].path | startswith($dir))' >/dev/null
 require_artifact "$semantic_dir/demo-stage-attempt-01.json"
 set +e
 semantic_timeout_output="$("$binary" wait eval 'window.__cdpDemoNeverReady()' --ready-expr 'value.terminalCondition === "fare_rows"' --poll 100ms --timeout 300ms --state-dir "$state_dir/cdp-state" --json)"

@@ -32,6 +32,7 @@ const (
 func (a *app) newTargetsCommand() *cobra.Command {
 	var limit int
 	var targetType string
+	var retryOpts commandRetryOptions
 	cmd := &cobra.Command{
 		Use:   "targets",
 		Short: "List browser targets",
@@ -39,22 +40,33 @@ func (a *app) newTargetsCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			targets, err := a.listTargets(ctx)
+			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
+				targets, err := a.listTargets(attemptCtx)
+				if err != nil {
+					return commandRetryResult{}, err
+				}
+				targets = filterTargetsByType(targets, targetType)
+				rows := targetRows(targets)
+				rows = limitRows(rows, limit)
+				var lines []string
+				for _, target := range rows {
+					lines = append(lines, fmt.Sprintf("%s\t%s\t%s", target["id"], target["type"], target["title"]))
+				}
+				return commandRetryResult{
+					Human: strings.Join(lines, "\n"),
+					Data:  map[string]any{"ok": true, "targets": rows},
+				}, nil
+			})
 			if err != nil {
 				return err
 			}
-			targets = filterTargetsByType(targets, targetType)
-			rows := targetRows(targets)
-			rows = limitRows(rows, limit)
-			var lines []string
-			for _, target := range rows {
-				lines = append(lines, fmt.Sprintf("%s\t%s\t%s", target["id"], target["type"], target["title"]))
-			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "targets": rows})
+			attachCommandRetryReport(result.Data, retryReport)
+			return a.render(ctx, result.Human, result.Data)
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of targets to return; use 0 for no limit")
 	cmd.Flags().StringVar(&targetType, "type", "", "only return targets of this CDP type, such as page or service_worker")
+	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd
 }
 
@@ -64,6 +76,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 	var titleContains string
 	var includeURL string
 	var excludeURL string
+	var retryOpts commandRetryOptions
 	cmd := &cobra.Command{
 		Use:   "pages",
 		Short: "List open pages and tabs",
@@ -71,26 +84,36 @@ func (a *app) newPagesCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			targets, err := a.listTargets(ctx)
+			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
+				targets, err := a.listTargets(attemptCtx)
+				if err != nil {
+					return commandRetryResult{}, err
+				}
+				client, closeClient, err := a.browserCDPClient(attemptCtx)
+				if err != nil {
+					return commandRetryResult{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
+				}
+				defer closeClient(attemptCtx)
+				budget := cdp.BrowserBudgetForTargets(attemptCtx, client, targets, a.browserResourceBudgetOptions())
+				pages := pageRows(targets)
+				pages = filterRowsContains(pages, "url", firstNonEmpty(urlContains, includeURL))
+				pages = filterRowsContains(pages, "title", titleContains)
+				pages = filterRowsExcludes(pages, "url", excludeURL)
+				pages = limitRows(pages, limit)
+				var lines []string
+				for _, page := range pages {
+					lines = append(lines, fmt.Sprintf("%s\t%s", page["id"], page["title"]))
+				}
+				return commandRetryResult{
+					Human: strings.Join(lines, "\n"),
+					Data:  map[string]any{"ok": true, "pages": pages, "budget": budget},
+				}, nil
+			})
 			if err != nil {
 				return err
 			}
-			client, closeClient, err := a.browserCDPClient(ctx)
-			if err != nil {
-				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
-			}
-			defer closeClient(ctx)
-			budget := cdp.BrowserBudgetForTargets(ctx, client, targets, a.browserResourceBudgetOptions())
-			pages := pageRows(targets)
-			pages = filterRowsContains(pages, "url", firstNonEmpty(urlContains, includeURL))
-			pages = filterRowsContains(pages, "title", titleContains)
-			pages = filterRowsExcludes(pages, "url", excludeURL)
-			pages = limitRows(pages, limit)
-			var lines []string
-			for _, page := range pages {
-				lines = append(lines, fmt.Sprintf("%s\t%s", page["id"], page["title"]))
-			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{"ok": true, "pages": pages, "budget": budget})
+			attachCommandRetryReport(result.Data, retryReport)
+			return a.render(ctx, result.Human, result.Data)
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of pages to return; use 0 for no limit")
@@ -98,6 +121,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "only return pages whose title contains this text")
 	cmd.Flags().StringVar(&includeURL, "include-url", "", "only return pages whose URL contains this text")
 	cmd.Flags().StringVar(&excludeURL, "exclude-url", "", "exclude pages whose URL contains this text")
+	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd
 }
 
