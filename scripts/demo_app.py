@@ -212,6 +212,15 @@ DEMO_HTML = """<!doctype html>
     });
     document.querySelector('#partial-selection').indeterminate = true;
     fetch('/api/ok').then(() => fetch('/api/fail'));
+    window.__cdpDemoSemanticState = { terminalCondition: 'loading', rowCount: 0, ready: false };
+    window.__cdpDemoStartSemanticDelay = (delayMs = 500) => {
+      window.__cdpDemoSemanticState = { terminalCondition: 'loading', rowCount: 0, ready: false };
+      window.setTimeout(() => {
+        window.__cdpDemoSemanticState = { terminalCondition: 'fare_rows', rowCount: 3, ready: true };
+      }, delayMs);
+      return window.__cdpDemoSemanticState;
+    };
+    window.__cdpDemoNeverReady = () => ({ terminalCondition: 'loading', rowCount: 0, ready: false });
     Promise.all([cacheReady, serviceWorkerReady, indexedDBReady]).finally(() => {
       setTimeout(() => {
         document.querySelector('main').dataset.ready = 'true';

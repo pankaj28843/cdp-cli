@@ -713,7 +713,8 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, URL condition, CDP event method, load state and readyState when applicable, criteria, match status, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, file-chooser interception state, popup target discovery state, download progress state, elapsed time, timeout, and poll interval when applicable."},
+				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, URL condition, CDP event method, load state and readyState when applicable, criteria, match status, eval ready predicate, last_value, attempt_count, attempts, optional attempt artifacts, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, file-chooser interception state, popup target discovery state, download progress state, elapsed time, timeout, and poll interval when applicable."},
+				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Per-attempt eval readiness artifact references when cdp wait eval --out-dir is used."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator result when waiting by user-facing locator."},
 				{Name: "matches", Type: "array<locator_match>", Required: false, Description: "Locator matches duplicated for jq convenience when waiting by locator."},
 				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched request or response CDP event metadata with safe URL redaction by default and no headers or bodies."},

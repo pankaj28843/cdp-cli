@@ -141,6 +141,22 @@ task_target_id="$(jq -r '.page.id' <<<"$task_open_output")"
   | jq -e --arg id "$task_target_id" '.ok == true and all(.pages[]; .id != $id)' >/dev/null
 "$binary" wait text "Ready from demo app" --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
+"$binary" eval 'window.__cdpDemoStartSemanticDelay(600)' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .result.value.terminalCondition == "loading"' >/dev/null
+semantic_dir="$state_dir/semantic-readiness"
+"$binary" wait eval 'window.__cdpDemoSemanticState' --ready-expr 'value.terminalCondition === "fare_rows"' --poll 50ms --timeout 3s --out-dir "$semantic_dir" --artifact-prefix demo-stage --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg dir "$semantic_dir" '.ok == true and .wait.kind == "eval" and .wait.ready == true and .wait.matched == true and .wait.ready_expression == "value.terminalCondition === \"fare_rows\"" and .wait.last_value.terminalCondition == "fare_rows" and .wait.last_value.rowCount == 3 and .wait.attempt_count >= 2 and (.wait.attempts | length) == .wait.attempt_count and (.wait.artifacts | length) == .wait.attempt_count and (.artifacts | length) == .wait.attempt_count and (.wait.artifacts[0].path | startswith($dir))' >/dev/null
+require_artifact "$semantic_dir/demo-stage-attempt-01.json"
+set +e
+semantic_timeout_output="$("$binary" wait eval 'window.__cdpDemoNeverReady()' --ready-expr 'value.terminalCondition === "fare_rows"' --poll 100ms --timeout 300ms --state-dir "$state_dir/cdp-state" --json)"
+semantic_timeout_code=$?
+set -e
+if [[ "$semantic_timeout_code" -ne 5 ]]; then
+  echo "wait eval semantic timeout exit code: $semantic_timeout_code" >&2
+  printf '%s\n' "$semantic_timeout_output" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "timeout" and .data.wait.kind == "eval" and .data.wait.ready == false and .data.wait.matched == false and .data.wait.last_value.terminalCondition == "loading" and .data.wait.attempt_count >= 1 and .data.wait.evidence.ready == false' <<<"$semantic_timeout_output" >/dev/null
 "$binary" assert url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \
   | jq -e --arg url "$app_url" '.ok == true and .assertion.field == "url" and .assertion.passed == true and (.assertion.actual | contains($url)) and (.assertion.url | contains($url)) and .assertion.title == "cdp-cli demo app" and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and (.target.url | contains($url))' >/dev/null
 "$binary" wait url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \

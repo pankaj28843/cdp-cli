@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -121,6 +123,9 @@ type waitResult struct {
 	Needle       string             `json:"needle,omitempty"`
 	Selector     string             `json:"selector,omitempty"`
 	Expression   string             `json:"expression,omitempty"`
+	Ready        *bool              `json:"ready,omitempty"`
+	ReadyExpr    string             `json:"ready_expression,omitempty"`
+	ReadyField   string             `json:"ready_field,omitempty"`
 	State        string             `json:"state,omitempty"`
 	ReadyState   string             `json:"ready_state,omitempty"`
 	URL          string             `json:"url,omitempty"`
@@ -133,12 +138,33 @@ type waitResult struct {
 	Matched      bool               `json:"matched"`
 	Count        int                `json:"count,omitempty"`
 	Value        json.RawMessage    `json:"value,omitempty"`
+	LastValue    json.RawMessage    `json:"last_value,omitempty"`
 	Condition    string             `json:"condition,omitempty"`
 	Evidence     map[string]any     `json:"evidence,omitempty"`
 	Locator      *locatorFindResult `json:"locator,omitempty"`
+	AttemptCount int                `json:"attempt_count,omitempty"`
+	Attempts     []waitEvalAttempt  `json:"attempts,omitempty"`
+	Artifacts    []map[string]any   `json:"artifacts,omitempty"`
 	ElapsedMS    int64              `json:"elapsed_ms"`
 	PollInterval string             `json:"poll_interval"`
 	Error        *evalError         `json:"error,omitempty"`
+}
+
+type waitEvalOptions struct {
+	ReadyExpression string
+	ReadyField      string
+	OutDir          string
+	ArtifactPrefix  string
+}
+
+type waitEvalAttempt struct {
+	Attempt      int            `json:"attempt"`
+	ElapsedMS    int64          `json:"elapsed_ms"`
+	Ready        bool           `json:"ready"`
+	Matched      bool           `json:"matched"`
+	ValueSummary any            `json:"value_summary,omitempty"`
+	Artifact     map[string]any `json:"artifact,omitempty"`
+	Error        *evalError     `json:"error,omitempty"`
 }
 
 type locatorWaitOptions struct {
@@ -747,9 +773,13 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
 	var poll time.Duration
+	var readyExpr string
+	var readyField string
+	var outDir string
+	var artifactPrefix string
 	cmd := &cobra.Command{
 		Use:   "eval <expression>",
-		Short: "Wait until a JavaScript expression evaluates truthy",
+		Short: "Wait until a JavaScript expression reaches a semantic ready state",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.browserCommandContext(cmd)
@@ -758,6 +788,15 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait eval 'window.__rendered === true' --poll 250ms --json"})
 			}
+			readyOpts := waitEvalOptions{
+				ReadyExpression: strings.TrimSpace(readyExpr),
+				ReadyField:      strings.TrimSpace(readyField),
+				OutDir:          strings.TrimSpace(outDir),
+				ArtifactPrefix:  strings.TrimSpace(artifactPrefix),
+			}
+			if readyOpts.ReadyExpression != "" && readyOpts.ReadyField != "" {
+				return commandError("usage", "usage", "--ready-expr and --ready-field are mutually exclusive", ExitUsage, []string{"cdp wait eval 'window.__stageState()' --ready-expr 'value.ready === true' --json", "cdp wait eval 'window.__stageState()' --ready-field ready --json"})
+			}
 			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
@@ -765,30 +804,42 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 			defer session.Close(ctx)
 
 			start := time.Now()
-			result, err := waitForPageCondition(ctx, session, poll, func() (waitResult, error) {
-				var result waitResult
-				err := evaluateJSONValue(ctx, session, waitEvalExpression(args[0]), "wait eval", &result)
-				return result, err
-			})
-			if err != nil {
-				return err
-			}
-			if result.Error != nil {
-				return commandError("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, []string{"cdp wait eval 'window.__rendered === true' --json"})
-			}
+			result, err := waitForEvalCondition(ctx, session, args[0], poll, start, readyOpts)
 			result.ElapsedMS = time.Since(start).Milliseconds()
 			result.PollInterval = poll.String()
-			return a.render(ctx, fmt.Sprintf("matched eval\t%s", args[0]), map[string]any{
-				"ok":     true,
+			report := map[string]any{
+				"ok":     err == nil && result.Error == nil,
 				"target": pageRow(target),
 				"wait":   result,
-			})
+			}
+			if len(result.Artifacts) > 0 {
+				report["artifacts"] = result.Artifacts
+			}
+			if err != nil {
+				if ctx.Err() == nil && exitCode(err) != ExitTimeout {
+					return err
+				}
+				cause := err
+				if ctx.Err() != nil {
+					cause = ctx.Err()
+				}
+				return commandErrorWithData("timeout", "timeout", fmt.Sprintf("wait eval %q not ready for target %s: %v", args[0], session.TargetID, cause), ExitTimeout, evalWaitRemediations(args[0], readyOpts), report)
+			}
+			if result.Error != nil {
+				return commandErrorWithData("javascript_exception", "runtime", result.Error.Message, ExitCheckFailed, evalWaitRemediations(args[0], readyOpts), report)
+			}
+			return a.render(ctx, fmt.Sprintf("matched eval\t%s", args[0]), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
+	cmd.Flags().StringVar(&readyExpr, "ready-expr", "", "JavaScript predicate evaluated with value bound to the expression result")
+	cmd.Flags().StringVar(&readyExpr, "ready-expression", "", "alias for --ready-expr")
+	cmd.Flags().StringVar(&readyField, "ready-field", "", "dot-separated field path in the expression result to treat as the readiness value")
+	cmd.Flags().StringVar(&outDir, "out-dir", "", "optional directory for per-attempt eval readiness artifacts")
+	cmd.Flags().StringVar(&artifactPrefix, "artifact-prefix", "wait-eval", "filename prefix for --out-dir attempt artifacts")
 	return cmd
 }
 
@@ -866,6 +917,264 @@ func normalizeLocatorWaitOptions(opts *locatorWaitOptions) error {
 	opts.Role = strings.TrimSpace(opts.Role)
 	opts.TestIDAttr = strings.TrimSpace(opts.TestIDAttr)
 	return validateLocatorFindOptions(opts.By, opts.Role, opts.TestIDAttr, opts.Limit)
+}
+
+func waitForEvalCondition(ctx context.Context, session *cdp.PageSession, expression string, poll time.Duration, start time.Time, opts waitEvalOptions) (waitResult, error) {
+	var last waitResult
+	attempts := []waitEvalAttempt{}
+	artifactRefs := []map[string]any{}
+	for {
+		var result waitResult
+		err := evaluateJSONValue(ctx, session, waitEvalExpressionWithOptions(expression, opts), "wait eval", &result)
+		if err != nil {
+			if ctx.Err() != nil || exitCode(err) == ExitTimeout {
+				return decorateEvalWaitTimeoutResult(last, expression, opts, attempts, artifactRefs, start, poll), err
+			}
+			return last, err
+		}
+		result = decorateEvalWaitResult(result, expression, opts, attempts, artifactRefs, start, poll)
+		attempt := waitEvalAttempt{
+			Attempt:      len(attempts) + 1,
+			ElapsedMS:    time.Since(start).Milliseconds(),
+			Ready:        waitEvalReady(result),
+			Matched:      result.Matched,
+			ValueSummary: waitEvalValueSummary(result.Value),
+			Error:        result.Error,
+		}
+		if strings.TrimSpace(opts.OutDir) != "" {
+			artifact, err := writeEvalWaitAttemptArtifact(opts, attempt, result)
+			if err != nil {
+				return result, err
+			}
+			attempt.Artifact = artifact
+			artifactRefs = append(artifactRefs, artifact)
+		}
+		attempts = append(attempts, attempt)
+		result = decorateEvalWaitResult(result, expression, opts, attempts, artifactRefs, start, poll)
+		last = result
+		if result.Matched || result.Error != nil {
+			result.addEvidence()
+			return result, nil
+		}
+
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return decorateEvalWaitTimeoutResult(last, expression, opts, attempts, artifactRefs, start, poll), ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func decorateEvalWaitResult(result waitResult, expression string, opts waitEvalOptions, attempts []waitEvalAttempt, artifactRefs []map[string]any, start time.Time, poll time.Duration) waitResult {
+	if result.Kind == "" {
+		result.Kind = "eval"
+	}
+	if result.Expression == "" {
+		result.Expression = strings.TrimSpace(expression)
+	}
+	if result.ReadyExpr == "" {
+		result.ReadyExpr = strings.TrimSpace(opts.ReadyExpression)
+	}
+	if result.ReadyField == "" {
+		result.ReadyField = strings.TrimSpace(opts.ReadyField)
+	}
+	if result.Ready == nil {
+		ready := result.Matched
+		result.Ready = &ready
+	}
+	if len(result.Value) > 0 {
+		result.LastValue = cloneRawMessage(result.Value)
+	} else if len(result.LastValue) == 0 && len(attempts) == 0 {
+		result.LastValue = json.RawMessage("null")
+	}
+	result.AttemptCount = len(attempts)
+	result.Attempts = cloneWaitEvalAttempts(attempts)
+	result.Artifacts = cloneArtifactRefs(artifactRefs)
+	result.ElapsedMS = time.Since(start).Milliseconds()
+	result.PollInterval = poll.String()
+	return result
+}
+
+func decorateEvalWaitTimeoutResult(result waitResult, expression string, opts waitEvalOptions, attempts []waitEvalAttempt, artifactRefs []map[string]any, start time.Time, poll time.Duration) waitResult {
+	result = decorateEvalWaitResult(result, expression, opts, attempts, artifactRefs, start, poll)
+	if result.Ready == nil {
+		ready := false
+		result.Ready = &ready
+	}
+	result.Matched = false
+	result.Condition = evalWaitCondition(expression, opts)
+	result.Evidence = evalWaitEvidence(result)
+	return result
+}
+
+func waitEvalReady(result waitResult) bool {
+	if result.Ready != nil {
+		return *result.Ready
+	}
+	return result.Matched
+}
+
+func evalWaitCondition(expression string, opts waitEvalOptions) string {
+	if strings.TrimSpace(opts.ReadyExpression) != "" {
+		return fmt.Sprintf("expression %q satisfies ready predicate %q", strings.TrimSpace(expression), strings.TrimSpace(opts.ReadyExpression))
+	}
+	if strings.TrimSpace(opts.ReadyField) != "" {
+		return fmt.Sprintf("expression %q has truthy ready field %q", strings.TrimSpace(expression), strings.TrimSpace(opts.ReadyField))
+	}
+	return fmt.Sprintf("expression %q evaluated truthy", strings.TrimSpace(expression))
+}
+
+func evalWaitEvidence(result waitResult) map[string]any {
+	evidence := map[string]any{
+		"expression":    result.Expression,
+		"matched":       result.Matched,
+		"ready":         waitEvalReady(result),
+		"attempt_count": result.AttemptCount,
+		"value":         result.LastValue,
+	}
+	if strings.TrimSpace(result.ReadyExpr) != "" {
+		evidence["ready_expression"] = result.ReadyExpr
+	}
+	if strings.TrimSpace(result.ReadyField) != "" {
+		evidence["ready_field"] = result.ReadyField
+	}
+	return evidence
+}
+
+func evalWaitRemediations(expression string, opts waitEvalOptions) []string {
+	command := "cdp wait eval " + shellQuote(expression) + " --timeout 15s --json"
+	if strings.TrimSpace(opts.ReadyExpression) != "" {
+		command = "cdp wait eval " + shellQuote(expression) + " --ready-expr " + shellQuote(opts.ReadyExpression) + " --timeout 15s --json"
+	}
+	if strings.TrimSpace(opts.ReadyField) != "" {
+		command = "cdp wait eval " + shellQuote(expression) + " --ready-field " + shellQuote(opts.ReadyField) + " --timeout 15s --json"
+	}
+	return []string{command, "cdp snapshot --json", "cdp pages --json"}
+}
+
+func writeEvalWaitAttemptArtifact(opts waitEvalOptions, attempt waitEvalAttempt, result waitResult) (map[string]any, error) {
+	prefix := sanitizeEvalArtifactPrefix(opts.ArtifactPrefix)
+	if prefix == "" {
+		prefix = "wait-eval"
+	}
+	path := filepath.Join(opts.OutDir, fmt.Sprintf("%s-attempt-%02d.json", prefix, attempt.Attempt))
+	payload := map[string]any{
+		"attempt":    attempt.Attempt,
+		"elapsed_ms": attempt.ElapsedMS,
+		"ready":      attempt.Ready,
+		"matched":    attempt.Matched,
+		"expression": result.Expression,
+		"value":      result.Value,
+	}
+	if strings.TrimSpace(result.ReadyExpr) != "" {
+		payload["ready_expression"] = result.ReadyExpr
+	}
+	if strings.TrimSpace(result.ReadyField) != "" {
+		payload["ready_field"] = result.ReadyField
+	}
+	if result.Error != nil {
+		payload["error"] = result.Error
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, commandError("internal", "internal", fmt.Sprintf("marshal wait eval attempt artifact: %v", err), ExitInternal, []string{"cdp wait eval 'window.__rendered === true' --json"})
+	}
+	writtenPath, err := writeArtifactFile(path, append(raw, '\n'))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"type":     "wait-eval-attempt",
+		"path":     writtenPath,
+		"attempt":  attempt.Attempt,
+		"bytes":    len(raw) + 1,
+		"warnings": []string{"Eval readiness artifacts may contain page content; keep local unless the expression is synthetic."},
+	}, nil
+}
+
+func sanitizeEvalArtifactPrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range prefix {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), ".-")
+}
+
+func waitEvalValueSummary(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return map[string]any{"type": "invalid_json", "bytes": len(raw)}
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if len(keys) > 20 {
+			keys = keys[:20]
+		}
+		return map[string]any{"type": "object", "keys": keys}
+	case []any:
+		return map[string]any{"type": "array", "count": len(typed)}
+	case string:
+		if len(typed) > 300 {
+			return typed[:300]
+		}
+		return typed
+	default:
+		return typed
+	}
+}
+
+func cloneRawMessage(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(json.RawMessage, len(raw))
+	copy(out, raw)
+	return out
+}
+
+func cloneWaitEvalAttempts(attempts []waitEvalAttempt) []waitEvalAttempt {
+	if len(attempts) == 0 {
+		return nil
+	}
+	out := make([]waitEvalAttempt, len(attempts))
+	copy(out, attempts)
+	return out
+}
+
+func cloneArtifactRefs(artifactRefs []map[string]any) []map[string]any {
+	if len(artifactRefs) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(artifactRefs))
+	for _, ref := range artifactRefs {
+		copied := map[string]any{}
+		for key, value := range ref {
+			copied[key] = value
+		}
+		out = append(out, copied)
+	}
+	return out
 }
 
 func waitForLocatorCondition(ctx context.Context, session *cdp.PageSession, poll time.Duration, query string, opts locatorWaitOptions) (waitResult, *locatorFindResult, error) {
@@ -2346,17 +2655,46 @@ func waitURLExpression(expected string, contains bool) string {
 }
 
 func waitEvalExpression(expression string) string {
+	return waitEvalExpressionWithOptions(expression, waitEvalOptions{})
+}
+
+func waitEvalExpressionWithOptions(expression string, opts waitEvalOptions) string {
 	expressionJSON, _ := json.Marshal(expression)
+	readyExprJSON, _ := json.Marshal(strings.TrimSpace(opts.ReadyExpression))
+	readyFieldJSON, _ := json.Marshal(strings.TrimSpace(opts.ReadyField))
 	return fmt.Sprintf(`(async () => {
   const marker = "__cdp_cli_wait_eval__";
   const expression = %s;
+  const readyExpression = %s;
+  const readyField = %s;
+  const getPath = (value, path) => {
+    if (!path) return undefined;
+    let current = value;
+    for (const part of String(path).split(".").filter(Boolean)) {
+      if (current == null || typeof current !== "object") return undefined;
+      current = current[part];
+    }
+    return current;
+  };
   try {
     const value = await (0, eval)(expression);
-    return { kind: "eval", expression, matched: !!value, value, marker };
+    let ready = false;
+    try {
+      if (readyExpression) {
+        ready = !!Function("value", "return Boolean(" + readyExpression + ");")(value);
+      } else if (readyField) {
+        ready = !!getPath(value, readyField);
+      } else {
+        ready = !!value;
+      }
+    } catch (error) {
+      return { kind: "eval", expression, ready_expression: readyExpression || undefined, ready_field: readyField || undefined, ready: false, matched: false, value, error: { name: error.name, message: "ready predicate failed: " + error.message }, marker };
+    }
+    return { kind: "eval", expression, ready_expression: readyExpression || undefined, ready_field: readyField || undefined, ready, matched: ready, value, marker };
   } catch (error) {
-    return { kind: "eval", expression, matched: false, error: { name: error.name, message: error.message }, marker };
+    return { kind: "eval", expression, ready_expression: readyExpression || undefined, ready_field: readyField || undefined, ready: false, matched: false, error: { name: error.name, message: error.message }, marker };
   }
-})()`, string(expressionJSON))
+})()`, string(expressionJSON), string(readyExprJSON), string(readyFieldJSON))
 }
 
 func waitLoadStateExpression(state string) string {

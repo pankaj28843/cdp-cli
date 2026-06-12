@@ -40,6 +40,7 @@ var fakeDelayedAssertCSSAttempts atomic.Int64
 var fakeDelayedAssertRoleAttempts atomic.Int64
 var fakeDelayedAssertNameAttempts atomic.Int64
 var fakeDelayedAssertViewportAttempts atomic.Int64
+var fakeDelayedWaitEvalAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
@@ -3207,6 +3208,38 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_wait_eval__") {
 		expression := expressionStringArg(req.Expression, "const expression = ")
+		readyExpr := expressionStringArg(req.Expression, "const readyExpression = ")
+		readyField := expressionStringArg(req.Expression, "const readyField = ")
+		if expression == "window.__semanticState" || expression == "window.__semanticNeverReady" {
+			attempt := fakeDelayedWaitEvalAttempts.Add(1)
+			terminalCondition := "loading"
+			rowCount := 0
+			ready := false
+			if expression == "window.__semanticState" && attempt >= 3 {
+				terminalCondition = "fare_rows"
+				rowCount = 12
+				ready = true
+			}
+			value := map[string]any{
+				"terminalCondition": terminalCondition,
+				"rowCount":          rowCount,
+				"attempt":           attempt,
+			}
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"kind":             "eval",
+						"expression":       expression,
+						"ready_expression": readyExpr,
+						"ready_field":      readyField,
+						"ready":            ready,
+						"matched":          ready,
+						"value":            value,
+					},
+				},
+			}
+		}
 		matched := expression == "window.__rendered === true"
 		return map[string]any{
 			"result": map[string]any{
@@ -3214,6 +3247,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 				"value": map[string]any{
 					"kind":       "eval",
 					"expression": expression,
+					"ready":      matched,
 					"matched":    matched,
 					"value":      matched,
 				},

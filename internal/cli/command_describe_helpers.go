@@ -378,6 +378,7 @@ func commandExamples(path string) []string {
 		"cdp wait eval": {
 			"cdp wait eval 'window.__rendered === true' --timeout 10s --json",
 			"cdp wait eval 'document.readyState === \"complete\"' --poll 500ms --json",
+			"cdp wait eval 'window.__stageState()' --ready-expr 'value.terminalCondition === \"fare_rows\"' --out-dir tmp/stage-ready --json",
 		},
 		"cdp wait load-state": {
 			"cdp wait load-state load --timeout 10s --json",

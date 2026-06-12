@@ -22,6 +22,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp page cleanup", want: []string{"--browser-mode headed", "--browser-mode headless", "--close", "--root-task-id"}},
 		{path: "cdp open", want: []string{"--task-id"}},
 		{path: "cdp eval", want: []string{"--title-contains"}},
+		{path: "cdp wait eval", want: []string{"--ready-expr", "--out-dir"}},
 		{path: "cdp html", want: []string{"--diagnose-empty"}},
 		{path: "cdp screenshot", want: []string{"--element"}},
 		{path: "cdp screenshot render", want: []string{"--serve"}},

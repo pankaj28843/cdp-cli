@@ -1568,6 +1568,137 @@ func TestWaitEvalJSON(t *testing.T) {
 	}
 }
 
+func TestWaitEvalSemanticReadinessJSONAndArtifacts(t *testing.T) {
+	fakeDelayedWaitEvalAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	outDir := t.TempDir()
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"wait", "eval", "window.__semanticState",
+		"--ready-expr", `value.terminalCondition === "fare_rows"`,
+		"--poll", "10ms",
+		"--timeout", "1s",
+		"--out-dir", outDir,
+		"--artifact-prefix", "stage-ready",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("wait eval semantic exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool `json:"ok"`
+		Wait struct {
+			Kind            string            `json:"kind"`
+			Expression      string            `json:"expression"`
+			ReadyExpression string            `json:"ready_expression"`
+			Ready           bool              `json:"ready"`
+			Matched         bool              `json:"matched"`
+			AttemptCount    int               `json:"attempt_count"`
+			PollInterval    string            `json:"poll_interval"`
+			LastValue       json.RawMessage   `json:"last_value"`
+			Attempts        []json.RawMessage `json:"attempts"`
+			Artifacts       []struct {
+				Type    string `json:"type"`
+				Path    string `json:"path"`
+				Attempt int    `json:"attempt"`
+			} `json:"artifacts"`
+		} `json:"wait"`
+		Artifacts []struct {
+			Path    string `json:"path"`
+			Attempt int    `json:"attempt"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait eval semantic output is invalid JSON: %v", err)
+	}
+	var lastValue struct {
+		TerminalCondition string `json:"terminalCondition"`
+		RowCount          int    `json:"rowCount"`
+	}
+	if err := json.Unmarshal(got.Wait.LastValue, &lastValue); err != nil {
+		t.Fatalf("wait eval semantic last_value is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Wait.Kind != "eval" || got.Wait.Expression != "window.__semanticState" || got.Wait.ReadyExpression != `value.terminalCondition === "fare_rows"` || !got.Wait.Ready || !got.Wait.Matched || got.Wait.AttemptCount < 3 || len(got.Wait.Attempts) != got.Wait.AttemptCount || got.Wait.PollInterval != "10ms" || lastValue.TerminalCondition != "fare_rows" || lastValue.RowCount != 12 {
+		t.Fatalf("wait eval semantic output = %+v last=%+v, want ready semantic state after attempts", got.Wait, lastValue)
+	}
+	if len(got.Wait.Artifacts) != got.Wait.AttemptCount || len(got.Artifacts) != got.Wait.AttemptCount {
+		t.Fatalf("wait eval semantic artifacts = wait:%d top:%d attempts:%d", len(got.Wait.Artifacts), len(got.Artifacts), got.Wait.AttemptCount)
+	}
+	for i, artifact := range got.Wait.Artifacts {
+		if artifact.Type != "wait-eval-attempt" || artifact.Attempt != i+1 || !strings.HasPrefix(artifact.Path, outDir) {
+			t.Fatalf("wait eval semantic artifact[%d] = %+v, want attempt artifact under out dir", i, artifact)
+		}
+		if _, err := os.Stat(artifact.Path); err != nil {
+			t.Fatalf("wait eval semantic artifact[%d] was not written: %v", i, err)
+		}
+	}
+}
+
+func TestWaitEvalSemanticReadinessTimeoutIncludesLastValueJSON(t *testing.T) {
+	fakeDelayedWaitEvalAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"wait", "eval", "window.__semanticNeverReady",
+		"--ready-expr", `value.terminalCondition === "fare_rows"`,
+		"--poll", "10ms",
+		"--timeout", "40ms",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait eval semantic timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Wait struct {
+				Kind            string          `json:"kind"`
+				Expression      string          `json:"expression"`
+				ReadyExpression string          `json:"ready_expression"`
+				Ready           bool            `json:"ready"`
+				Matched         bool            `json:"matched"`
+				AttemptCount    int             `json:"attempt_count"`
+				LastValue       json.RawMessage `json:"last_value"`
+				Evidence        map[string]any  `json:"evidence"`
+			} `json:"wait"`
+		} `json:"data"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("wait eval semantic timeout output is invalid JSON: %v", err)
+	}
+	var lastValue struct {
+		TerminalCondition string `json:"terminalCondition"`
+		RowCount          int    `json:"rowCount"`
+	}
+	if err := json.Unmarshal(got.Data.Wait.LastValue, &lastValue); err != nil {
+		t.Fatalf("wait eval semantic timeout last_value is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "eval" || got.Data.Wait.Expression != "window.__semanticNeverReady" || got.Data.Wait.ReadyExpression != `value.terminalCondition === "fare_rows"` || got.Data.Wait.Ready || got.Data.Wait.Matched || got.Data.Wait.AttemptCount == 0 || lastValue.TerminalCondition != "loading" || lastValue.RowCount != 0 {
+		t.Fatalf("wait eval semantic timeout = %+v last=%+v, want timeout with last observed semantic state", got, lastValue)
+	}
+	if got.Data.Wait.Evidence["attempt_count"].(float64) == 0 || got.Data.Wait.Evidence["ready"].(bool) {
+		t.Fatalf("wait eval semantic timeout evidence = %+v, want bounded not-ready evidence", got.Data.Wait.Evidence)
+	}
+	if !containsString(got.RemediationCommands, `cdp wait eval window.__semanticNeverReady --ready-expr 'value.terminalCondition === "fare_rows"' --timeout 15s --json`) {
+		t.Fatalf("wait eval semantic timeout remediations = %+v, want predicate retry command", got.RemediationCommands)
+	}
+}
+
 func TestWaitLoadStateJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
