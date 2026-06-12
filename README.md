@@ -165,6 +165,7 @@ cdp doctor --check scheduled-tasks --json
 - Formal browser invariants: daemon boundary, explicit profile access, lazy discovery, bounded page creation, unambiguous target selection, conservative cleanup, and JSON error envelopes are tracked in `docs/FORMAL_INVARIANTS.md`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.
+- Evidence bundles by manifest: use `cdp workflow debug-bundle --out-dir tmp/debug-bundle --task-id <task> --json` to write a public-safe bundle manifest, command log, stage log, and local-only browser artifacts by path. Raw request, console, and snapshot payloads stay out of default JSON unless `--inline-payloads` is explicitly set.
 
 ## Development
 

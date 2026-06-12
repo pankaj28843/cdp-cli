@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
@@ -22,6 +23,11 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	var screenshotFull bool
 	var screenshotView bool
 	var snapshotInteractiveOnly bool
+	var redact string
+	var inlinePayloads bool
+	var runID string
+	var taskID string
+	var stageName string
 	cmd := &cobra.Command{
 		Use:   "debug-bundle",
 		Short: "Collect a full debug bundle with events, snapshot, screenshot, and artifact references",
@@ -39,6 +45,10 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					[]string{"cdp workflow debug-bundle --url 'https://example.com' --screenshot-view --json"},
 				)
 			}
+			redact = artifacts.NormalizeMode(redact)
+			if redact != artifacts.ModeSafe && redact != artifacts.ModeNone {
+				return commandError("usage", "usage", "--redact must be safe or none", ExitUsage, []string{"cdp workflow debug-bundle --redact safe --json"})
+			}
 			if !screenshotFull && !screenshotView {
 				screenshotView = true
 			}
@@ -52,6 +62,19 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 
 			rawURL = strings.TrimSpace(rawURL)
 			outDir = strings.TrimSpace(outDir)
+			runID = strings.TrimSpace(runID)
+			taskID = strings.TrimSpace(taskID)
+			stageName = strings.TrimSpace(stageName)
+			if stageName == "" {
+				stageName = "debug-bundle"
+			}
+			started := time.Now()
+			layout := debugBundleLayout{Root: outDir}
+			if outDir != "" {
+				layout.Manifest = filepath.Clean(filepath.Join(outDir, "debug-bundle.bundle.json"))
+				layout.CommandLog = filepath.Clean(filepath.Join(outDir, "debug-bundle.command-log.jsonl"))
+				layout.StageLog = filepath.Clean(filepath.Join(outDir, "debug-bundle.stage-log.json"))
+			}
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
 			requestedURL := rawURL
 			trigger := "attached"
@@ -60,48 +83,53 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 			var client browserEventClient
 			var closeClient func(context.Context) error
 			var collectorErrors []map[string]string
-			artifacts := []map[string]any{}
-			artifactList := []map[string]any{}
+			artifactRecords := []debugBundleArtifactRecord{}
+			commands := []debugBundleCommandRecord{}
+			stages := []debugBundleStageRecord{}
 
-			addArtifact := func(kind, path string, artifact map[string]any) {
-				if strings.TrimSpace(path) == "" || artifact == nil {
+			addArtifact := func(artifact debugBundleArtifactRecord) {
+				if strings.TrimSpace(artifact.Path) == "" || strings.TrimSpace(artifact.Type) == "" {
 					return
 				}
-				artifacts = append(artifacts, artifact)
-				artifactList = append(artifactList, map[string]any{"type": kind, "path": path})
+				artifactRecords = append(artifactRecords, artifact)
 			}
-			writeBundleArtifact := func(name string, payload any) (map[string]any, error) {
+			writeBundleArtifact := func(name, content string, safety artifacts.SafetyMetadata, payload any) (debugBundleArtifactRecord, error) {
 				if outDir == "" {
-					return nil, nil
+					return debugBundleArtifactRecord{}, nil
 				}
 				raw, err := json.MarshalIndent(payload, "", "  ")
 				if err != nil {
-					return nil, commandError("internal", "internal", fmt.Sprintf("marshal debug bundle artifact %s: %v", name, err), ExitInternal, []string{"cdp workflow debug-bundle --json"})
+					return debugBundleArtifactRecord{}, commandError("internal", "internal", fmt.Sprintf("marshal debug bundle artifact %s: %v", name, err), ExitInternal, []string{"cdp workflow debug-bundle --json"})
 				}
 				path := filepath.Join(outDir, "debug-bundle."+name+".json")
 				writtenPath, err := writeArtifactFile(path, append(raw, '\n'))
 				if err != nil {
-					return nil, err
+					return debugBundleArtifactRecord{}, err
 				}
 				kind := "workflow-debug-bundle-" + name
-				meta := map[string]any{
-					"type":  kind,
-					"path":  writtenPath,
-					"bytes": len(raw) + 1,
+				meta := debugBundleArtifactRecord{
+					Type:    kind,
+					Path:    writtenPath,
+					Bytes:   len(raw) + 1,
+					Content: content,
+					Safety:  safety,
 				}
-				addArtifact(kind, writtenPath, meta)
+				addArtifact(meta)
 				return meta, nil
 			}
 			writeSnapshotArtifact := func(snapshot pageSnapshot) {
 				if outDir == "" {
 					return
 				}
-				_, err := writeBundleArtifact("snapshot", map[string]any{
-					"url":      snapshot.URL,
+				snapshotRedactor := artifacts.NewRedactor(redact)
+				snapshotPayload := debugBundleRedactedSnapshot(snapshot, snapshotRedactor)
+				snapshotSafety := debugBundleArtifactSafety(snapshotRedactor, true, debugBundleSnapshotWarning)
+				_, err := writeBundleArtifact("snapshot", "snapshot", snapshotSafety, map[string]any{
+					"url":      snapshotPayload.URL,
 					"title":    snapshot.Title,
 					"selector": snapshot.Selector,
 					"count":    snapshot.Count,
-					"items":    snapshot.Items,
+					"items":    snapshotPayload.Items,
 				})
 				if err != nil {
 					collectorErrors = append(collectorErrors, collectorError("artifact", err))
@@ -175,14 +203,6 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 			}
 
 			if outDir != "" {
-				if snapshotInteractiveOnly {
-					artifactList = append(artifactList, map[string]any{
-						"type":    "snapshot-interactive-only",
-						"path":    filepath.Join(outDir, "debug-bundle.snapshot_interactive_only"),
-						"enabled": true,
-						"note":    "reserved compatibility flag",
-					})
-				}
 				if screenshotView || screenshotFull {
 					shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{
 						Format:   "png",
@@ -196,30 +216,38 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 						if err != nil {
 							collectorErrors = append(collectorErrors, collectorError("artifact", err))
 						} else {
-							meta := map[string]any{
-								"type":      "workflow-debug-bundle-screenshot",
-								"path":      writtenPath,
-								"bytes":     len(shot.Data),
-								"format":    shot.Format,
-								"full_page": screenshotFull,
+							meta := debugBundleArtifactRecord{
+								Type:    "workflow-debug-bundle-screenshot",
+								Path:    writtenPath,
+								Bytes:   len(shot.Data),
+								Content: "screenshot",
+								Safety:  debugBundleArtifactSafety(artifacts.NewRedactor(redact), true, debugBundleScreenshotWarning),
 							}
-							addArtifact("workflow-debug-bundle-screenshot", writtenPath, meta)
+							addArtifact(meta)
 						}
 					}
 				}
 
-				if _, err := writeBundleArtifact("network", map[string]any{
-					"requests": requests,
+				networkRedactor := artifacts.NewRedactor(redact)
+				networkRequests := debugBundleRedactedRequests(requests, networkRedactor)
+				networkSafety := debugBundleArtifactSafety(networkRedactor, false, "network summary contains redacted request URLs and no headers or bodies by default")
+				if _, err := writeBundleArtifact("network", "network-summary", networkSafety, map[string]any{
+					"requests": networkRequests,
 				}); err != nil {
 					collectorErrors = append(collectorErrors, collectorError("artifact", err))
 				}
-				if _, err := writeBundleArtifact("console", map[string]any{
-					"messages": messages,
+				consoleRedactor := artifacts.NewRedactor(redact)
+				consoleMessages := debugBundleRedactedMessages(messages, consoleRedactor)
+				consoleSafety := debugBundleArtifactSafety(consoleRedactor, true, debugBundleConsoleWarning)
+				if _, err := writeBundleArtifact("console", "console", consoleSafety, map[string]any{
+					"messages": consoleMessages,
 				}); err != nil {
 					collectorErrors = append(collectorErrors, collectorError("artifact", err))
 				}
-				if _, err := writeBundleArtifact("page-metadata", map[string]any{
-					"url":              target.URL,
+				pageMetadataRedactor := artifacts.NewRedactor(redact)
+				pageMetadataSafety := debugBundleArtifactSafety(pageMetadataRedactor, true, debugBundlePageMetadataWarning)
+				if _, err := writeBundleArtifact("page-metadata", "page-metadata", pageMetadataSafety, map[string]any{
+					"url":              pageMetadataRedactor.URL(target.URL, "page_metadata.url"),
 					"title":            snapshot.Title,
 					"type":             target.Type,
 					"id":               target.TargetID,
@@ -233,11 +261,21 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 				}); err != nil {
 					collectorErrors = append(collectorErrors, collectorError("artifact", err))
 				}
-				if _, err := writeBundleArtifact("workflow", map[string]any{
-					"name":      "debug-bundle",
-					"requested": requestedURL,
-					"trigger":   trigger,
-				}); err != nil {
+				workflowRedactor := artifacts.NewRedactor(redact)
+				workflowPayload := map[string]any{
+					"name":         "debug-bundle",
+					"requested":    workflowRedactor.URL(requestedURL, "workflow.requested"),
+					"trigger":      trigger,
+					"run_id":       runID,
+					"task_id":      taskID,
+					"stage":        stageName,
+					"redact":       redact,
+					"out_dir":      outDir,
+					"since":        durationString(since),
+					"browser_mode": a.browserModeName(),
+				}
+				workflowSafety := debugBundleArtifactSafety(workflowRedactor, false, debugBundleCommandRecordWarning)
+				if _, err := writeBundleArtifact("workflow", "workflow-metadata", workflowSafety, workflowPayload); err != nil {
 					collectorErrors = append(collectorErrors, collectorError("artifact", err))
 				}
 			}
@@ -258,16 +296,102 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 				target.URL = requestedURL
 			}
 
+			outputRedactor := artifacts.NewRedactor(redact)
+			outputTarget := debugBundleRedactedPageRow(target, outputRedactor)
+			requestedURLOutput := outputRedactor.URL(requestedURL, "workflow.requested_url")
+			nextVerifyCommand := "cdp workflow verify " + requestedURLOutput + " --json"
+			if strings.TrimSpace(requestedURLOutput) == "" {
+				nextVerifyCommand = "cdp workflow verify <url> --json"
+			}
+			argvRedactor := artifacts.NewRedactor(redact)
+			commandArgv := []string{"cdp", "workflow", "debug-bundle"}
+			if rawURL != "" {
+				commandArgv = append(commandArgv, "--url", argvRedactor.URL(rawURL, "command.argv.url"))
+			} else if targetID != "" {
+				commandArgv = append(commandArgv, "--target", targetID)
+			} else if urlContains != "" {
+				commandArgv = append(commandArgv, "--url-contains", urlContains)
+			} else if titleContains != "" {
+				commandArgv = append(commandArgv, "--title-contains", titleContains)
+			}
+			commandArgv = append(commandArgv, "--since", durationString(since), "--redact", redact)
+			if outDir != "" {
+				commandArgv = append(commandArgv, "--out-dir", outDir)
+			}
+			if screenshotFull {
+				commandArgv = append(commandArgv, "--screenshot-full")
+			} else if screenshotView {
+				commandArgv = append(commandArgv, "--screenshot-view")
+			}
+			if inlinePayloads {
+				commandArgv = append(commandArgv, "--inline-payloads")
+			}
+			if runID != "" {
+				commandArgv = append(commandArgv, "--run-id", runID)
+			}
+			if taskID != "" {
+				commandArgv = append(commandArgv, "--task-id", taskID)
+			}
+			if stageName != "" {
+				commandArgv = append(commandArgv, "--stage", stageName)
+			}
+			commands = append(commands, newDebugBundleCommandRecord(debugBundleCommandRecordOptions{
+				Name:         "workflow debug-bundle",
+				BrowserMode:  a.browserModeName(),
+				Timeout:      durationString(fallback),
+				ExitCode:     ExitOK,
+				Status:       "ok",
+				TaskID:       taskID,
+				RunID:        runID,
+				Stage:        stageName,
+				Attempt:      1,
+				ArtifactPath: layout.Manifest,
+				Argv:         commandArgv,
+				ArgvRedacted: len(argvRedactor.ChangedFields()) > 0,
+			}))
+			stages = append(stages, newDebugBundleStageRecord(stageName, "ok", taskID, runID, time.Since(started), commands, artifactRecords))
+			if outDir != "" {
+				commandSafety := debugBundleArtifactSafety(artifacts.NewRedactor(redact), false, debugBundleCommandRecordWarning)
+				commandBytes, err := debugBundleCommandLogJSONL(commands)
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal debug bundle command log: %v", err), ExitInternal, []string{"cdp workflow debug-bundle --json"})
+				}
+				writtenPath, err := writeArtifactFile(layout.CommandLog, commandBytes)
+				if err != nil {
+					return err
+				}
+				addArtifact(debugBundleArtifactRecord{
+					Type:    "workflow-debug-bundle-command-log",
+					Path:    writtenPath,
+					Bytes:   len(commandBytes),
+					Content: "command-log",
+					Safety:  commandSafety,
+				})
+				stageBytes, err := json.MarshalIndent(stages, "", "  ")
+				if err != nil {
+					return commandError("internal", "internal", fmt.Sprintf("marshal debug bundle stage log: %v", err), ExitInternal, []string{"cdp workflow debug-bundle --json"})
+				}
+				writtenPath, err = writeArtifactFile(layout.StageLog, append(stageBytes, '\n'))
+				if err != nil {
+					return err
+				}
+				addArtifact(debugBundleArtifactRecord{
+					Type:    "workflow-debug-bundle-stage-log",
+					Path:    writtenPath,
+					Bytes:   len(stageBytes) + 1,
+					Content: "stage-log",
+					Safety:  commandSafety,
+				})
+			}
+			bundleSummary := newDebugBundleSummary(layout, redact, inlinePayloads, artifactRecords, commands, stages)
 			report := map[string]any{
 				"ok":       true,
-				"target":   pageRow(target),
-				"requests": requests,
-				"messages": messages,
-				"snapshot": snapshot,
+				"target":   outputTarget,
 				"evidence": evidence,
+				"bundle":   bundleSummary,
 				"workflow": map[string]any{
 					"name":                "debug-bundle",
-					"requested_url":       requestedURL,
+					"requested_url":       requestedURLOutput,
 					"trigger":             trigger,
 					"since":               durationString(since),
 					"request_count":       len(requests),
@@ -278,26 +402,37 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					"collector_errors":    collectorErrors,
 					"partial":             len(collectorErrors) > 0,
 					"next_commands": []string{
-						"cdp workflow verify " + requestedURL + " --json",
+						nextVerifyCommand,
 						"cdp console --target " + target.TargetID + " --errors --wait 5s --json",
 						"cdp network --target " + target.TargetID + " --failed --wait 5s --json",
 					},
 					"screenshot_view": screenshotView,
 					"screenshot_full": screenshotFull,
+					"redact":          redact,
+					"inline_payloads": inlinePayloads,
+					"run_id":          runID,
+					"task_id":         taskID,
+					"stage":           stageName,
 				},
 			}
+			if inlinePayloads {
+				report["requests"] = debugBundleRedactedRequests(requests, artifacts.NewRedactor(redact))
+				report["messages"] = debugBundleRedactedMessages(messages, artifacts.NewRedactor(redact))
+				report["snapshot"] = debugBundleRedactedSnapshot(snapshot, artifacts.NewRedactor(redact))
+			}
 			if outDir != "" {
-				bundleMeta, err := writeBundleArtifact("bundle", report)
+				bundleSafety := debugBundleArtifactSafety(artifacts.NewRedactor(redact), false, debugBundleCommandRecordWarning)
+				bundleMeta, err := writeBundleArtifact("bundle", "bundle-manifest", bundleSafety, report)
 				if err != nil {
 					return err
 				}
-				if bundleMeta != nil {
-					report["artifact"] = bundleMeta
-				}
+				report["artifact"] = bundleMeta
+				bundleSummary = newDebugBundleSummary(layout, redact, inlinePayloads, artifactRecords, commands, stages)
+				report["bundle"] = bundleSummary
 			}
-			if len(artifacts) > 0 {
-				report["artifacts"] = artifacts
-				report["artifact_list"] = artifactList
+			if len(artifactRecords) > 0 {
+				report["artifacts"] = artifactRecords
+				report["artifact_list"] = debugBundleArtifactList(artifactRecords)
 			}
 			return a.render(ctx, fmt.Sprintf("debug-bundle\t%s", target.TargetID), report)
 		},
@@ -311,5 +446,10 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&screenshotFull, "screenshot-full", false, "capture full-page screenshot in the debug bundle")
 	cmd.Flags().BoolVar(&screenshotView, "screenshot-view", false, "capture viewport screenshot in the debug bundle")
 	cmd.Flags().BoolVar(&snapshotInteractiveOnly, "snapshot-interactive-only", false, "reserved compatibility flag; snapshot still returns visible text items")
+	cmd.Flags().StringVar(&redact, "redact", artifacts.ModeSafe, "redaction preset for URLs and obvious secrets: safe or none")
+	cmd.Flags().BoolVar(&inlinePayloads, "inline-payloads", false, "include redacted request, console, and snapshot payloads in command JSON instead of artifact references only")
+	cmd.Flags().StringVar(&runID, "run-id", "", "optional run id recorded in bundle command and stage logs")
+	cmd.Flags().StringVar(&taskID, "task-id", "", "optional task id recorded in bundle command and stage logs")
+	cmd.Flags().StringVar(&stageName, "stage", "", "optional stage name recorded in bundle command and stage logs")
 	return cmd
 }

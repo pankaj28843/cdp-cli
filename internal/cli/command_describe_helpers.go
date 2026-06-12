@@ -586,8 +586,9 @@ func commandExamples(path string) []string {
 			"cdp workflow verify 'https://example.com' --json",
 		},
 		"cdp workflow debug-bundle": {
-			"cdp workflow debug-bundle --url 'https://example.com' --since 5s --screenshot-view --out-dir tmp/debug-bundle --json",
-			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --json",
+			"cdp workflow debug-bundle --url 'https://example.com' --since 5s --screenshot-view --out-dir tmp/debug-bundle --task-id research-preflight --json",
+			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --run-id run-1 --task-id task-1 --stage selection --json",
+			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --inline-payloads --redact safe --json",
 		},
 		"cdp workflow action-capture": {
 			"cdp workflow action-capture --action click:'button.submit' --include network,console,dom,text,a11y,screenshot --wait-after 2s --evidence-out-dir tmp/action-capture --json",

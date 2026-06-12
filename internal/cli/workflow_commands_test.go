@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 )
 
@@ -855,9 +855,12 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 
 	outDir := t.TempDir()
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "debug-bundle", "--url", "https://example.test/app", "--since", "250ms", "--out-dir", outDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "debug-bundle", "--url", "https://example.test/app?token=abc&client_id=public", "--since", "250ms", "--out-dir", outDir, "--run-id", "run-1", "--task-id", "task-1", "--stage", "preflight", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow debug-bundle exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	if strings.Contains(out.String(), "token=abc") || strings.Contains(out.String(), "Synthetic console error") {
+		t.Fatalf("workflow debug-bundle stdout contains raw browser payload: %s", out.String())
 	}
 
 	var got struct {
@@ -868,29 +871,57 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 			URL   string `json:"url"`
 			Title string `json:"title"`
 		} `json:"target"`
-		Requests []struct {
-			ID     string `json:"id"`
-			Failed bool   `json:"failed"`
-		} `json:"requests"`
-		Messages []struct {
-			ID int `json:"id"`
-		} `json:"messages"`
-		Snapshot struct {
-			Count int    `json:"count"`
-			Title string `json:"title"`
-			URL   string `json:"url"`
-		} `json:"snapshot"`
 		Evidence struct {
-			Requests int `json:"requests"`
-			Messages int `json:"messages"`
+			Requests      int `json:"requests"`
+			Messages      int `json:"messages"`
+			SnapshotItems int `json:"snapshot_items"`
 		} `json:"evidence"`
 		Artifacts []struct {
-			Type string `json:"type"`
-			Path string `json:"path"`
+			Type    string                   `json:"type"`
+			Path    string                   `json:"path"`
+			Content string                   `json:"content"`
+			Safety  artifacts.SafetyMetadata `json:"safety"`
 		} `json:"artifacts"`
 		Artifact struct {
-			Path string `json:"path"`
+			Path   string                   `json:"path"`
+			Safety artifacts.SafetyMetadata `json:"safety"`
 		} `json:"artifact"`
+		Bundle struct {
+			SchemaVersion        string `json:"schema_version"`
+			RedactionMode        string `json:"redaction_mode"`
+			DefaultJSON          string `json:"default_json"`
+			InlinePayloads       bool   `json:"inline_payloads"`
+			ArtifactCount        int    `json:"artifact_count"`
+			PublicSafeArtifacts  int    `json:"public_safe_artifacts"`
+			LocalOnlyArtifacts   int    `json:"local_only_artifacts"`
+			UnsafeOptInArtifacts int    `json:"unsafe_opt_in_artifacts"`
+			Layout               struct {
+				Manifest   string `json:"manifest"`
+				CommandLog string `json:"command_log"`
+				StageLog   string `json:"stage_log"`
+			} `json:"layout"`
+			Commands []struct {
+				Name         string   `json:"name"`
+				BrowserMode  string   `json:"browser_mode"`
+				Timeout      string   `json:"timeout"`
+				ExitCode     int      `json:"exit_code"`
+				Status       string   `json:"status"`
+				TaskID       string   `json:"task_id"`
+				RunID        string   `json:"run_id"`
+				Stage        string   `json:"stage"`
+				Attempt      int      `json:"attempt"`
+				ArtifactPath string   `json:"artifact_path"`
+				Argv         []string `json:"argv"`
+				ArgvRedacted bool     `json:"argv_redacted"`
+			} `json:"commands"`
+			Stages []struct {
+				Name         string `json:"name"`
+				Status       string `json:"status"`
+				TaskID       string `json:"task_id"`
+				RunID        string `json:"run_id"`
+				AttemptCount int    `json:"attempt_count"`
+			} `json:"stages"`
+		} `json:"bundle"`
 		Workflow struct {
 			Name              string `json:"name"`
 			RequestedURL      string `json:"requested_url"`
@@ -899,44 +930,34 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 			RequestsTruncated bool   `json:"requests_truncated"`
 			MessagesTruncated bool   `json:"messages_truncated"`
 			Partial           bool   `json:"partial"`
+			Redact            string `json:"redact"`
+			InlinePayloads    bool   `json:"inline_payloads"`
+			RunID             string `json:"run_id"`
+			TaskID            string `json:"task_id"`
+			Stage             string `json:"stage"`
 		} `json:"workflow"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("workflow debug-bundle output is invalid JSON: %v", err)
 	}
-
-	expectedURL, err := url.Parse("https://example.test/app")
-	if err != nil {
-		t.Fatalf("invalid expected URL: %v", err)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		t.Fatalf("workflow debug-bundle raw output is invalid JSON: %v", err)
 	}
-	targetURL, err := url.Parse(got.Target.URL)
-	if err != nil {
-		t.Fatalf("invalid target URL %q: %v", got.Target.URL, err)
-	}
-	if !got.OK || got.Target.ID == "" || got.Target.Type != "page" || got.Target.Title == "" || targetURL.Host != expectedURL.Host || targetURL.Scheme != expectedURL.Scheme {
-		t.Fatalf("workflow debug-bundle target = %+v, want selected page target", got.Target)
-	}
-	if got.Workflow.Name != "debug-bundle" || got.Workflow.RequestedURL != "https://example.test/app" {
-		t.Fatalf("workflow debug-bundle metadata = %+v, want debug-bundle workflow metadata", got.Workflow)
-	}
-	if len(got.Requests) < 2 || len(got.Messages) == 0 || got.Evidence.Requests == 0 || got.Evidence.Messages == 0 || got.Snapshot.Count == 0 {
-		t.Fatalf("workflow debug-bundle evidence = %+v, want requests, messages, and snapshot", got)
-	}
-	hasFailed := false
-	for _, request := range got.Requests {
-		if request.Failed {
-			hasFailed = true
-			break
+	for _, field := range []string{"requests", "messages", "snapshot"} {
+		if _, ok := raw[field]; ok {
+			t.Fatalf("workflow debug-bundle default JSON includes %q payload; want artifact references only", field)
 		}
 	}
-	if !hasFailed {
-		t.Fatalf("workflow debug-bundle requests = %+v, want at least one failed request", got.Requests)
+
+	if !got.OK || got.Target.ID == "" || got.Target.Type != "page" || got.Target.Title == "" || !strings.Contains(got.Target.URL, "https://example.test/app") || strings.Contains(got.Target.URL, "token=abc") {
+		t.Fatalf("workflow debug-bundle target = %+v, want selected page target", got.Target)
 	}
-	if len(got.Requests) != got.Workflow.RequestCount {
-		t.Fatalf("workflow request_count = %d, got %d requests", got.Workflow.RequestCount, len(got.Requests))
+	if got.Workflow.Name != "debug-bundle" || !strings.Contains(got.Workflow.RequestedURL, "token=%3Credacted%3E") || got.Workflow.Redact != artifacts.ModeSafe || got.Workflow.InlinePayloads || got.Workflow.RunID != "run-1" || got.Workflow.TaskID != "task-1" || got.Workflow.Stage != "preflight" {
+		t.Fatalf("workflow debug-bundle metadata = %+v, want debug-bundle workflow metadata", got.Workflow)
 	}
-	if len(got.Messages) != got.Workflow.MessageCount {
-		t.Fatalf("workflow message_count = %d, got %d messages", got.Workflow.MessageCount, len(got.Messages))
+	if got.Evidence.Requests < 2 || got.Evidence.Messages == 0 || got.Evidence.SnapshotItems == 0 || got.Evidence.Requests != got.Workflow.RequestCount || got.Evidence.Messages != got.Workflow.MessageCount {
+		t.Fatalf("workflow debug-bundle evidence = %+v workflow=%+v, want summarized request/message/snapshot counts", got.Evidence, got.Workflow)
 	}
 	if got.Workflow.RequestsTruncated || got.Workflow.MessagesTruncated {
 		t.Fatalf("workflow debug-bundle = %+v, expect no truncation in synthetic window", got.Workflow)
@@ -944,17 +965,25 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 	if got.Workflow.Partial {
 		t.Fatalf("workflow debug-bundle = %+v, expect zero collector errors with synthetic events", got.Workflow)
 	}
-	snapshotURL, err := url.Parse(got.Snapshot.URL)
-	if err != nil {
-		t.Fatalf("invalid snapshot URL %q: %v", got.Snapshot.URL, err)
+	if got.Bundle.SchemaVersion != "cdp-evidence-bundle/v1" || got.Bundle.RedactionMode != artifacts.ModeSafe || got.Bundle.DefaultJSON != "artifact_references" || got.Bundle.InlinePayloads {
+		t.Fatalf("workflow bundle = %+v, want safe artifact-reference manifest", got.Bundle)
 	}
-	if snapshotURL.Host != targetURL.Host {
-		t.Fatalf("workflow snapshot url = %q, want same host as target %q", got.Snapshot.URL, got.Target.URL)
+	if got.Bundle.Layout.Manifest != filepath.Join(outDir, "debug-bundle.bundle.json") || got.Bundle.Layout.CommandLog != filepath.Join(outDir, "debug-bundle.command-log.jsonl") || got.Bundle.Layout.StageLog != filepath.Join(outDir, "debug-bundle.stage-log.json") {
+		t.Fatalf("workflow bundle layout = %+v, want stable artifact paths under out dir", got.Bundle.Layout)
 	}
-	if got.Snapshot.Title != got.Target.Title {
-		t.Fatalf("workflow snapshot title = %q, want %q", got.Snapshot.Title, got.Target.Title)
+	if got.Bundle.ArtifactCount != len(got.Artifacts) || got.Bundle.PublicSafeArtifacts == 0 || got.Bundle.LocalOnlyArtifacts == 0 || got.Bundle.UnsafeOptInArtifacts != 0 {
+		t.Fatalf("workflow bundle safety counts = %+v artifacts=%d, want public-safe and local-only counts", got.Bundle, len(got.Artifacts))
 	}
-	if len(got.Artifacts) < 5 {
+	if len(got.Bundle.Commands) != 1 || got.Bundle.Commands[0].Name != "workflow debug-bundle" || got.Bundle.Commands[0].BrowserMode == "" || got.Bundle.Commands[0].Timeout == "" || got.Bundle.Commands[0].ExitCode != 0 || got.Bundle.Commands[0].Status != "ok" || got.Bundle.Commands[0].TaskID != "task-1" || got.Bundle.Commands[0].RunID != "run-1" || got.Bundle.Commands[0].Stage != "preflight" || got.Bundle.Commands[0].Attempt != 1 || got.Bundle.Commands[0].ArtifactPath != filepath.Join(outDir, "debug-bundle.bundle.json") || !got.Bundle.Commands[0].ArgvRedacted {
+		t.Fatalf("workflow bundle commands = %+v, want reproducible command log shape", got.Bundle.Commands)
+	}
+	if strings.Join(got.Bundle.Commands[0].Argv, " ") == "" || strings.Contains(strings.Join(got.Bundle.Commands[0].Argv, " "), "token=abc") {
+		t.Fatalf("workflow bundle command argv = %+v, want redacted argv", got.Bundle.Commands[0].Argv)
+	}
+	if len(got.Bundle.Stages) != 1 || got.Bundle.Stages[0].Name != "preflight" || got.Bundle.Stages[0].Status != "ok" || got.Bundle.Stages[0].TaskID != "task-1" || got.Bundle.Stages[0].RunID != "run-1" || got.Bundle.Stages[0].AttemptCount != 1 {
+		t.Fatalf("workflow bundle stages = %+v, want stage log shape", got.Bundle.Stages)
+	}
+	if len(got.Artifacts) < 8 {
 		t.Fatalf("workflow artifacts = %+v, want artifact list with bundle + evidence", got.Artifacts)
 	}
 	if got.Artifact.Path == "" {
@@ -968,20 +997,37 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 	}
 	requiredArtifacts := map[string]struct{}{
 		"workflow-debug-bundle-bundle":        {},
+		"workflow-debug-bundle-command-log":   {},
 		"workflow-debug-bundle-network":       {},
 		"workflow-debug-bundle-console":       {},
 		"workflow-debug-bundle-page-metadata": {},
 		"workflow-debug-bundle-snapshot":      {},
+		"workflow-debug-bundle-stage-log":     {},
 		"workflow-debug-bundle-workflow":      {},
 	}
 	seenArtifacts := map[string]struct{}{}
 	artifactInBundleList := false
+	networkPath := ""
+	snapshotSawLocalOnly := false
+	commandLogPath := ""
 	for _, artifact := range got.Artifacts {
-		if artifact.Path == "" || artifact.Type == "" {
+		if artifact.Path == "" || artifact.Type == "" || artifact.Content == "" || artifact.Safety.RedactionMode == "" || artifact.Safety.Classification == "" {
 			t.Fatalf("workflow artifacts = %+v, want typed file metadata", got.Artifacts)
 		}
 		if artifact.Path == got.Artifact.Path {
 			artifactInBundleList = true
+		}
+		if artifact.Type == "workflow-debug-bundle-network" {
+			networkPath = artifact.Path
+			if artifact.Safety.Classification != "public_safe" || !artifact.Safety.Shareable {
+				t.Fatalf("workflow network artifact safety = %+v, want public-safe redacted summary", artifact.Safety)
+			}
+		}
+		if artifact.Type == "workflow-debug-bundle-snapshot" && artifact.Safety.Classification == "local_only" && !artifact.Safety.Shareable {
+			snapshotSawLocalOnly = true
+		}
+		if artifact.Type == "workflow-debug-bundle-command-log" {
+			commandLogPath = artifact.Path
 		}
 		seenArtifacts[artifact.Type] = struct{}{}
 		if _, err := os.Stat(artifact.Path); err != nil {
@@ -993,6 +1039,29 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 	}
 	if !artifactInBundleList {
 		t.Fatalf("workflow artifacts = %+v, want bundle path included in artifacts", got.Artifacts)
+	}
+	if networkPath == "" {
+		t.Fatalf("workflow artifacts = %+v, want network artifact path", got.Artifacts)
+	}
+	networkBytes, err := os.ReadFile(networkPath)
+	if err != nil {
+		t.Fatalf("read network artifact: %v", err)
+	}
+	if strings.Contains(string(networkBytes), "token=abc") || !strings.Contains(string(networkBytes), "token=%3Credacted%3E") {
+		t.Fatalf("network artifact = %s, want redacted token URL", string(networkBytes))
+	}
+	if !snapshotSawLocalOnly {
+		t.Fatalf("workflow artifacts = %+v, want snapshot marked local-only", got.Artifacts)
+	}
+	if commandLogPath == "" {
+		t.Fatalf("workflow artifacts = %+v, want command log artifact", got.Artifacts)
+	}
+	commandBytes, err := os.ReadFile(commandLogPath)
+	if err != nil {
+		t.Fatalf("read command log artifact: %v", err)
+	}
+	if !strings.Contains(string(commandBytes), `"task_id":"task-1"`) || !strings.Contains(string(commandBytes), `"artifact_path":"`+filepath.Join(outDir, "debug-bundle.bundle.json")+`"`) {
+		t.Fatalf("command log artifact = %s, want task id and primary artifact path", string(commandBytes))
 	}
 	for artifactType := range requiredArtifacts {
 		if _, ok := seenArtifacts[artifactType]; !ok {

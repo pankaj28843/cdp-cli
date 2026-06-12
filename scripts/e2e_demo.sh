@@ -558,9 +558,11 @@ require_artifact "$state_dir/storage.local.json"
   | jq -e --arg path "$state_dir/demo.png" '.ok == true and .screenshot.path == $path and .screenshot.bytes > 0' >/dev/null
 require_artifact "$state_dir/demo.png"
 mkdir -p "$state_dir/debug-bundle"
-"$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url" --since 2s --out-dir "$state_dir/debug-bundle" --json \
-  | jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.artifacts | length >= 6)' >/dev/null
+"$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url?token=demo-secret" --since 2s --out-dir "$state_dir/debug-bundle" --run-id demo-run --task-id demo-debug-bundle --stage demo-debug --json \
+  | jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.bundle.schema_version == "cdp-evidence-bundle/v1") and .bundle.default_json == "artifact_references" and (.bundle.public_safe_artifacts >= 1) and (.bundle.local_only_artifacts >= 1) and (.bundle.commands[0].task_id == "demo-debug-bundle") and (.bundle.commands[0].artifact_path == $path) and (.bundle.stages[0].name == "demo-debug") and (has("requests") | not) and (.artifacts | length >= 8) and (.artifact_list[] | select(.type == "workflow-debug-bundle-command-log" and .classification == "public_safe"))' >/dev/null
 require_artifact "$state_dir/debug-bundle/debug-bundle.bundle.json"
+require_artifact "$state_dir/debug-bundle/debug-bundle.command-log.jsonl"
+require_artifact "$state_dir/debug-bundle/debug-bundle.stage-log.json"
 "$binary" protocol exec Page.captureScreenshot --url-contains "$app_url" --params '{"format":"png"}' --save "$state_dir/protocol-shot.png" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg path "$state_dir/protocol-shot.png" '.ok == true and .artifact.path == $path and .artifact.bytes > 0 and .result.data.omitted == true' >/dev/null
 require_artifact "$state_dir/protocol-shot.png"
