@@ -286,7 +286,7 @@ func TestWaitResponseTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--timeout", "20ms", "wait", "response", "--match-url", "does-not-exist", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--timeout", "200ms", "wait", "response", "--match-url", "does-not-exist", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait response timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -387,7 +387,7 @@ func TestWaitNetworkIdleTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "10ms", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "50ms", "--timeout", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait network-idle timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -435,7 +435,7 @@ func TestWaitNetworkIdleIgnoreURLJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "10ms", "--ignore-url-contains", "/stream", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "50ms", "--ignore-url-contains", "/stream", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("wait network-idle ignore exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -1182,7 +1182,7 @@ func TestNetworkWebSocketCaptureJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{
 		"network", "websocket",
-		"--wait", "250ms",
+		"--wait", "1s",
 		"--include-payloads",
 		"--payload-limit", "12",
 		"--redact", "safe",

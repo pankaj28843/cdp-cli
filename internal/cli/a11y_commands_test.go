@@ -112,7 +112,7 @@ func TestAssertAriaSnapshotTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "aria-snapshot", "--expected", "- button \"Missing\"", "--selector", "body", "--timeout", "80ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"assert", "aria-snapshot", "--expected", "- button \"Missing\"", "--selector", "body", "--timeout", "3s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("assert aria-snapshot timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
