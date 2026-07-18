@@ -32,10 +32,13 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	for _, want := range []string{"--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h --repair --force --reconnect 30s --health-check --cleanup --cleanup-close --json", "headless-maintenance.log", "command -v flock", "--help 2>&1 | grep -q -- '--close'"} {
+	for _, want := range []string{"artifacts run-managed --task headed-daemon-keepalive", "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "artifacts run-managed --task headless-maintenance", "--browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h --repair --force --reconnect 30s --health-check --cleanup --cleanup-close --json", "artifacts prune --older-than 168h --max-log-size 64MiB --apply", "headless-maintenance.log", "command -v flock", "--help 2>&1 | grep -q -- '--close'"} {
 		if !strings.Contains(afterFirst, want) {
 			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
 		}
+	}
+	if strings.Contains(afterFirst, ">> ") {
+		t.Fatalf("crontab after install append-opens a managed log:\n%s", afterFirst)
 	}
 	for _, oldCommand := range []string{"--browser-mode headless daemon keepalive --managed-process-sweep", "--browser-mode headless daemon health-check --managed-process-sweep", "--browser-mode headless browser profile seed", "--browser-mode headless page cleanup"} {
 		if strings.Contains(afterFirst, oldCommand) {
@@ -97,14 +100,14 @@ func TestCronStatusReportsManagedTaskIDsAndSweepHooks(t *testing.T) {
 		} `json:"scheduled_tasks"`
 	}
 	executeCronJSON(t, []string{"cron", "status", "--state-dir", stateDir, "--json"}, &status)
-	if !status.OK || len(status.Tasks) != 2 {
-		t.Fatalf("cron status tasks = %+v ok=%v, want two managed tasks", status.Tasks, status.OK)
+	if !status.OK || len(status.Tasks) != 3 {
+		t.Fatalf("cron status tasks = %+v ok=%v, want three managed tasks", status.Tasks, status.OK)
 	}
 	taskIDs := map[string]bool{}
 	for _, task := range status.Tasks {
 		taskIDs[task.ID] = true
 	}
-	wantIDs := []string{"headed-daemon-keepalive", "headless-maintenance"}
+	wantIDs := []string{"artifact-prune", "headed-daemon-keepalive", "headless-maintenance"}
 	for _, id := range wantIDs {
 		if !taskIDs[id] || !containsString(status.ScheduledTasks.Details.ExpectedManagedTaskIDs, id) || !containsString(status.ScheduledTasks.Details.InstalledManagedTaskIDs, id) {
 			t.Fatalf("cron status missing task id %q in tasks=%+v details=%+v", id, status.Tasks, status.ScheduledTasks.Details)
@@ -120,6 +123,85 @@ func TestCronStatusReportsManagedTaskIDsAndSweepHooks(t *testing.T) {
 		if task.ID == "headless-maintenance" && (!task.LaunchCapable || !task.RequiresManagedProcessSweep || !task.ManagedProcessSweepInstalled) {
 			t.Fatalf("headless maintenance task %q = %+v, want sweep phase installed", task.ID, task)
 		}
+	}
+}
+
+func TestCronStatusReportsPolicyDriftAndLastCleanup(t *testing.T) {
+	_, crontabBin := fakeCrontab(t, "")
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var install cronInstallResult
+	executeCronJSON(t, []string{"cron", "install", "--state-dir", stateDir, "--json"}, &install)
+	if !install.OK || !install.Changed {
+		t.Fatalf("cron install = %+v, want changed", install)
+	}
+	var prune struct {
+		OK bool `json:"ok"`
+	}
+	executeCronJSON(t, []string{"artifacts", "prune", "--apply", "--state-dir", stateDir, "--json"}, &prune)
+	if !prune.OK {
+		t.Fatalf("artifact prune = %+v, want successful summary", prune)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"artifacts":{"retention":"336h","max_log_size":"8MiB"}}`), 0o600); err != nil {
+		t.Fatalf("write artifact policy config: %v", err)
+	}
+	var status struct {
+		OK              bool `json:"ok"`
+		MatchesIntended bool `json:"matches_intended"`
+		ArtifactPolicy  struct {
+			RetentionSeconds int64 `json:"retention_seconds"`
+			MaxLogSizeBytes  int64 `json:"max_log_size_bytes"`
+		} `json:"artifact_policy"`
+		LastCleanup struct {
+			Exists         bool   `json:"exists"`
+			Status         string `json:"status"`
+			FailedCount    int    `json:"failed_count"`
+			BytesReclaimed int64  `json:"bytes_reclaimed"`
+		} `json:"last_cleanup"`
+		Tasks []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"tasks"`
+	}
+	executeCronJSON(t, []string{"--config", configPath, "cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	if !status.OK || status.MatchesIntended || status.ArtifactPolicy.RetentionSeconds != 336*60*60 || status.ArtifactPolicy.MaxLogSizeBytes != 8<<20 {
+		t.Fatalf("cron policy drift status = %+v, want current config policy and block mismatch", status)
+	}
+	if !status.LastCleanup.Exists || status.LastCleanup.Status != "pass" || status.LastCleanup.FailedCount != 0 {
+		t.Fatalf("last cleanup = %+v, want successful persisted execution", status.LastCleanup)
+	}
+	foundStalePrune := false
+	for _, task := range status.Tasks {
+		if task.ID == "artifact-prune" && task.Status == "stale" {
+			foundStalePrune = true
+		}
+	}
+	if !foundStalePrune {
+		t.Fatalf("cron tasks = %+v, want artifact-prune marked stale for policy drift", status.Tasks)
+	}
+	var doctor struct {
+		Checks []struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Details struct {
+				MatchesCurrentPolicy bool     `json:"matches_current_policy"`
+				StaleManagedTaskIDs  []string `json:"stale_managed_task_ids"`
+				ArtifactPolicy       struct {
+					RetentionSeconds int64 `json:"retention_seconds"`
+					MaxLogSizeBytes  int64 `json:"max_log_size_bytes"`
+				} `json:"artifact_policy"`
+				LastCleanup struct {
+					Exists bool `json:"exists"`
+				} `json:"last_cleanup"`
+			} `json:"details"`
+		} `json:"checks"`
+	}
+	executeCronJSON(t, []string{"--config", configPath, "doctor", "--check", "scheduled-tasks", "--state-dir", stateDir, "--json"}, &doctor)
+	if len(doctor.Checks) != 1 || doctor.Checks[0].Status != "warn" || doctor.Checks[0].Details.MatchesCurrentPolicy || !containsString(doctor.Checks[0].Details.StaleManagedTaskIDs, "artifact-prune") || doctor.Checks[0].Details.ArtifactPolicy.RetentionSeconds != 336*60*60 || doctor.Checks[0].Details.ArtifactPolicy.MaxLogSizeBytes != 8<<20 || !doctor.Checks[0].Details.LastCleanup.Exists {
+		t.Fatalf("scheduled-tasks doctor = %+v, want policy drift and last cleanup observability", doctor.Checks)
 	}
 }
 
@@ -184,7 +266,7 @@ func TestCronInstallUsesHeadlessSeedConfigDryRun(t *testing.T) {
 	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
 	stateDir := shortCLIStateDir(t)
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"30m"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"30m"}},"artifacts":{"retention":"336h","max_log_size":"8MiB"}}`), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -197,6 +279,12 @@ func TestCronInstallUsesHeadlessSeedConfigDryRun(t *testing.T) {
 			IfOlderThanSeconds int64  `json:"if_older_than_seconds"`
 			Schedule           string `json:"schedule"`
 		} `json:"profile_seed"`
+		ArtifactPolicy struct {
+			Retention        string `json:"retention"`
+			RetentionSeconds int64  `json:"retention_seconds"`
+			MaxLogSize       string `json:"max_log_size"`
+			MaxLogSizeBytes  int64  `json:"max_log_size_bytes"`
+		} `json:"artifact_policy"`
 		IntendedBlock struct {
 			Entries []string `json:"entries"`
 		} `json:"intended_block"`
@@ -205,8 +293,11 @@ func TestCronInstallUsesHeadlessSeedConfigDryRun(t *testing.T) {
 	if !got.OK || !got.DryRun || got.ProfileSeed.Strategy != "copy-default" || got.ProfileSeed.IfOlderThan != "30m" || got.ProfileSeed.IfOlderThanSeconds != 1800 || got.ProfileSeed.Schedule != "*/15 * * * *" {
 		t.Fatalf("cron install dry-run profile_seed = %+v, want copy-default 30m cadence", got.ProfileSeed)
 	}
+	if got.ArtifactPolicy.Retention != "336h0m0s" || got.ArtifactPolicy.RetentionSeconds != 336*60*60 || got.ArtifactPolicy.MaxLogSize != "8MiB" || got.ArtifactPolicy.MaxLogSizeBytes != 8<<20 {
+		t.Fatalf("cron install dry-run artifact_policy = %+v, want config-backed 336h/8MiB", got.ArtifactPolicy)
+	}
 	block := strings.Join(got.IntendedBlock.Entries, "\n")
-	for _, want := range []string{"--browser-mode headless daemon maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m", "--health-check --cleanup --cleanup-close --json"} {
+	for _, want := range []string{"--browser-mode headless daemon maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m", "--max-log-size 8MiB", "artifacts prune --older-than 336h --max-log-size 8MiB --apply", "--health-check --cleanup --cleanup-close --json"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("intended cron block missing %q:\n%s", want, block)
 		}
@@ -260,8 +351,8 @@ func TestCronInstallHeadedOnlyDryRunDoesNotMutateCrontab(t *testing.T) {
 		} `json:"intended_block"`
 	}
 	executeCronJSON(t, []string{"--browser-mode", "headed", "cron", "install", "--dry-run", "--state-dir", stateDir, "--json"}, &got)
-	if !got.OK || !got.Changed || got.Installed || !got.DryRun || len(got.IntendedBlock.Entries) != 1 {
-		t.Fatalf("cron install headed dry-run = %+v, want one intended headed entry without install", got)
+	if !got.OK || !got.Changed || got.Installed || !got.DryRun || len(got.IntendedBlock.Entries) != 2 {
+		t.Fatalf("cron install headed dry-run = %+v, want headed keepalive plus daily artifact prune without install", got)
 	}
 	entry := got.IntendedBlock.Entries[0]
 	if !strings.Contains(entry, "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive") || strings.Contains(entry, "--browser-mode headless") || strings.Contains(entry, "cron heal headed") || strings.Contains(entry, " pages ") {

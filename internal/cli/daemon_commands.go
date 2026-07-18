@@ -58,6 +58,13 @@ type daemonStopResult struct {
 	DaemonStopped         bool                      `json:"daemon_stopped"`
 	ManagedBrowserStopped bool                      `json:"managed_browser_stopped"`
 	ManagedBrowser        browser.ManagedStopResult `json:"managed_browser"`
+	RecoveryState         *managedRecoveryState     `json:"recovery_state,omitempty"`
+}
+
+type managedRecoveryState struct {
+	ConnectionsRemoved      []string                `json:"connections_removed"`
+	StaleLocks              daemon.StaleLockCleanup `json:"stale_locks"`
+	RuntimeArtifactsCleared bool                    `json:"runtime_artifacts_cleared"`
 }
 
 func (a *app) newDaemonStartCommand() *cobra.Command {
@@ -141,14 +148,7 @@ func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemon
 		} else {
 			endpoint, err = a.browserEndpoint(ctx)
 			if err != nil {
-				return daemonStartResult{}, commandErrorWithData(
-					"permission_pending",
-					"permission",
-					err.Error(),
-					ExitPermission,
-					permissionRemediationCommands(),
-					permissionPendingData(map[string]any{"daemon_start": map[string]any{"phase": "resolve_browser_endpoint", "waiting_for_user_approval": a.opts.autoConnect}}),
-				)
+				return daemonStartResult{}, a.daemonStartError("resolve_browser_endpoint", err.Error(), map[string]any{"waiting_for_user_approval": a.opts.autoConnect})
 			}
 		}
 	}
@@ -185,14 +185,7 @@ func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemon
 	if keepAlive {
 		r, reused, err := a.startKeepAlive(ctx, endpoint, cfg.managedKeepAlive, cfg.reconnect)
 		if err != nil {
-			return daemonStartResult{}, commandErrorWithData(
-				"permission_pending",
-				"permission",
-				fmt.Sprintf("start daemon keepalive: %v", err),
-				ExitPermission,
-				permissionRemediationCommands(),
-				permissionPendingData(map[string]any{"daemon_start": map[string]any{"phase": "start_keepalive", "waiting_for_user_approval": a.opts.autoConnect, "browser_endpoint_seen": endpoint != ""}}),
-			)
+			return daemonStartResult{}, a.daemonStartError("start_keepalive", fmt.Sprintf("start daemon keepalive: %v", err), map[string]any{"waiting_for_user_approval": a.opts.autoConnect, "browser_endpoint_seen": endpoint != ""})
 		}
 		runtime = &r
 		alreadyRunning = reused
@@ -201,7 +194,29 @@ func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemon
 	status := a.daemonStatus(ctx, probe)
 	if runtime != nil {
 		status = daemon.WithRuntime(status, *runtime, true)
-		status.Health = a.browserHealthSnapshot(ctx, status, false)
+		health := a.browserHealthSnapshot(ctx, status, false)
+		status.Health = health
+		if cfg.managedKeepAlive != nil && !healthUsable(health) {
+			code, _ := stringMapField(health, "code")
+			if code == "" {
+				code = "managed_headless_start_unhealthy"
+			}
+			nextCommands := uniqueCommands(toStringSlice(health["next_commands"]), a.connectionRemediationCommands())
+			return daemonStartResult{}, commandErrorWithData(
+				code,
+				"connection",
+				"managed headless daemon started but daemon RPC and browser CDP discovery did not become usable",
+				ExitConnection,
+				nextCommands,
+				map[string]any{
+					"browser_mode":      "headless",
+					"human_required":    false,
+					"agent_should_stop": false,
+					"daemon":            status,
+					"health":            status.Health,
+				},
+			)
+		}
 	}
 	if !keepAlive {
 		if err := daemonStartFailure(probe, status); err != nil {
@@ -240,6 +255,35 @@ func (a *app) runDaemonStart(ctx context.Context, cfg daemonStartConfig) (daemon
 		human = fmt.Sprintf("%s\nconnection %s saved", human, savedConnection.Name)
 	}
 	return daemonStartResult{human: human, data: data}, nil
+}
+
+func (a *app) daemonStartError(phase, message string, details map[string]any) error {
+	if a.browserModeName() == string(config.BrowserModeHeadless) {
+		return commandErrorWithData(
+			"managed_headless_start_failed",
+			"connection",
+			message,
+			ExitConnection,
+			a.connectionRemediationCommands(),
+			map[string]any{
+				"browser_mode":      "headless",
+				"human_required":    false,
+				"agent_should_stop": false,
+				"daemon_start": map[string]any{
+					"phase":   phase,
+					"details": details,
+				},
+			},
+		)
+	}
+	return commandErrorWithData(
+		"permission_pending",
+		"permission",
+		message,
+		ExitPermission,
+		permissionRemediationCommands(),
+		permissionPendingData(map[string]any{"daemon_start": map[string]any{"phase": phase, "details": details}}),
+	)
 }
 
 func (a *app) rememberDaemonConnection(ctx context.Context, name string) (*state.Connection, string, error) {
@@ -405,6 +449,7 @@ func (a *app) startKeepAliveFromEndpoint(ctx context.Context, endpoint, connecti
 
 func (a *app) newDaemonStopCommand() *cobra.Command {
 	var forceManaged bool
+	var staleLockAfter time.Duration
 	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop the attach daemon",
@@ -412,7 +457,10 @@ func (a *app) newDaemonStopCommand() *cobra.Command {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
 
-			stop, err := a.stopSelectedRuntime(ctx, forceManaged)
+			if staleLockAfter < 0 {
+				return commandError("invalid_duration", "usage", "--stale-lock-after must be non-negative", ExitUsage, []string{"cdp --browser-mode headless daemon stop --force-managed --stale-lock-after 10m --json"})
+			}
+			stop, err := a.stopSelectedRuntime(ctx, forceManaged, staleLockAfter)
 			if err != nil {
 				return commandError(
 					"connection_failed",
@@ -435,6 +483,7 @@ func (a *app) newDaemonStopCommand() *cobra.Command {
 						"daemon_stopped":          stop.DaemonStopped,
 						"managed_browser_stopped": stop.ManagedBrowserStopped,
 						"managed_browser":         stop.ManagedBrowser,
+						"recovery_state":          stop.RecoveryState,
 						"runtime":                 stop.Runtime,
 						"daemon":                  status,
 						"health":                  health,
@@ -461,15 +510,17 @@ func (a *app) newDaemonStopCommand() *cobra.Command {
 				"daemon_stopped":          stop.DaemonStopped,
 				"managed_browser_stopped": stop.ManagedBrowserStopped,
 				"managed_browser":         stop.ManagedBrowser,
+				"recovery_state":          stop.RecoveryState,
 				"runtime":                 stop.Runtime,
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&forceManaged, "force-managed", false, "for --browser-mode headless, reclaim cdp-owned managed Chrome even when ownership metadata is incomplete")
+	cmd.Flags().DurationVar(&staleLockAfter, "stale-lock-after", 10*time.Minute, "with --force-managed, remove eligible inactive headless recovery locks older than this duration; 0 disables age cleanup")
 	return cmd
 }
 
-func (a *app) stopSelectedRuntime(ctx context.Context, forceManaged bool) (daemonStopResult, error) {
+func (a *app) stopSelectedRuntime(ctx context.Context, forceManaged bool, staleLockAfter time.Duration) (daemonStopResult, error) {
 	store, err := a.stateStore()
 	if err != nil {
 		return daemonStopResult{}, err
@@ -486,7 +537,50 @@ func (a *app) stopSelectedRuntime(ctx context.Context, forceManaged bool) (daemo
 		}
 		result.ManagedBrowser = managedStop
 		result.ManagedBrowserStopped = managedStop.Stopped
+		if forceManaged {
+			cleanup, err := a.clearManagedHeadlessRecoveryState(ctx, store.Dir, staleLockAfter)
+			if err != nil {
+				return result, err
+			}
+			result.RecoveryState = &cleanup
+		}
 	}
+	return result, nil
+}
+
+func (a *app) clearManagedHeadlessRecoveryState(ctx context.Context, stateDir string, staleLockAfter time.Duration) (managedRecoveryState, error) {
+	result := managedRecoveryState{ConnectionsRemoved: []string{}}
+	store := state.Store{Dir: stateDir}
+	file, err := store.Load(ctx)
+	if err != nil {
+		return result, err
+	}
+	for _, connection := range append([]state.Connection(nil), file.Connections...) {
+		if connection.BrowserMode != "headless" || connection.Mode != "browser_url" || connection.Project != "" {
+			continue
+		}
+		file, _ = state.RemoveConnection(file, connection.Name)
+		result.ConnectionsRemoved = append(result.ConnectionsRemoved, connection.Name)
+	}
+	if len(result.ConnectionsRemoved) > 0 {
+		if err := store.Save(ctx, file); err != nil {
+			return result, err
+		}
+	}
+	locks, err := daemon.RemoveStaleLocks(ctx, stateDir, staleLockAfter,
+		"daemon-keepalive-headless-",
+		"daemon-health-check-headless",
+		"keepalive-headless",
+		"headless-",
+	)
+	if err != nil {
+		return result, err
+	}
+	result.StaleLocks = locks
+	if err := browser.ClearManagedRuntimeArtifacts(stateDir); err != nil {
+		return result, err
+	}
+	result.RuntimeArtifactsCleared = true
 	return result, nil
 }
 
@@ -849,7 +943,7 @@ func (a *app) repairManagedHeadlessForHealthCheck(ctx context.Context, storeDir 
 	if mode == "" {
 		mode = a.connectionMode()
 	}
-	human, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, opts.ManagedProcessSweep, status, probeResult, map[string]any{
+	human, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, opts.ManagedProcessSweep, opts.StaleLockAfter, status, probeResult, map[string]any{
 		"ok":            false,
 		"result":        healthFailureResult(health),
 		"runtime_state": status.State,
@@ -1105,6 +1199,7 @@ func (a *app) newDaemonRestartCommand() *cobra.Command {
 	var connectionName string
 	var remember bool
 	var forceManaged bool
+	var staleLockAfter time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "restart",
@@ -1113,7 +1208,10 @@ func (a *app) newDaemonRestartCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, 60*time.Second)
 			defer cancel()
 
-			stop, err := a.stopSelectedRuntime(ctx, forceManaged)
+			if staleLockAfter < 0 {
+				return commandError("invalid_duration", "usage", "--stale-lock-after must be non-negative", ExitUsage, []string{"cdp --browser-mode headless daemon restart --force-managed --stale-lock-after 10m --json"})
+			}
+			stop, err := a.stopSelectedRuntime(ctx, forceManaged, staleLockAfter)
 			if err != nil {
 				return commandError(
 					"connection_failed",
@@ -1164,6 +1262,7 @@ func (a *app) newDaemonRestartCommand() *cobra.Command {
 	cmd.Flags().StringVar(&connectionName, "connection-name", "default", "connection name to save when --browser-url or --auto-connect is supplied")
 	cmd.Flags().BoolVar(&remember, "remember", true, "save supplied connection metadata for future on-demand commands")
 	cmd.Flags().BoolVar(&forceManaged, "force-managed", false, "for --browser-mode headless, reclaim cdp-owned managed Chrome even when ownership metadata is incomplete")
+	cmd.Flags().DurationVar(&staleLockAfter, "stale-lock-after", 10*time.Minute, "with --force-managed, remove eligible inactive headless recovery locks older than this duration; 0 disables age cleanup")
 	return cmd
 }
 
@@ -1186,7 +1285,7 @@ func (a *app) runHeadlessDaemonRestart(ctx context.Context, stop daemonStopResul
 	}
 	managed, chrome, err := a.ensureManagedChromeForKeepalive(ctx, store.Dir, defaultChromeCommand())
 	if err != nil {
-		return daemonStartResult{}, commandError(
+		return daemonStartResult{}, commandErrorWithData(
 			"chrome_start_failed",
 			"connection",
 			fmt.Sprintf("start managed headless Chrome: %v", err),
@@ -1195,6 +1294,7 @@ func (a *app) runHeadlessDaemonRestart(ctx context.Context, stop daemonStopResul
 				"cdp --browser-mode headless browser profile status --json",
 				"cdp --browser-mode headless daemon keepalive --repair --json",
 			},
+			map[string]any{"browser_mode": "headless", "human_required": false, "agent_should_stop": false, "chrome": chrome},
 		)
 	}
 	a.opts.browserURL = managedHTTPURL(managed.Endpoint)
@@ -1216,6 +1316,7 @@ func (a *app) runHeadlessDaemonRestart(ctx context.Context, stop daemonStopResul
 		"daemon_stopped":          stop.DaemonStopped,
 		"managed_browser_stopped": stop.ManagedBrowserStopped,
 		"managed_browser":         stop.ManagedBrowser,
+		"recovery_state":          stop.RecoveryState,
 		"managed_restart":         true,
 		"chrome":                  chrome,
 	}
@@ -1241,6 +1342,9 @@ type keepaliveChromeStatus struct {
 	Launched       bool                   `json:"launched"`
 	Skipped        bool                   `json:"skipped"`
 	Reason         string                 `json:"reason,omitempty"`
+	Attempts       int                    `json:"attempts,omitempty"`
+	MaxAttempts    int                    `json:"max_attempts,omitempty"`
+	AttemptErrors  []string               `json:"attempt_errors,omitempty"`
 	ManagedBrowser *browser.ManagedStatus `json:"managed_browser,omitempty"`
 }
 
@@ -1446,7 +1550,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				})
 			}
 			if browserMode == "headless" {
-				human, data, err := a.runHeadlessKeepaliveStartOrRepair(ctx, store.Dir, lock, connectionName, mode, reconnect, chromeCommand, force, managedProcessSweep, status, probeResult, runtimeCheck)
+				human, data, err := a.runHeadlessKeepaliveStartOrRepair(ctx, store.Dir, lock, connectionName, mode, reconnect, chromeCommand, force, managedProcessSweep, staleLockAfter, status, probeResult, runtimeCheck)
 				if err != nil {
 					return err
 				}
@@ -1568,7 +1672,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir string, lock daemon.LockHandle, connectionName, mode string, reconnect time.Duration, chromeCommand string, force bool, managedProcessSweep bool, status daemon.Status, probeResult map[string]any, runtimeCheck map[string]any) (string, map[string]any, error) {
+func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir string, lock daemon.LockHandle, connectionName, mode string, reconnect time.Duration, chromeCommand string, force bool, managedProcessSweep bool, staleLockAfter time.Duration, status daemon.Status, probeResult map[string]any, runtimeCheck map[string]any) (string, map[string]any, error) {
 	if managedProcessSweep {
 		if _, ok := runtimeCheck["managed_process_sweep"]; !ok {
 			sweep, err := a.runManagedProcessSweep(ctx, storeDir, lock, status)
@@ -1622,24 +1726,32 @@ func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir st
 		if err := lock.Update(ctx, "force_cleaning_managed_headless"); err != nil {
 			return "", nil, err
 		}
-		_ = daemon.ClearRuntimeForMode(ctx, storeDir, string(config.BrowserModeHeadless), 0)
+		if err := daemon.ClearRuntimeForMode(ctx, storeDir, string(config.BrowserModeHeadless), 0); err != nil {
+			return "", nil, err
+		}
 		managedStop, err := browser.StopManagedChrome(ctx, storeDir, browser.ManagedStopOptions{Force: true})
 		if err != nil {
 			return "", nil, err
 		}
 		runtimeCheck["forced_managed_cleanup"] = managedStop
+		cleanup, err := a.clearManagedHeadlessRecoveryState(ctx, storeDir, staleLockAfter)
+		if err != nil {
+			return "", nil, err
+		}
+		runtimeCheck["forced_recovery_state"] = cleanup
 	}
 	if err := lock.Update(ctx, "launching_managed_chrome"); err != nil {
 		return "", nil, err
 	}
 	managed, chrome, err := a.ensureManagedChromeForKeepalive(ctx, storeDir, chromeCommand)
 	if err != nil {
-		return "", nil, commandError(
+		return "", nil, commandErrorWithData(
 			"chrome_start_failed",
 			"connection",
 			fmt.Sprintf("start managed headless Chrome: %v", err),
 			ExitConnection,
 			[]string{"cdp --browser-mode headless browser profile status --json", "cdp --browser-mode headless daemon keepalive --repair --json"},
+			map[string]any{"browser_mode": "headless", "human_required": false, "agent_should_stop": false, "chrome": chrome},
 		)
 	}
 	a.opts.browserURL = managedHTTPURL(managed.Endpoint)
@@ -1807,6 +1919,11 @@ func (a *app) connectionStateName(ctx context.Context) string {
 	return preferredName
 }
 
+const (
+	managedChromeLaunchMaxAttempts    = 3
+	managedChromeLaunchAttemptTimeout = 15 * time.Second
+)
+
 func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chromeCommand string) (*managedKeepAlive, keepaliveChromeStatus, error) {
 	status := keepaliveChromeStatus{Checked: true, Command: chromeCommand}
 	if launch, ok, err := browser.ReuseManagedChrome(ctx, stateDir); err != nil {
@@ -1823,14 +1940,51 @@ func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chr
 	} else {
 		seedStrategy = cfg.Browser.Headless.ProfileSeedStrategy
 	}
-	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromeCommand, ProfileSeedStrategy: seedStrategy})
+	status.MaxAttempts = managedChromeLaunchMaxAttempts
+	launch, err := startManagedChromeWithRetries(ctx, stateDir, browser.ManagedOptions{StateDir: stateDir, Chrome: chromeCommand, ProfileSeedStrategy: seedStrategy}, &status, browser.StartManagedChrome, managedChromeLaunchMaxAttempts, managedChromeLaunchAttemptTimeout)
 	if err != nil {
-		return nil, status, err
+		return nil, status, fmt.Errorf("managed Chrome launch failed after %d bounded attempt(s): %w", status.Attempts, err)
 	}
 	managedStatus := browser.ManagedMetadataStatus(launch.Metadata)
 	status.Launched = true
 	status.ManagedBrowser = &managedStatus
 	return &managedKeepAlive{Endpoint: launch.Endpoint, Metadata: launch.Metadata, ManagedBrowser: &managedStatus}, status, nil
+}
+
+func startManagedChromeWithRetries(
+	ctx context.Context,
+	stateDir string,
+	opts browser.ManagedOptions,
+	status *keepaliveChromeStatus,
+	launch func(context.Context, browser.ManagedOptions) (browser.ManagedLaunch, error),
+	maxAttempts int,
+	attemptTimeout time.Duration,
+) (browser.ManagedLaunch, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		status.Attempts = attempt
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		result, err := launch(attemptCtx, opts)
+		cancel()
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		status.AttemptErrors = append(status.AttemptErrors, err.Error())
+		if ctx.Err() != nil || attempt == maxAttempts {
+			break
+		}
+		_, _ = browser.StopManagedChrome(ctx, stateDir, browser.ManagedStopOptions{Force: true})
+		_ = browser.ClearManagedRuntimeArtifacts(stateDir)
+		timer := time.NewTimer(time.Duration(attempt) * 150 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return browser.ManagedLaunch{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return browser.ManagedLaunch{}, lastErr
 }
 
 func managedHTTPURL(endpoint string) string {

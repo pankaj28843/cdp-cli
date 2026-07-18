@@ -1595,7 +1595,7 @@ func (a *app) repairHeadlessDaemonForBrowserCommand(ctx context.Context, storeDi
 		"result":           probe.State,
 		"repair_requested": true,
 	}
-	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, false, status, probeResult, runtimeCheck)
+	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, false, 10*time.Minute, status, probeResult, runtimeCheck)
 	if err != nil {
 		return err
 	}

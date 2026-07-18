@@ -22,9 +22,12 @@ func TestVersionJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 
 	code := cli.Execute(context.Background(), []string{"version", "--json"}, &out, &errOut, cli.BuildInfo{
-		Version: "test",
-		Commit:  "abc",
-		Date:    "now",
+		Version:    "1.2.3",
+		Commit:     "0123456789abcdef0123456789abcdef01234567",
+		Date:       "2026-07-18T12:34:56Z",
+		Dirty:      true,
+		Verified:   true,
+		Provenance: "managed",
 	})
 	if code != 0 {
 		t.Fatalf("Execute exit code = %d, want 0; stderr=%s", code, errOut.String())
@@ -34,8 +37,8 @@ func TestVersionJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("version output is invalid JSON: %v", err)
 	}
-	if got.Version != "test" {
-		t.Fatalf("Version = %q, want %q", got.Version, "test")
+	if got.Version != "1.2.3" || got.Commit != "0123456789abcdef0123456789abcdef01234567" || got.Date != "2026-07-18T12:34:56Z" || !got.Dirty || !got.Verified || got.Provenance != "managed" || got.SourceState != "dirty" {
+		t.Fatalf("build info = %+v, want verified dirty managed provenance", got)
 	}
 }
 
@@ -47,6 +50,27 @@ func TestVersionCompactJSON(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "\n  ") {
 		t.Fatalf("compact output contains indentation: %q", out.String())
+	}
+}
+
+func TestVersionDirectGoBuildIsExplicitlyUnverified(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"version", "--json"}, &out, &errOut, cli.BuildInfo{Version: "dev", Commit: "unknown", Date: "unknown"})
+	if code != cli.ExitOK {
+		t.Fatalf("version exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got cli.BuildInfo
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("version output is invalid JSON: %v", err)
+	}
+	if got.Verified || got.Provenance != "unverified" || got.SourceState != "unverified" {
+		t.Fatalf("direct build info = %+v, want explicit unverified provenance", got)
+	}
+
+	out.Reset()
+	code = cli.Execute(context.Background(), []string{"version"}, &out, &errOut, cli.BuildInfo{Version: "dev", Commit: "unknown", Date: "unknown"})
+	if code != cli.ExitOK || !strings.Contains(out.String(), "unverified build") {
+		t.Fatalf("direct build text = %q exit=%d, want unverified label", out.String(), code)
 	}
 }
 
@@ -1067,12 +1091,14 @@ func TestNetworkCaptureJSON(t *testing.T) {
 
 	outPath := filepath.Join(t.TempDir(), "network.local.json")
 	harPath := filepath.Join(t.TempDir(), "network.har")
+	bodyDir := filepath.Join(t.TempDir(), "bodies")
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{
 		"network", "capture",
 		"--wait", "250ms",
 		"--out", outPath,
 		"--har-out", harPath,
+		"--body-out-dir", bodyDir,
 		"--redact", "safe",
 		"--json",
 	}, &out, &errOut, cli.BuildInfo{})
@@ -1108,11 +1134,16 @@ func TestNetworkCaptureJSON(t *testing.T) {
 			Type string `json:"type"`
 			Path string `json:"path"`
 		} `json:"har"`
+		BodyArtifacts []struct {
+			Path      string `json:"path"`
+			Bytes     int    `json:"bytes"`
+			Truncated bool   `json:"truncated"`
+		} `json:"body_artifacts"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("network capture output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Capture.Count != 2 || len(got.Requests) != 2 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath || got.HAR.Type != "network-har" || got.HAR.Path != harPath {
+	if !got.OK || got.Capture.Count != 2 || len(got.Requests) != 2 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath || got.HAR.Type != "network-har" || got.HAR.Path != harPath || len(got.BodyArtifacts) != 1 {
 		t.Fatalf("network capture = %+v, want two safe-redacted requests and artifact", got)
 	}
 	if got.Capture.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !got.Capture.ArtifactSafety.Shareable || got.Capture.ArtifactSafety.ChangedFieldCount == 0 {
@@ -1145,6 +1176,14 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	scan = artifacts.ScanBytes(harBytes, []string{"Bearer secret", "session=secret", `"token":"secret"`, "csrf=secret"}, 0)
 	if len(scan.Findings) != 0 {
 		t.Fatalf("network HAR artifact leaked synthetic secrets: %+v", scan.Findings)
+	}
+	bodyBytes, err := os.ReadFile(got.BodyArtifacts[0].Path)
+	if err != nil {
+		t.Fatalf("read network body artifact: %v", err)
+	}
+	scan = artifacts.ScanBytes(bodyBytes, []string{"secret", "Bearer", "session="}, 0)
+	if len(scan.Findings) != 0 || !strings.Contains(string(bodyBytes), `"ok":true`) {
+		t.Fatalf("network body artifact = %q findings=%+v, want safe bounded JSON body", string(bodyBytes), scan.Findings)
 	}
 	var har struct {
 		Log struct {

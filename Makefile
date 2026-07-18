@@ -2,14 +2,19 @@
 
 BINARY := bin/cdp
 PREFIX ?= $(HOME)/.local
+VERSION ?= 0.1.0
+BUILD_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
+BUILD_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || printf unknown)
+BUILD_DIRTY := $(shell if test -n "$$(git status --porcelain --untracked-files=normal 2>/dev/null)"; then printf true; else printf false; fi)
+BUILD_LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(BUILD_COMMIT) -X main.date=$(BUILD_DATE) -X main.dirty=$(BUILD_DIRTY) -X main.managedBuild=true
 
 build:
 	mkdir -p bin
-	go build -o $(BINARY) ./cmd/cdp
+	go build -ldflags "$(BUILD_LDFLAGS)" -o $(BINARY) ./cmd/cdp
 
 cross-build:
 	mkdir -p bin
-	GOOS=darwin GOARCH=arm64 go build -o bin/cdp-darwin-arm64 ./cmd/cdp
+	GOOS=darwin GOARCH=arm64 go build -ldflags "$(BUILD_LDFLAGS)" -o bin/cdp-darwin-arm64 ./cmd/cdp
 
 test:
 	go test ./...

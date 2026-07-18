@@ -2,16 +2,17 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"encoding/json"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
-	"net/url"
-	"path/filepath"
 )
 
 type renderedExtractReadiness struct {
@@ -64,6 +65,9 @@ type renderedExtractOptions struct {
 	ArtifactTypePrefix string
 	UsageCommand       string
 	RawURL             string
+	TargetID           string
+	URLContains        string
+	TitleContains      string
 	Selector           string
 	Wait               time.Duration
 	WaitUntil          string
@@ -75,6 +79,8 @@ type renderedExtractOptions struct {
 	MinMarkdownWords   int
 	MinHTMLChars       int
 	KeepOpen           bool
+	Reload             bool
+	IgnoreCache        bool
 	ReusePage          *renderedExtractReusablePage
 }
 
@@ -92,6 +98,95 @@ type renderedExtractReusablePage struct {
 	TargetID    string
 }
 
+const renderedExtractCleanupTimeout = 5 * time.Second
+
+type renderedExtractCleanupResult struct {
+	Attempted       bool     `json:"attempted"`
+	Closed          bool     `json:"closed"`
+	Skipped         bool     `json:"skipped,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	TargetID        string   `json:"target_id,omitempty"`
+	Timeout         string   `json:"timeout,omitempty"`
+	Error           string   `json:"error,omitempty"`
+	RecoveryCommand string   `json:"recovery_command,omitempty"`
+	Errors          []string `json:"errors,omitempty"`
+}
+
+type renderedExtractCleanupGuard struct {
+	client   cdp.CommandClient
+	targetID string
+	owned    bool
+	keepOpen bool
+	done     bool
+	result   renderedExtractCleanupResult
+}
+
+func (g *renderedExtractCleanupGuard) cleanup() renderedExtractCleanupResult {
+	if g == nil {
+		return renderedExtractCleanupResult{Skipped: true, Reason: "not_registered"}
+	}
+	if g.done {
+		return g.result
+	}
+	g.done = true
+	g.result = renderedExtractCleanupResult{TargetID: strings.TrimSpace(g.targetID)}
+	switch {
+	case !g.owned:
+		g.result.Skipped = true
+		g.result.Reason = "caller_owned"
+		return g.result
+	case g.keepOpen:
+		g.result.Skipped = true
+		g.result.Reason = "keep_open"
+		return g.result
+	case g.client == nil || strings.TrimSpace(g.targetID) == "":
+		g.result.Attempted = true
+		g.result.Error = "created target cleanup is missing its client or target id"
+		g.result.Errors = []string{g.result.Error}
+		return g.result
+	}
+
+	g.result.Attempted = true
+	g.result.Timeout = durationString(renderedExtractCleanupTimeout)
+	g.result.RecoveryCommand = fmt.Sprintf("cdp page cleanup --target %s --force --close --json", g.targetID)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), renderedExtractCleanupTimeout)
+	defer cancel()
+	if err := cdp.CloseTargetWithClient(cleanupCtx, g.client, g.targetID); err != nil {
+		g.result.Error = err.Error()
+		g.result.Errors = []string{err.Error()}
+		return g.result
+	}
+	g.result.Closed = true
+	return g.result
+}
+
+func renderedExtractErrorSummary(err error) map[string]any {
+	summary := map[string]any{"message": err.Error()}
+	var commandErr *CommandError
+	if errors.As(err, &commandErr) {
+		summary["code"] = commandErr.Code
+		summary["err_class"] = commandErr.Class
+		summary["exit_code"] = commandErr.ExitCode
+		summary["remediation_commands"] = commandErr.RemediationCommands
+		if commandErr.Data != nil {
+			summary["data"] = commandErr.Data
+		}
+	}
+	return summary
+}
+
+func closeRenderedExtractSession(session *cdp.PageSession, closeClient func(context.Context) error) {
+	closeCtx, cancel := context.WithTimeout(context.Background(), renderedExtractCleanupTimeout)
+	defer cancel()
+	if session != nil {
+		_ = session.Close(closeCtx)
+		return
+	}
+	if closeClient != nil {
+		_ = closeClient(closeCtx)
+	}
+}
+
 func (a *app) openRenderedExtractReusablePage(ctx context.Context, rawURL, workflow string) (*renderedExtractReusablePage, error) {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
@@ -104,38 +199,39 @@ func (a *app) openRenderedExtractReusablePage(ctx context.Context, rawURL, workf
 	}
 	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 	if err != nil {
-		_ = closeClient(ctx)
+		cleanup := (&renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true}).cleanup()
+		closeRenderedExtractSession(nil, closeClient)
+		if cleanup.Error != "" {
+			return nil, commandErrorWithData(
+				"rendered_extract_cleanup_failed",
+				"internal",
+				fmt.Sprintf("attach target %s: %v; close created target: %s", targetID, err, cleanup.Error),
+				ExitInternal,
+				[]string{cleanup.RecoveryCommand, "cdp pages --json", "cdp doctor --json"},
+				map[string]any{
+					"primary_error": renderedExtractErrorSummary(commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})),
+					"cleanup":       cleanup,
+				},
+			)
+		}
 		return nil, commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 	}
 	return &renderedExtractReusablePage{Client: client, CloseClient: closeClient, Session: session, TargetID: targetID}, nil
 }
 
-func (p *renderedExtractReusablePage) Close(ctx context.Context) (bool, string) {
+func (p *renderedExtractReusablePage) Close(_ context.Context) (bool, string) {
 	if p == nil {
 		return false, ""
 	}
-	closed := false
-	closeErr := ""
-	if p.Client != nil && strings.TrimSpace(p.TargetID) != "" {
-		if err := cdp.CloseTargetWithClient(ctx, p.Client, p.TargetID); err != nil {
-			closeErr = err.Error()
-		} else {
-			closed = true
-		}
-	}
-	if p.Session != nil {
-		if err := p.Session.Close(ctx); err != nil && closeErr == "" {
-			closeErr = err.Error()
-		}
-	} else if p.CloseClient != nil {
-		if err := p.CloseClient(ctx); err != nil && closeErr == "" {
-			closeErr = err.Error()
-		}
-	}
-	return closed, closeErr
+	cleanup := (&renderedExtractCleanupGuard{client: p.Client, targetID: p.TargetID, owned: true}).cleanup()
+	closeRenderedExtractSession(p.Session, p.CloseClient)
+	return cleanup.Closed, cleanup.Error
 }
 
 func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
+	var targetID string
+	var urlContains string
+	var titleContains string
 	var selector string
 	var wait time.Duration
 	var waitUntil string
@@ -147,16 +243,25 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	var minMarkdownWords int
 	var minHTMLChars int
 	var keepOpen bool
+	var reload bool
+	var ignoreCache bool
 	cmd := &cobra.Command{
-		Use:   "rendered-extract <url>",
-		Short: "Open a rendered page and write research extraction artifacts",
-		Args:  cobra.ExactArgs(1),
+		Use:   "rendered-extract [url]",
+		Short: "Extract rendered content from a new URL or an existing page target",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			rawURL := ""
+			if len(args) == 1 {
+				rawURL = args[0]
+			}
 			options := renderedExtractOptions{
 				WorkflowName:       "rendered-extract",
 				ArtifactTypePrefix: "rendered-extract",
 				UsageCommand:       "cdp workflow rendered-extract",
-				RawURL:             args[0],
+				RawURL:             rawURL,
+				TargetID:           targetID,
+				URLContains:        urlContains,
+				TitleContains:      titleContains,
 				Selector:           selector,
 				Wait:               wait,
 				WaitUntil:          waitUntil,
@@ -168,6 +273,8 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 				MinMarkdownWords:   minMarkdownWords,
 				MinHTMLChars:       minHTMLChars,
 				KeepOpen:           keepOpen,
+				Reload:             reload,
+				IgnoreCache:        ignoreCache,
 			}
 			if strings.TrimSpace(options.OutDir) == "" {
 				options.OutDir = filepath.Join("tmp", "cdp-rendered-extract")
@@ -180,6 +287,11 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 			return a.render(ctx, result.Human, result.Report)
 		},
 	}
+	cmd.Flags().StringVar(&targetID, "target", "", "existing page target id or unique prefix")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique existing page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique existing page whose title contains this text")
+	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected existing page before extraction")
+	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload the selected existing page while bypassing cache")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for useful rendered content and a quiet stability window")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable; useful-content waits for SPA-aware content stability")
@@ -194,7 +306,67 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExtractOptions) (renderedExtractResult, error) {
+func (a *app) openExistingRenderedExtractPage(ctx context.Context, targetID, urlContains, titleContains string) (*renderedExtractReusablePage, cdp.TargetInfo, error) {
+	client, closeClient, err := a.browserEventCDPClient(ctx)
+	if err != nil {
+		return nil, cdp.TargetInfo{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
+	}
+	target, err := a.resolveUniqueRenderedExtractTarget(ctx, client, targetID, urlContains, titleContains)
+	if err != nil {
+		closeRenderedExtractSession(nil, closeClient)
+		return nil, cdp.TargetInfo{}, err
+	}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+	if err != nil {
+		closeRenderedExtractSession(nil, closeClient)
+		return nil, target, commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+	}
+	return &renderedExtractReusablePage{Client: client, CloseClient: closeClient, Session: session, TargetID: target.TargetID}, target, nil
+}
+
+func (a *app) resolveUniqueRenderedExtractTarget(ctx context.Context, client cdp.CommandClient, targetID, urlContains, titleContains string) (cdp.TargetInfo, error) {
+	targetID = strings.TrimSpace(targetID)
+	urlContains = strings.TrimSpace(urlContains)
+	titleContains = strings.TrimSpace(titleContains)
+	selectors := 0
+	for _, value := range []string{targetID, urlContains, titleContains} {
+		if value != "" {
+			selectors++
+		}
+	}
+	if selectors > 1 {
+		return cdp.TargetInfo{}, commandError("conflicting_target_selectors", "usage", "pass only one of --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp workflow rendered-extract --target <target-id> --json", "cdp pages --json"})
+	}
+	if selectors == 0 {
+		return a.resolvePageTargetWithClient(ctx, client, "", "", "")
+	}
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
+		return cdp.TargetInfo{}, commandError("connection_failed", "connection", fmt.Sprintf("list targets: %v", err), ExitConnection, []string{"cdp doctor --json", "cdp daemon status --json"})
+	}
+	if targetID != "" {
+		return resolvePageTarget(targets, targetID, "", "")
+	}
+	matches := make([]cdp.TargetInfo, 0)
+	for _, target := range targets {
+		if target.Type != "page" {
+			continue
+		}
+		if urlContains != "" && strings.Contains(strings.ToLower(target.URL), strings.ToLower(urlContains)) {
+			matches = append(matches, target)
+		}
+		if titleContains != "" && strings.Contains(strings.ToLower(target.Title), strings.ToLower(titleContains)) {
+			matches = append(matches, target)
+		}
+	}
+	label := fmt.Sprintf("page URL containing %q", urlContains)
+	if titleContains != "" {
+		label = fmt.Sprintf("page title containing %q", titleContains)
+	}
+	return onePageTarget(matches, label)
+}
+
+func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExtractOptions) (result renderedExtractResult, retErr error) {
 	if options.Wait < 0 || options.Limit < 0 || options.MinVisibleWords < 0 || options.MinMarkdownWords < 0 || options.MinHTMLChars < 0 {
 		return renderedExtractResult{}, commandError("usage", "usage", "--wait, --limit, and quality thresholds must be non-negative", ExitUsage, []string{options.UsageCommand + " https://example.com --json"})
 	}
@@ -221,19 +393,19 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	defer cancel()
 
 	rawURL := strings.TrimSpace(options.RawURL)
-	if rawURL == "" {
-		return renderedExtractResult{}, commandError("usage", "usage", "url is required", ExitUsage, []string{options.UsageCommand + " https://example.com --json"})
+	if options.IgnoreCache && !options.Reload {
+		return renderedExtractResult{}, commandError("usage", "usage", "--ignore-cache requires --reload", ExitUsage, []string{options.UsageCommand + " --target <target-id> --reload --ignore-cache --json"})
 	}
 	if strings.TrimSpace(options.OutDir) == "" {
 		options.OutDir = filepath.Join("tmp", "cdp-rendered-extract")
 	}
 	formatSet := renderedExtractFormatSet(options.Formats)
-	serpMode := renderedExtractSERPMode(rawURL, options.Serp)
 
 	var client browserEventClient
 	var session *cdp.PageSession
 	var createdID string
-	createdPage := true
+	var selectedTarget cdp.TargetInfo
+	createdPage := false
 	reusedPage := false
 	if options.ReusePage != nil {
 		if options.ReusePage.Client == nil || options.ReusePage.Session == nil || strings.TrimSpace(options.ReusePage.TargetID) == "" {
@@ -244,6 +416,18 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		createdID = options.ReusePage.TargetID
 		createdPage = false
 		reusedPage = true
+		selectedTarget = cdp.TargetInfo{TargetID: createdID, Type: "page", URL: rawURL}
+	} else if rawURL == "" || strings.TrimSpace(options.TargetID) != "" || strings.TrimSpace(options.URLContains) != "" || strings.TrimSpace(options.TitleContains) != "" {
+		reusablePage, target, err := a.openExistingRenderedExtractPage(ctx, options.TargetID, options.URLContains, options.TitleContains)
+		if err != nil {
+			return renderedExtractResult{}, err
+		}
+		client = reusablePage.Client
+		session = reusablePage.Session
+		createdID = reusablePage.TargetID
+		selectedTarget = target
+		reusedPage = true
+		defer closeRenderedExtractSession(session, nil)
 	} else {
 		reusablePage, err := a.openRenderedExtractReusablePage(ctx, "about:blank", "rendered-extract")
 		if err != nil {
@@ -252,8 +436,45 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		client = reusablePage.Client
 		session = reusablePage.Session
 		createdID = reusablePage.TargetID
-		defer session.Close(ctx)
+		selectedTarget = cdp.TargetInfo{TargetID: createdID, Type: "page", URL: rawURL}
+		createdPage = true
+		defer closeRenderedExtractSession(session, nil)
 	}
+
+	cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: createdID, owned: createdPage, keepOpen: options.KeepOpen}
+	defer func() {
+		cleanup := cleanupGuard.cleanup()
+		if result.Report != nil {
+			if workflow, ok := result.Report["workflow"].(map[string]any); ok {
+				workflow["closed"] = cleanup.Closed
+				workflow["close_error"] = cleanup.Error
+				workflow["cleanup"] = cleanup
+				workflow["cleanup_command"] = cleanup.RecoveryCommand
+				workflow["partial"] = workflow["partial"] == true || cleanup.Error != ""
+			}
+		}
+		if cleanup.Error == "" {
+			return
+		}
+		data := map[string]any{"cleanup": cleanup}
+		message := fmt.Sprintf("close rendered-extract target %s: %s", createdID, cleanup.Error)
+		if retErr != nil {
+			data["primary_error"] = renderedExtractErrorSummary(retErr)
+			message = fmt.Sprintf("%s; cleanup failed: %s", retErr.Error(), cleanup.Error)
+		} else if result.Report != nil {
+			data["partial_result"] = result.Report
+		}
+		remediation := []string{cleanup.RecoveryCommand, "cdp pages --json"}
+		retErr = commandErrorWithData("rendered_extract_cleanup_failed", "internal", message, ExitInternal, remediation, data)
+	}()
+
+	if rawURL == "" {
+		rawURL = strings.TrimSpace(selectedTarget.URL)
+	}
+	if rawURL == "" {
+		return renderedExtractResult{}, commandError("target_url_missing", "usage", "selected page has no URL to extract", ExitUsage, []string{"cdp pages --json", options.UsageCommand + " https://example.com --json"})
+	}
+	serpMode := renderedExtractSERPMode(rawURL, options.Serp)
 
 	collectorErrors, teardownCollectors := enablePageLoadCollectorsWithTeardown(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
 	defer func() {
@@ -261,9 +482,23 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			_ = teardownCollectors(ctx)
 		}
 	}()
-	frameID, err := session.Navigate(ctx, rawURL)
-	if err != nil {
-		collectorErrors = append(collectorErrors, collectorError("navigation", err))
+	trigger := "observe"
+	reloaded := false
+	frameID := ""
+	if createdPage || (reusedPage && strings.TrimSpace(options.RawURL) != "") {
+		trigger = "navigate"
+		var navigateErr error
+		frameID, navigateErr = session.Navigate(ctx, rawURL)
+		if navigateErr != nil {
+			collectorErrors = append(collectorErrors, collectorError("navigation", navigateErr))
+		}
+	} else if options.Reload {
+		trigger = "reload"
+		if reloadErr := session.Reload(ctx, options.IgnoreCache); reloadErr != nil {
+			collectorErrors = append(collectorErrors, collectorError("reload", reloadErr))
+		} else {
+			reloaded = true
+		}
 	}
 
 	readiness, err := waitForRenderedExtractReadiness(ctx, session, options.Selector, options.Wait, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
@@ -379,22 +614,6 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	teardownCollectors = nil
 	collectorErrors = append(collectorErrors, teardownErrors...)
 
-	closed := false
-	closeErr := ""
-	unclosedTargetPath := ""
-	if !options.KeepOpen && createdPage {
-		if err := cdp.CloseTargetWithClient(ctx, client, createdID); err != nil {
-			closeErr = err.Error()
-			unclosedTargetPath, _ = writeArtifactFile(filepath.Join(options.OutDir, "unclosed-targets.txt"), []byte(createdID+"\t"+finalURL+"\t"+closeErr+"\n"))
-		} else {
-			closed = true
-		}
-	}
-	if unclosedTargetPath != "" {
-		artifactPaths["unclosed_targets_txt"] = unclosedTargetPath
-		artifactList = append(artifactList, map[string]any{"type": artifactPrefix + "-unclosed-targets", "path": unclosedTargetPath})
-	}
-
 	report := map[string]any{
 		"ok":            true,
 		"target":        pageRow(target),
@@ -413,6 +632,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		"warnings": warnings,
 		"workflow": map[string]any{
 			"name":             options.WorkflowName,
+			"trigger":          trigger,
 			"requested_url":    rawURL,
 			"final_url":        finalURL,
 			"frame_id":         frameID,
@@ -423,12 +643,14 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			"serp":             serpMode,
 			"created_page":     createdPage,
 			"reused_page":      reusedPage,
-			"closed":           closed,
-			"close_error":      closeErr,
-			"unclosed_targets": unclosedTargetPath,
-			"cleanup_command":  "cdp page cleanup --workflow-created --close --json",
+			"reloaded":         reloaded,
+			"ignore_cache":     options.IgnoreCache,
+			"closed":           false,
+			"close_error":      "",
+			"cleanup":          renderedExtractCleanupResult{TargetID: createdID},
+			"cleanup_command":  "",
 			"collector_errors": collectorErrors,
-			"partial":          len(collectorErrors) > 0 || closeErr != "",
+			"partial":          len(collectorErrors) > 0,
 		},
 	}
 	if len(warnings) > 0 || len(collectorErrors) > 0 {

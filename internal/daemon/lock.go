@@ -34,6 +34,55 @@ type LockInfo struct {
 	OwnerRunning *bool        `json:"owner_running,omitempty"`
 }
 
+type StaleLockCleanup struct {
+	Checked []LockInfo `json:"checked"`
+	Removed []LockInfo `json:"removed"`
+}
+
+func RemoveStaleLocks(ctx context.Context, stateDir string, staleAfter time.Duration, prefixes ...string) (StaleLockCleanup, error) {
+	result := StaleLockCleanup{Checked: []LockInfo{}, Removed: []LockInfo{}}
+	if strings.TrimSpace(stateDir) == "" {
+		return result, fmt.Errorf("state directory is required for stale lock cleanup")
+	}
+	entries, err := os.ReadDir(filepath.Join(stateDir, "locks"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, nil
+		}
+		return result, fmt.Errorf("read lock directory: %w", err)
+	}
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".lock") || !hasAnyPrefix(entry.Name(), prefixes) {
+			continue
+		}
+		path := filepath.Join(stateDir, "locks", entry.Name())
+		info := InspectLock(path, staleAfter)
+		result.Checked = append(result.Checked, info)
+		if !info.Stale || (info.OwnerRunning != nil && *info.OwnerRunning) {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return result, fmt.Errorf("remove stale lock %s: %w", entry.Name(), err)
+		}
+		result.Removed = append(result.Removed, info)
+	}
+	return result, nil
+}
+
+func hasAnyPrefix(name string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func AcquireLock(ctx context.Context, stateDir, name string, timeout, staleAfter time.Duration, metadata LockMetadata) (LockHandle, bool, LockMetadata, error) {
 	if strings.TrimSpace(stateDir) == "" {
 		return LockHandle{}, false, LockMetadata{}, fmt.Errorf("state directory is required for lock")

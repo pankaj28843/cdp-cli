@@ -112,6 +112,7 @@ type networkCaptureBody struct {
 	Bytes         int    `json:"bytes"`
 	Truncated     bool   `json:"truncated,omitempty"`
 	OmittedReason string `json:"omitted_reason,omitempty"`
+	limit         int
 }
 
 func collectNetworkRequests(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, failedOnly bool) ([]networkRequest, bool, error) {
@@ -786,12 +787,7 @@ func ensureWebSocket(record *networkCaptureRecord, requestID string) *networkWeb
 
 func captureBody(text string, base64Encoded bool, limit int) *networkCaptureBody {
 	bytes := len([]byte(text))
-	body := &networkCaptureBody{Text: text, Base64Encoded: base64Encoded, Bytes: bytes}
-	if limit > 0 && bytes > limit {
-		body.Text = string([]byte(text)[:limit])
-		body.Truncated = true
-	}
-	return body
+	return &networkCaptureBody{Text: text, Base64Encoded: base64Encoded, Bytes: bytes, limit: limit}
 }
 
 func parseBodyKinds(includeBodies string) map[string]bool {
@@ -834,9 +830,6 @@ func shouldCaptureResponseBody(record networkCaptureRecord, kinds map[string]boo
 }
 
 func applyNetworkCaptureRedaction(records []networkCaptureRecord, redactor *artifacts.Redactor) {
-	if redactor == nil || redactor.Mode() == artifacts.ModeNone {
-		return
-	}
 	for i := range records {
 		redactCaptureRecord(&records[i], redactor, "requests")
 	}
@@ -848,10 +841,10 @@ func redactCaptureRecord(record *networkCaptureRecord, redactor *artifacts.Redac
 	record.RequestHeaders = redactor.HeaderMap(record.RequestHeaders, prefix+".request_headers")
 	record.ResponseHeaders = redactor.HeaderMap(record.ResponseHeaders, prefix+".response_headers")
 	if record.RequestPostData != nil && record.RequestPostData.Text != "" {
-		record.RequestPostData.Text = redactor.BodyText(record.RequestPostData.Text, prefix+".request_post_data.text")
+		redactAndBoundCaptureBody(record.RequestPostData, redactor, prefix+".request_post_data.text")
 	}
 	if record.Body != nil && record.Body.Text != "" {
-		record.Body.Text = redactor.BodyText(record.Body.Text, prefix+".body.text")
+		redactAndBoundCaptureBody(record.Body, redactor, prefix+".body.text")
 	}
 	if record.WebSocket != nil {
 		record.WebSocket.URL = redactor.URL(record.WebSocket.URL, prefix+".websocket.url")
@@ -859,12 +852,25 @@ func redactCaptureRecord(record *networkCaptureRecord, redactor *artifacts.Redac
 		record.WebSocket.ResponseHeaders = redactor.HeaderMap(record.WebSocket.ResponseHeaders, prefix+".websocket.response_headers")
 		for i := range record.WebSocket.Frames {
 			if record.WebSocket.Frames[i].Payload != nil && record.WebSocket.Frames[i].Payload.Text != "" {
-				record.WebSocket.Frames[i].Payload.Text = redactor.BodyText(record.WebSocket.Frames[i].Payload.Text, prefix+".websocket.frames.payload.text")
+				redactAndBoundCaptureBody(record.WebSocket.Frames[i].Payload, redactor, prefix+".websocket.frames.payload.text")
 			}
 		}
 	}
 	for i := range record.Redirects {
 		redactCaptureRecord(&record.Redirects[i], redactor, prefix+".redirects")
+	}
+}
+
+func redactAndBoundCaptureBody(body *networkCaptureBody, redactor *artifacts.Redactor, field string) {
+	if body == nil {
+		return
+	}
+	if redactor != nil && redactor.Mode() != artifacts.ModeNone {
+		body.Text = redactor.BodyText(body.Text, field)
+	}
+	if body.limit > 0 && len([]byte(body.Text)) > body.limit {
+		body.Text = string([]byte(body.Text)[:body.limit])
+		body.Truncated = true
 	}
 }
 

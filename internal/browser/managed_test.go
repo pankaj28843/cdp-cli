@@ -215,6 +215,44 @@ func TestManagedMetadataRoundTripAndStatusRedaction(t *testing.T) {
 	}
 }
 
+func TestVerifyManagedOwnershipRequiresMatchingAtomicMetadataAndRegistry(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           4242,
+		StartedAt:           "2026-06-11T12:00:00Z",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+		OwnedMarker:         "synthetic-owned-token",
+		ProcessStartTime:    "2026-06-11T12:00:00Z",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	if err := browser.RegisterManagedProcessLaunch(stateDir, metadata); err != nil {
+		t.Fatalf("RegisterManagedProcessLaunch returned error: %v", err)
+	}
+
+	evidence := browser.VerifyManagedOwnership(stateDir, browser.ManagedMetadataStatus(metadata))
+	if !evidence.Checked || !evidence.Owned || len(evidence.Reasons) != 0 || !containsString(evidence.SafetyChecks, "managed_registry_record_matches") {
+		t.Fatalf("VerifyManagedOwnership = %+v, want verified ownership", evidence)
+	}
+	mismatched := browser.ManagedMetadataStatus(metadata)
+	mismatched.DebuggingPort = "9333"
+	evidence = browser.VerifyManagedOwnership(stateDir, mismatched)
+	if evidence.Owned || !containsString(evidence.Reasons, "runtime_debugging_port_mismatch") {
+		t.Fatalf("VerifyManagedOwnership mismatched port = %+v, want unowned port mismatch", evidence)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(browser.ManagedMetadataPath(stateDir)), ".managed-state-*"))
+	if err != nil {
+		t.Fatalf("Glob temporary managed state: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("atomic managed state left temporary files: %+v", matches)
+	}
+}
+
 func TestManagedProcessRegistryRoundTripAndStatusRedaction(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	registry := browser.ManagedProcessRegistry{
@@ -458,6 +496,9 @@ while :; do sleep 1; done
 	}
 	if !containsString(result.SafetyChecks, "managed_profile_path_matches_state_dir") || !containsString(result.SafetyChecks, "process_command_line_matches_managed_profile") {
 		t.Fatalf("safety checks = %+v, want managed profile and command-line checks", result.SafetyChecks)
+	}
+	if !containsString(result.SafetyChecks, "process_tree_inspected") || len(result.ProcessEvidence) == 0 || result.ProcessEvidence[0].Role != "root" || !result.ProcessEvidence[0].DebuggingPortMatch {
+		t.Fatalf("process evidence = %+v checks=%+v, want root port and process-tree evidence", result.ProcessEvidence, result.SafetyChecks)
 	}
 }
 

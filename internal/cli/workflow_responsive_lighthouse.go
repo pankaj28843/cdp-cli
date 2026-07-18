@@ -32,7 +32,7 @@ func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
 }
 
 func (a *app) newWorkflowLighthouseCommand() *cobra.Command {
-	var categories, formFactor, throttling, outDir string
+	var categories, formFactor, throttling, outDir, redact string
 	var wait time.Duration
 	cmd := &cobra.Command{
 		Use:   "lighthouse <url>",
@@ -44,7 +44,7 @@ func (a *app) newWorkflowLighthouseCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 2*time.Minute)
 			defer cancel()
-			return runLighthouseWorkflow(ctx, a, args[0], lighthouseWorkflowOptions{Categories: categories, FormFactor: formFactor, Throttling: throttling, OutDir: outDir, Wait: wait})
+			return runLighthouseWorkflow(ctx, a, args[0], lighthouseWorkflowOptions{Categories: categories, FormFactor: formFactor, Throttling: throttling, OutDir: outDir, Wait: wait, Redact: redact})
 		},
 	}
 	cmd.Flags().StringVar(&categories, "categories", "accessibility,best-practices,performance,seo", "comma-separated Lighthouse categories")
@@ -52,5 +52,6 @@ func (a *app) newWorkflowLighthouseCommand() *cobra.Command {
 	cmd.Flags().StringVar(&throttling, "throttling", "simulate", "Lighthouse throttling method: simulate, devtools, or provided")
 	cmd.Flags().StringVar(&outDir, "out-dir", "tmp/lighthouse", "directory for Lighthouse JSON and HTML reports")
 	cmd.Flags().DurationVar(&wait, "wait", 0, "optional pre-audit wait hint included in output")
+	cmd.Flags().StringVar(&redact, "redact", "safe", "report artifact redaction preset: safe, headers, or none")
 	return cmd
 }

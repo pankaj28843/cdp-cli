@@ -1264,6 +1264,180 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowRenderedExtractReusesReloadsAndKeepsExistingTarget(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId": "existing-page-123",
+		"type":     "page",
+		"title":    "Existing dashboard",
+		"url":      "https://example.test/dashboard",
+		"attached": false,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract",
+		"--target", "existing-page",
+		"--reload",
+		"--ignore-cache",
+		"--out-dir", outDir,
+		"--wait", "1500ms",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("rendered-extract reuse exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var got struct {
+		OK     bool `json:"ok"`
+		Target struct {
+			TargetID string `json:"id"`
+		} `json:"target"`
+		Workflow struct {
+			Trigger     string `json:"trigger"`
+			CreatedPage bool   `json:"created_page"`
+			ReusedPage  bool   `json:"reused_page"`
+			Reloaded    bool   `json:"reloaded"`
+			IgnoreCache bool   `json:"ignore_cache"`
+			Closed      bool   `json:"closed"`
+			Cleanup     struct {
+				Skipped bool   `json:"skipped"`
+				Reason  string `json:"reason"`
+			} `json:"cleanup"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode rendered-extract reuse output: %v", err)
+	}
+	if !got.OK || got.Target.TargetID != "existing-page-123" || got.Workflow.Trigger != "reload" || got.Workflow.CreatedPage || !got.Workflow.ReusedPage || !got.Workflow.Reloaded || !got.Workflow.IgnoreCache || got.Workflow.Closed || !got.Workflow.Cleanup.Skipped || got.Workflow.Cleanup.Reason != "caller_owned" {
+		t.Fatalf("rendered-extract reuse ownership = %+v", got)
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("page count after reused extraction = %d, want 1", count)
+	}
+}
+
+func TestWorkflowRenderedExtractTargetSelectorsFailClosed(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-a", "type": "page", "title": "Dashboard A", "url": "https://example.test/a"},
+		{"targetId": "page-b", "type": "page", "title": "Dashboard B", "url": "https://example.test/b"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "rendered-extract", "--url-contains", "example.test", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("ambiguous rendered-extract exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode ambiguous rendered-extract output: %v", err)
+	}
+	if got.OK || got.Code != "ambiguous_target" {
+		t.Fatalf("ambiguous rendered-extract output = %+v", got)
+	}
+}
+
+func TestWorkflowRenderedExtractFailureCleansOnlyCreatedTarget(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId": "baseline-page",
+		"type":     "page",
+		"title":    "Baseline",
+		"url":      "https://example.test/baseline",
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	blockedOutDir := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedOutDir, []byte("fixture"), 0o600); err != nil {
+		t.Fatalf("write blocked output fixture: %v", err)
+	}
+	args := []string{"workflow", "rendered-extract", "https://example.test/new", "--out-dir", blockedOutDir, "--wait", "0s", "--json"}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitInternal {
+		t.Fatalf("created failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitInternal, out.String(), errOut.String())
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("page count after created-target failure = %d, want baseline 1", count)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	args = []string{"workflow", "rendered-extract", "--target", "baseline-page", "--out-dir", blockedOutDir, "--wait", "0s", "--json"}
+	code = cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitInternal {
+		t.Fatalf("reused failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitInternal, out.String(), errOut.String())
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("page count after reused-target failure = %d, want unchanged 1", count)
+	}
+}
+
+func TestWorkflowRenderedExtractCloseFailurePreservesPrimaryError(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":             "close-failure-sentinel",
+		"type":                 "page",
+		"title":                "Sentinel",
+		"url":                  "https://example.test/sentinel",
+		"fakeCloseTargetError": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	blockedOutDir := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedOutDir, []byte("fixture"), 0o600); err != nil {
+		t.Fatalf("write blocked output fixture: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "rendered-extract", "https://example.test/new", "--out-dir", blockedOutDir, "--wait", "0s", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitInternal {
+		t.Fatalf("cleanup failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitInternal, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			PrimaryError map[string]any `json:"primary_error"`
+			Cleanup      struct {
+				TargetID        string `json:"target_id"`
+				Error           string `json:"error"`
+				RecoveryCommand string `json:"recovery_command"`
+			} `json:"cleanup"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode cleanup failure output: %v", err)
+	}
+	if got.OK || got.Code != "rendered_extract_cleanup_failed" || got.Data.PrimaryError["code"] != "artifact_write_failed" || got.Data.Cleanup.TargetID == "" || got.Data.Cleanup.Error == "" || got.Data.Cleanup.RecoveryCommand != "cdp page cleanup --target "+got.Data.Cleanup.TargetID+" --force --close --json" {
+		t.Fatalf("cleanup failure output = %+v", got)
+	}
+}
+
+func fakePagesCount(t *testing.T) int {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var got struct {
+		Pages []json.RawMessage `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode pages output: %v", err)
+	}
+	return len(got.Pages)
+}
+
 func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -1703,8 +1877,24 @@ func TestWorkflowPerfJSON(t *testing.T) {
 			Partial      bool   `json:"partial"`
 		} `json:"workflow"`
 		Artifact struct {
-			Path string `json:"path"`
+			Type   string                   `json:"type"`
+			Path   string                   `json:"path"`
+			Safety artifacts.SafetyMetadata `json:"safety"`
 		} `json:"artifact"`
+		Trace struct {
+			Stream struct {
+				EOF            bool `json:"eof"`
+				CloseAttempted bool `json:"close_attempted"`
+				Closed         bool `json:"closed"`
+			} `json:"stream"`
+			ArtifactSafety artifacts.SafetyMetadata `json:"artifact_safety"`
+		} `json:"trace"`
+		Insights map[string]struct {
+			Available bool    `json:"available"`
+			ValueMS   float64 `json:"value_ms"`
+			Value     float64 `json:"value"`
+			Count     int     `json:"count"`
+		} `json:"insights"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("workflow perf output is invalid JSON: %v", err)
@@ -1715,11 +1905,21 @@ func TestWorkflowPerfJSON(t *testing.T) {
 	if len(got.Performance.Metrics) != got.Workflow.MetricCount {
 		t.Fatalf("workflow perf = %+v, want metric count to match performance.metrics", got)
 	}
-	if got.Workflow.MetricCount == 0 || got.Artifact.Path != outPath || got.Workflow.Partial {
+	if got.Workflow.MetricCount == 0 || got.Artifact.Path != outPath || got.Artifact.Type != "performance-trace" || got.Workflow.Partial {
 		t.Fatalf("workflow perf = %+v, want captured performance metrics and trace artifact", got)
 	}
-	if _, err := os.Stat(outPath); err != nil {
+	if !got.Trace.Stream.EOF || !got.Trace.Stream.CloseAttempted || !got.Trace.Stream.Closed || got.Trace.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !got.Trace.ArtifactSafety.Shareable {
+		t.Fatalf("workflow perf trace = %+v, want closed public-safe stream", got.Trace)
+	}
+	if !got.Insights["lcp"].Available || got.Insights["lcp"].ValueMS != 250 || !got.Insights["cls"].Available || got.Insights["cls"].Value != 0.125 || !got.Insights["long_tasks"].Available || got.Insights["long_tasks"].Count != 1 || !got.Insights["blocking_requests"].Available || got.Insights["blocking_requests"].Count != 1 {
+		t.Fatalf("workflow perf insights = %+v, want trace-derived LCP/CLS/long-task/blocking request summaries", got.Insights)
+	}
+	traceBytes, err := os.ReadFile(outPath)
+	if err != nil {
 		t.Fatalf("workflow perf artifact was not written: %v", err)
+	}
+	if scan := artifacts.ScanBytes(traceBytes, []string{"trace-secret", "token=trace-secret"}, 0); len(scan.Findings) != 0 {
+		t.Fatalf("workflow perf trace leaked synthetic secrets: %+v", scan.Findings)
 	}
 }
 

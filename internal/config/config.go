@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 )
 
 const (
@@ -31,10 +33,11 @@ const (
 )
 
 type Config struct {
-	Path    string        `json:"path,omitempty"`
-	Profile string        `json:"profile,omitempty"`
-	Timeout time.Duration `json:"timeout,omitempty"`
-	Browser BrowserConfig `json:"browser,omitempty"`
+	Path      string         `json:"path,omitempty"`
+	Profile   string         `json:"profile,omitempty"`
+	Timeout   time.Duration  `json:"timeout,omitempty"`
+	Browser   BrowserConfig  `json:"browser,omitempty"`
+	Artifacts ArtifactConfig `json:"artifacts,omitempty"`
 
 	browserModeSet bool
 }
@@ -58,6 +61,11 @@ type ResourceBudgetConfig struct {
 type HeadlessConfig struct {
 	ProfileSeedStrategy string        `json:"profile_seed_strategy,omitempty"`
 	ProfileRefreshAfter time.Duration `json:"profile_refresh_after,omitempty"`
+}
+
+type ArtifactConfig struct {
+	Retention       time.Duration `json:"retention,omitempty"`
+	MaxLogSizeBytes int64         `json:"max_log_size_bytes,omitempty"`
 }
 
 type BrowserModeResolution struct {
@@ -183,9 +191,15 @@ func (c Config) BrowserModeConfigured() bool {
 }
 
 type fileConfig struct {
-	Profile string             `json:"profile,omitempty"`
-	Timeout string             `json:"timeout,omitempty"`
-	Browser *fileBrowserConfig `json:"browser,omitempty"`
+	Profile   string              `json:"profile,omitempty"`
+	Timeout   string              `json:"timeout,omitempty"`
+	Browser   *fileBrowserConfig  `json:"browser,omitempty"`
+	Artifacts *fileArtifactConfig `json:"artifacts,omitempty"`
+}
+
+type fileArtifactConfig struct {
+	Retention  string `json:"retention,omitempty"`
+	MaxLogSize string `json:"max_log_size,omitempty"`
 }
 
 type fileBrowserConfig struct {
@@ -266,6 +280,25 @@ func decode(data []byte) (Config, error) {
 			cfg.Browser.ResourceBudget.MaxLoadPerCPU = raw.Browser.ResourceBudget.MaxLoadPerCPU
 		}
 	}
+	if raw.Artifacts != nil {
+		if raw.Artifacts.Retention != "" {
+			d, err := time.ParseDuration(raw.Artifacts.Retention)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse artifacts.retention: %w", err)
+			}
+			if d <= 0 {
+				return Config{}, fmt.Errorf("artifacts.retention must be positive")
+			}
+			cfg.Artifacts.Retention = d
+		}
+		if raw.Artifacts.MaxLogSize != "" {
+			size, err := artifacts.ParseByteSize(raw.Artifacts.MaxLogSize)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse artifacts.max_log_size: %w", err)
+			}
+			cfg.Artifacts.MaxLogSizeBytes = size
+		}
+	}
 	return cfg, nil
 }
 
@@ -318,6 +351,18 @@ func encode(cfg Config) ([]byte, error) {
 				MinFreeDiskMB:   cfg.Browser.ResourceBudget.MinFreeDiskMB,
 				MaxLoadPerCPU:   cfg.Browser.ResourceBudget.MaxLoadPerCPU,
 			}
+		}
+	}
+	if cfg.Artifacts.Retention < 0 || cfg.Artifacts.MaxLogSizeBytes < 0 {
+		return nil, fmt.Errorf("artifact retention and max log size must be non-negative")
+	}
+	if cfg.Artifacts.Retention > 0 || cfg.Artifacts.MaxLogSizeBytes > 0 {
+		raw.Artifacts = &fileArtifactConfig{}
+		if cfg.Artifacts.Retention > 0 {
+			raw.Artifacts.Retention = cfg.Artifacts.Retention.String()
+		}
+		if cfg.Artifacts.MaxLogSizeBytes > 0 {
+			raw.Artifacts.MaxLogSize = artifacts.FormatByteSize(cfg.Artifacts.MaxLogSizeBytes)
 		}
 	}
 

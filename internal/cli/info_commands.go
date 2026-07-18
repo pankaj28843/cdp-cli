@@ -6,9 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/browser"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -34,15 +38,50 @@ type flagInfo struct {
 func (a *app) newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print version information",
+		Short: "Print verifiable build provenance",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
 
-			human := fmt.Sprintf("cdp %s", a.build.Version)
-			return a.render(ctx, human, a.build)
+			build := normalizedBuildInfo(a.build)
+			human := fmt.Sprintf("cdp %s (%s build; commit %s; date %s; source %s)", build.Version, build.Provenance, build.Commit, build.Date, build.SourceState)
+			return a.render(ctx, human, build)
 		},
 	}
+}
+
+var (
+	semanticVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+	fullCommitPattern      = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+)
+
+func normalizedBuildInfo(build BuildInfo) BuildInfo {
+	build.Version = strings.TrimSpace(build.Version)
+	build.Commit = strings.TrimSpace(build.Commit)
+	build.Date = strings.TrimSpace(build.Date)
+	if build.Version == "" {
+		build.Version = "dev"
+	}
+	if build.Commit == "" {
+		build.Commit = "unknown"
+	}
+	if build.Date == "" {
+		build.Date = "unknown"
+	}
+	_, dateErr := time.Parse(time.RFC3339, build.Date)
+	valid := semanticVersionPattern.MatchString(build.Version) && fullCommitPattern.MatchString(build.Commit) && dateErr == nil
+	if build.Verified && valid {
+		build.Provenance = "managed"
+		build.SourceState = "clean"
+		if build.Dirty {
+			build.SourceState = "dirty"
+		}
+		return build
+	}
+	build.Verified = false
+	build.Provenance = "unverified"
+	build.SourceState = "unverified"
+	return build
 }
 
 func (a *app) newDescribeCommand() *cobra.Command {
@@ -374,6 +413,33 @@ func (a *app) scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
 		return check
 	}
 	details["last_run_artifacts"] = cronLastRunArtifacts(store.Dir)
+	details["last_cleanup"] = loadArtifactRetentionSummary(store.Dir)
+	policyOpts := defaultCronRenderOptions()
+	if cfg, cfgErr := config.Load(a.opts.config); cfgErr == nil {
+		if cfg.Artifacts.Retention > 0 {
+			policyOpts.ArtifactRetention = cfg.Artifacts.Retention
+		}
+		if cfg.Artifacts.MaxLogSizeBytes > 0 {
+			policyOpts.MaxLogSizeBytes = cfg.Artifacts.MaxLogSizeBytes
+			policyOpts.MaxLogSize = artifacts.FormatByteSize(cfg.Artifacts.MaxLogSizeBytes)
+		}
+	}
+	details["artifact_policy"] = cronArtifactPolicy(policyOpts)
+	effectiveTasks := managedCronTasks(policyOpts)
+	effectiveStatuses := cronTaskStatuses(extractCronManagedBlock(string(output)).Entries, effectiveTasks)
+	details["expected_managed_task_ids"] = cronTaskIDs(effectiveTasks)
+	details["installed_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "installed", "stale", "blocked")
+	details["missing_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "missing")
+	details["stale_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "stale")
+	details["blocked_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "blocked")
+	details["tasks"] = cronTaskStatusSliceOrEmpty(effectiveStatuses)
+	installedBlock := extractCronManagedBlock(string(output))
+	matchesCurrentPolicy := installedBlock.Installed && normalizeCronBlock(installedBlock.Text) == normalizeCronBlock(managedCronBlock(policyOpts))
+	details["matches_current_policy"] = matchesCurrentPolicy
+	if installedBlock.Installed && !matchesCurrentPolicy && check["status"] == "pass" {
+		check["status"] = "warn"
+		check["message"] = "cdp managed cron block does not match the current retention and task policy"
+	}
 	if lifecycle, lifecycleErr := browser.ReconcileManagedProcesses(ctx, store.Dir, browser.ManagedProcessReconcileOptions{ReadOnly: true}); lifecycleErr == nil {
 		details["managed_processes"] = lifecycle
 	} else {

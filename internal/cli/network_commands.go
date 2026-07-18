@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -71,6 +72,8 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only return failed requests and HTTP 4xx/5xx responses")
 	cmd.AddCommand(a.newNetworkCaptureCommand())
 	cmd.AddCommand(a.newNetworkWebSocketCommand())
+	cmd.AddCommand(a.newNetworkBlockCommand())
+	cmd.AddCommand(a.newNetworkMockCommand())
 	return cmd
 }
 
@@ -89,8 +92,8 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 		Short: "Capture WebSocket lifecycle events and frames from a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || limit < 0 || payloadLimit < 0 {
-				return commandError("usage", "usage", "--wait, --limit, and --payload-limit must be non-negative", ExitUsage, []string{"cdp network websocket --wait 20s --json"})
+			if wait < 0 || limit < 0 || payloadLimit <= 0 {
+				return commandError("usage", "usage", "--wait and --limit must be non-negative and --payload-limit must be positive", ExitUsage, []string{"cdp network websocket --wait 20s --payload-limit 262144 --json"})
 			}
 			redact = strings.ToLower(strings.TrimSpace(redact))
 			if redact == "" {
@@ -178,7 +181,7 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 0, "maximum WebSocket records to return; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON WebSocket capture artifact")
 	cmd.Flags().BoolVar(&includePayloads, "include-payloads", false, "include WebSocket frame payload text")
-	cmd.Flags().IntVar(&payloadLimit, "payload-limit", 256*1024, "maximum WebSocket frame payload bytes to include; 0 means no limit")
+	cmd.Flags().IntVar(&payloadLimit, "payload-limit", 256*1024, "positive maximum WebSocket frame payload bytes to include")
 	cmd.Flags().StringVar(&redact, "redact", "none", "redaction preset for output and artifacts: none, safe, or headers")
 	return cmd
 }
@@ -207,6 +210,8 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	var includePostData bool
 	var includeBodies string
 	var bodyLimit int
+	var bodyOutDir string
+	var bodyArtifactLimit int
 	var includeWebSockets bool
 	var includeWebSocketPayloads bool
 	var websocketPayloadLimit int
@@ -218,8 +223,8 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 		Short: "Capture full local network metadata from a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || limit < 0 || bodyLimit < 0 || websocketPayloadLimit < 0 {
-				return commandError("usage", "usage", "--wait, --limit, --body-limit, and --websocket-payload-limit must be non-negative", ExitUsage, []string{"cdp network capture --wait 10s --json"})
+			if wait < 0 || limit < 0 || bodyLimit <= 0 || websocketPayloadLimit <= 0 || bodyArtifactLimit < 1 || bodyArtifactLimit > 100 {
+				return commandError("usage", "usage", "--wait and --limit must be non-negative; body and WebSocket byte limits must be positive; --body-artifact-limit must be between 1 and 100", ExitUsage, []string{"cdp network capture --wait 10s --body-limit 262144 --json"})
 			}
 			redact = strings.ToLower(strings.TrimSpace(redact))
 			if redact == "" {
@@ -280,7 +285,8 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 			redactor := artifacts.NewRedactor(redact)
 			applyNetworkCaptureRedaction(records, redactor)
 			artifactWarning := "network capture may include cookies, authorization headers, tokens, request bodies, and response bodies; keep this artifact local"
-			artifactSafety := redactor.Metadata(strings.TrimSpace(outPath) != "", artifactWarning)
+			writesArtifact := strings.TrimSpace(outPath) != "" || strings.TrimSpace(harOutPath) != "" || strings.TrimSpace(bodyOutDir) != ""
+			artifactSafety := redactor.Metadata(writesArtifact, artifactWarning)
 			capture := map[string]any{
 				"count":                      len(records),
 				"wait":                       durationString(wait),
@@ -301,7 +307,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				"collector_errors":           collectorErrors,
 				"artifact_safety":            artifactSafety,
 			}
-			if strings.TrimSpace(outPath) != "" && redact == "none" {
+			if writesArtifact && redact == "none" {
 				capture["local_artifact_warning"] = artifactWarning
 			}
 			report := map[string]any{
@@ -311,6 +317,14 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				"capture":  capture,
 			}
 			artifactList := []map[string]any{}
+			if strings.TrimSpace(bodyOutDir) != "" {
+				bodyArtifacts, bodyArtifactRefs, err := writeNetworkBodyArtifacts(bodyOutDir, records, bodyArtifactLimit, artifactSafety)
+				if err != nil {
+					return err
+				}
+				report["body_artifacts"] = bodyArtifacts
+				artifactList = append(artifactList, bodyArtifactRefs...)
+			}
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
@@ -356,12 +370,57 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&includeTiming, "include-timing", true, "include response timing and connection metadata")
 	cmd.Flags().BoolVar(&includePostData, "include-post-data", true, "include request post data when CDP exposes it")
 	cmd.Flags().StringVar(&includeBodies, "include-bodies", "json,text", "comma-separated response body kinds to include: json,text,base64,all")
-	cmd.Flags().IntVar(&bodyLimit, "body-limit", 256*1024, "maximum request/response body bytes to include; 0 means no limit")
+	cmd.Flags().IntVar(&bodyLimit, "body-limit", 256*1024, "positive maximum request/response body bytes to include")
+	cmd.Flags().StringVar(&bodyOutDir, "body-out-dir", "", "optional directory for bounded per-response body artifacts")
+	cmd.Flags().IntVar(&bodyArtifactLimit, "body-artifact-limit", 20, "maximum response body artifacts to write (1-100)")
 	cmd.Flags().BoolVar(&includeWebSockets, "include-websockets", false, "include WebSocket lifecycle events and frames")
 	cmd.Flags().BoolVar(&includeWebSocketPayloads, "include-websocket-payloads", false, "include WebSocket frame payload text")
-	cmd.Flags().IntVar(&websocketPayloadLimit, "websocket-payload-limit", 256*1024, "maximum WebSocket frame payload bytes to include; 0 means no limit")
+	cmd.Flags().IntVar(&websocketPayloadLimit, "websocket-payload-limit", 256*1024, "positive maximum WebSocket frame payload bytes to include")
 	cmd.Flags().StringVar(&redact, "redact", "none", "redaction preset for output and artifacts: none, safe, or headers")
 	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected page after attaching network collectors")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
 	return cmd
+}
+
+func writeNetworkBodyArtifacts(outDir string, records []networkCaptureRecord, limit int, safety artifacts.SafetyMetadata) ([]map[string]any, []map[string]any, error) {
+	outDir = filepath.Clean(strings.TrimSpace(outDir))
+	bodyArtifacts := []map[string]any{}
+	artifactRefs := []map[string]any{}
+	written := 0
+	for _, record := range records {
+		if record.Body == nil || record.Body.Text == "" || len(bodyArtifacts) >= limit {
+			continue
+		}
+		entry := map[string]any{
+			"request_id":     record.ID,
+			"url":            record.URL,
+			"mime_type":      record.MimeType,
+			"source_bytes":   record.Body.Bytes,
+			"truncated":      record.Body.Truncated,
+			"base64_encoded": record.Body.Base64Encoded,
+			"safety":         safety,
+		}
+		if record.Body.Base64Encoded && safety.Shareable {
+			entry["omitted_reason"] = "base64 response bodies remain local-only and are omitted from safe artifacts"
+			bodyArtifacts = append(bodyArtifacts, entry)
+			continue
+		}
+		written++
+		ext := ".txt"
+		if record.Body.Base64Encoded {
+			ext = ".base64"
+		} else if strings.Contains(strings.ToLower(record.MimeType), "json") {
+			ext = ".json"
+		}
+		path := filepath.Join(outDir, fmt.Sprintf("body-%03d%s", written, ext))
+		writtenPath, err := writeArtifactFile(path, []byte(record.Body.Text))
+		if err != nil {
+			return nil, nil, err
+		}
+		entry["path"] = writtenPath
+		entry["bytes"] = len([]byte(record.Body.Text))
+		bodyArtifacts = append(bodyArtifacts, entry)
+		artifactRefs = append(artifactRefs, map[string]any{"type": "network-response-body", "path": writtenPath, "bytes": len([]byte(record.Body.Text)), "safety": safety})
+	}
+	return bodyArtifacts, artifactRefs, nil
 }

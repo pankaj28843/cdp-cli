@@ -69,7 +69,9 @@ approved Chrome remote debugging.
 
 `headless` is for unattended agent work. It launches managed Chrome with a
 cdp-owned profile, loopback-only remote debugging, and mode-specific daemon
-runtime files. The `managed` seed strategy creates an empty owner-only profile.
+runtime files. Headless failures never ask for `chrome://inspect` approval;
+bounded repair retries return connection-class JSON with per-attempt evidence.
+The `managed` seed strategy creates an empty owner-only profile.
 The explicit `copy-default` strategy replaces that managed profile with a local
 full-state snapshot of Chrome's default profile for developer-controlled harness
 work, preserving browser-state files such as cookies, Local Storage, IndexedDB,
@@ -90,6 +92,7 @@ cdp --browser-mode headless browser profile seed --strategy copy-default --json
 cdp --browser-mode headless browser profile seed --strategy copy-default --if-older-than 6h --json
 cdp --browser-mode headless browser profile status --json
 cdp --browser-mode headless daemon keepalive --repair --json
+cdp --browser-mode headless daemon keepalive --repair --force --json
 cdp --browser-mode headless daemon maintenance --json
 cdp doctor --check headless-security --json
 ```
@@ -129,7 +132,7 @@ The managed path is available through first-class cron commands:
 
 ```bash
 cdp cron status --json
-cdp cron status --json | jq '{state,tasks,managed_processes,last_run_artifacts}'
+cdp cron status --json | jq '{state,tasks,artifact_policy,last_cleanup,managed_processes,last_run_artifacts}'
 cdp cron diff --json
 cdp cron install --json
 cdp cron remove --json
@@ -137,8 +140,10 @@ cdp cron heal headed --json
 ```
 
 `cdp cron install --json` renders and installs the full managed
-block, including mode-explicit headed daemon keepalive and the canonical
-headless maintenance entry. The maintenance entry performs managed-process
+block, including mode-explicit headed daemon keepalive, the canonical
+headless maintenance entry, and one daily artifact-prune task. Both per-minute
+tasks replace owner-only latest-run logs through a hard-bounded writer before
+child output opens the target; they do not append indefinitely. The maintenance entry performs managed-process
 sweep, resource preflight, profile seeding, daemon repair, synthetic
 health-check, page cleanup, and summary artifact writes in one ordered flow.
 Use `cdp cron diff --json` or
@@ -150,7 +155,37 @@ only one side:
 cdp --browser-mode headed cron install --dry-run --json
 cdp --browser-mode headless cron install --dry-run --json
 cdp --config cdp.json cron install --dry-run --json
+cdp cron install --artifact-retention 168h --max-log-size 64MiB --dry-run --json
 ```
+
+The default artifact policy is exactly 168 hours of history and 64 MiB per
+managed active log. Configure it with `artifacts.retention` and
+`artifacts.max_log_size`, or override it with cron/prune flags:
+
+```json
+{
+  "artifacts": {
+    "retention": "168h",
+    "max_log_size": "64MiB"
+  }
+}
+```
+
+Manual cleanup is a non-mutating plan unless `--apply` is explicit:
+
+```bash
+cdp artifacts prune --older-than 168h --max-log-size 64MiB --dry-run --json
+cdp artifacts prune --older-than 168h --max-log-size 64MiB --apply --json
+```
+
+Cleanup is code-allowlisted. It can remove old timestamped health/maintenance
+runs, rotated or legacy managed logs, and stale atomic-write temporaries. It
+retains boundary/future-dated artifacts, current summaries, active runtime
+state, browser profiles, connections and page selections, process registries,
+sockets, locks, unknown names, symlinks, and custom output directories outside
+the canonical state root. `cron status` and the scheduled-tasks doctor check
+expose the effective policy and the latest prune result, including reclaimed
+bytes and failures.
 
 Use explicit `--browser-mode` for scheduled maintenance and cleanup so headed and
 headless browser records cannot be confused. Verify the current Linux user's
@@ -169,9 +204,15 @@ then inspect cron status artifacts before running repair:
 ```bash
 cdp --browser-mode headless daemon maintenance --dry-run --json
 cdp --browser-mode headless daemon maintenance --stale-lock-after 1s --json
-cdp --browser-mode headless daemon stop --force-managed --json
+cdp --browser-mode headless daemon stop --force-managed --stale-lock-after 10m --json
+cdp --browser-mode headless daemon restart --force-managed --stale-lock-after 10m --json
 cdp --browser-mode headless daemon maintenance --json
 ```
+
+Explicit forced recovery removes only non-project managed-headless endpoint
+memory, inactive eligible headless locks, managed Chrome runtime artifacts, and
+processes whose profile, debugging-port, and process-tree evidence match the
+selected cdp state directory. Its JSON includes reclaimed PIDs and safety checks.
 
 ## Principles
 
@@ -197,6 +238,20 @@ make e2e-installed
 
 `make install` copies the binary to `$(HOME)/.local/bin` by default. Override
 with `PREFIX=/usr/local` or another install prefix.
+
+Supported `make build`, `make install`, and cross-build paths inject a semantic
+version, the full source commit, a reproducible RFC3339 source timestamp, and
+the clean/dirty source state. Agents can verify the installed binary matches the
+checkout with:
+
+```bash
+cdp version --json | jq --arg head "$(git rev-parse HEAD)" \
+  '.verified and .commit == $head'
+```
+
+Direct `go build` or `go install` remains available for development, but those
+binaries intentionally report `verified: false`, `provenance: unverified`, and
+placeholder source metadata because the supported linker contract was bypassed.
 
 Individual checks:
 

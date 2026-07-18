@@ -125,6 +125,25 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	}
 }
 
+func TestLoadParsesArtifactRetentionConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{
+  "artifacts": {
+    "retention": "240h",
+    "max_log_size": "32MiB"
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Artifacts.Retention != 240*time.Hour || cfg.Artifacts.MaxLogSizeBytes != 32<<20 {
+		t.Fatalf("artifact config = %+v", cfg.Artifacts)
+	}
+}
+
 func TestLoadRejectsMalformedConfig(t *testing.T) {
 	tests := []struct {
 		name string
@@ -139,6 +158,9 @@ func TestLoadRejectsMalformedConfig(t *testing.T) {
 		{"bad min free memory", `{"browser":{"resource_budget":{"min_free_memory_mb":-1}}}`},
 		{"bad min free disk", `{"browser":{"resource_budget":{"min_free_disk_mb":-1}}}`},
 		{"bad max load", `{"browser":{"resource_budget":{"max_load_per_cpu":-1}}}`},
+		{"bad artifact retention", `{"artifacts":{"retention":"weekly"}}`},
+		{"zero artifact retention", `{"artifacts":{"retention":"0s"}}`},
+		{"bad artifact max log size", `{"artifacts":{"max_log_size":"huge"}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -170,6 +192,10 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 				MinFreeDiskMB:   4096,
 				MaxLoadPerCPU:   1.5,
 			},
+		},
+		Artifacts: config.ArtifactConfig{
+			Retention:       240 * time.Hour,
+			MaxLogSizeBytes: 32 << 20,
 		},
 	}
 	if err := config.Save(path, cfg); err != nil {
@@ -212,6 +238,9 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 	}
 	if loaded.Browser.ResourceBudget.MaxLoadPerCPU != 1.5 {
 		t.Fatalf("loaded ResourceBudget.MaxLoadPerCPU = %v, want 1.5", loaded.Browser.ResourceBudget.MaxLoadPerCPU)
+	}
+	if loaded.Artifacts.Retention != 240*time.Hour || loaded.Artifacts.MaxLogSizeBytes != 32<<20 {
+		t.Fatalf("loaded artifact config = %+v", loaded.Artifacts)
 	}
 }
 

@@ -21,9 +21,13 @@ import (
 )
 
 type BuildInfo struct {
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
-	Date    string `json:"date"`
+	Version     string `json:"version"`
+	Commit      string `json:"commit"`
+	Date        string `json:"date"`
+	Dirty       bool   `json:"dirty"`
+	Verified    bool   `json:"verified"`
+	Provenance  string `json:"provenance"`
+	SourceState string `json:"source_state"`
 }
 
 type options struct {
@@ -127,6 +131,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newSchemaCommand())
 	root.AddCommand(a.newDaemonCommand())
 	root.AddCommand(a.newCronCommand())
+	root.AddCommand(a.newArtifactsCommand())
 	root.AddCommand(a.newConnectionCommand())
 	root.AddCommand(a.newBrowserCommand())
 	root.AddCommand(a.newTargetsCommand())

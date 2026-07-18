@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -71,14 +72,15 @@ type ManagedLaunch struct {
 }
 
 type ManagedStopResult struct {
-	Checked      bool          `json:"checked"`
-	Stopped      bool          `json:"stopped"`
-	Skipped      bool          `json:"skipped"`
-	Force        bool          `json:"force,omitempty"`
-	Reason       string        `json:"reason,omitempty"`
-	PIDs         []int         `json:"pids,omitempty"`
-	SafetyChecks []string      `json:"safety_checks,omitempty"`
-	Browser      ManagedStatus `json:"browser,omitempty"`
+	Checked         bool                     `json:"checked"`
+	Stopped         bool                     `json:"stopped"`
+	Skipped         bool                     `json:"skipped"`
+	Force           bool                     `json:"force,omitempty"`
+	Reason          string                   `json:"reason,omitempty"`
+	PIDs            []int                    `json:"pids,omitempty"`
+	SafetyChecks    []string                 `json:"safety_checks,omitempty"`
+	ProcessEvidence []ManagedProcessEvidence `json:"process_evidence,omitempty"`
+	Browser         ManagedStatus            `json:"browser,omitempty"`
 }
 
 type ManagedStopOptions struct {
@@ -90,6 +92,26 @@ type ManagedProcessRegistry struct {
 	Version     int                    `json:"version"`
 	BrowserMode string                 `json:"browser_mode"`
 	Records     []ManagedProcessRecord `json:"records"`
+}
+
+type ManagedProcessEvidence struct {
+	PID                int    `json:"pid"`
+	ParentPID          int    `json:"parent_pid,omitempty"`
+	RootPID            int    `json:"root_pid"`
+	Role               string `json:"role"`
+	ProfileMatched     bool   `json:"profile_matched"`
+	DebuggingPort      string `json:"debugging_port,omitempty"`
+	DebuggingPortMatch bool   `json:"debugging_port_match"`
+}
+
+type ManagedOwnershipEvidence struct {
+	Checked       bool     `json:"checked"`
+	Owned         bool     `json:"owned"`
+	PID           int      `json:"pid,omitempty"`
+	DebuggingPort string   `json:"debugging_port,omitempty"`
+	UserDataDir   string   `json:"user_data_dir,omitempty"`
+	SafetyChecks  []string `json:"safety_checks,omitempty"`
+	Reasons       []string `json:"reasons,omitempty"`
 }
 
 type ManagedProcessRecord struct {
@@ -478,6 +500,17 @@ func removeChromeRuntimeArtifacts(root string) error {
 	return nil
 }
 
+func ClearManagedRuntimeArtifacts(stateDir string) error {
+	profileDir := filepath.Clean(ManagedProfileDir(stateDir))
+	if profileDir == "." || strings.TrimSpace(stateDir) == "" {
+		return fmt.Errorf("managed state directory is required")
+	}
+	if err := removeChromeRuntimeArtifacts(profileDir); err != nil {
+		return fmt.Errorf("clear managed Chrome runtime artifacts: %w", err)
+	}
+	return nil
+}
+
 func chromeRuntimeArtifact(rel string) bool {
 	switch filepath.Clean(rel) {
 	case "SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort":
@@ -496,7 +529,7 @@ func SaveManagedMetadata(stateDir string, metadata ManagedMetadata) error {
 		return fmt.Errorf("marshal managed metadata: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(ManagedMetadataPath(stateDir), data, 0o600); err != nil {
+	if err := atomicWriteManagedFile(ManagedMetadataPath(stateDir), data, 0o600); err != nil {
 		return fmt.Errorf("write managed metadata: %w", err)
 	}
 	return nil
@@ -533,8 +566,50 @@ func SaveManagedProcessRegistry(stateDir string, registry ManagedProcessRegistry
 		return fmt.Errorf("marshal managed process registry: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(ManagedProcessRegistryPath(stateDir), data, 0o600); err != nil {
+	if err := atomicWriteManagedFile(ManagedProcessRegistryPath(stateDir), data, 0o600); err != nil {
 		return fmt.Errorf("write managed process registry: %w", err)
+	}
+	return nil
+}
+
+func atomicWriteManagedFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".managed-state-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	removeTemp = false
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
 	}
 	return nil
 }
@@ -558,6 +633,93 @@ func LoadManagedProcessRegistry(stateDir string) (ManagedProcessRegistry, bool, 
 		registry.BrowserMode = "headless"
 	}
 	return registry, true, nil
+}
+
+func VerifyManagedOwnership(stateDir string, expected ManagedStatus) ManagedOwnershipEvidence {
+	evidence := ManagedOwnershipEvidence{
+		Checked:       true,
+		PID:           expected.ChromePID,
+		DebuggingPort: strings.TrimSpace(expected.DebuggingPort),
+		UserDataDir:   strings.TrimSpace(expected.UserDataDir),
+	}
+	metadata, ok, err := LoadManagedMetadata(stateDir)
+	if err != nil {
+		evidence.Reasons = append(evidence.Reasons, "managed_metadata_unreadable")
+		return evidence
+	}
+	if !ok {
+		evidence.Reasons = append(evidence.Reasons, "managed_metadata_missing")
+		return evidence
+	}
+	managedProfile := cleanPath(ManagedProfileDir(stateDir))
+	if metadata.BrowserMode != "headless" {
+		evidence.Reasons = append(evidence.Reasons, "browser_mode_not_headless")
+	}
+	if cleanPath(metadata.UserDataDir) != managedProfile {
+		evidence.Reasons = append(evidence.Reasons, "managed_profile_path_mismatch")
+	} else {
+		evidence.SafetyChecks = append(evidence.SafetyChecks, "managed_profile_path_matches_state_dir")
+	}
+	if strings.TrimSpace(metadata.OwnedMarker) == "" {
+		evidence.Reasons = append(evidence.Reasons, "ownership_token_missing")
+	} else {
+		evidence.SafetyChecks = append(evidence.SafetyChecks, "ownership_token_present")
+	}
+	if strings.TrimSpace(metadata.ProcessStartTime) == "" {
+		evidence.Reasons = append(evidence.Reasons, "process_start_time_missing")
+	} else {
+		evidence.SafetyChecks = append(evidence.SafetyChecks, "process_start_time_present")
+	}
+	if metadata.ChromePID <= 0 {
+		evidence.Reasons = append(evidence.Reasons, "chrome_pid_missing")
+	} else {
+		evidence.PID = metadata.ChromePID
+	}
+	if strings.TrimSpace(metadata.DebuggingPort) == "" {
+		evidence.Reasons = append(evidence.Reasons, "debugging_port_missing")
+	} else {
+		evidence.DebuggingPort = metadata.DebuggingPort
+	}
+	if expected.ChromePID > 0 && metadata.ChromePID != expected.ChromePID {
+		evidence.Reasons = append(evidence.Reasons, "runtime_pid_mismatch")
+	}
+	if expected.UserDataDir != "" && cleanPath(expected.UserDataDir) != cleanPath(metadata.UserDataDir) {
+		evidence.Reasons = append(evidence.Reasons, "runtime_profile_mismatch")
+	}
+	if expected.DebuggingPort != "" && expected.DebuggingPort != metadata.DebuggingPort {
+		evidence.Reasons = append(evidence.Reasons, "runtime_debugging_port_mismatch")
+	}
+
+	registry, registryOK, err := LoadManagedProcessRegistry(stateDir)
+	if err != nil {
+		evidence.Reasons = append(evidence.Reasons, "managed_registry_unreadable")
+		return evidence
+	}
+	if !registryOK {
+		evidence.Reasons = append(evidence.Reasons, "managed_registry_missing")
+		return evidence
+	}
+	recordMatched := false
+	for _, record := range registry.Records {
+		if record.PID != metadata.ChromePID || record.BrowserMode != "headless" || cleanPath(record.UserDataDir) != managedProfile {
+			continue
+		}
+		if record.OwnershipMarker != metadata.OwnedMarker || record.ProcessStartTime != metadata.ProcessStartTime {
+			continue
+		}
+		if record.DebuggingPort != "" && metadata.DebuggingPort != "" && record.DebuggingPort != metadata.DebuggingPort {
+			continue
+		}
+		recordMatched = true
+		break
+	}
+	if !recordMatched {
+		evidence.Reasons = append(evidence.Reasons, "managed_registry_record_mismatch")
+	} else {
+		evidence.SafetyChecks = append(evidence.SafetyChecks, "managed_registry_record_matches")
+	}
+	evidence.Owned = len(evidence.Reasons) == 0
+	return evidence
 }
 
 func ManagedMetadataStatus(metadata ManagedMetadata) ManagedStatus {
@@ -972,9 +1134,10 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 			UserDataDir:         ManagedProfileDir(stateDir),
 			ProfileSeedStrategy: ProfileSeedStrategyManaged,
 		}
-		pids, checks, err := forceManagedStopCandidates(ctx, stateDir, metadata)
+		pids, checks, processEvidence, err := forceManagedStopCandidates(ctx, stateDir, metadata)
 		result.PIDs = pids
 		result.SafetyChecks = checks
+		result.ProcessEvidence = processEvidence
 		if err != nil {
 			return result, err
 		}
@@ -996,15 +1159,17 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 		return result, nil
 	}
 	result := ManagedStopResult{Checked: true, Force: opts.Force, Browser: ManagedMetadataStatus(metadata)}
-	if metadata.BrowserMode != "headless" || metadata.ChromePID <= 0 || strings.TrimSpace(metadata.OwnedMarker) == "" || strings.TrimSpace(metadata.ProcessStartTime) == "" {
+	incompleteOwnership := metadata.BrowserMode != "headless" || metadata.ChromePID <= 0 || strings.TrimSpace(metadata.OwnedMarker) == "" || strings.TrimSpace(metadata.ProcessStartTime) == ""
+	if incompleteOwnership || opts.Force {
 		if !opts.Force {
 			result.Skipped = true
 			result.Reason = "managed ownership metadata incomplete"
 			return result, nil
 		}
-		pids, checks, err := forceManagedStopCandidates(ctx, stateDir, metadata)
+		pids, checks, processEvidence, err := forceManagedStopCandidates(ctx, stateDir, metadata)
 		result.PIDs = pids
 		result.SafetyChecks = checks
+		result.ProcessEvidence = processEvidence
 		if err != nil {
 			return result, err
 		}
@@ -1039,7 +1204,7 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 	return result, nil
 }
 
-func forceManagedStopCandidates(ctx context.Context, stateDir string, metadata ManagedMetadata) ([]int, []string, error) {
+func forceManagedStopCandidates(ctx context.Context, stateDir string, metadata ManagedMetadata) ([]int, []string, []ManagedProcessEvidence, error) {
 	managedProfile := filepath.Clean(ManagedProfileDir(stateDir))
 	userDataDir := filepath.Clean(strings.TrimSpace(metadata.UserDataDir))
 	if userDataDir == "." || userDataDir == "" {
@@ -1047,33 +1212,156 @@ func forceManagedStopCandidates(ctx context.Context, stateDir string, metadata M
 	}
 	checks := []string{"force_requested", "browser_mode=headless"}
 	if metadata.BrowserMode != "headless" {
-		return nil, checks, nil
+		return nil, checks, nil, nil
 	}
 	if userDataDir != managedProfile {
 		checks = append(checks, "managed_profile_path_mismatch")
-		return nil, checks, nil
+		return nil, checks, nil, nil
 	}
 	checks = append(checks, "managed_profile_path_matches_state_dir")
-	seen := map[int]bool{}
-	var pids []int
-	add := func(pid int) {
-		if pid <= 0 || seen[pid] {
-			return
+	knownPort := strings.TrimSpace(metadata.DebuggingPort)
+	if port, _, err := ReadActivePortFile(managedProfile); err == nil {
+		if knownPort == "" || knownPort == port {
+			knownPort = port
+			checks = append(checks, "devtools_active_port_read")
 		}
-		seen[pid] = true
-		pids = append(pids, pid)
 	}
-	processes, err := managedChromeProcesses(ctx, managedProfile)
+	pids, evidence, err := managedChromeProcessTreeEvidence(ctx, managedProfile, knownPort)
 	if err != nil {
-		return pids, checks, err
+		return pids, checks, evidence, err
 	}
-	if len(processes) > 0 {
+	if len(evidence) > 0 {
 		checks = append(checks, "process_command_line_matches_managed_profile")
 	}
-	for _, pid := range processes {
-		add(pid)
+	if knownPort != "" {
+		checks = append(checks, "debugging_port_evidence_checked")
 	}
-	return pids, checks, nil
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		checks = append(checks, "process_tree_inspected")
+	} else {
+		checks = append(checks, "process_tree_evidence_unavailable")
+	}
+	return pids, checks, evidence, nil
+}
+
+type managedProcessSnapshot struct {
+	PID         int
+	ParentPID   int
+	CommandLine string
+}
+
+func managedChromeProcessTreeEvidence(ctx context.Context, managedProfile, knownPort string) ([]int, []ManagedProcessEvidence, error) {
+	snapshots, err := managedProcessSnapshots(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	children := map[int][]managedProcessSnapshot{}
+	var roots []managedProcessSnapshot
+	for _, snapshot := range snapshots {
+		children[snapshot.ParentPID] = append(children[snapshot.ParentPID], snapshot)
+		matched, portMatch, _ := managedChromeCommandLineEvidence(snapshot.CommandLine, managedProfile, knownPort)
+		if matched && portMatch {
+			roots = append(roots, snapshot)
+		}
+	}
+	seen := map[int]bool{}
+	var evidence []ManagedProcessEvidence
+	var visit func(managedProcessSnapshot, int, string)
+	visit = func(snapshot managedProcessSnapshot, rootPID int, role string) {
+		if snapshot.PID <= 0 || seen[snapshot.PID] {
+			return
+		}
+		seen[snapshot.PID] = true
+		matched, portMatch, port := managedChromeCommandLineEvidence(snapshot.CommandLine, managedProfile, knownPort)
+		if role == "descendant" {
+			matched = true
+			portMatch = knownPort != ""
+			port = knownPort
+		}
+		evidence = append(evidence, ManagedProcessEvidence{
+			PID:                snapshot.PID,
+			ParentPID:          snapshot.ParentPID,
+			RootPID:            rootPID,
+			Role:               role,
+			ProfileMatched:     matched,
+			DebuggingPort:      port,
+			DebuggingPortMatch: portMatch,
+		})
+		for _, child := range children[snapshot.PID] {
+			visit(child, rootPID, "descendant")
+		}
+	}
+	for _, root := range roots {
+		visit(root, root.PID, "root")
+	}
+	pids := make([]int, 0, len(evidence))
+	for _, item := range evidence {
+		pids = append(pids, item.PID)
+	}
+	return uniquePIDsPreserveOrder(pids), evidence, nil
+}
+
+func managedProcessSnapshots(ctx context.Context) ([]managedProcessSnapshot, error) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		return nil, nil
+	}
+	cmd := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,command=")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, nil
+	}
+	var snapshots []managedProcessSnapshot
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		parentPID, parentErr := strconv.Atoi(fields[1])
+		if pidErr != nil || parentErr != nil || pid == os.Getpid() {
+			continue
+		}
+		commandLine := strings.Join(fields[2:], " ")
+		snapshots = append(snapshots, managedProcessSnapshot{PID: pid, ParentPID: parentPID, CommandLine: commandLine})
+	}
+	return snapshots, nil
+}
+
+func managedChromeCommandLineEvidence(cmdline, managedProfile, knownPort string) (bool, bool, string) {
+	if !managedChromeCommandLine(cmdline, managedProfile) {
+		return false, false, ""
+	}
+	port := commandLineFlagValue(cmdline, "--remote-debugging-port")
+	if knownPort == "" {
+		return true, port != "", port
+	}
+	return true, port == knownPort || port == "0", knownPort
+}
+
+func commandLineFlagValue(cmdline, name string) string {
+	fields := strings.Fields(cmdline)
+	for i, field := range fields {
+		if strings.HasPrefix(field, name+"=") {
+			return strings.TrimPrefix(field, name+"=")
+		}
+		if field == name && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+func uniquePIDsPreserveOrder(pids []int) []int {
+	seen := map[int]bool{}
+	out := make([]int, 0, len(pids))
+	for _, pid := range pids {
+		if pid <= 0 || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		out = append(out, pid)
+	}
+	return out
 }
 
 func managedChromeProcesses(ctx context.Context, managedProfile string) ([]int, error) {
@@ -1158,6 +1446,9 @@ func signalProcess(pid int) error {
 		return fmt.Errorf("find managed chrome process: %w", err)
 	}
 	interruptErr := process.Signal(os.Interrupt)
+	if errors.Is(interruptErr, os.ErrProcessDone) || errors.Is(interruptErr, syscall.ESRCH) {
+		return nil
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := process.Signal(syscall.Signal(0)); err != nil {
@@ -1166,6 +1457,9 @@ func signalProcess(pid int) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if killErr := process.Kill(); killErr != nil {
+		if errors.Is(killErr, os.ErrProcessDone) || errors.Is(killErr, syscall.ESRCH) {
+			return nil
+		}
 		return fmt.Errorf("stop managed chrome: interrupt: %v; kill: %w", interruptErr, killErr)
 	}
 	deadline = time.Now().Add(2 * time.Second)
@@ -1214,11 +1508,22 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 	}
 	metadata.ChromePID = cmd.Process.Pid
 	metadata.ProcessStartTime = now.Format(time.RFC3339)
+	if err := SaveManagedMetadata(opts.StateDir, metadata); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return ManagedLaunch{}, err
+	}
+	if err := RegisterManagedProcessLaunch(opts.StateDir, metadata); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return ManagedLaunch{}, err
+	}
 
 	port, path, err := WaitManagedActivePort(ctx, metadata.UserDataDir)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		markManagedProcessesStopped(opts.StateDir, []int{metadata.ChromePID}, "launch_failed", err.Error())
 		return ManagedLaunch{}, err
 	}
 	metadata.DebuggingPort = port

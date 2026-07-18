@@ -64,7 +64,7 @@ func TestSummarizeCrontabDetectsHeadlessMaintenance(t *testing.T) {
 		got.HasUnflockedCDPTask {
 		t.Fatalf("summarizeCrontab = %+v, want flocked headless maintenance as keepalive, cleanup, and sweep", got)
 	}
-	if len(got.TaskStatuses) != 2 || got.TaskStatuses[1].ID != "headless-maintenance" || !got.TaskStatuses[1].RequiresManagedProcessSweep {
+	if len(got.TaskStatuses) != 3 || got.TaskStatuses[1].ID != "headless-maintenance" || !got.TaskStatuses[1].RequiresManagedProcessSweep || got.TaskStatuses[2].ID != "artifact-prune" {
 		t.Fatalf("summarizeCrontab task statuses = %+v, want headless maintenance task model with sweep requirement", got.TaskStatuses)
 	}
 }

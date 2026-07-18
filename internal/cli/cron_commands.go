@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
@@ -26,15 +27,18 @@ const (
 )
 
 type cronRenderOptions struct {
-	Profile       string
-	CDPBin        string
-	LogDir        string
-	Display       string
-	XDGRuntimeDir string
-	Reconnect     time.Duration
-	BrowserMode   string
-	SeedStrategy  string
-	SeedAfter     time.Duration
+	Profile           string
+	CDPBin            string
+	LogDir            string
+	Display           string
+	XDGRuntimeDir     string
+	Reconnect         time.Duration
+	BrowserMode       string
+	SeedStrategy      string
+	SeedAfter         time.Duration
+	ArtifactRetention time.Duration
+	MaxLogSize        string
+	MaxLogSizeBytes   int64
 }
 
 type cronBlockState struct {
@@ -50,6 +54,7 @@ const (
 	cronTaskHeadlessDaemonHealth     = "headless-daemon-health-check"
 	cronTaskHeadlessProfileSeed      = "headless-profile-seed"
 	cronTaskHeadlessPageCleanup      = "headless-page-cleanup"
+	cronTaskArtifactPrune            = "artifact-prune"
 	cronManagedProcessSweepFlag      = "--managed-process-sweep"
 	cronManagedProcessSweepPhaseName = "managed-process-sweep"
 )
@@ -136,12 +141,14 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 			locks := map[string]any{}
 			daemonLocks := map[string]any{}
 			artifacts := map[string]any{}
+			lastCleanup := map[string]any{"exists": false}
 			profileSeed := cronProfileSeedMetadata(opts)
 			managedProcesses := any(map[string]any{"checked": false, "state": "unknown"})
 			if storeErr == nil {
 				locks = cronLockStates(store.Dir)
 				daemonLocks = cronDaemonLockStates(store.Dir)
 				artifacts = cronLastRunArtifacts(store.Dir)
+				lastCleanup = loadArtifactRetentionSummary(store.Dir)
 				if lastSeed, ok, seedErr := loadProfileSeedStatus(store.Dir); seedErr == nil && ok {
 					profileSeed["last_seed"] = lastSeed
 				}
@@ -157,6 +164,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 				"state":              health["state"],
 				"browser_mode":       opts.BrowserMode,
 				"profile_seed":       profileSeed,
+				"artifact_policy":    cronArtifactPolicy(opts),
 				"available":          available,
 				"installed":          state.Installed,
 				"matches_intended":   matchesIntended,
@@ -168,6 +176,7 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 				"locks":              locks,
 				"daemon_locks":       daemonLocks,
 				"last_run_artifacts": artifacts,
+				"last_cleanup":       lastCleanup,
 				"managed_processes":  managedProcesses,
 				"processes_by_mode":  a.daemonProcessesByMode(ctx),
 				"next_commands":      health["next_commands"],
@@ -209,6 +218,7 @@ func (a *app) newCronDiffCommand() *cobra.Command {
 				"ok":               true,
 				"browser_mode":     opts.BrowserMode,
 				"profile_seed":     cronProfileSeedMetadata(opts),
+				"artifact_policy":  cronArtifactPolicy(opts),
 				"installed":        installed.Installed,
 				"matches_intended": normalizeCronBlock(installed.Text) == normalizeCronBlock(intendedText),
 				"current_block":    installed,
@@ -263,6 +273,7 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 				"ok":               true,
 				"browser_mode":     opts.BrowserMode,
 				"profile_seed":     cronProfileSeedMetadata(opts),
+				"artifact_policy":  cronArtifactPolicy(opts),
 				"action":           actionString(changed, "installed", "unchanged"),
 				"changed":          changed,
 				"dry_run":          dryRun,
@@ -520,19 +531,24 @@ func addCronRenderFlags(cmd *cobra.Command, opts *cronRenderOptions) {
 	cmd.Flags().StringVar(&opts.Display, "display", opts.Display, "DISPLAY value used for headed cron healing")
 	cmd.Flags().StringVar(&opts.XDGRuntimeDir, "xdg-runtime-dir", opts.XDGRuntimeDir, "XDG_RUNTIME_DIR value used for headed cron healing")
 	cmd.Flags().DurationVar(&opts.Reconnect, "reconnect", opts.Reconnect, "daemon reconnect interval used in generated cron entries")
+	cmd.Flags().DurationVar(&opts.ArtifactRetention, "artifact-retention", opts.ArtifactRetention, "strict retention age for allowlisted historical artifacts")
+	cmd.Flags().StringVar(&opts.MaxLogSize, "max-log-size", opts.MaxLogSize, "hard size bound for each managed task log, such as 64MiB")
 }
 
 func defaultCronRenderOptions() cronRenderOptions {
 	return cronRenderOptions{
-		Profile:       "agent",
-		CDPBin:        envDefault("CDP_BIN", "$HOME/.local/bin/cdp"),
-		LogDir:        envDefault("CDP_LOG_DIR", "$HOME/.cdp-cli"),
-		Display:       envDefault("DISPLAY", ":0"),
-		XDGRuntimeDir: envDefault("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", os.Getuid())),
-		Reconnect:     30 * time.Second,
-		BrowserMode:   "all",
-		SeedStrategy:  browser.ProfileSeedStrategyManaged,
-		SeedAfter:     6 * time.Hour,
+		Profile:           "agent",
+		CDPBin:            envDefault("CDP_BIN", "$HOME/.local/bin/cdp"),
+		LogDir:            envDefault("CDP_LOG_DIR", "$HOME/.cdp-cli"),
+		Display:           envDefault("DISPLAY", ":0"),
+		XDGRuntimeDir:     envDefault("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", os.Getuid())),
+		Reconnect:         30 * time.Second,
+		BrowserMode:       "all",
+		SeedStrategy:      browser.ProfileSeedStrategyManaged,
+		SeedAfter:         6 * time.Hour,
+		ArtifactRetention: artifacts.DefaultRetention,
+		MaxLogSize:        artifacts.FormatByteSize(artifacts.DefaultMaxLogSizeBytes),
+		MaxLogSizeBytes:   artifacts.DefaultMaxLogSizeBytes,
 	}
 }
 
@@ -569,6 +585,21 @@ func (a *app) applyCronBrowserMode(cmd *cobra.Command, opts *cronRenderOptions) 
 	if cfg.Browser.Headless.ProfileRefreshAfter > 0 {
 		opts.SeedAfter = cfg.Browser.Headless.ProfileRefreshAfter
 	}
+	if !cmd.Flags().Changed("artifact-retention") && cfg.Artifacts.Retention > 0 {
+		opts.ArtifactRetention = cfg.Artifacts.Retention
+	}
+	if opts.ArtifactRetention <= 0 {
+		return commandError("invalid_artifact_retention", "usage", "--artifact-retention must be positive", ExitUsage, []string{"cdp cron install --artifact-retention 168h --dry-run --json"})
+	}
+	maxLogSize, err := artifacts.ParseByteSize(opts.MaxLogSize)
+	if err != nil {
+		return commandError("invalid_max_log_size", "usage", err.Error(), ExitUsage, []string{"cdp cron install --max-log-size 64MiB --dry-run --json"})
+	}
+	if !cmd.Flags().Changed("max-log-size") && cfg.Artifacts.MaxLogSizeBytes > 0 {
+		maxLogSize = cfg.Artifacts.MaxLogSizeBytes
+		opts.MaxLogSize = artifacts.FormatByteSize(maxLogSize)
+	}
+	opts.MaxLogSizeBytes = maxLogSize
 	if opts.SeedStrategy == "" {
 		opts.SeedStrategy = browser.ProfileSeedStrategyManaged
 	}
@@ -599,6 +630,14 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 	}
 	seedStrategy := cronProfileSeedStrategy(opts)
 	seedAfter := cronDurationLiteral(cronProfileSeedAfter(opts))
+	retention := cronDurationLiteral(opts.ArtifactRetention)
+	if opts.ArtifactRetention <= 0 {
+		retention = cronDurationLiteral(artifacts.DefaultRetention)
+	}
+	maxLogSize := artifacts.FormatByteSize(opts.MaxLogSizeBytes)
+	if opts.MaxLogSizeBytes <= 0 {
+		maxLogSize = artifacts.FormatByteSize(artifacts.DefaultMaxLogSizeBytes)
+	}
 	var tasks []managedCronTask
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headed" {
 		tasks = append(tasks, newManagedCronTask(
@@ -610,7 +649,7 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 				LogName:            "keepalive-headed.log",
 				LogArtifactKey:     "headed_keepalive_log",
 				Purpose:            "Keep the headed daemon healthy with passive probing and noninteractive repair when an approved endpoint already exists.",
-				Command:            fmt.Sprintf("env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect %s --display %s --json >> %s/keepalive-headed.log 2>&1", display, xdgRuntimeDir, cdpBin, reconnect, display, logDir),
+				Command:            fmt.Sprintf("%s --state-dir %s artifacts run-managed --task %s --log %s/keepalive-headed.log --max-log-size %s --json -- env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --state-dir %s --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect %s --display %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadedDaemonKeepalive, logDir, maxLogSize, display, xdgRuntimeDir, cdpBin, logDir, reconnect, display),
 				ProbeWords:         []string{"daemon", "keepalive"},
 				ConfigDependencies: []string{"display", "xdg_runtime_dir", "reconnect"},
 				LaunchCapable:      true,
@@ -628,7 +667,7 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 				LogName:                     "headless-maintenance.log",
 				LogArtifactKey:              "headless_maintenance_log",
 				Purpose:                     "Run the canonical managed headless maintenance flow: sweep, resource preflight, profile seed, daemon repair, health-check, cleanup, and summary artifact write.",
-				Command:                     fmt.Sprintf("%s --browser-mode headless daemon maintenance --profile-seed-strategy %s --profile-seed-if-older-than %s --repair --force --reconnect %s --health-check --cleanup --cleanup-close --json >> %s/headless-maintenance.log 2>&1", cdpBin, seedStrategy, seedAfter, reconnect, logDir),
+				Command:                     fmt.Sprintf("%s --state-dir %s artifacts run-managed --task %s --log %s/headless-maintenance.log --max-log-size %s --json -- %s --state-dir %s --browser-mode headless daemon maintenance --profile-seed-strategy %s --profile-seed-if-older-than %s --repair --force --reconnect %s --health-check --cleanup --cleanup-close --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadlessMaintenance, logDir, maxLogSize, cdpBin, logDir, seedStrategy, seedAfter, reconnect),
 				ProbeWords:                  []string{"daemon", "maintenance"},
 				ConfigDependencies:          []string{"reconnect", "headless.profile_seed_strategy", "headless.profile_refresh_after"},
 				LaunchCapable:               true,
@@ -638,6 +677,20 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 			logDir,
 		))
 	}
+	tasks = append(tasks, newManagedCronTask(
+		managedCronTask{
+			ID:                 cronTaskArtifactPrune,
+			Schedule:           "23 3 * * *",
+			LockName:           "artifact-prune",
+			LogName:            "artifact-prune/latest.json",
+			LogArtifactKey:     "artifact_retention_summary",
+			Purpose:            "Apply the allowlisted historical-artifact retention policy and hard managed-log bounds once per day.",
+			Command:            fmt.Sprintf("%s --state-dir %s artifacts prune --older-than %s --max-log-size %s --apply --json >/dev/null 2>&1", cdpBin, logDir, retention, maxLogSize),
+			ProbeWords:         []string{"artifacts", "prune"},
+			ConfigDependencies: []string{"artifacts.retention", "artifacts.max_log_size"},
+		},
+		logDir,
+	))
 	return tasks
 }
 
@@ -773,6 +826,21 @@ func cronProfileSeedMetadata(opts cronRenderOptions) map[string]any {
 		"if_older_than_seconds": int64(after.Seconds()),
 		"schedule":              cronProfileSeedSchedule(after),
 	}
+}
+
+func cronArtifactPolicy(opts cronRenderOptions) artifacts.PolicySummary {
+	retention := opts.ArtifactRetention
+	if retention <= 0 {
+		retention = artifacts.DefaultRetention
+	}
+	maxLogSize := opts.MaxLogSizeBytes
+	if maxLogSize <= 0 {
+		maxLogSize = artifacts.DefaultMaxLogSizeBytes
+	}
+	policy := artifacts.DefaultRetentionPolicy(opts.LogDir)
+	policy.OlderThan = retention
+	policy.MaxLogSizeBytes = maxLogSize
+	return policy.Summary()
 }
 
 func cronDurationLiteral(d time.Duration) string {

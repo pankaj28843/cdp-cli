@@ -160,7 +160,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		health[key] = value
 	}
 	if status.Runtime == nil || !status.ProcessRunning {
-		a.applyManagedBrowserHealth(health, status.Runtime)
+		a.applyManagedBrowserHealth(ctx, health, status.Runtime)
 		if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
 			health["state"] = "degraded"
 			health["code"] = headlessHealthFailureCode(status, health)
@@ -170,7 +170,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		return finalizeBrowserHealth(a.browserModeName(), health)
 	}
 	if !status.RuntimeSocketReady {
-		a.applyManagedBrowserHealth(health, status.Runtime)
+		a.applyManagedBrowserHealth(ctx, health, status.Runtime)
 		health["reasons"] = appendStringReasons(health["reasons"], daemonHealthState(status))
 		health["next_commands"] = uniqueCommands(toStringSlice(health["next_commands"]), status.NextCommands, a.connectionRemediationCommands())
 		if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
@@ -195,7 +195,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	health["daemon_rpc_ready"] = true
 	health["usable"] = true
 	applyBudgetToHealth(health, budget)
-	a.applyManagedBrowserHealth(health, status.Runtime)
+	a.applyManagedBrowserHealth(ctx, health, status.Runtime)
 	if includeProcessInfo {
 		processInfo, err := collectProcessInfo(ctx, client)
 		if err != nil {
@@ -228,13 +228,36 @@ func (a *app) managedProcessLifecycleStatus(ctx context.Context, status daemon.S
 	return result
 }
 
-func (a *app) applyManagedBrowserHealth(health map[string]any, runtime *daemon.Runtime) {
+func (a *app) applyManagedBrowserHealth(ctx context.Context, health map[string]any, runtime *daemon.Runtime) {
 	ok, detail := managedRuntimeProcessCheck(runtime)
 	if detail == nil {
 		return
 	}
 	health["managed_browser_health"] = detail
-	health["managed_chrome_owned"] = true
+	store, err := a.stateStore()
+	if err != nil {
+		health["managed_ownership"] = map[string]any{"checked": true, "owned": false, "reasons": []string{err.Error()}}
+		health["managed_chrome_owned"] = false
+		return
+	}
+	expected := browser.ManagedStatus{BrowserMode: "headless"}
+	if runtime.ManagedBrowser != nil {
+		expected = *runtime.ManagedBrowser
+	}
+	if runtime.ChromePID > 0 {
+		expected.ChromePID = runtime.ChromePID
+	}
+	if runtime.ChromePort != "" {
+		expected.DebuggingPort = runtime.ChromePort
+	}
+	if runtime.ManagedProfilePath != "" {
+		expected.UserDataDir = runtime.ManagedProfilePath
+	} else if expected.UserDataDir == "" {
+		expected.UserDataDir = runtime.UserDataDir
+	}
+	ownership := browser.VerifyManagedOwnership(store.Dir, expected)
+	health["managed_ownership"] = ownership
+	health["managed_chrome_owned"] = ownership.Owned
 	if ok {
 		return
 	}
@@ -260,6 +283,9 @@ func headlessHealthFailureCode(status daemon.Status, health map[string]any) stri
 	}
 	if reachable, _ := health["browser_endpoint_reachable"].(bool); !reachable {
 		return "headless_browser_endpoint_unreachable"
+	}
+	if owned, _ := health["managed_chrome_owned"].(bool); !owned {
+		return "managed_chrome_ownership_unverified"
 	}
 	if managed, ok := health["managed_browser_health"].(map[string]any); ok {
 		if running, _ := managed["running"].(bool); !running {

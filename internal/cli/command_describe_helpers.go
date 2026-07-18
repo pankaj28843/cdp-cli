@@ -58,6 +58,7 @@ func commandExamples(path string) []string {
 		"cdp version": {
 			"cdp version --json",
 			"cdp version --json --compact",
+			"cdp version --json | jq --arg head \"$(git rev-parse HEAD)\" '.verified and .commit == $head'",
 		},
 		"cdp describe": {
 			"cdp describe --json",
@@ -92,12 +93,13 @@ func commandExamples(path string) []string {
 		},
 		"cdp daemon stop": {
 			"cdp daemon stop --json",
-			"cdp --browser-mode headless daemon stop --force-managed --json",
+			"cdp --browser-mode headless daemon stop --force-managed --stale-lock-after 10m --json",
 		},
 		"cdp daemon restart": {
 			"cdp daemon restart --auto-connect --json",
 			"cdp daemon restart --debug --autoConnect --active-browser-probe --json",
 			"cdp daemon restart --browser-url <browser-url> --json",
+			"cdp --browser-mode headless daemon restart --force-managed --stale-lock-after 10m --json",
 		},
 		"cdp daemon keepalive": {
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect 30s --display :0 --json",
@@ -140,7 +142,19 @@ func commandExamples(path string) []string {
 			"cdp --browser-mode headed cron install --dry-run --json",
 			"cdp --browser-mode headless cron install --dry-run --json",
 			"cdp --config cdp.json cron install --dry-run --json",
+			"cdp cron install --artifact-retention 168h --max-log-size 64MiB --dry-run --json",
 			"cdp cron install --cdp-bin $HOME/.local/bin/cdp --json",
+		},
+		"cdp artifacts": {
+			"cdp artifacts prune --dry-run --json",
+			"cdp artifacts prune --apply --json",
+		},
+		"cdp artifacts prune": {
+			"cdp artifacts prune --older-than 168h --max-log-size 64MiB --dry-run --json",
+			"cdp artifacts prune --older-than 168h --max-log-size 64MiB --apply --json",
+		},
+		"cdp artifacts run-managed": {
+			"cdp artifacts run-managed --task example --log tmp/example.log --max-log-size 1MiB -- echo ok",
 		},
 		"cdp cron remove": {
 			"cdp cron remove --json",
@@ -468,12 +482,19 @@ func commandExamples(path string) []string {
 		"cdp network capture": {
 			"cdp network capture --reload --wait 20s --out tmp/network.local.json --json",
 			"cdp network capture --redact safe --har-out tmp/network.har --json",
+			"cdp network capture --redact safe --body-out-dir tmp/network-bodies --body-artifact-limit 20 --json",
 			"cdp network capture --include-websockets --include-websocket-payloads --out tmp/network-with-ws.local.json --json",
 			"cdp network capture --url-contains localhost --redact safe --out tmp/network-shareable.json --json",
 		},
 		"cdp network websocket": {
 			"cdp network websocket --wait 20s --include-payloads --out tmp/ws.local.json --json",
 			"cdp network websocket --url-contains localhost --redact safe --json",
+		},
+		"cdp network block": {
+			"cdp network block --pattern '*://*/analytics/*' --duration 10s --url-contains localhost --json",
+		},
+		"cdp network mock": {
+			`cdp network mock --rule '{"url_pattern":"*://*/api/config","method":"GET","status":200,"body":"{\"enabled\":true}","max_matches":1}' --duration 10s --json`,
 		},
 		"cdp storage": {
 			"cdp storage list --url-contains localhost --json",
@@ -626,7 +647,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow perf": {
 			"cdp workflow perf 'https://example.com' --wait 5s --json",
-			"cdp workflow perf 'https://example.com' --wait 5s --trace tmp/perf.local.json --json",
+			"cdp workflow perf 'https://example.com' --wait 5s --trace tmp/perf.local.json --trace-max-bytes 16777216 --redact safe --json",
 		},
 		"cdp workflow console-errors": {
 			"cdp workflow console-errors --wait 2s --json",
@@ -642,6 +663,8 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow rendered-extract": {
 			"cdp workflow rendered-extract 'https://example.com' --out-dir tmp/rendered-example --json",
+			"cdp workflow rendered-extract --target <target-id> --reload --out-dir tmp/rendered-existing --json",
+			"cdp workflow rendered-extract --url-contains localhost --out-dir tmp/rendered-selected --json",
 			"cdp workflow rendered-extract 'https://www.google.com/search?q=agentic+engineering&safe=active&tbs=qdr:m' --serp google --out-dir tmp/rendered-google --json",
 		},
 		"cdp workflow web-research": {
@@ -698,7 +721,7 @@ func commandExamples(path string) []string {
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}
 	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}
-	examples["cdp workflow lighthouse"] = []string{"cdp workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --json"}
+	examples["cdp workflow lighthouse"] = []string{"cdp --browser-mode headless workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --redact safe --json"}
 	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json"}
 	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json"}
 	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --timeout 5s --json", "cdp assert value 'Search' expected --by label --poll 100ms --json"}

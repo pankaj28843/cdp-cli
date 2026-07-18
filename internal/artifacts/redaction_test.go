@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,12 @@ func TestRedactorHeadersURLsAndBodies(t *testing.T) {
 	gotJSON := redactor.BodyText(`{"ok":true,"csrf":"secret","nested":{"sessionId":"abc","path":"file:///workspace/private-project"}}`, "body.text")
 	if strings.Contains(gotJSON, "secret") || strings.Contains(gotJSON, "file:///workspace") || !strings.Contains(gotJSON, `"ok":true`) {
 		t.Fatalf("redacted JSON = %q, want secrets and local path redacted", gotJSON)
+	}
+
+	gotAuth := redactor.BodyText(`{"auth":"secret","url":"https://example.test/app?token=private&view=public"}`, "frame.text")
+	var authBody map[string]string
+	if err := json.Unmarshal([]byte(gotAuth), &authBody); err != nil || authBody["auth"] != Redacted || strings.Contains(authBody["url"], "private") || !strings.Contains(authBody["url"], "%3Credacted%3E") {
+		t.Fatalf("redacted auth/url JSON = %q, want auth and sensitive URL query redacted", gotAuth)
 	}
 
 	gotForm := redactor.BodyText("name=public&password=secret", "request_post_data.text")

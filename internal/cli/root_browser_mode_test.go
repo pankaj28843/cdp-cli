@@ -838,10 +838,14 @@ func TestBrowserProfileSeedCopyDefaultReapsAndStopsManagedProcessesBeforeReplace
 				ReapedPIDs  []int  `json:"reaped_pids"`
 			} `json:"managed_process_sweep"`
 			ManagedStop struct {
-				Checked bool  `json:"checked"`
-				Stopped bool  `json:"stopped"`
-				Force   bool  `json:"force"`
-				PIDs    []int `json:"pids"`
+				Checked         bool  `json:"checked"`
+				Stopped         bool  `json:"stopped"`
+				Force           bool  `json:"force"`
+				PIDs            []int `json:"pids"`
+				ProcessEvidence []struct {
+					PID  int    `json:"pid"`
+					Role string `json:"role"`
+				} `json:"process_evidence"`
 			} `json:"managed_stop"`
 		} `json:"maintenance"`
 	}
@@ -860,11 +864,17 @@ func TestBrowserProfileSeedCopyDefaultReapsAndStopsManagedProcessesBeforeReplace
 	if !got.Maintenance.ManagedProcessSweep.Checked || got.Maintenance.ManagedProcessSweep.State != "reaped" || got.Maintenance.ManagedProcessSweep.ReapedCount != 1 || got.Maintenance.ManagedProcessSweep.LiveCount != 1 {
 		t.Fatalf("managed process sweep = %+v, want one duplicate reaped and one retained before stop", got.Maintenance.ManagedProcessSweep)
 	}
-	if !got.Maintenance.ManagedStop.Checked || !got.Maintenance.ManagedStop.Force || !got.Maintenance.ManagedStop.Stopped || len(got.Maintenance.ManagedStop.PIDs) != 1 {
-		t.Fatalf("managed stop = %+v, want retained process force-stopped before replace", got.Maintenance.ManagedStop)
+	if !got.Maintenance.ManagedStop.Checked || !got.Maintenance.ManagedStop.Force || !got.Maintenance.ManagedStop.Stopped || len(got.Maintenance.ManagedStop.PIDs) == 0 {
+		t.Fatalf("managed stop = %+v, want retained process tree force-stopped before replace", got.Maintenance.ManagedStop)
 	}
-	if !containsIntTest(got.Maintenance.ManagedStop.PIDs, first.Process.Pid) && !containsIntTest(got.Maintenance.ManagedStop.PIDs, second.Process.Pid) {
-		t.Fatalf("managed stop pids = %+v, want one fake process pid", got.Maintenance.ManagedStop.PIDs)
+	rootPIDs := []int{}
+	for _, evidence := range got.Maintenance.ManagedStop.ProcessEvidence {
+		if evidence.Role == "root" {
+			rootPIDs = append(rootPIDs, evidence.PID)
+		}
+	}
+	if len(rootPIDs) != 1 || (!containsIntTest(rootPIDs, first.Process.Pid) && !containsIntTest(rootPIDs, second.Process.Pid)) {
+		t.Fatalf("managed stop evidence = %+v, want one retained fake root plus any descendants", got.Maintenance.ManagedStop.ProcessEvidence)
 	}
 	if content := readBrowserModeTestFile(t, filepath.Join(profileDir, "Default", "Cookies")); content != "fresh-cookie-db" {
 		t.Fatalf("copy-default seed cookie fixture = %q, want fresh-cookie-db", content)

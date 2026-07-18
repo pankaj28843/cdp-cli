@@ -207,6 +207,9 @@ func (r *Redactor) redactJSONValue(value any, field string) any {
 			r.record(field)
 			return Redacted
 		}
+		if looksLikeURL(typed) {
+			return r.URL(typed, field)
+		}
 		redacted := redactLocalPaths(typed)
 		if redacted != typed {
 			r.record(field)
@@ -231,12 +234,20 @@ func (r *Redactor) record(field string) {
 
 func SensitiveName(name string) bool {
 	lower := strings.ToLower(name)
+	if lower == "auth" || lower == "credential" || lower == "credentials" {
+		return true
+	}
 	for _, needle := range []string{"authorization", "cookie", "csrf", "xsrf", "token", "secret", "password", "session", "api-key", "apikey", "client-transaction-id"} {
 		if strings.Contains(lower, needle) {
 			return true
 		}
 	}
 	return false
+}
+
+func looksLikeURL(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "ws://") || strings.HasPrefix(lower, "wss://") || strings.HasPrefix(lower, "file://")
 }
 
 func SensitiveValue(value any) bool {

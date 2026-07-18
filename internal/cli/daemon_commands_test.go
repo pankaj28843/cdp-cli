@@ -190,6 +190,95 @@ func TestDaemonHealthReportsRecentCrashLogsJSON(t *testing.T) {
 	}
 }
 
+func TestHeadlessDaemonHealthAndPagesAgreeOnUsability(t *testing.T) {
+	t.Run("unavailable", func(t *testing.T) {
+		stateDir := shortCLIStateDir(t)
+		var healthOut, healthErr bytes.Buffer
+		healthCode := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &healthOut, &healthErr, cli.BuildInfo{})
+		if healthCode != cli.ExitCheckFailed {
+			t.Fatalf("daemon health exit code = %d, want %d; stdout=%s stderr=%s", healthCode, cli.ExitCheckFailed, healthOut.String(), healthErr.String())
+		}
+		var health struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(healthOut.Bytes(), &health); err != nil {
+			t.Fatalf("daemon health output is invalid JSON: %v", err)
+		}
+
+		var pagesOut, pagesErr bytes.Buffer
+		pagesCode := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "--timeout", "100ms", "pages", "--state-dir", stateDir, "--json"}, &pagesOut, &pagesErr, cli.BuildInfo{})
+		if pagesCode == cli.ExitOK {
+			t.Fatalf("pages exit code = %d, want failure while matching health unusable; stdout=%s stderr=%s", pagesCode, pagesOut.String(), pagesErr.String())
+		}
+		var pages struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(pagesOut.Bytes(), &pages); err != nil {
+			t.Fatalf("pages output is invalid JSON: %v", err)
+		}
+		if health.OK || pages.OK {
+			t.Fatalf("health ok=%v pages ok=%v, want both unusable", health.OK, pages.OK)
+		}
+	})
+
+	t.Run("usable", func(t *testing.T) {
+		stateDir := shortCLIStateDir(t)
+		server := newFakeCDPServer(t, []map[string]any{{"targetId": "page-1", "type": "page", "title": "Example", "url": "https://example.test", "attached": false}})
+		defer server.Close()
+		t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+		ctx, cancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+		}()
+		waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+		t.Cleanup(func() {
+			cancel()
+			select {
+			case err := <-errCh:
+				if err != nil && err != context.Canceled {
+					t.Fatalf("daemon hold returned error: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("daemon hold did not stop")
+			}
+		})
+
+		var healthOut, healthErr bytes.Buffer
+		healthCode := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &healthOut, &healthErr, cli.BuildInfo{})
+		if healthCode != cli.ExitOK {
+			t.Fatalf("daemon health exit code = %d, want %d; stdout=%s stderr=%s", healthCode, cli.ExitOK, healthOut.String(), healthErr.String())
+		}
+		var health struct {
+			OK     bool `json:"ok"`
+			Health struct {
+				Endpoint bool `json:"browser_endpoint_reachable"`
+				Process  bool `json:"daemon_process_running"`
+				RPC      bool `json:"daemon_rpc_ready"`
+				Usable   bool `json:"usable"`
+			} `json:"health"`
+		}
+		if err := json.Unmarshal(healthOut.Bytes(), &health); err != nil {
+			t.Fatalf("daemon health output is invalid JSON: %v", err)
+		}
+
+		var pagesOut, pagesErr bytes.Buffer
+		pagesCode := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "pages", "--state-dir", stateDir, "--json"}, &pagesOut, &pagesErr, cli.BuildInfo{})
+		if pagesCode != cli.ExitOK {
+			t.Fatalf("pages exit code = %d, want %d; stdout=%s stderr=%s", pagesCode, cli.ExitOK, pagesOut.String(), pagesErr.String())
+		}
+		var pages struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(pagesOut.Bytes(), &pages); err != nil {
+			t.Fatalf("pages output is invalid JSON: %v", err)
+		}
+		if !health.OK || !health.Health.Endpoint || !health.Health.Process || !health.Health.RPC || !health.Health.Usable || !pages.OK {
+			t.Fatalf("health=%+v pages.ok=%v, want both usable with all required health layers", health, pages.OK)
+		}
+	})
+}
+
 func TestDaemonHealthReportsUsableDegradedKeepaliveReadErrorJSON(t *testing.T) {
 	stateDir := shortCLIStateDir(t)
 	server := newFakeCDPServer(t, []map[string]any{

@@ -248,8 +248,16 @@ require_artifact "$state_dir/page-load.local.json"
   | jq -e '.ok == true and .assertion.passed == true and .assertion.attempts >= 1 and .assertion.poll_interval == "100ms" and .locator.strict == true and .resolved_selector == "select#plan" and .assertion.actual == "pro"' >/dev/null
 "$binary" select "#hidden-plan" pro --force --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "selected" and .select.force == true and .select.selected == true and .select.value == "pro" and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("visible")) and .actionability.checks.visible.required == false and .actionability.checks.visible.skipped == true and .actionability.checks.visible.passed == false and .actionability.checks.enabled.passed == true' >/dev/null
-"$binary" check "Subscribe" --by role --role checkbox --trial --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .action == "trial" and .check.trial == true and .check.checked == false and .check.desired_checked == true and .check.changed == false and ((.check.already // false) == false) and .locator.strict == true and .resolved_selector == "input#subscribe" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.stable.passed == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
+"$binary" eval 'document.querySelector("#subscribe").scrollIntoView({block:"center"})' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+if ! check_trial_output="$("$binary" check "Subscribe" --by role --role checkbox --trial --state-dir "$state_dir/cdp-state" --json)"; then
+  printf '%s\n' "$check_trial_output" >&2
+  exit 1
+fi
+if ! jq -e '.ok == true and .action == "trial" and .check.trial == true and .check.checked == false and .check.desired_checked == true and .check.changed == false and ((.check.already // false) == false) and .locator.strict == true and .resolved_selector == "input#subscribe" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.stable.passed == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' <<<"$check_trial_output" >/dev/null; then
+  printf '%s\n' "$check_trial_output" >&2
+  exit 1
+fi
 "$binary" check "Subscribe to newsletter" --by label --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "checked" and .check.checked == true and .check.desired_checked == true and .check.previous_checked == false and .check.changed == true and .check.type == "checkbox" and .check.role == "checkbox" and .locator.strict == true and .resolved_selector == "input#subscribe" and .actionability.actionable == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
 "$binary" assert checked "Subscribe to newsletter" --by label --timeout 2s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
@@ -307,6 +315,23 @@ require_artifact "$rendered_dir/visible.txt"
 require_artifact "$rendered_dir/html.json"
 require_artifact "$rendered_dir/page.md"
 require_artifact "$rendered_dir/links.json"
+rendered_baseline_tabs="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq '.pages | length')"
+rendered_reuse_dir="$state_dir/rendered-extract-reuse"
+"$binary" workflow rendered-extract --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --out-dir "$rendered_reuse_dir" --wait 5s --json \
+  | jq -e '.ok == true and .workflow.trigger == "reload" and .workflow.created_page == false and .workflow.reused_page == true and .workflow.reloaded == true and .workflow.closed == false and .workflow.cleanup.skipped == true and .workflow.cleanup.reason == "caller_owned"' >/dev/null
+rendered_after_reuse_tabs="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq '.pages | length')"
+test "$rendered_after_reuse_tabs" -eq "$rendered_baseline_tabs"
+rendered_blocked_out="$state_dir/rendered-extract-not-a-directory"
+printf 'synthetic fixture\n' >"$rendered_blocked_out"
+rendered_failure_json="$state_dir/rendered-extract-failure.json"
+set +e
+"$binary" workflow rendered-extract "$app_url" --state-dir "$state_dir/cdp-state" --out-dir "$rendered_blocked_out" --wait 1s --json >"$rendered_failure_json"
+rendered_failure_code=$?
+set -e
+test "$rendered_failure_code" -eq 10
+jq -e '.ok == false and .code == "artifact_write_failed"' "$rendered_failure_json" >/dev/null
+rendered_after_failure_tabs="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq '.pages | length')"
+test "$rendered_after_failure_tabs" -eq "$rendered_baseline_tabs"
 "$binary" snapshot --selector article --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .snapshot.selector == "article" and (.snapshot.items | length >= 1)' >/dev/null
 "$binary" snapshot --selector "#missing-empty-fixture" --diagnose-empty --state-dir "$state_dir/cdp-state" --json \
@@ -512,9 +537,20 @@ if [[ -n "$download_file" ]]; then
   require_artifact "$download_file"
 fi
 capture_output="$state_dir/network-capture.json"
-"$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$state_dir/network-capture.local.json" --json >"$capture_output"
+capture_artifact="$state_dir/network-capture.local.json"
+capture_har="$state_dir/network-capture.har"
+capture_body_dir="$state_dir/network-bodies"
+"$binary" network capture --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --reload --wait 2s --redact safe --out "$capture_artifact" --har-out "$capture_har" --body-out-dir "$capture_body_dir" --body-artifact-limit 10 --json >"$capture_output"
 require_artifact "$capture_output"
-jq -e --arg path "$state_dir/network-capture.local.json" '.ok == true and .artifact.path == $path and .capture.trigger == "reload" and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\""))))' "$capture_output" >/dev/null
+require_artifact "$capture_artifact"
+require_artifact "$capture_har"
+test -d "$capture_body_dir"
+test -n "$(find "$capture_body_dir" -type f -print -quit)"
+jq -e --arg path "$capture_artifact" --arg har "$capture_har" '.ok == true and .artifact.path == $path and .har.path == $har and .capture.trigger == "reload" and .capture.artifact_safety.shareable == true and (.body_artifacts | length > 0) and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\"")) and (.body.text | contains("demo-network-secret") | not)))' "$capture_output" >/dev/null
+if rg -q 'demo-network-secret' "$capture_output" "$capture_artifact" "$capture_har" "$capture_body_dir"; then
+  echo "safe network evidence leaked the synthetic secret" >&2
+  exit 1
+fi
 "$binary" storage list --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
   | jq -e '.ok == true and (.storage.local_storage.entries[] | select(.key == "feature" and .value == "enabled")) and (.storage.session_storage.keys | index("nonce")) and (.storage.cookies | length >= 1)' >/dev/null
 "$binary" storage set localStorage feature disabled --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \

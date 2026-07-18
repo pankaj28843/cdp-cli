@@ -305,7 +305,9 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					TargetID string `json:"targetId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
-				if params.TargetID != "" {
+				if fakeAnyTargetBool(targetInfos, "fakeCloseTargetError") {
+					resp["error"] = map[string]any{"code": -32000, "message": "synthetic target close failure"}
+				} else if params.TargetID != "" {
 					filtered := targetInfos[:0]
 					for _, target := range targetInfos {
 						if target["targetId"] == params.TargetID {
@@ -314,8 +316,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						filtered = append(filtered, target)
 					}
 					targetInfos = filtered
+					resp["result"] = map[string]any{"success": true}
+				} else {
+					resp["result"] = map[string]any{"success": true}
 				}
-				resp["result"] = map[string]any{"success": true}
 			} else if req.Method == "Browser.getWindowForTarget" {
 				var params struct {
 					TargetID string `json:"targetId"`
@@ -441,6 +445,26 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setTimezoneOverride" || req.Method == "Emulation.setLocaleOverride" || req.Method == "Emulation.setCPUThrottlingRate" || req.Method == "Network.emulateNetworkConditions" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.disable" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Network.setBlockedURLs" {
+				var params struct {
+					URLs []string `json:"urls"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				resp["result"] = map[string]any{}
+				if len(params.URLs) > 0 {
+					events = append(events,
+						map[string]any{"sessionId": req.SessionID, "method": "Network.requestWillBeSent", "params": map[string]any{"requestId": "blocked-1", "request": map[string]any{"url": "https://example.test/analytics/pixel", "method": "GET"}}},
+						map[string]any{"sessionId": req.SessionID, "method": "Network.loadingFailed", "params": map[string]any{"requestId": "blocked-1", "errorText": "net::ERR_BLOCKED_BY_CLIENT", "blockedReason": "inspector"}},
+					)
+				}
+			} else if req.Method == "Fetch.enable" {
+				resp["result"] = map[string]any{}
+				events = append(events,
+					map[string]any{"sessionId": req.SessionID, "method": "Fetch.requestPaused", "params": map[string]any{"requestId": "mock-1", "resourceType": "Fetch", "request": map[string]any{"url": "https://example.test/api/config", "method": "GET"}}},
+					map[string]any{"sessionId": req.SessionID, "method": "Fetch.requestPaused", "params": map[string]any{"requestId": "mock-2", "resourceType": "Fetch", "request": map[string]any{"url": "https://example.test/api/config", "method": "POST"}}},
+				)
+			} else if req.Method == "Fetch.fulfillRequest" || req.Method == "Fetch.continueRequest" || req.Method == "Fetch.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.enable" {
 				resp["result"] = map[string]any{}
@@ -690,6 +714,24 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						{"name": "DomContentLoaded", "value": 124.5},
 					},
 				}
+			} else if req.Method == "Tracing.start" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Tracing.end" {
+				resp["result"] = map[string]any{}
+				events = append(events, map[string]any{"sessionId": req.SessionID, "method": "Tracing.tracingComplete", "params": map[string]any{"stream": "trace-stream-1"}})
+			} else if req.Method == "IO.read" {
+				trace := map[string]any{"traceEvents": []map[string]any{
+					{"name": "navigationStart", "ts": 1000000},
+					{"name": "largestContentfulPaint::Candidate", "ts": 1250000, "args": map[string]any{"data": map[string]any{"url": "https://example.test/image?token=trace-secret"}}},
+					{"name": "LayoutShift", "ts": 1300000, "args": map[string]any{"data": map[string]any{"had_recent_input": false, "weighted_score_delta": 0.125}}},
+					{"name": "RunTask", "ts": 1400000, "dur": 80000},
+					{"name": "ResourceSendRequest", "ts": 1500000, "args": map[string]any{"data": map[string]any{"requestId": "slow-1"}}},
+					{"name": "ResourceFinish", "ts": 2700000, "args": map[string]any{"data": map[string]any{"requestId": "slow-1"}}},
+				}}
+				traceBytes, _ := json.Marshal(trace)
+				resp["result"] = map[string]any{"data": string(traceBytes), "eof": true}
+			} else if req.Method == "IO.close" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.getFrameTree" {
 				resp["result"] = map[string]any{
 					"frameTree": map[string]any{

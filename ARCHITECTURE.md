@@ -32,6 +32,12 @@ architecture is intentionally small: keep browser protocol mechanics in
   a page only when a page-scoped command actually needs it.
 - Heavy outputs are artifacts. Screenshots, traces, heap snapshots, HAR files,
   and debug bundles are written to files and referenced by path in JSON.
+- Retention is allowlist-only. Automatic cleanup is confined to registered
+  cdp-generated historical classes under the canonical state root, uses strict
+  age boundaries plus hard active-log caps, never follows symlinks or crosses a
+  filesystem boundary, and always retains browser profiles, runtime metadata,
+  connections/page selections, registries, sockets, locks, current summaries,
+  unknown paths, and external custom output directories.
 - Raw CDP is a first-class escape hatch. High-level commands should cover common
   workflows, but agents must be able to discover and execute current protocol
   methods without waiting for wrappers.
@@ -45,6 +51,7 @@ architecture is intentionally small: keep browser protocol mechanics in
 | `cmd/cdp` | Binary entry point and build metadata wiring | Browser logic |
 | `internal/cli` | Cobra commands, output shaping, error envelopes | Raw WebSocket protocol loops |
 | `internal/cdp` | CDP transport, target/page helpers, protocol metadata | CLI flag policy |
+| `internal/artifacts` | Retention planning/execution, path and filesystem safety, atomic bounded managed logs | Browser/profile state discovery |
 | `internal/browser` | Browser endpoint probing, auto-connect endpoint resolution, managed headless profile metadata and launch helpers | CLI output policy |
 | `internal/daemon` | Mode-specific keepalive runtime files, sockets, logs, process status, runtime client | User-facing command formatting |
 | `internal/state` | Disk-backed connection metadata and mode-scoped page selection | Browser/page content |
@@ -74,6 +81,14 @@ daemon keepalive repair, synthetic health-check, page cleanup, and summary
 artifact writes as ordered phases. Phase results stay inside the maintenance
 phase array; top-level cron status links to task definitions, managed process
 lifecycle state, and recent artifact paths for troubleshooting.
+
+Cron owns the lifecycle of its output. Headed keepalive and headless maintenance
+run through a latest-run writer with an independent hard byte cap while already
+holding their task lock, so the target log is bounded before child output opens.
+A separately locked daily task applies the shared retention plan at most once a
+day. Manual dry-run and apply use the same immutable plan; apply revalidates the
+observed path, size, timestamp, root, symlink, and filesystem assumptions before
+mutation and continues across independent candidate failures.
 
 Runtime artifacts are mode-specific so headed and headless can coexist: headed
 keeps the historical singleton paths, while headless uses its own runtime file,

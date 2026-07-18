@@ -651,7 +651,7 @@ func (a *app) runDaemonMaintenanceKeepalive(ctx context.Context, storeDir string
 		}
 		return fmt.Sprintf("keepalive\t%s\tskipped", connectionName), data, nil
 	}
-	return a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, false, status, probeResult, runtimeCheck)
+	return a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, false, opts.StaleLockAfter, status, probeResult, runtimeCheck)
 }
 
 func writeMaintenanceSummary(ctx context.Context, ops daemonMaintenanceOperations, path string, report *daemonMaintenanceReport) error {

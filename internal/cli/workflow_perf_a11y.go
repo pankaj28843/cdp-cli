@@ -13,13 +13,19 @@ import (
 func (a *app) newWorkflowPerfCommand() *cobra.Command {
 	var wait time.Duration
 	var tracePath string
+	var traceMaxBytes int
+	var traceRedact string
 	cmd := &cobra.Command{
 		Use:   "perf <url>",
 		Short: "Collect post-load performance metrics",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 {
-				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow perf 'https://example.com' --wait 5s --json"})
+			if wait < 0 || traceMaxBytes <= 0 || traceMaxBytes > 64*1024*1024 {
+				return commandError("usage", "usage", "--wait must be non-negative and --trace-max-bytes must be between 1 and 67108864", ExitUsage, []string{"cdp workflow perf 'https://example.com' --wait 5s --trace-max-bytes 16777216 --json"})
+			}
+			traceRedact = strings.ToLower(strings.TrimSpace(traceRedact))
+			if traceRedact != "none" && traceRedact != "safe" && traceRedact != "headers" {
+				return commandError("usage", "usage", "--redact must be none, safe, or headers", ExitUsage, []string{"cdp workflow perf 'https://example.com' --redact safe --json"})
 			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {
@@ -68,6 +74,17 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 			defer session.Close(ctx)
 
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"performance": true})
+			traceStarted := false
+			if err := startPerformanceTrace(ctx, client, session.SessionID); err != nil {
+				collectorErrors = append(collectorErrors, collectorError("trace_start", err))
+			} else {
+				traceStarted = true
+				defer func() {
+					if traceStarted {
+						stopPerformanceTraceBestEffort(client, session.SessionID)
+					}
+				}()
+			}
 			_, err = session.Navigate(ctx, rawURL)
 			if err != nil {
 				collectorErrors = append(collectorErrors, collectorError("navigation", err))
@@ -94,10 +111,30 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 				collectorErrors = append(collectorErrors, collectorError("performance", err))
 			}
 
+			trace := performanceTraceResult{Insights: map[string]any{
+				"lcp":               unavailableInsight("trace capture did not start"),
+				"cls":               unavailableInsight("trace capture did not start"),
+				"long_tasks":        unavailableInsight("trace capture did not start"),
+				"blocking_requests": unavailableInsight("trace capture did not start"),
+			}}
+			if traceStarted {
+				trace, err = finishPerformanceTrace(ctx, client, session.SessionID, tracePath, traceRedact, traceMaxBytes)
+				traceStarted = false
+				if err != nil {
+					collectorErrors = append(collectorErrors, collectorError("trace", err))
+				}
+			}
+
 			report := map[string]any{
 				"ok":          true,
 				"target":      pageRow(target),
 				"performance": map[string]any{"metrics": performance, "count": len(performance)},
+				"insights":    trace.Insights,
+				"trace": map[string]any{
+					"stream":          trace.Stream,
+					"artifact_safety": trace.Safety,
+					"max_bytes":       traceMaxBytes,
+				},
 				"workflow": map[string]any{
 					"name":             "perf",
 					"requested_url":    rawURL,
@@ -111,17 +148,9 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 					},
 				},
 			}
-			if strings.TrimSpace(tracePath) != "" {
-				b, err := json.MarshalIndent(report, "", "  ")
-				if err != nil {
-					return commandError("internal", "internal", fmt.Sprintf("marshal perf report: %v", err), ExitInternal, []string{"cdp workflow perf --json"})
-				}
-				writtenPath, err := writeArtifactFile(tracePath, append(b, '\n'))
-				if err != nil {
-					return err
-				}
-				report["artifact"] = map[string]any{"type": "workflow-perf", "path": writtenPath, "bytes": len(b) + 1}
-				report["artifacts"] = []map[string]any{{"type": "workflow-perf", "path": writtenPath, "bytes": len(b) + 1}}
+			if trace.Artifact != nil {
+				report["artifact"] = trace.Artifact
+				report["artifacts"] = []map[string]any{trace.Artifact}
 			}
 
 			human := fmt.Sprintf("perf\t%s\t%d metrics", rawURL, len(performance))
@@ -129,7 +158,9 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect evidence before sampling metrics")
-	cmd.Flags().StringVar(&tracePath, "trace", "", "optional path for the JSON performance trace artifact")
+	cmd.Flags().StringVar(&tracePath, "trace", "", "optional path for the streamed JSON performance trace artifact")
+	cmd.Flags().IntVar(&traceMaxBytes, "trace-max-bytes", 16*1024*1024, "positive maximum trace artifact bytes (up to 64 MiB)")
+	cmd.Flags().StringVar(&traceRedact, "redact", "safe", "trace artifact redaction preset: safe, headers, or none")
 	return cmd
 }
 
