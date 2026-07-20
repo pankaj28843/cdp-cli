@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -27,6 +29,169 @@ func TestManagedProfilePaths(t *testing.T) {
 	}
 	if got := browser.ManagedMetadataPath(stateDir); got != filepath.Join(stateDir, "browser", "managed-browser.json") {
 		t.Fatalf("ManagedMetadataPath() = %q", got)
+	}
+}
+
+func TestReconcileManagedProcessesCompactsBoundedTerminalTail(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	metadata := browser.ManagedMetadata{
+		BrowserMode:      "headless",
+		ChromePID:        900,
+		UserDataDir:      profileDir,
+		DebuggingPort:    "9222",
+		StartedAt:        now.Add(-time.Minute).Format(time.RFC3339),
+		ProcessStartTime: now.Add(-time.Minute).Format(time.RFC3339),
+		OwnedMarker:      "current-owned-marker",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata: %v", err)
+	}
+	records := make([]browser.ManagedProcessRecord, 0, 14)
+	for i := 0; i < 12; i++ {
+		when := now.Add(-time.Duration(i+1) * time.Minute).Format(time.RFC3339)
+		records = append(records, browser.ManagedProcessRecord{
+			PID:              100 + i,
+			BrowserMode:      "headless",
+			UserDataDir:      profileDir,
+			ProcessStartTime: when,
+			OwnershipMarker:  "owned-" + when,
+			State:            "stopped",
+			ExitedAt:         when,
+			CleanupAt:        when,
+			CleanupReason:    fmt.Sprintf("historical stop %02d", i),
+		})
+	}
+	records = append(records, browser.ManagedProcessRecord{PID: 777, BrowserMode: "headless", UserDataDir: profileDir, State: "unknown_fixture"})
+	if err := browser.SaveManagedProcessRegistry(stateDir, browser.ManagedProcessRegistry{Version: 1, BrowserMode: "headless", Records: records}); err != nil {
+		t.Fatalf("SaveManagedProcessRegistry: %v", err)
+	}
+
+	result, err := browser.ReconcileManagedProcesses(context.Background(), stateDir, browser.ManagedProcessReconcileOptions{
+		ActivePID: 900,
+		Now:       func() time.Time { return now },
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return []int{900}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileManagedProcesses: %v", err)
+	}
+	if result.CompactedCount != 4 || result.HistoricalProcesses.Retained != 8 || result.HistoricalProcesses.LiveProbesAttempted != 0 {
+		t.Fatalf("history summary = %+v compacted=%d, want retained=8 compacted=4 and no historical live probes", result.HistoricalProcesses, result.CompactedCount)
+	}
+	if result.HistoricalProcesses.LastFailureSummary != "historical stop 00" {
+		t.Fatalf("last failure summary = %q, want newest terminal failure", result.HistoricalProcesses.LastFailureSummary)
+	}
+	if result.HistoricalProcesses.SkipReasons["missing_ownership_identity"] != 1 {
+		t.Fatalf("skip reasons = %+v, want malformed unknown record preserved", result.HistoricalProcesses.SkipReasons)
+	}
+	second, err := browser.ReconcileManagedProcesses(context.Background(), stateDir, browser.ManagedProcessReconcileOptions{
+		ActivePID: 900,
+		Now:       func() time.Time { return now },
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return []int{900}, nil
+		},
+	})
+	if err != nil || second.CompactedCount != 0 {
+		t.Fatalf("second reconcile = %+v err=%v, want idempotent compaction", second, err)
+	}
+}
+
+func TestReconcileManagedProcessesDoesNotProtectStoppedMetadataGeneration(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	metadata := browser.ManagedMetadata{
+		BrowserMode:      "headless",
+		ChromePID:        509,
+		UserDataDir:      profileDir,
+		ProcessStartTime: now.Add(-time.Minute).Format(time.RFC3339),
+		OwnedMarker:      "stopped-current-metadata",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatal(err)
+	}
+	records := make([]browser.ManagedProcessRecord, 0, 10)
+	for i := 0; i < 10; i++ {
+		when := now.Add(-time.Duration(10-i) * time.Minute).Format(time.RFC3339)
+		marker := fmt.Sprintf("stopped-%d", i)
+		if i == 9 {
+			marker = metadata.OwnedMarker
+			when = metadata.ProcessStartTime
+		}
+		records = append(records, browser.ManagedProcessRecord{PID: 500 + i, BrowserMode: "headless", UserDataDir: profileDir, ProcessStartTime: when, OwnershipMarker: marker, State: "stopped", ExitedAt: when, CleanupAt: when})
+	}
+	if err := browser.SaveManagedProcessRegistry(stateDir, browser.ManagedProcessRegistry{Version: 1, BrowserMode: "headless", Records: records}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := browser.ReconcileManagedProcesses(context.Background(), stateDir, browser.ManagedProcessReconcileOptions{
+		ActivePID: 509,
+		Now:       func() time.Time { return now },
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CompactedCount != 2 || result.RegisteredCount != 8 || result.HistoricalProcesses.SkipReasons["active_generation"] != 0 {
+		t.Fatalf("reconcile = %+v, want stopped metadata generation eligible for the bounded terminal tail", result)
+	}
+}
+
+func TestManagedProcessRegistryConcurrentLaunchesAndSymlinkSafety(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	const launches = 12
+	var wg sync.WaitGroup
+	errCh := make(chan error, launches)
+	for i := 0; i < launches; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errCh <- browser.RegisterManagedProcessLaunch(stateDir, browser.ManagedMetadata{
+				BrowserMode:      "headless",
+				ChromePID:        1000 + i,
+				UserDataDir:      profileDir,
+				ProcessStartTime: time.Date(2026, 7, 20, 12, i, 0, 0, time.UTC).Format(time.RFC3339),
+				OwnedMarker:      "owned-concurrent-" + string(rune('a'+i)),
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("RegisterManagedProcessLaunch: %v", err)
+		}
+	}
+	registry, ok, err := browser.LoadManagedProcessRegistry(stateDir)
+	if err != nil || !ok || len(registry.Records) != launches {
+		t.Fatalf("concurrent registry ok=%v err=%v records=%d, want %d", ok, err, len(registry.Records), launches)
+	}
+
+	symlinkState := filepath.Join(t.TempDir(), "symlink-state")
+	if err := os.MkdirAll(filepath.Dir(browser.ManagedProcessRegistryPath(symlinkState)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside.json")
+	if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, browser.ManagedProcessRegistryPath(symlinkState)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := browser.LoadManagedProcessRegistry(symlinkState); err == nil {
+		t.Fatal("LoadManagedProcessRegistry accepted a symlink")
+	}
+	if err := browser.SaveManagedProcessRegistry(symlinkState, browser.ManagedProcessRegistry{}); err == nil {
+		t.Fatal("SaveManagedProcessRegistry replaced a symlink")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "outside" {
+		t.Fatalf("outside symlink target changed: %q err=%v", data, err)
 	}
 }
 

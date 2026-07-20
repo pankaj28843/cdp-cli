@@ -53,6 +53,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	var include string
 	var limit int
 	var outPath string
+	var readyFile string
 	cmd := &cobra.Command{
 		Use:   "page-load [url]",
 		Short: "Capture console, network, storage, and performance signals around a page load",
@@ -120,6 +121,14 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 			defer session.Close(ctx)
 
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, includeSet)
+			if strings.TrimSpace(readyFile) != "" && len(collectorErrors) > 0 {
+				return commandErrorWithData("collector_enable_failed", "connection", "cannot publish readiness because one or more requested collectors failed to enable", ExitConnection, []string{"cdp pages --json", "cdp doctor --json"}, map[string]any{"collector_errors": collectorErrors})
+			}
+			removeReady, err := publishCollectorReadiness(readyFile, target.TargetID, session.SessionID, pageLoadEnabledDomains(includeSet))
+			if err != nil {
+				return collectorReadinessError(err)
+			}
+			defer removeReady()
 			trigger := "observe"
 			frameID := ""
 			if rawURL != "" {
@@ -227,7 +236,25 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	cmd.Flags().StringVar(&include, "include", "console,network,storage,performance,navigation", "comma-separated collectors: console,network,storage,performance,navigation")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum console messages and requests per collector; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON page-load report artifact")
+	cmd.Flags().StringVar(&readyFile, "ready-file", "", "exclusive owner-only readiness artifact written after exact-target attach and all requested collector enables")
 	return cmd
+}
+
+func pageLoadEnabledDomains(includeSet map[string]bool) []string {
+	domains := []string{}
+	if includeSet["navigation"] {
+		domains = append(domains, "Page")
+	}
+	if includeSet["console"] {
+		domains = append(domains, "Log", "Runtime")
+	}
+	if includeSet["network"] {
+		domains = append(domains, "Network")
+	}
+	if includeSet["performance"] {
+		domains = append(domains, "Performance")
+	}
+	return domains
 }
 
 func pageLoadIncludeSet(include string) map[string]bool {

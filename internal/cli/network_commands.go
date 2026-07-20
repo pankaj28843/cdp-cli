@@ -18,6 +18,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	var wait time.Duration
 	var limit int
 	var failedOnly bool
+	var readyFile string
 	cmd := &cobra.Command{
 		Use:   "network",
 		Short: "Inspect network requests from a page target",
@@ -39,8 +40,19 @@ func (a *app) newNetworkCommand() *cobra.Command {
 			}
 			defer session.Close(ctx)
 
-			requests, truncated, err := collectNetworkRequests(ctx, client, session.SessionID, wait, limit, failedOnly)
+			var removeReady func()
+			var readyErr error
+			requests, truncated, err := collectNetworkRequests(ctx, client, session.SessionID, wait, limit, failedOnly, func() error {
+				removeReady, readyErr = publishCollectorReadiness(readyFile, target.TargetID, session.SessionID, []string{"Network"})
+				return readyErr
+			})
+			if removeReady != nil {
+				defer removeReady()
+			}
 			if err != nil {
+				if readyErr != nil {
+					return collectorReadinessError(readyErr)
+				}
 				return commandError(
 					"connection_failed",
 					"connection",
@@ -70,6 +82,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect network events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of requests to return; use 0 for no limit")
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only return failed requests and HTTP 4xx/5xx responses")
+	cmd.Flags().StringVar(&readyFile, "ready-file", "", "exclusive owner-only readiness artifact written after exact-target attach and Network enable")
 	cmd.AddCommand(a.newNetworkCaptureCommand())
 	cmd.AddCommand(a.newNetworkWebSocketCommand())
 	cmd.AddCommand(a.newNetworkBlockCommand())

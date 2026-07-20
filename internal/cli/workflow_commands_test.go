@@ -924,6 +924,10 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 		} `json:"bundle"`
 		Workflow struct {
 			Name              string `json:"name"`
+			Trigger           string `json:"trigger"`
+			Reloaded          bool   `json:"reloaded"`
+			IgnoreCache       bool   `json:"ignore_cache"`
+			CachePolicy       string `json:"cache_policy"`
 			RequestedURL      string `json:"requested_url"`
 			RequestCount      int    `json:"request_count"`
 			MessageCount      int    `json:"message_count"`
@@ -953,7 +957,7 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 	if !got.OK || got.Target.ID == "" || got.Target.Type != "page" || got.Target.Title == "" || !strings.Contains(got.Target.URL, "https://example.test/app") || strings.Contains(got.Target.URL, "token=abc") {
 		t.Fatalf("workflow debug-bundle target = %+v, want selected page target", got.Target)
 	}
-	if got.Workflow.Name != "debug-bundle" || !strings.Contains(got.Workflow.RequestedURL, "token=%3Credacted%3E") || got.Workflow.Redact != artifacts.ModeSafe || got.Workflow.InlinePayloads || got.Workflow.RunID != "run-1" || got.Workflow.TaskID != "task-1" || got.Workflow.Stage != "preflight" {
+	if got.Workflow.Name != "debug-bundle" || got.Workflow.Trigger != "navigate" || got.Workflow.Reloaded || !got.Workflow.IgnoreCache || got.Workflow.CachePolicy != "bypass_http_cache" || !strings.Contains(got.Workflow.RequestedURL, "token=%3Credacted%3E") || got.Workflow.Redact != artifacts.ModeSafe || got.Workflow.InlinePayloads || got.Workflow.RunID != "run-1" || got.Workflow.TaskID != "task-1" || got.Workflow.Stage != "preflight" {
 		t.Fatalf("workflow debug-bundle metadata = %+v, want debug-bundle workflow metadata", got.Workflow)
 	}
 	if got.Evidence.Requests < 2 || got.Evidence.Messages == 0 || got.Evidence.SnapshotItems == 0 || got.Evidence.Requests != got.Workflow.RequestCount || got.Evidence.Messages != got.Workflow.MessageCount {
@@ -1067,6 +1071,58 @@ func TestWorkflowDebugBundleJSON(t *testing.T) {
 		if _, ok := seenArtifacts[artifactType]; !ok {
 			t.Fatalf("workflow artifacts = %+v, missing required type %q", got.Artifacts, artifactType)
 		}
+	}
+}
+
+func TestWorkflowDebugBundleReloadDefaultsAndPassiveOptOut(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId": "debug-existing",
+		"type":     "page",
+		"title":    "Existing App",
+		"url":      "https://example.test/existing",
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	run := func(args ...string) struct {
+		Trigger     string `json:"trigger"`
+		Reloaded    bool   `json:"reloaded"`
+		IgnoreCache bool   `json:"ignore_cache"`
+		CachePolicy string `json:"cache_policy"`
+	} {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		code := cli.Execute(context.Background(), append([]string{"workflow", "debug-bundle", "--target", "debug-existing", "--since", "0s", "--json"}, args...), &out, &errOut, cli.BuildInfo{})
+		if code != cli.ExitOK {
+			t.Fatalf("debug-bundle %v exit=%d stdout=%s stderr=%s", args, code, out.String(), errOut.String())
+		}
+		var report struct {
+			Workflow struct {
+				Trigger     string `json:"trigger"`
+				Reloaded    bool   `json:"reloaded"`
+				IgnoreCache bool   `json:"ignore_cache"`
+				CachePolicy string `json:"cache_policy"`
+			} `json:"workflow"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+			t.Fatalf("decode debug-bundle: %v", err)
+		}
+		return report.Workflow
+	}
+
+	defaultPolicy := run()
+	if defaultPolicy.Trigger != "reload" || !defaultPolicy.Reloaded || !defaultPolicy.IgnoreCache || defaultPolicy.CachePolicy != "bypass_http_cache" {
+		t.Fatalf("default policy = %+v, want cache-bypassing reload", defaultPolicy)
+	}
+	passive := run("--reload=false", "--ignore-cache=false")
+	if passive.Trigger != "observe" || passive.Reloaded || passive.IgnoreCache || passive.CachePolicy != "normal_http_cache" {
+		t.Fatalf("passive policy = %+v, want no-load observation", passive)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "debug-bundle", "--target", "debug-existing", "--reload=false", "--ignore-cache=true", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage || !strings.Contains(out.String(), "--reload=false") {
+		t.Fatalf("contradictory policy exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
 }
 

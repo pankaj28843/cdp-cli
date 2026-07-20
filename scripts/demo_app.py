@@ -4,8 +4,12 @@ import json
 import sys
 
 
+BOOTSTRAP_REQUESTS = 0
+
+
 class DemoHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        global BOOTSTRAP_REQUESTS
         if self.path == "/sw.js":
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript")
@@ -18,6 +22,21 @@ class DemoHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "token": "demo-network-secret"}).encode())
+            return
+        if self.path.startswith("/api/bootstrap-count"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(json.dumps({"count": BOOTSTRAP_REQUESTS}).encode())
+            return
+        if self.path.startswith("/api/bootstrap"):
+            BOOTSTRAP_REQUESTS += 1
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.end_headers()
+            self.wfile.write(json.dumps({"bootstrap": True, "count": BOOTSTRAP_REQUESTS}).encode())
             return
         if self.path.startswith("/api/fail"):
             self.send_response(503)
@@ -214,7 +233,7 @@ DEMO_HTML = """<!doctype html>
       document.querySelector('#status').textContent = 'Plan selected: ' + event.target.value;
     });
     document.querySelector('#partial-selection').indeterminate = true;
-    fetch('/api/ok').then(() => fetch('/api/fail'));
+    fetch('/api/bootstrap').then(() => fetch('/api/ok')).then(() => fetch('/api/fail'));
     window.__cdpDemoSemanticState = { terminalCondition: 'loading', rowCount: 0, ready: false };
     window.__cdpDemoStartSemanticDelay = (delayMs = 500) => {
       window.__cdpDemoSemanticState = { terminalCondition: 'loading', rowCount: 0, ready: false };

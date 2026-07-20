@@ -418,12 +418,26 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 	if err != nil {
 		return out
 	}
+	startIndex := 0
 	for i := len(entries) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(entries[i].Event), "health_check_validated") {
-			entries = entries[i+1:]
+		event := strings.ToLower(strings.TrimSpace(entries[i].Event))
+		if event == "health_check_validated" || event == "managed_process_history_compacted" || event == "managed_process_repair_validated" {
+			startIndex = i + 1
 			break
 		}
 	}
+	historicalWarnings := 0
+	historicalErrors := 0
+	for _, entry := range entries[:startIndex] {
+		level := strings.ToLower(strings.TrimSpace(entry.Level))
+		if level == "warn" || level == "warning" {
+			historicalWarnings++
+		}
+		if level == "error" {
+			historicalErrors++
+		}
+	}
+	entries = entries[startIndex:]
 	warns := 0
 	errs := 0
 	lastDisconnect := ""
@@ -461,6 +475,8 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 	}
 	out["recent_log_warnings"] = warns
 	out["recent_log_errors"] = errs
+	out["historical_log_warnings"] = historicalWarnings
+	out["historical_log_errors"] = historicalErrors
 	if lastDisconnect != "" {
 		out["last_browser_keepalive_error"] = lastDisconnect
 	}

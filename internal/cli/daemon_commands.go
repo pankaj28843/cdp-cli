@@ -756,7 +756,7 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 		report["managed_process_sweep"] = map[string]any{
 			"requested": true,
 			"phase":     cronManagedProcessSweepPhaseName,
-			"state":     "pending_lifecycle_implementation",
+			"state":     "pending",
 		}
 	}
 	fail := func(failure string, cause error) (string, map[string]any, error) {
@@ -779,6 +779,20 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 	}
 
 	status, health, err := a.selectedDaemonHealth(ctx)
+	if opts.ManagedProcessSweep {
+		sweep, sweepErr := a.runManagedProcessSweep(ctx, store.Dir, lock, status)
+		if sweepErr != nil {
+			report["managed_process_sweep"] = map[string]any{"requested": true, "phase": cronManagedProcessSweepPhaseName, "state": "error", "error": sweepErr.Error()}
+			return fail("managed_process_sweep_failed", sweepErr)
+		}
+		report["managed_process_sweep"] = sweep
+		daemon.AppendLogForMode(ctx, store.Dir, a.browserModeName(), daemon.LogEntry{
+			Level:   "info",
+			Event:   "managed_process_history_compacted",
+			Message: fmt.Sprintf("managed process history reconciled: retained=%d compacted=%d", sweep.HistoricalProcesses.Retained, sweep.HistoricalProcesses.Compacted),
+		})
+		status, health, err = a.selectedDaemonHealth(ctx)
+	}
 	report["daemon"] = status
 	report["health"] = health
 	resourcePreflight := a.maintenanceResourcePreflightForState(ctx, store.Dir, status, health)
@@ -1804,6 +1818,13 @@ func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir st
 	}
 	if conn, ok := result.data["connection"]; ok {
 		data["connection_detail"] = conn
+	}
+	if managedProcessSweep {
+		daemon.AppendLogForMode(ctx, storeDir, string(config.BrowserModeHeadless), daemon.LogEntry{
+			Level:   "info",
+			Event:   "managed_process_repair_validated",
+			Message: "managed headless keepalive completed after process reconciliation",
+		})
 	}
 	return fmt.Sprintf("keepalive\t%s\t%s", connectionName, state), data, nil
 }

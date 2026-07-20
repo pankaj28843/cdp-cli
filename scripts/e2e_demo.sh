@@ -21,6 +21,7 @@ chrome_log="$state_dir/chrome.log"
 app_pid=""
 chrome_pid=""
 app_url=""
+managed_state=""
 
 require_artifact() {
   local path=$1
@@ -51,6 +52,9 @@ extract_demo_url() {
 }
 
 cleanup() {
+	if [[ -n "$managed_state" ]]; then
+		"$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_state" --json >/dev/null 2>&1 || true
+	fi
   if [[ -n "$chrome_pid" ]]; then
     "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
     kill "$chrome_pid" 2>/dev/null || true
@@ -86,6 +90,21 @@ if [[ -z "$app_url" ]]; then
   sed -n '1,80p' "$app_log" >&2
   exit 1
 fi
+
+managed_state="$state_dir/managed-cdp-state"
+for _ in {1..10}; do
+  "$binary" --browser-mode headless daemon keepalive --repair --force --chrome-command "$chrome" --state-dir "$managed_state" --json \
+    | jq -e '.ok == true and (.state == "started" or .state == "repaired" or .state == "healthy")' >/dev/null
+  "$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_state" --json \
+    | jq -e '.ok == true and .stopped == true' >/dev/null
+done
+"$binary" --browser-mode headless daemon keepalive --repair --force --managed-process-sweep --chrome-command "$chrome" --state-dir "$managed_state" --json \
+  | jq -e '.ok == true and (.state == "started" or .state == "repaired" or .state == "healthy") and .health.managed_process_sweep.historical_processes.live_probes_attempted == 0 and .health.managed_process_sweep.compacted_count >= 1 and .health.managed_process_sweep.registered_count == 8' >/dev/null
+"$binary" --browser-mode headless daemon health --state-dir "$managed_state" --json \
+  | jq -e '.ok == true and .health.state == "healthy" and .health.usable == true and .health.managed_processes.historical_processes.live_probes_attempted == 0' >/dev/null
+"$binary" --browser-mode headless daemon health-check --managed-process-sweep --require-healthy --chrome-command "$chrome" --state-dir "$managed_state" --json \
+  | jq -e '.ok == true and .state == "healthy" and .usable == true and .managed_process_sweep.state == "healthy"' >/dev/null
+"$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_state" --json >/dev/null
 
 "$chrome" \
   --headless=new \
@@ -136,6 +155,30 @@ fi
   | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
+collector_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' | head -n 1)"
+collector_ready_root="$state_dir/collector-ready"
+collector_ready_file="$collector_ready_root/console.ready.json"
+collector_output="$state_dir/collector-console.json"
+mkdir -m 700 "$collector_ready_root"
+"$binary" console --target "$collector_target_id" --wait 3s --ready-file "$collector_ready_file" --state-dir "$state_dir/cdp-state" --json >"$collector_output" &
+collector_pid=$!
+for _ in {1..100}; do
+  [[ -s "$collector_ready_file" ]] && break
+  if ! kill -0 "$collector_pid" 2>/dev/null; then
+    echo "collector exited before readiness" >&2
+    wait "$collector_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and .collector_pid > 0 and .ready_monotonic_ns > 0 and (.enabled_domains | sort == ["Log","Runtime"]) and (has("url") | not) and (has("headers") | not) and (has("cookies") | not)' "$collector_ready_file" >/dev/null
+"$binary" eval "window.setTimeout(() => { throw new Error('ready-collector-exception') }, 0); true" --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json >/dev/null
+wait "$collector_pid"
+jq -e '.ok == true and (.messages[] | select(.type == "exception" and (.text | contains("ready-collector-exception"))))' "$collector_output" >/dev/null
+if [[ -e "$collector_ready_file" ]]; then
+  echo "collector readiness artifact remained after collector exit" >&2
+  exit 1
+fi
 reuse_open_output="$("$binary" open "$app_url?cdp_reused=1" --reuse --url-contains "$app_url" --budget-summary --state-dir "$state_dir/cdp-state" --json)"
 jq -e '.ok == true and .action == "reused" and .reused == true and .created == false and .reuse.matched == true and .tab_budget.policy == "reuse_url_contains" and .tab_budget.cleanup_status == "skipped_reused_tab" and .tab_budget.managed_tab_created == false and (.tab_budget.before.tab_count >= 1) and (.tab_budget.after.tab_count == .tab_budget.before.tab_count)' <<<"$reuse_open_output" >/dev/null
 task_open_output="$("$binary" open "$app_url?cdp_task_owned=1" --run-id demo-run --task-id demo-child --root-task-id demo-root --parent-task-id demo-root --state-dir "$state_dir/cdp-state" --json)"
@@ -557,6 +600,26 @@ fi
   | jq -e '.ok == true and .storage.backend == "localStorage" and .storage.value == "disabled"' >/dev/null
 "$binary" storage get localStorage feature --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
   | jq -e '.ok == true and .storage.found == true and .storage.value == "disabled"' >/dev/null
+"$binary" storage set localStorage debug_bundle_sentinel preserved --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json >/dev/null
+"$binary" storage indexeddb put cdp-demo-db settings debug-bundle-sentinel '{"preserved":true}' --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json >/dev/null
+"$binary" storage cookies set --state-dir "$state_dir/cdp-state" --url "$app_url" --name debug_bundle_sentinel --value preserved --json >/dev/null
+bootstrap_before="$(python3 -c 'import json,sys,urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1]))["count"])' "$app_url/api/bootstrap-count")"
+for run in 1 2; do
+  "$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --since 1s --json \
+    | jq -e '.ok == true and .workflow.trigger == "reload" and .workflow.reloaded == true and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache"' >/dev/null
+done
+bootstrap_after="$(python3 -c 'import json,sys,urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1]))["count"])' "$app_url/api/bootstrap-count")"
+if [[ "$bootstrap_after" -ne $((bootstrap_before + 2)) ]]; then
+  echo "debug-bundle cache bypass did not refetch bootstrap: before=$bootstrap_before after=$bootstrap_after" >&2
+  exit 1
+fi
+"$binary" storage get localStorage debug_bundle_sentinel --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.value == "preserved"' >/dev/null
+"$binary" storage indexeddb get cdp-demo-db settings debug-bundle-sentinel --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and .storage.value.preserved == true' >/dev/null
+"$binary" storage list --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
+  | jq -e '.ok == true and (.storage.cookies[] | select(.name == "debug_bundle_sentinel" and .value == "preserved"))' >/dev/null
+"$binary" storage cookies delete --state-dir "$state_dir/cdp-state" --url "$app_url" --name debug_bundle_sentinel --json >/dev/null
 "$binary" storage delete sessionStorage nonce --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --json \
   | jq -e '.ok == true and .storage.backend == "sessionStorage" and .storage.found == true' >/dev/null
 "$binary" storage cookies set --state-dir "$state_dir/cdp-state" --url "$app_url" --name cdp_demo --value enabled --json \
@@ -595,7 +658,7 @@ require_artifact "$state_dir/storage.local.json"
 require_artifact "$state_dir/demo.png"
 mkdir -p "$state_dir/debug-bundle"
 "$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url?token=demo-secret" --since 2s --out-dir "$state_dir/debug-bundle" --run-id demo-run --task-id demo-debug-bundle --stage demo-debug --json \
-  | jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.bundle.schema_version == "cdp-evidence-bundle/v1") and .bundle.default_json == "artifact_references" and (.bundle.public_safe_artifacts >= 1) and (.bundle.local_only_artifacts >= 1) and (.bundle.commands[0].task_id == "demo-debug-bundle") and (.bundle.commands[0].artifact_path == $path) and (.bundle.stages[0].name == "demo-debug") and (has("requests") | not) and (.artifacts | length >= 8) and (.artifact_list[] | select(.type == "workflow-debug-bundle-command-log" and .classification == "public_safe"))' >/dev/null
+  | jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.trigger == "navigate" and .workflow.reloaded == false and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.bundle.schema_version == "cdp-evidence-bundle/v1") and .bundle.default_json == "artifact_references" and (.bundle.public_safe_artifacts >= 1) and (.bundle.local_only_artifacts >= 1) and (.bundle.commands[0].task_id == "demo-debug-bundle") and (.bundle.commands[0].artifact_path == $path) and (.bundle.stages[0].name == "demo-debug") and (has("requests") | not) and (.artifacts | length >= 8) and (.artifact_list[] | select(.type == "workflow-debug-bundle-command-log" and .classification == "public_safe"))' >/dev/null
 require_artifact "$state_dir/debug-bundle/debug-bundle.bundle.json"
 require_artifact "$state_dir/debug-bundle/debug-bundle.command-log.jsonl"
 require_artifact "$state_dir/debug-bundle/debug-bundle.stage-log.json"

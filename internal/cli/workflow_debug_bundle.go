@@ -28,6 +28,8 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	var runID string
 	var taskID string
 	var stageName string
+	var reload bool
+	var ignoreCache bool
 	cmd := &cobra.Command{
 		Use:   "debug-bundle",
 		Short: "Collect a full debug bundle with events, snapshot, screenshot, and artifact references",
@@ -61,6 +63,9 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 			defer cancel()
 
 			rawURL = strings.TrimSpace(rawURL)
+			if rawURL == "" && !reload && ignoreCache {
+				return commandError("usage", "usage", "--reload=false cannot be combined with --ignore-cache=true for an existing target", ExitUsage, []string{"cdp workflow debug-bundle --target <target-id> --reload=false --ignore-cache=false --json"})
+			}
 			outDir = strings.TrimSpace(outDir)
 			runID = strings.TrimSpace(runID)
 			taskID = strings.TrimSpace(taskID)
@@ -77,7 +82,9 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 			}
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
 			requestedURL := rawURL
-			trigger := "attached"
+			trigger := "observe"
+			reloaded := false
+			cachePolicy := "normal_http_cache"
 			var session *cdp.PageSession
 			var err error
 			var client browserEventClient
@@ -148,7 +155,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 						a.connectionRemediationCommands(),
 					)
 				}
-				targetID, err = a.createWorkflowPageTarget(ctx, client, rawURL, "debug-bundle")
+				targetID, err = a.createWorkflowPageTarget(ctx, client, "about:blank", "debug-bundle")
 				if err != nil {
 					closeClient(ctx)
 					return err
@@ -177,15 +184,53 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 			}
 
 			collectorErrors = enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"console": true, "network": true})
+			if len(collectorErrors) > 0 {
+				return commandErrorWithData("collector_enable_failed", "connection", "debug-bundle collectors must enable before the evidence trigger", ExitConnection, []string{"cdp pages --json", "cdp doctor --json"}, map[string]any{"collector_errors": collectorErrors, "target_id": target.TargetID})
+			}
+			cacheRestoreNeeded := false
+			defer func() {
+				if !cacheRestoreNeeded {
+					return
+				}
+				restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer restoreCancel()
+				_ = client.CallSession(restoreCtx, session.SessionID, "Network.setCacheDisabled", map[string]any{"cacheDisabled": false}, nil)
+			}()
 			if rawURL != "" {
+				if ignoreCache {
+					if err := client.CallSession(ctx, session.SessionID, "Network.setCacheDisabled", map[string]any{"cacheDisabled": true}, nil); err != nil {
+						return commandError("debug_bundle_trigger_failed", "connection", fmt.Sprintf("enable cache bypass for target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp workflow debug-bundle --ignore-cache=false --json", "cdp doctor --json"})
+					}
+					cacheRestoreNeeded = true
+					cachePolicy = "bypass_http_cache"
+				}
 				if _, err := session.Navigate(ctx, target.URL); err != nil {
-					collectorErrors = append(collectorErrors, collectorError("navigation", err))
+					return commandError("debug_bundle_trigger_failed", "connection", fmt.Sprintf("navigate target %s after enabling collectors: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				}
+				trigger = "navigate"
+			} else if reload {
+				if err := session.Reload(ctx, ignoreCache); err != nil {
+					return commandError("debug_bundle_trigger_failed", "connection", fmt.Sprintf("reload target %s after enabling collectors: %v", target.TargetID, err), ExitConnection, []string{"cdp workflow debug-bundle --target " + target.TargetID + " --reload=false --ignore-cache=false --json", "cdp doctor --json"})
+				}
+				trigger = "reload"
+				reloaded = true
+				if ignoreCache {
+					cachePolicy = "bypass_http_cache"
 				}
 			}
 
 			requests, requestsTruncated, messages, messagesTruncated, err := collectPageLoadEvents(ctx, client, session.SessionID, since, 100, map[string]bool{"console": true, "network": true})
 			if err != nil {
 				collectorErrors = append(collectorErrors, collectorError("events", err))
+			}
+			if cacheRestoreNeeded {
+				restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				restoreErr := client.CallSession(restoreCtx, session.SessionID, "Network.setCacheDisabled", map[string]any{"cacheDisabled": false}, nil)
+				restoreCancel()
+				cacheRestoreNeeded = false
+				if restoreErr != nil {
+					collectorErrors = append(collectorErrors, collectorError("cache_restore", restoreErr))
+				}
 			}
 			if len(messages) > 0 {
 				for i := range messages {
@@ -255,6 +300,9 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					"requests":         len(requests),
 					"messages":         len(messages),
 					"trigger":          trigger,
+					"reloaded":         reloaded,
+					"ignore_cache":     ignoreCache,
+					"cache_policy":     cachePolicy,
 					"since":            durationString(since),
 					"partial":          len(collectorErrors) > 0,
 					"interactive_only": snapshotInteractiveOnly,
@@ -266,6 +314,9 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					"name":         "debug-bundle",
 					"requested":    workflowRedactor.URL(requestedURL, "workflow.requested"),
 					"trigger":      trigger,
+					"reloaded":     reloaded,
+					"ignore_cache": ignoreCache,
+					"cache_policy": cachePolicy,
 					"run_id":       runID,
 					"task_id":      taskID,
 					"stage":        stageName,
@@ -315,6 +366,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 				commandArgv = append(commandArgv, "--title-contains", titleContains)
 			}
 			commandArgv = append(commandArgv, "--since", durationString(since), "--redact", redact)
+			commandArgv = append(commandArgv, fmt.Sprintf("--reload=%t", reload), fmt.Sprintf("--ignore-cache=%t", ignoreCache))
 			if outDir != "" {
 				commandArgv = append(commandArgv, "--out-dir", outDir)
 			}
@@ -393,6 +445,9 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					"name":                "debug-bundle",
 					"requested_url":       requestedURLOutput,
 					"trigger":             trigger,
+					"reloaded":            reloaded,
+					"ignore_cache":        ignoreCache,
+					"cache_policy":        cachePolicy,
 					"since":               durationString(since),
 					"request_count":       len(requests),
 					"message_count":       len(messages),
@@ -451,5 +506,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	cmd.Flags().StringVar(&runID, "run-id", "", "optional run id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "optional task id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&stageName, "stage", "", "optional stage name recorded in bundle command and stage logs")
+	cmd.Flags().BoolVar(&reload, "reload", true, "reload an existing selected target after collectors are armed")
+	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", true, "bypass ordinary HTTP cache for the evidence-triggering reload or navigation")
 	return cmd
 }

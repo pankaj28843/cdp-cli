@@ -115,9 +115,14 @@ type networkCaptureBody struct {
 	limit         int
 }
 
-func collectNetworkRequests(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, failedOnly bool) ([]networkRequest, bool, error) {
+func collectNetworkRequests(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, failedOnly bool, afterEnable ...func() error) ([]networkRequest, bool, error) {
 	if err := client.CallSession(ctx, sessionID, "Network.enable", map[string]any{}, nil); err != nil {
 		return nil, false, err
+	}
+	if len(afterEnable) > 0 && afterEnable[0] != nil {
+		if err := afterEnable[0](); err != nil {
+			return nil, false, err
+		}
 	}
 
 	requestsByID := map[string]*networkRequest{}

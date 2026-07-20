@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -29,7 +31,12 @@ const (
 
 	ProfileSeedStrategyManaged     = "managed"
 	ProfileSeedStrategyCopyDefault = "copy-default"
+
+	managedTerminalRetention = 24 * time.Hour
+	managedTerminalTailCount = 8
 )
+
+var managedRegistryProcessLock sync.Mutex
 
 type ManagedOptions struct {
 	StateDir            string
@@ -115,6 +122,7 @@ type ManagedOwnershipEvidence struct {
 }
 
 type ManagedProcessRecord struct {
+	GenerationID        string `json:"generation_id,omitempty"`
 	PID                 int    `json:"pid"`
 	BrowserMode         string `json:"browser_mode"`
 	UserDataDir         string `json:"user_data_dir"`
@@ -131,6 +139,8 @@ type ManagedProcessRecord struct {
 }
 
 type ManagedProcessRecordStatus struct {
+	GenerationID        string `json:"generation_id,omitempty"`
+	Lifecycle           string `json:"lifecycle"`
 	PID                 int    `json:"pid"`
 	BrowserMode         string `json:"browser_mode"`
 	UserDataDir         string `json:"user_data_dir"`
@@ -145,12 +155,14 @@ type ManagedProcessRecordStatus struct {
 }
 
 type ManagedProcessReconcileOptions struct {
-	ActivePID     int
-	ReapExtras    bool
-	ReadOnly      bool
-	Now           func() time.Time
-	Signal        func(int) error
-	ProcessLister func(context.Context, string) ([]int, error)
+	ActivePID         int
+	ReapExtras        bool
+	ReadOnly          bool
+	Now               func() time.Time
+	Signal            func(int) error
+	ProcessLister     func(context.Context, string) ([]int, error)
+	TerminalRetention time.Duration
+	TerminalTailCount int
 }
 
 type ManagedProcessSignalFailure struct {
@@ -159,21 +171,33 @@ type ManagedProcessSignalFailure struct {
 }
 
 type ManagedProcessReconcileResult struct {
-	Checked         bool                          `json:"checked"`
-	State           string                        `json:"state"`
-	BrowserMode     string                        `json:"browser_mode"`
-	ActivePID       int                           `json:"active_pid,omitempty"`
-	RegisteredCount int                           `json:"registered_count"`
-	LiveCount       int                           `json:"live_count"`
-	StaleCount      int                           `json:"stale_count"`
-	ReapedCount     int                           `json:"reaped_count"`
-	ReapedPIDs      []int                         `json:"reaped_pids,omitempty"`
-	SkippedPIDs     []int                         `json:"skipped_pids,omitempty"`
-	SignalFailures  []ManagedProcessSignalFailure `json:"signal_failures,omitempty"`
-	SafetyChecks    []string                      `json:"safety_checks,omitempty"`
-	Records         []ManagedProcessRecordStatus  `json:"records,omitempty"`
-	Reason          string                        `json:"reason,omitempty"`
-	NextCommands    []string                      `json:"next_commands,omitempty"`
+	Checked             bool                          `json:"checked"`
+	State               string                        `json:"state"`
+	BrowserMode         string                        `json:"browser_mode"`
+	ActivePID           int                           `json:"active_pid,omitempty"`
+	RegisteredCount     int                           `json:"registered_count"`
+	CompactedCount      int                           `json:"compacted_count"`
+	HistoricalProcesses ManagedProcessHistorySummary  `json:"historical_processes"`
+	LiveCount           int                           `json:"live_count"`
+	StaleCount          int                           `json:"stale_count"`
+	ReapedCount         int                           `json:"reaped_count"`
+	ReapedPIDs          []int                         `json:"reaped_pids,omitempty"`
+	SkippedPIDs         []int                         `json:"skipped_pids,omitempty"`
+	SignalFailures      []ManagedProcessSignalFailure `json:"signal_failures,omitempty"`
+	SafetyChecks        []string                      `json:"safety_checks,omitempty"`
+	Records             []ManagedProcessRecordStatus  `json:"records,omitempty"`
+	Reason              string                        `json:"reason,omitempty"`
+	NextCommands        []string                      `json:"next_commands,omitempty"`
+}
+
+type ManagedProcessHistorySummary struct {
+	Retained            int            `json:"retained"`
+	Compacted           int            `json:"compacted"`
+	LiveProbesAttempted int            `json:"live_probes_attempted"`
+	LifecycleCounts     map[string]int `json:"lifecycle_counts"`
+	SkipReasons         map[string]int `json:"skip_reasons,omitempty"`
+	OldestAgeSeconds    int64          `json:"oldest_age_seconds,omitempty"`
+	LastFailureSummary  string         `json:"last_failure_summary,omitempty"`
 }
 
 func ManagedProfileDir(stateDir string) string {
@@ -561,6 +585,9 @@ func SaveManagedProcessRegistry(stateDir string, registry ManagedProcessRegistry
 	if err := os.MkdirAll(filepath.Dir(ManagedProcessRegistryPath(stateDir)), 0o700); err != nil {
 		return fmt.Errorf("create managed process registry directory: %w", err)
 	}
+	if err := validateManagedRegistryPath(ManagedProcessRegistryPath(stateDir)); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(registry, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal managed process registry: %w", err)
@@ -568,6 +595,103 @@ func SaveManagedProcessRegistry(stateDir string, registry ManagedProcessRegistry
 	data = append(data, '\n')
 	if err := atomicWriteManagedFile(ManagedProcessRegistryPath(stateDir), data, 0o600); err != nil {
 		return fmt.Errorf("write managed process registry: %w", err)
+	}
+	return nil
+}
+
+type managedRegistryLockRecord struct {
+	PID       int    `json:"pid"`
+	CreatedAt string `json:"created_at"`
+}
+
+func withManagedRegistryLock(ctx context.Context, stateDir string, fn func() error) error {
+	managedRegistryProcessLock.Lock()
+	defer managedRegistryProcessLock.Unlock()
+	dir := filepath.Dir(ManagedProcessRegistryPath(stateDir))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create managed registry lock directory: %w", err)
+	}
+	lockPath := filepath.Join(dir, ".managed-processes.lock")
+	for {
+		file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			record, _ := json.Marshal(managedRegistryLockRecord{PID: os.Getpid(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+			if _, writeErr := file.Write(append(record, '\n')); writeErr != nil {
+				_ = file.Close()
+				_ = os.Remove(lockPath)
+				return fmt.Errorf("write managed registry lock: %w", writeErr)
+			}
+			if syncErr := file.Sync(); syncErr != nil {
+				_ = file.Close()
+				_ = os.Remove(lockPath)
+				return fmt.Errorf("sync managed registry lock: %w", syncErr)
+			}
+			lockInfo, statErr := file.Stat()
+			_ = file.Close()
+			if statErr != nil {
+				_ = os.Remove(lockPath)
+				return fmt.Errorf("inspect managed registry lock: %w", statErr)
+			}
+			defer func() {
+				current, err := os.Lstat(lockPath)
+				if err == nil && current.Mode().IsRegular() && os.SameFile(lockInfo, current) {
+					_ = os.Remove(lockPath)
+				}
+			}()
+			return fn()
+		}
+		if !os.IsExist(err) {
+			return fmt.Errorf("acquire managed registry lock: %w", err)
+		}
+		if staleManagedRegistryLock(lockPath, 30*time.Second) {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("acquire managed registry lock: %w", ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func staleManagedRegistryLock(path string, staleAfter time.Duration) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || time.Since(info.ModTime()) < staleAfter {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var record managedRegistryLockRecord
+	if json.Unmarshal(data, &record) != nil || managedRegistryPIDRunning(record.PID) {
+		return false
+	}
+	current, err := os.Lstat(path)
+	if err != nil || !os.SameFile(info, current) {
+		return false
+	}
+	return os.Remove(path) == nil
+}
+
+func managedRegistryPIDRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	return err == nil && process.Signal(syscall.Signal(0)) == nil
+}
+
+func validateManagedRegistryPath(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect managed process registry: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("managed process registry must be a regular file and not a symlink")
 	}
 	return nil
 }
@@ -615,6 +739,9 @@ func atomicWriteManagedFile(path string, data []byte, perm os.FileMode) error {
 }
 
 func LoadManagedProcessRegistry(stateDir string) (ManagedProcessRegistry, bool, error) {
+	if err := validateManagedRegistryPath(ManagedProcessRegistryPath(stateDir)); err != nil {
+		return ManagedProcessRegistry{}, false, err
+	}
 	data, err := os.ReadFile(ManagedProcessRegistryPath(stateDir))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -738,6 +865,8 @@ func ManagedMetadataStatus(metadata ManagedMetadata) ManagedStatus {
 
 func ManagedProcessStatus(record ManagedProcessRecord) ManagedProcessRecordStatus {
 	return ManagedProcessRecordStatus{
+		GenerationID:        managedProcessGenerationID(record),
+		Lifecycle:           managedProcessLifecycle(record),
 		PID:                 record.PID,
 		BrowserMode:         record.BrowserMode,
 		UserDataDir:         record.UserDataDir,
@@ -764,18 +893,32 @@ func RegisterManagedProcessLaunch(stateDir string, metadata ManagedMetadata) err
 	if metadata.ChromePID <= 0 {
 		return fmt.Errorf("register managed process launch: missing Chrome PID")
 	}
-	registry, ok, err := LoadManagedProcessRegistry(stateDir)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		registry = ManagedProcessRegistry{Version: 1, BrowserMode: "headless"}
-	}
-	registry.Records = upsertManagedProcessRecord(registry.Records, managedProcessRecordFromMetadata(metadata, "live"))
-	return SaveManagedProcessRegistry(stateDir, registry)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return withManagedRegistryLock(ctx, stateDir, func() error {
+		registry, ok, err := LoadManagedProcessRegistry(stateDir)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			registry = ManagedProcessRegistry{Version: 1, BrowserMode: "headless"}
+		}
+		registry.Records = upsertManagedProcessRecord(registry.Records, managedProcessRecordFromMetadata(metadata, "live"))
+		return SaveManagedProcessRegistry(stateDir, registry)
+	})
 }
 
 func ReconcileManagedProcesses(ctx context.Context, stateDir string, opts ManagedProcessReconcileOptions) (ManagedProcessReconcileResult, error) {
+	var result ManagedProcessReconcileResult
+	err := withManagedRegistryLock(ctx, stateDir, func() error {
+		var err error
+		result, err = reconcileManagedProcessesLocked(ctx, stateDir, opts)
+		return err
+	})
+	return result, err
+}
+
+func reconcileManagedProcessesLocked(ctx context.Context, stateDir string, opts ManagedProcessReconcileOptions) (ManagedProcessReconcileResult, error) {
 	now := time.Now().UTC()
 	if opts.Now != nil {
 		now = opts.Now().UTC()
@@ -811,6 +954,10 @@ func ReconcileManagedProcesses(ctx context.Context, stateDir string, opts Manage
 		}
 	}
 	result.ActivePID = opts.ActivePID
+	activeGeneration := ""
+	if metadataOK && metadata.ChromePID == opts.ActivePID {
+		activeGeneration = managedProcessGenerationID(managedProcessRecordFromMetadata(metadata, "metadata"))
+	}
 
 	lister := opts.ProcessLister
 	if lister == nil {
@@ -826,6 +973,9 @@ func ReconcileManagedProcesses(ctx context.Context, stateDir string, opts Manage
 	liveSet := map[int]bool{}
 	for _, pid := range livePIDs {
 		liveSet[pid] = true
+	}
+	if opts.ActivePID <= 0 || !liveSet[opts.ActivePID] {
+		activeGeneration = ""
 	}
 	if len(livePIDs) > 0 {
 		result.SafetyChecks = append(result.SafetyChecks, "process_command_line_matches_managed_profile")
@@ -849,13 +999,25 @@ func ReconcileManagedProcesses(ctx context.Context, stateDir string, opts Manage
 		if record.PID <= 0 || record.BrowserMode != "headless" || cleanPath(record.UserDataDir) != managedProfile {
 			continue
 		}
-		if liveSet[record.PID] {
+		generation := managedProcessGenerationID(*record)
+		if liveSet[record.PID] && (activeGeneration == "" || generation == activeGeneration) {
 			record.State = "live"
 			record.LastSeenAt = nowText
 			record.ExitedAt = ""
 			continue
 		}
-		if record.State != "reaped" && record.State != "signal_failed" {
+		if liveSet[record.PID] && generation != "" && activeGeneration != "" && generation != activeGeneration {
+			record.State = "superseded"
+			if record.ExitedAt == "" {
+				record.ExitedAt = nowText
+			}
+			continue
+		}
+		if generation == "" {
+			record.State = "indeterminate"
+			continue
+		}
+		if record.State != "reaped" {
 			record.State = "exited"
 			if record.ExitedAt == "" {
 				record.ExitedAt = nowText
@@ -893,17 +1055,20 @@ func ReconcileManagedProcesses(ctx context.Context, stateDir string, opts Manage
 		}
 	}
 
-	result.LiveCount = 0
+	registry.Records, result.HistoricalProcesses = compactManagedProcessRecords(registry.Records, liveSet, activeGeneration, now, opts.TerminalRetention, opts.TerminalTailCount)
+	result.CompactedCount = result.HistoricalProcesses.Compacted
+	result.LiveCount = len(liveSet)
 	result.StaleCount = 0
 	for _, record := range registry.Records {
 		if record.PID <= 0 || record.BrowserMode != "headless" || cleanPath(record.UserDataDir) != managedProfile {
 			continue
 		}
 		if liveSet[record.PID] {
-			result.LiveCount++
 			continue
 		}
-		result.StaleCount++
+		if lifecycle := managedProcessLifecycle(record); lifecycle == "exited" || lifecycle == "superseded" {
+			result.StaleCount++
+		}
 	}
 	result.RegisteredCount = len(registry.Records)
 	result.ReapedCount = len(result.ReapedPIDs)
@@ -936,7 +1101,7 @@ func ReconcileManagedProcesses(ctx context.Context, stateDir string, opts Manage
 }
 
 func managedProcessRecordFromMetadata(metadata ManagedMetadata, state string) ManagedProcessRecord {
-	return ManagedProcessRecord{
+	record := ManagedProcessRecord{
 		PID:                 metadata.ChromePID,
 		BrowserMode:         metadata.BrowserMode,
 		UserDataDir:         metadata.UserDataDir,
@@ -948,6 +1113,8 @@ func managedProcessRecordFromMetadata(metadata ManagedMetadata, state string) Ma
 		ProcessStartTime:    metadata.ProcessStartTime,
 		ProfileSeedStrategy: metadata.ProfileSeedStrategy,
 	}
+	record.GenerationID = managedProcessGenerationID(record)
+	return record
 }
 
 func upsertManagedProcessRecord(records []ManagedProcessRecord, record ManagedProcessRecord) []ManagedProcessRecord {
@@ -957,7 +1124,8 @@ func upsertManagedProcessRecord(records []ManagedProcessRecord, record ManagedPr
 	if strings.TrimSpace(record.BrowserMode) == "" {
 		record.BrowserMode = "headless"
 	}
-	idx := findManagedProcessRecord(records, record.PID)
+	record.GenerationID = managedProcessGenerationID(record)
+	idx := findManagedProcessGeneration(records, record)
 	if idx < 0 {
 		return append(records, record)
 	}
@@ -1002,6 +1170,36 @@ func upsertManagedProcessRecord(records []ManagedProcessRecord, record ManagedPr
 	return records
 }
 
+func managedProcessGenerationID(record ManagedProcessRecord) string {
+	if strings.TrimSpace(record.GenerationID) != "" {
+		return strings.TrimSpace(record.GenerationID)
+	}
+	identity := strings.Join([]string{
+		strconv.Itoa(record.PID),
+		strings.TrimSpace(record.ProcessStartTime),
+		strings.TrimSpace(record.OwnershipMarker),
+		cleanPath(record.UserDataDir),
+	}, "\x00")
+	if record.PID <= 0 || strings.TrimSpace(record.ProcessStartTime) == "" || strings.TrimSpace(record.OwnershipMarker) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:8])
+}
+
+func findManagedProcessGeneration(records []ManagedProcessRecord, record ManagedProcessRecord) int {
+	generationID := managedProcessGenerationID(record)
+	if generationID != "" {
+		for i := range records {
+			if managedProcessGenerationID(records[i]) == generationID {
+				return i
+			}
+		}
+		return -1
+	}
+	return findManagedProcessRecord(records, record.PID)
+}
+
 func findManagedProcessRecord(records []ManagedProcessRecord, pid int) int {
 	for i, record := range records {
 		if record.PID == pid {
@@ -1012,7 +1210,7 @@ func findManagedProcessRecord(records []ManagedProcessRecord, pid int) int {
 }
 
 func markManagedProcessRecordCleanup(records []ManagedProcessRecord, pid int, state, at, reason string) {
-	idx := findManagedProcessRecord(records, pid)
+	idx := findNewestManagedProcessRecord(records, pid)
 	if idx < 0 {
 		return
 	}
@@ -1024,19 +1222,36 @@ func markManagedProcessRecordCleanup(records []ManagedProcessRecord, pid int, st
 	}
 }
 
+func findNewestManagedProcessRecord(records []ManagedProcessRecord, pid int) int {
+	best := -1
+	for i := range records {
+		if records[i].PID != pid {
+			continue
+		}
+		if best < 0 || managedProcessRecordNewer(records[i], records[best]) {
+			best = i
+		}
+	}
+	return best
+}
+
 func markManagedProcessesStopped(stateDir string, pids []int, state, reason string) {
 	if len(pids) == 0 {
 		return
 	}
-	registry, ok, err := LoadManagedProcessRegistry(stateDir)
-	if err != nil || !ok {
-		return
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, pid := range pids {
-		markManagedProcessRecordCleanup(registry.Records, pid, state, now, reason)
-	}
-	_ = SaveManagedProcessRegistry(stateDir, registry)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = withManagedRegistryLock(ctx, stateDir, func() error {
+		registry, ok, err := LoadManagedProcessRegistry(stateDir)
+		if err != nil || !ok {
+			return err
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		for _, pid := range pids {
+			markManagedProcessRecordCleanup(registry.Records, pid, state, now, reason)
+		}
+		return SaveManagedProcessRegistry(stateDir, registry)
+	})
 }
 
 func managedProcessPIDToRetain(records []ManagedProcessRecord, liveSet map[int]bool) int {
@@ -1074,7 +1289,7 @@ func managedProcessRecordNewer(a, b ManagedProcessRecord) bool {
 }
 
 func managedProcessRecordTime(record ManagedProcessRecord) time.Time {
-	for _, value := range []string{record.ProcessStartTime, record.StartedAt, record.LastSeenAt} {
+	for _, value := range []string{record.CleanupAt, record.ExitedAt, record.LastSeenAt, record.ProcessStartTime, record.StartedAt} {
 		if strings.TrimSpace(value) == "" {
 			continue
 		}
@@ -1083,6 +1298,99 @@ func managedProcessRecordTime(record ManagedProcessRecord) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func managedProcessLifecycle(record ManagedProcessRecord) string {
+	state := strings.ToLower(strings.TrimSpace(record.State))
+	switch state {
+	case "live", "metadata":
+		return "active"
+	case "exited", "stopped", "reaped", "launch_failed":
+		return "exited"
+	case "superseded":
+		return "superseded"
+	case "signal_failed", "live_unregistered", "":
+		return "indeterminate"
+	default:
+		return "unknown"
+	}
+}
+
+func compactManagedProcessRecords(records []ManagedProcessRecord, liveSet map[int]bool, activeGeneration string, now time.Time, retention time.Duration, tailCount int) ([]ManagedProcessRecord, ManagedProcessHistorySummary) {
+	if retention <= 0 {
+		retention = managedTerminalRetention
+	}
+	if tailCount <= 0 {
+		tailCount = managedTerminalTailCount
+	}
+	summary := ManagedProcessHistorySummary{
+		LifecycleCounts: map[string]int{},
+		SkipReasons:     map[string]int{},
+	}
+	type candidate struct {
+		index  int
+		when   time.Time
+		reason string
+	}
+	var candidates []candidate
+	for i, record := range records {
+		lifecycle := managedProcessLifecycle(record)
+		summary.LifecycleCounts[lifecycle]++
+		generation := managedProcessGenerationID(record)
+		if generation != "" && generation == activeGeneration {
+			summary.SkipReasons["active_generation"]++
+			continue
+		}
+		if liveSet[record.PID] && (activeGeneration == "" || generation == activeGeneration) {
+			summary.SkipReasons["live_process"]++
+			continue
+		}
+		if generation == "" {
+			summary.SkipReasons["missing_ownership_identity"]++
+			continue
+		}
+		if lifecycle != "exited" && lifecycle != "superseded" {
+			summary.SkipReasons["non_terminal_"+lifecycle]++
+			continue
+		}
+		when := managedProcessRecordTime(record)
+		if when.IsZero() {
+			summary.SkipReasons["missing_terminal_time"]++
+			continue
+		}
+		candidates = append(candidates, candidate{index: i, when: when, reason: strings.TrimSpace(record.CleanupReason)})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].when.After(candidates[j].when) })
+	remove := map[int]bool{}
+	for rank, item := range candidates {
+		if summary.LastFailureSummary == "" && item.reason != "" {
+			summary.LastFailureSummary = item.reason
+		}
+		age := now.Sub(item.when)
+		if age < 0 {
+			summary.SkipReasons["future_terminal_time"]++
+			continue
+		}
+		if ageSeconds := int64(age.Seconds()); ageSeconds > summary.OldestAgeSeconds {
+			summary.OldestAgeSeconds = ageSeconds
+		}
+		if rank >= tailCount || age > retention {
+			remove[item.index] = true
+			summary.Compacted++
+			continue
+		}
+		summary.Retained++
+	}
+	if len(remove) == 0 {
+		return records, summary
+	}
+	compacted := make([]ManagedProcessRecord, 0, len(records)-len(remove))
+	for i, record := range records {
+		if !remove[i] {
+			compacted = append(compacted, record)
+		}
+	}
+	return compacted, summary
 }
 
 func sortManagedProcessRecords(records []ManagedProcessRecord) {

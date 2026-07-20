@@ -16,6 +16,7 @@ func (a *app) newConsoleCommand() *cobra.Command {
 	var limit int
 	var errorsOnly bool
 	var types string
+	var readyFile string
 	cmd := &cobra.Command{
 		Use:   "console",
 		Short: "Capture console and browser log messages from a page target",
@@ -50,8 +51,19 @@ func (a *app) newConsoleCommand() *cobra.Command {
 			defer session.Close(ctx)
 
 			typeSet := parseCSVSet(types)
-			messages, truncated, err := collectConsoleMessages(ctx, client, session.SessionID, wait, limit, errorsOnly, typeSet)
+			var removeReady func()
+			var readyErr error
+			messages, truncated, err := collectConsoleMessages(ctx, client, session.SessionID, wait, limit, errorsOnly, typeSet, func() error {
+				removeReady, readyErr = publishCollectorReadiness(readyFile, target.TargetID, session.SessionID, []string{"Log", "Runtime"})
+				return readyErr
+			})
+			if removeReady != nil {
+				defer removeReady()
+			}
 			if err != nil {
+				if readyErr != nil {
+					return collectorReadinessError(readyErr)
+				}
 				return commandError(
 					"connection_failed",
 					"connection",
@@ -83,5 +95,6 @@ func (a *app) newConsoleCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of messages to return; use 0 for no limit")
 	cmd.Flags().BoolVar(&errorsOnly, "errors", false, "only return warnings, errors, assertions, and exceptions")
 	cmd.Flags().StringVar(&types, "types", "", "comma-separated console types or log levels to keep, such as error,warning")
+	cmd.Flags().StringVar(&readyFile, "ready-file", "", "exclusive owner-only readiness artifact written after exact-target attach and Runtime/Log enable")
 	return cmd
 }

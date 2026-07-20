@@ -82,6 +82,14 @@ artifact writes as ordered phases. Phase results stay inside the maintenance
 phase array; top-level cron status links to task definitions, managed process
 lifecycle state, and recent artifact paths for troubleshooting.
 
+Managed process health is generation-scoped. The current owned generation is
+identified independently of PID reuse; terminal exited/superseded generations
+are diagnostic history and are never connection-probed as current dependencies.
+Reconciliation holds the registry lock, atomically replaces the owner-only
+regular registry, retains at most eight terminal generations younger than 24
+hours, preserves active/indeterminate/unknown records, and reports compaction
+and skip counts separately from current health.
+
 Cron owns the lifecycle of its output. Headed keepalive and headless maintenance
 run through a latest-run writer with an independent hard byte cap while already
 holding their task lock, so the target log is bounded before child output opens.

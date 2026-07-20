@@ -466,8 +466,20 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				)
 			} else if req.Method == "Fetch.fulfillRequest" || req.Method == "Fetch.continueRequest" || req.Method == "Fetch.disable" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "Network.setCacheDisabled" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Network.enable" {
 				resp["result"] = map[string]any{}
+				if strings.Contains(req.SessionID, "event-tap") {
+					events = append(events, map[string]any{
+						"sessionId": "session-foreign-target",
+						"method":    "Network.requestWillBeSent",
+						"params": map[string]any{
+							"requestId": "foreign-request",
+							"request":   map[string]any{"url": "https://foreign.example.test/private", "method": "GET"},
+						},
+					})
+				}
 				events = append(events,
 					map[string]any{
 						"sessionId": req.SessionID,

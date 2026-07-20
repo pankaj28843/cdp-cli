@@ -474,10 +474,12 @@ func commandExamples(path string) []string {
 			"cdp console --json",
 			"cdp console --errors --wait 2s --json",
 			"cdp console --url-contains localhost --types error,warning --json",
+			"cdp console --target <target-id> --wait 30s --ready-file tmp/console.ready.json --json",
 		},
 		"cdp network": {
 			"cdp network --wait 2s --json",
 			"cdp network --failed --url-contains localhost --json",
+			"cdp network --target <target-id> --wait 30s --ready-file tmp/network.ready.json --json",
 		},
 		"cdp network capture": {
 			"cdp network capture --reload --wait 20s --out tmp/network.local.json --json",
@@ -619,6 +621,7 @@ func commandExamples(path string) []string {
 			"cdp workflow debug-bundle --url 'https://example.com' --since 5s --screenshot-view --out-dir tmp/debug-bundle --task-id research-preflight --json",
 			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --run-id run-1 --task-id task-1 --stage selection --json",
 			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --inline-payloads --redact safe --json",
+			"cdp workflow debug-bundle --target <target-id> --reload=false --ignore-cache=false --json",
 		},
 		"cdp workflow action-capture": {
 			"cdp workflow action-capture --action click:'button.submit' --include network,console,dom,text,a11y,screenshot --wait-after 2s --evidence-out-dir tmp/action-capture --json",
@@ -660,6 +663,7 @@ func commandExamples(path string) []string {
 		"cdp workflow page-load": {
 			"cdp workflow page-load 'https://example.com' --wait 10s --json",
 			"cdp workflow page-load --url-contains localhost --reload --include console,network,performance --out tmp/page-load.local.json --json",
+			"cdp workflow page-load --target <target-id> --wait 30s --ready-file tmp/page-load.ready.json --json",
 		},
 		"cdp workflow rendered-extract": {
 			"cdp workflow rendered-extract 'https://example.com' --out-dir tmp/rendered-example --json",
@@ -717,7 +721,10 @@ func commandExamples(path string) []string {
 	examples["cdp memory counters"] = []string{"cdp memory counters --json"}
 	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"}
 	examples["cdp events"] = []string{"cdp events tap --duration 10s --json"}
-	examples["cdp events tap"] = []string{"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json"}
+	examples["cdp events tap"] = []string{
+		"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json",
+		"cdp events tap --target <target-id> --duration 30s --ready-file tmp/events.ready.json --json",
+	}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}
 	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}

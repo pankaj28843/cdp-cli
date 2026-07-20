@@ -38,12 +38,17 @@ type consoleMessageArg struct {
 	UnserializableValue string          `json:"unserializable_value,omitempty"`
 }
 
-func collectConsoleMessages(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, errorsOnly bool, typeSet map[string]bool) ([]consoleMessage, bool, error) {
+func collectConsoleMessages(ctx context.Context, client browserEventClient, sessionID string, wait time.Duration, limit int, errorsOnly bool, typeSet map[string]bool, afterEnable ...func() error) ([]consoleMessage, bool, error) {
 	if err := client.CallSession(ctx, sessionID, "Runtime.enable", map[string]any{}, nil); err != nil {
 		return nil, false, err
 	}
 	if err := client.CallSession(ctx, sessionID, "Log.enable", map[string]any{}, nil); err != nil {
 		return nil, false, err
+	}
+	if len(afterEnable) > 0 && afterEnable[0] != nil {
+		if err := afterEnable[0](); err != nil {
+			return nil, false, err
+		}
 	}
 
 	var messages []consoleMessage
