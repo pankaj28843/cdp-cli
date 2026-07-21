@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -24,23 +25,41 @@ type locatorFindResult struct {
 }
 
 type locatorMatch struct {
-	Index             int          `json:"index"`
-	SelectorHint      string       `json:"selector_hint"`
-	SelectorAmbiguous bool         `json:"selector_ambiguous"`
-	Tag               string       `json:"tag"`
-	Type              string       `json:"type,omitempty"`
-	Role              string       `json:"role,omitempty"`
-	Name              string       `json:"name,omitempty"`
-	Text              string       `json:"text,omitempty"`
-	Placeholder       string       `json:"placeholder,omitempty"`
-	Title             string       `json:"title,omitempty"`
-	Alt               string       `json:"alt,omitempty"`
-	TestID            string       `json:"test_id,omitempty"`
-	Visible           bool         `json:"visible"`
-	Disabled          bool         `json:"disabled,omitempty"`
-	ReadOnly          bool         `json:"read_only,omitempty"`
-	ContentEditable   bool         `json:"content_editable,omitempty"`
-	Rect              snapshotRect `json:"rect"`
+	Index                 int          `json:"index"`
+	SelectorHint          string       `json:"selector_hint"`
+	SelectorAmbiguous     bool         `json:"selector_ambiguous"`
+	ResolvedNodeSelector  string       `json:"-"`
+	ResolvedNodeID        string       `json:"-"`
+	ResolvedBackendNodeID int          `json:"-"`
+	Tag                   string       `json:"tag"`
+	Type                  string       `json:"type,omitempty"`
+	Role                  string       `json:"role,omitempty"`
+	Name                  string       `json:"name,omitempty"`
+	Text                  string       `json:"text,omitempty"`
+	Placeholder           string       `json:"placeholder,omitempty"`
+	Title                 string       `json:"title,omitempty"`
+	Alt                   string       `json:"alt,omitempty"`
+	TestID                string       `json:"test_id,omitempty"`
+	Visible               bool         `json:"visible"`
+	Disabled              bool         `json:"disabled,omitempty"`
+	ReadOnly              bool         `json:"read_only,omitempty"`
+	ContentEditable       bool         `json:"content_editable,omitempty"`
+	Rect                  snapshotRect `json:"rect"`
+}
+
+func (match *locatorMatch) UnmarshalJSON(data []byte) error {
+	type publicLocatorMatch locatorMatch
+	decoded := struct {
+		*publicLocatorMatch
+		ResolvedNodeSelector string `json:"resolved_node_selector"`
+		ResolvedNodeID       string `json:"resolved_node_id"`
+	}{publicLocatorMatch: (*publicLocatorMatch)(match)}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	match.ResolvedNodeSelector = decoded.ResolvedNodeSelector
+	match.ResolvedNodeID = decoded.ResolvedNodeID
+	return nil
 }
 
 func (a *app) newLocatorCommand() *cobra.Command {
@@ -165,7 +184,18 @@ func locatorNextCommands(result locatorFindResult) []string {
 	}
 	match := result.Matches[0]
 	if strings.TrimSpace(match.SelectorHint) == "" || match.SelectorAmbiguous {
-		return []string{"cdp locator find <query> --by " + result.By + " --json", "cdp snapshot --selector body --json"}
+		options := locatorActionOptions{
+			By:            result.By,
+			Role:          result.Role,
+			TestIDAttr:    result.TestIDAttr,
+			Exact:         result.Exact,
+			IncludeHidden: result.IncludeHidden,
+		}
+		commands := []string{semanticLocatorActionCommand("click", result.Query, options)}
+		if locatorMatchIsEditable(match) {
+			commands = append([]string{semanticLocatorActionCommand("fill", result.Query, options)}, commands...)
+		}
+		return commands
 	}
 	selector := shellQuote(match.SelectorHint)
 	commands := []string{"cdp click " + selector + " --json", "cdp snapshot --selector " + selector + " --json"}
@@ -173,6 +203,26 @@ func locatorNextCommands(result locatorFindResult) []string {
 		commands = append([]string{"cdp fill " + selector + " <value> --json"}, commands...)
 	}
 	return commands
+}
+
+func semanticLocatorActionCommand(action, query string, opts locatorActionOptions) string {
+	command := "cdp " + action + " " + shellQuote(query) + " --by " + opts.By
+	if action == "fill" {
+		command = "cdp fill " + shellQuote(query) + " <value> --by " + opts.By
+	}
+	if opts.By == "role" {
+		command += " --role " + shellQuote(opts.Role)
+	}
+	if opts.Exact {
+		command += " --exact"
+	}
+	if opts.IncludeHidden {
+		command += " --include-hidden"
+	}
+	if opts.By == "test-id" && opts.TestIDAttr != "" && opts.TestIDAttr != "data-testid" {
+		command += " --test-id-attr " + shellQuote(opts.TestIDAttr)
+	}
+	return command + " --json"
 }
 
 func locatorMatchIsEditable(match locatorMatch) bool {
@@ -237,21 +287,7 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
   };
   const ownText = (el) => norm(Array.from(el.childNodes || []).filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent || "").join(" "));
   const textOf = (el) => norm(ownText(el) || el.innerText || el.textContent || "");
-  const labelledBy = (el) => {
-    const ids = norm(el.getAttribute("aria-labelledby")).split(" ").filter(Boolean);
-    return norm(ids.map((id) => {
-      const node = document.getElementById(id);
-      return node ? node.innerText || node.textContent || "" : "";
-    }).join(" "));
-  };
-  const labelText = (el) => {
-    if (el.id) {
-      const label = document.querySelector('label[for="' + cssEscape(el.id) + '"]');
-      if (label) return norm(label.innerText || label.textContent);
-    }
-    const parent = el.closest("label");
-    return parent ? norm(parent.innerText || parent.textContent) : "";
-  };
+  %s
   const implicitRole = (el) => {
     const explicit = norm(el.getAttribute("role")).split(" ")[0];
     if (explicit) return explicit;
@@ -273,7 +309,6 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
     }
     return "";
   };
-  const accessibleName = (el) => norm(el.getAttribute("aria-label") || labelledBy(el) || el.getAttribute("alt") || el.getAttribute("title") || labelText(el) || el.getAttribute("placeholder") || el.getAttribute("value") || textOf(el));
   const selectorHint = (el) => {
     const tag = el.tagName.toLowerCase();
     if (el.id) return tag + "#" + cssEscape(el.id);
@@ -302,6 +337,25 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
       node = parent;
     }
     return parts.join(" > ") || tag;
+  };
+  const resolvedNodeSelector = (el) => {
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === Node.ELEMENT_NODE) {
+      const tag = node.tagName.toLowerCase();
+      const parent = node.parentElement;
+      if (!parent) {
+        parts.unshift(tag);
+      } else {
+        const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
+        const index = siblings.indexOf(node) + 1;
+        parts.unshift(siblings.length > 1 ? tag + ":nth-of-type(" + index + ")" : tag);
+      }
+      const candidate = parts.join(" > ");
+      if (document.querySelectorAll(candidate).length === 1) return candidate;
+      node = parent;
+    }
+    return parts.join(" > ");
   };
   const matchesText = (value) => exact ? lower(value) === queryLower : lower(value).includes(queryLower);
   const all = () => Array.from(document.querySelectorAll("body *"));
@@ -338,6 +392,8 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
       index,
       selector_hint: hint,
       selector_ambiguous: document.querySelectorAll(hint).length !== 1,
+      resolved_node_selector: resolvedNodeSelector(el),
+      resolved_node_id: el.id || "",
       tag,
       type: el.getAttribute("type") || "",
       role,
@@ -355,5 +411,14 @@ func locatorFindExpression(by, query, role string, exact, includeHidden bool, te
     };
   });
   return { url: location.href, title: document.title, by, query, role: roleQuery, exact, include_hidden: includeHidden, test_id_attr: testIDAttr, count: visibleFiltered.length, returned: matches.length, strict: visibleFiltered.length === 1, matches, marker };
-})()`, jsStringLiteral(by), jsStringLiteral(query), jsStringLiteral(role), exact, includeHidden, jsStringLiteral(testIDAttr), limit)
+})()`, jsStringLiteral(by), jsStringLiteral(query), jsStringLiteral(role), exact, includeHidden, jsStringLiteral(testIDAttr), limit, accessibleNameHelpersJS())
+}
+
+func accessibleNameHelpersJS() string {
+	return `const labelledBy = (el) => norm(norm(el.getAttribute("aria-labelledby")).split(" ").filter(Boolean).map((id) => {
+    const node = document.getElementById(id);
+    return node ? node.innerText || node.textContent || "" : "";
+  }).join(" "));
+  const labelText = (el) => norm(el.labels && el.labels.length ? Array.from(el.labels).map((label) => label.innerText || label.textContent || "").join(" ") : "");
+  const accessibleName = (el) => norm(el.getAttribute("aria-label") || labelledBy(el) || el.getAttribute("alt") || el.getAttribute("title") || labelText(el) || el.getAttribute("placeholder") || el.getAttribute("value") || el.innerText || el.textContent || "");`
 }

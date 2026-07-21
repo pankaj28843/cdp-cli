@@ -72,6 +72,35 @@ func TestLocatorFindRoleRequiresRoleFlag(t *testing.T) {
 	}
 }
 
+func TestLocatorFindSuggestsSemanticActionWhenCSSHintIsAmbiguous(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"locator", "find", "Delete Chat", "--by", "role", "--role", "menuitem", "--exact", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("locator find exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		NextCommands []string `json:"next_commands"`
+		Matches      []struct {
+			SelectorAmbiguous bool `json:"selector_ambiguous"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("locator find output is invalid JSON: %v", err)
+	}
+	if len(got.Matches) != 1 || !got.Matches[0].SelectorAmbiguous {
+		t.Fatalf("locator matches = %+v, want one ambiguous CSS hint", got.Matches)
+	}
+	if !containsSubstring(got.NextCommands, "cdp click 'Delete Chat' --by role --role menuitem --exact --json") {
+		t.Fatalf("next commands = %+v, want semantic click suggestion", got.NextCommands)
+	}
+}
+
 func containsSubstring(values []string, needle string) bool {
 	for _, value := range values {
 		if strings.Contains(value, needle) {

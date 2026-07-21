@@ -41,6 +41,8 @@ var fakeDelayedAssertRoleAttempts atomic.Int64
 var fakeDelayedAssertNameAttempts atomic.Int64
 var fakeDelayedAssertViewportAttempts atomic.Int64
 var fakeDelayedWaitEvalAttempts atomic.Int64
+var fakeSemanticDriftActionabilityAttempts atomic.Int64
+var fakeSemanticReplacementDescribeAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
 
 func TestMain(m *testing.M) {
@@ -436,10 +438,23 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 				_ = json.Unmarshal(req.Params, &params)
 				nodeID := 2
+				if strings.Contains(params.Selector, "nth-of-type(4)") {
+					nodeID = 4
+				}
 				if params.Selector == "#missing" {
 					nodeID = 0
 				}
 				resp["result"] = map[string]any{"nodeId": nodeID}
+			} else if req.Method == "DOM.describeNode" {
+				var params struct {
+					NodeID int `json:"nodeId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				backendNodeID := params.NodeID + 100
+				if params.NodeID == 4 && fakeSemanticReplacementDescribeAttempts.Add(1) >= 2 {
+					backendNodeID++
+				}
+				resp["result"] = map[string]any{"node": map[string]any{"nodeId": params.NodeID, "backendNodeId": backendNodeID}}
 			} else if req.Method == "DOM.setFileInputFiles" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setTimezoneOverride" || req.Method == "Emulation.setLocaleOverride" || req.Method == "Emulation.setCPUThrottlingRate" || req.Method == "Network.emulateNetworkConditions" {
@@ -1182,7 +1197,11 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			query = "Search"
 		}
 		includeHidden := strings.Contains(req.Expression, "const includeHidden = true")
+		exact := strings.Contains(req.Expression, "const exact = true")
 		selector := "input#q"
+		selectorHint := selector
+		selectorAmbiguous := false
+		resolvedNodeSelector := selector
 		tag := "input"
 		elementType := "search"
 		role := "searchbox"
@@ -1193,10 +1212,72 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		contentEditable := false
 		if by == "role" && roleQuery == "button" {
 			selector = "button#submit"
+			selectorHint = selector
+			resolvedNodeSelector = selector
 			tag = "button"
 			elementType = "submit"
 			role = "button"
 			placeholder = ""
+		}
+		if query == "Delete Chat" && by == "role" && roleQuery == "menuitem" {
+			selector = "main > div:nth-of-type(2) > div:nth-of-type(2)"
+			selectorHint = "div[role=\"menuitem\"]"
+			selectorAmbiguous = true
+			resolvedNodeSelector = selector
+			tag = "div"
+			elementType = ""
+			role = "menuitem"
+			name = "Delete Chat"
+			placeholder = ""
+		}
+		if query == "Drifting menuitem" && by == "role" && roleQuery == "menuitem" {
+			selector = "main > div:nth-of-type(3) > div:nth-of-type(2)"
+			selectorHint = "div[role=\"menuitem\"]"
+			selectorAmbiguous = true
+			resolvedNodeSelector = selector
+			tag = "div"
+			elementType = ""
+			role = "menuitem"
+			name = "Drifting menuitem"
+			placeholder = ""
+		}
+		if query == "Replacing menuitem" && by == "role" && roleQuery == "menuitem" {
+			selector = "main > div:nth-of-type(4) > div:nth-of-type(2)"
+			selectorHint = "div[role=\"menuitem\"]"
+			selectorAmbiguous = true
+			resolvedNodeSelector = selector
+			tag = "div"
+			elementType = ""
+			role = "menuitem"
+			name = "Replacing menuitem"
+			placeholder = ""
+		}
+		if query == "Duplicate menuitem" {
+			matches := make([]map[string]any, 0, 2)
+			for index := 0; index < 2; index++ {
+				matches = append(matches, map[string]any{
+					"index":                  index,
+					"selector_hint":          "div[role=\"menuitem\"]",
+					"selector_ambiguous":     true,
+					"resolved_node_selector": fmt.Sprintf("main > div:nth-of-type(%d)", index+1),
+					"tag":                    "div",
+					"role":                   "menuitem",
+					"name":                   "Duplicate menuitem",
+					"visible":                true,
+					"rect":                   map[string]any{"x": 10, "y": 20 + index*30, "width": 300, "height": 24},
+				})
+			}
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url": "https://example.test/app", "title": "Example App",
+						"by": by, "query": query, "role": roleQuery, "exact": exact,
+						"include_hidden": includeHidden, "test_id_attr": "data-testid",
+						"count": 2, "returned": 2, "strict": false, "matches": matches,
+					},
+				},
+			}
 		}
 		if query == "Drag target" || query == "drag-target" {
 			selector = "div#drag-target"
@@ -1440,6 +1521,10 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 				},
 			}
 		}
+		if !selectorAmbiguous {
+			selectorHint = selector
+			resolvedNodeSelector = selector
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -1449,27 +1534,28 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 					"by":             by,
 					"query":          query,
 					"role":           roleQuery,
-					"exact":          false,
+					"exact":          exact,
 					"include_hidden": includeHidden,
 					"test_id_attr":   "data-testid",
 					"count":          1,
 					"returned":       1,
 					"strict":         true,
 					"matches": []map[string]any{{
-						"index":              0,
-						"selector_hint":      selector,
-						"selector_ambiguous": false,
-						"tag":                tag,
-						"type":               elementType,
-						"role":               role,
-						"name":               name,
-						"text":               "",
-						"placeholder":        placeholder,
-						"visible":            true,
-						"disabled":           disabled,
-						"read_only":          readOnly,
-						"content_editable":   contentEditable,
-						"rect":               map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
+						"index":                  0,
+						"selector_hint":          selectorHint,
+						"selector_ambiguous":     selectorAmbiguous,
+						"resolved_node_selector": resolvedNodeSelector,
+						"tag":                    tag,
+						"type":                   elementType,
+						"role":                   role,
+						"name":                   name,
+						"text":                   "",
+						"placeholder":            placeholder,
+						"visible":                true,
+						"disabled":               disabled,
+						"read_only":              readOnly,
+						"content_editable":       contentEditable,
+						"rect":                   map[string]any{"x": 10, "y": 20, "width": 300, "height": 40},
 					}},
 				},
 			},
@@ -2320,6 +2406,30 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
 			point = map[string]any{"x": 160, "y": 40, "hit_tag": "button", "hit_id": "submit", "hit_role": "button", "target_matches": true}
 		}
+		if selector == "main > div:nth-of-type(2) > div:nth-of-type(2)" {
+			tag = "div"
+			role = "menuitem"
+			name = "Delete Chat"
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "", "hit_role": "menuitem", "target_matches": true}
+		}
+		if selector == "main > div:nth-of-type(3) > div:nth-of-type(2)" {
+			tag = "div"
+			role = "menuitem"
+			name = "Drifting menuitem"
+			if fakeSemanticDriftActionabilityAttempts.Add(1) >= 2 {
+				name = "Sibling menuitem"
+			}
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "", "hit_role": "menuitem", "target_matches": true}
+		}
+		if selector == "main > div:nth-of-type(4) > div:nth-of-type(2)" {
+			tag = "div"
+			role = "menuitem"
+			name = "Replacing menuitem"
+			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
+			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "", "hit_role": "menuitem", "target_matches": true}
+		}
 		if selector == "button#covered" || selector == "#covered-button" {
 			tag = "button"
 			elementType = "button"
@@ -2540,6 +2650,12 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		for _, checkName := range required {
 			actionable = actionable && passedByName[checkName]
 		}
+		targetElementID := ""
+		if strings.HasPrefix(selector, "#") {
+			targetElementID = strings.TrimPrefix(selector, "#")
+		} else if strings.HasPrefix(selector, tag+"#") {
+			targetElementID = strings.TrimPrefix(selector, tag+"#")
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -2555,7 +2671,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 					"checks":          checks,
 					"target": map[string]any{
 						"tag":              tag,
-						"id":               strings.TrimPrefix(strings.TrimPrefix(selector, tag+"#"), "#"),
+						"id":               targetElementID,
 						"type":             elementType,
 						"role":             role,
 						"name":             name,

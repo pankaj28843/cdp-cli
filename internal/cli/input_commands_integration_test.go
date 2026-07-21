@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -568,6 +569,190 @@ func TestClickTrialByRoleLocatorJSON(t *testing.T) {
 	}
 	if !got.Actionability.Actionable || !got.Actionability.Trial || len(got.Actionability.Required) != 5 || !got.Actionability.Checks.Visible.Passed || !got.Actionability.Checks.Stable.Passed || !got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.Enabled.Passed {
 		t.Fatalf("click trial actionability = %+v, want passing click checks", got.Actionability)
+	}
+}
+
+func TestClickByUniqueSemanticLocatorUsesResolvedNodeWhenCSSHintIsAmbiguous(t *testing.T) {
+	for _, trial := range []bool{true, false} {
+		t.Run(fmt.Sprintf("trial=%t", trial), func(t *testing.T) {
+			server := newFakeCDPServer(t, []map[string]any{
+				{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+			})
+			defer server.Close()
+			startFakeDaemon(t, server, "browser_url")
+
+			args := []string{"click", "Delete Chat", "--by", "role", "--role", "menuitem", "--exact", "--strategy", "raw-input", "--json"}
+			if trial {
+				args = append(args, "--trial")
+			} else {
+				args = append(args, "--wait-url", "https://example.test/app")
+			}
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitOK {
+				t.Fatalf("semantic click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+			}
+
+			var got struct {
+				OK               bool   `json:"ok"`
+				ResolvedSelector string `json:"resolved_selector"`
+				Locator          struct {
+					Count   int `json:"count"`
+					Matches []struct {
+						SelectorHint      string `json:"selector_hint"`
+						SelectorAmbiguous bool   `json:"selector_ambiguous"`
+					} `json:"matches"`
+				} `json:"locator"`
+				Click struct {
+					Selector string `json:"selector"`
+					Clicked  bool   `json:"clicked"`
+					Trial    bool   `json:"trial"`
+					Strategy string `json:"strategy"`
+					Verified *bool  `json:"verified"`
+				} `json:"click"`
+				Actionability struct {
+					Actionable bool `json:"actionable"`
+					Checks     struct {
+						ReceivesEvents struct {
+							Passed bool `json:"passed"`
+						} `json:"receives_events"`
+					} `json:"checks"`
+				} `json:"actionability"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("semantic click output is invalid JSON: %v", err)
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+				t.Fatalf("semantic click raw output is invalid JSON: %v", err)
+			}
+			locatorPayload := raw["locator"].(map[string]any)
+			matchPayload := locatorPayload["matches"].([]any)[0].(map[string]any)
+			if _, exposed := matchPayload["resolved_node_selector"]; exposed {
+				t.Fatal("internal resolved-node selector leaked into the public locator schema")
+			}
+			if strings.Contains(out.String(), ":nth-of-type(") {
+				t.Fatalf("semantic click leaked private node selector: %s", out.String())
+			}
+			if !got.OK || got.ResolvedSelector != "" || got.Locator.Count != 1 || len(got.Locator.Matches) != 1 {
+				t.Fatalf("semantic resolution = %+v, want one resolved node", got)
+			}
+			if got.Locator.Matches[0].SelectorHint != `div[role="menuitem"]` || !got.Locator.Matches[0].SelectorAmbiguous {
+				t.Fatalf("semantic locator evidence = %+v, want preserved ambiguous hint", got.Locator)
+			}
+			if got.Click.Selector != "Delete Chat" || got.Click.Strategy != "raw-input" || got.Click.Trial != trial || got.Click.Clicked == trial {
+				t.Fatalf("semantic click = %+v, want raw-input trial=%t", got.Click, trial)
+			}
+			if !trial && (got.Click.Verified == nil || !*got.Click.Verified) {
+				t.Fatalf("semantic raw-input click = %+v, want verified postcondition", got.Click)
+			}
+			if !got.Actionability.Actionable || !got.Actionability.Checks.ReceivesEvents.Passed {
+				t.Fatalf("semantic actionability = %+v, want actionable receiving target", got.Actionability)
+			}
+		})
+	}
+}
+
+func TestClickSemanticResolvedNodeDriftFailsBeforeDispatch(t *testing.T) {
+	fakeSemanticDriftActionabilityAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "Drifting menuitem", "--by", "role", "--role", "menuitem", "--exact", "--strategy", "raw-input", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("drifting semantic click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Action string `json:"action"`
+			Click  struct {
+				Clicked bool `json:"clicked"`
+			} `json:"click"`
+			Actionability struct {
+				Checks map[string]struct {
+					Passed  bool   `json:"passed"`
+					Message string `json:"message"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("drifting semantic click output is invalid JSON: %v", err)
+	}
+	if strings.Contains(out.String(), ":nth-of-type(") {
+		t.Fatalf("blocked semantic click leaked private node selector: %s", out.String())
+	}
+	identity := got.Data.Actionability.Checks["semantic_identity"]
+	if got.OK || got.Code != "actionability_failed" || got.Data.Action != "blocked" || got.Data.Click.Clicked || identity.Passed || identity.Message == "" {
+		t.Fatalf("drifting semantic click = %+v, want pre-dispatch identity failure", got)
+	}
+}
+
+func TestClickIdenticalSemanticNodeReplacementFailsBackendIdentity(t *testing.T) {
+	fakeSemanticReplacementDescribeAttempts.Store(0)
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "Replacing menuitem", "--by", "role", "--role", "menuitem", "--exact", "--strategy", "raw-input", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("replaced semantic click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+	if strings.Contains(out.String(), ":nth-of-type(") {
+		t.Fatalf("replacement failure leaked private node selector: %s", out.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Click struct {
+				Clicked bool `json:"clicked"`
+			} `json:"click"`
+			Actionability struct {
+				Checks map[string]struct {
+					Passed bool `json:"passed"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("replacement failure output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "actionability_failed" || got.Data.Click.Clicked || got.Data.Actionability.Checks["semantic_backend_identity"].Passed {
+		t.Fatalf("replacement failure = %+v, want backend identity to fail closed", got)
+	}
+}
+
+func TestClickStillRejectsMultipleSemanticMatches(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "Duplicate menuitem", "--by", "role", "--role", "menuitem", "--exact", "--strategy", "raw-input", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("ambiguous semantic click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("ambiguous semantic click output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "ambiguous_locator" {
+		t.Fatalf("ambiguous semantic click = %+v, want strict rejection", got)
 	}
 }
 

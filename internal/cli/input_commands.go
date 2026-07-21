@@ -308,6 +308,7 @@ func (a *app) newClickCommand() *cobra.Command {
 				return invalidSelectorError(selector, actionability.Error, "cdp click main --trial --json")
 			}
 			prepareActionability(&actionability, "click", trial, force)
+			bindSemanticLocatorIdentity(&actionability, locator)
 			var autoScroll *scrollResult
 			if !trial && shouldAutoScrollBeforePointerAction("click", actionability) {
 				scrolled, err := autoScrollPointerTarget(ctx, session, selector)
@@ -315,6 +316,9 @@ func (a *app) newClickCommand() *cobra.Command {
 					return err
 				}
 				autoScroll = &scrolled
+				if semanticLocatorNeedsIdentityBinding(locator) {
+					autoScroll.Selector = args[0]
+				}
 				if scrolled.Error == nil && scrolled.After.InViewport {
 					actionability, err = evaluateActionability(ctx, session, selector, "click")
 					if err != nil {
@@ -324,13 +328,16 @@ func (a *app) newClickCommand() *cobra.Command {
 						return invalidSelectorError(selector, actionability.Error, "cdp click main --trial --json")
 					}
 					prepareActionability(&actionability, "click", trial, force)
+					bindSemanticLocatorIdentity(&actionability, locator)
 				}
 			}
 			if trial {
+				evidenceSelector := publicActionSelector(args[0], selector, locator)
+				actionability.Selector = evidenceSelector
 				result := clickResult{
 					URL:      actionability.URL,
 					Title:    actionability.Title,
-					Selector: selector,
+					Selector: evidenceSelector,
 					Count:    actionability.Count,
 					Clicked:  false,
 					Trial:    true,
@@ -353,45 +360,17 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 				if locator != nil {
 					report["locator"] = locator
-					report["resolved_selector"] = selector
+					if !semanticLocatorNeedsIdentityBinding(locator) {
+						report["resolved_selector"] = selector
+					}
 				}
 				if !actionability.Actionable {
-					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("click", selector, actionability), ExitCheckFailed, actionabilityRemediations("click", args[0], selector, locatorOpts), report)
+					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("click", evidenceSelector, actionability), ExitCheckFailed, actionabilityRemediations("click", args[0], evidenceSelector, locatorOpts), report)
 				}
-				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, evidenceSelector), report)
 			}
 			if !actionability.Actionable {
-				result := clickResult{
-					URL:      actionability.URL,
-					Title:    actionability.Title,
-					Selector: selector,
-					Count:    actionability.Count,
-					Clicked:  false,
-					Force:    force,
-					Strategy: strategy,
-					X:        actionability.Point.X,
-					Y:        actionability.Point.Y,
-					Rect:     actionability.Rect,
-				}
-				report := map[string]any{
-					"ok":            false,
-					"action":        "blocked",
-					"target":        pageRow(target),
-					"before_target": pageRow(target),
-					"after_target":  pageRow(target),
-					"final_target":  pageRow(target),
-					"page_state":    clickPageState(target, target),
-					"click":         result,
-					"actionability": actionability,
-				}
-				if locator != nil {
-					report["locator"] = locator
-					report["resolved_selector"] = selector
-				}
-				if autoScroll != nil {
-					report["auto_scroll"] = autoScroll
-				}
-				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("click", selector, actionability), ExitCheckFailed, actionabilityRemediations("click", args[0], selector, locatorOpts), report)
+				return blockedClickActionabilityError(target, selector, args[0], strategy, force, locatorOpts, locator, actionability, autoScroll)
 			}
 
 			var popupCriteria popupWaitCriteria
@@ -546,6 +525,23 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 			}
 
+			if semanticLocatorNeedsIdentityBinding(locator) {
+				actionability, err = evaluateActionability(ctx, session, selector, "click")
+				if err != nil {
+					return err
+				}
+				if actionability.Error != nil {
+					return invalidSelectorError(selector, actionability.Error, "cdp click main --trial --json")
+				}
+				prepareActionability(&actionability, "click", false, force)
+				bindSemanticLocatorIdentity(&actionability, locator)
+				backendNodeID, identityErr := queryBackendNodeID(ctx, session, selector)
+				bindSemanticBackendIdentity(&actionability, locator, backendNodeID, identityErr)
+				if !actionability.Actionable {
+					return blockedClickActionabilityError(target, selector, args[0], strategy, force, locatorOpts, locator, actionability, autoScroll)
+				}
+			}
+
 			clickStrategy := strategy
 			if (waitPopup || waitDownload || waitDialog || waitFileChooser || waitRequest || waitResponse) && clickStrategy == "auto" {
 				clickStrategy = "raw-input"
@@ -557,17 +553,21 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			result.Force = force
 			if result.Error != nil {
-				return invalidSelectorError(selector, result.Error, "cdp click main --json")
+				return invalidSelectorError(publicActionSelector(args[0], selector, locator), result.Error, "cdp click main --json")
 			}
 			if !result.Clicked {
+				evidenceSelector := publicActionSelector(args[0], selector, locator)
 				return commandError(
 					"invalid_selector",
 					"usage",
-					fmt.Sprintf("no matching element found for selector %q", selector),
+					fmt.Sprintf("no matching element found for selector %q", evidenceSelector),
 					ExitUsage,
 					[]string{"cdp click main --json"},
 				)
 			}
+			evidenceSelector := publicActionSelector(args[0], selector, locator)
+			result.Selector = evidenceSelector
+			actionability.Selector = evidenceSelector
 
 			verified := true
 			var verification *waitResult
@@ -686,7 +686,9 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 			if locator != nil {
 				report["locator"] = locator
-				report["resolved_selector"] = selector
+				if !semanticLocatorNeedsIdentityBinding(locator) {
+					report["resolved_selector"] = selector
+				}
 			}
 			if autoScroll != nil {
 				report["auto_scroll"] = autoScroll
@@ -717,7 +719,7 @@ func (a *app) newClickCommand() *cobra.Command {
 				addNetworkWaitToClickReport(report, networkWaitKind, networkReport)
 			}
 			if strings.TrimSpace(diagnosticsOut) != "" {
-				diagnostics := clickDiagnostics(target, finalTarget, selector, strategy, activate, force, waitText, waitSelector, waitURL, waitURLContains, a.clickTimeout(), result, verification)
+				diagnostics := clickDiagnostics(target, finalTarget, evidenceSelector, strategy, activate, force, waitText, waitSelector, waitURL, waitURLContains, a.clickTimeout(), result, verification)
 				diagnostics["actionability"] = actionability
 				if autoScroll != nil {
 					diagnostics["auto_scroll"] = autoScroll
@@ -865,6 +867,61 @@ func performClick(ctx context.Context, session *cdp.PageSession, selector, strat
 	return result, nil
 }
 
+func blockedClickActionabilityError(
+	target cdp.TargetInfo,
+	selector string,
+	query string,
+	strategy string,
+	force bool,
+	locatorOpts locatorActionOptions,
+	locator *locatorFindResult,
+	actionability actionabilityResult,
+	autoScroll *scrollResult,
+) error {
+	evidenceSelector := publicActionSelector(query, selector, locator)
+	actionability.Selector = evidenceSelector
+	result := clickResult{
+		URL:      actionability.URL,
+		Title:    actionability.Title,
+		Selector: evidenceSelector,
+		Count:    actionability.Count,
+		Clicked:  false,
+		Force:    force,
+		Strategy: strategy,
+		X:        actionability.Point.X,
+		Y:        actionability.Point.Y,
+		Rect:     actionability.Rect,
+	}
+	report := map[string]any{
+		"ok":            false,
+		"action":        "blocked",
+		"target":        pageRow(target),
+		"before_target": pageRow(target),
+		"after_target":  pageRow(target),
+		"final_target":  pageRow(target),
+		"page_state":    clickPageState(target, target),
+		"click":         result,
+		"actionability": actionability,
+	}
+	if locator != nil {
+		report["locator"] = locator
+		if !semanticLocatorNeedsIdentityBinding(locator) {
+			report["resolved_selector"] = selector
+		}
+	}
+	if autoScroll != nil {
+		report["auto_scroll"] = autoScroll
+	}
+	return commandErrorWithData(
+		"actionability_failed",
+		"check_failed",
+		actionabilityFailureMessage("click", evidenceSelector, actionability),
+		ExitCheckFailed,
+		actionabilityRemediations("click", query, evidenceSelector, locatorOpts),
+		report,
+	)
+}
+
 func dispatchRawMouseClick(ctx context.Context, session *cdp.PageSession, x, y float64) error {
 	events := []map[string]any{
 		{"type": "mouseMoved", "x": x, "y": y, "button": "none"},
@@ -936,15 +993,73 @@ func resolveActionSelector(ctx context.Context, session *cdp.PageSession, query 
 	match := result.Matches[0]
 	selector := strings.TrimSpace(match.SelectorHint)
 	if selector == "" || match.SelectorAmbiguous {
+		selector = strings.TrimSpace(match.ResolvedNodeSelector)
+	}
+	if selector == "" {
 		return "", &result, commandError(
 			"ambiguous_locator",
 			"usage",
-			fmt.Sprintf("%s locator %s %q matched one element but did not produce a unique CSS selector hint", action, opts.By, query),
+			fmt.Sprintf("%s locator %s %q matched one element but did not preserve a unique resolved-node selector", action, opts.By, query),
 			ExitUsage,
 			[]string{locatorActionFindCommand(query, opts), "cdp snapshot --selector body --json"},
 		)
 	}
+	if semanticLocatorNeedsIdentityBinding(&result) {
+		backendNodeID, backendErr := queryBackendNodeID(ctx, session, selector)
+		if backendErr != nil || backendNodeID == 0 {
+			return "", &result, commandError(
+				"locator_identity_unavailable",
+				"check_failed",
+				fmt.Sprintf("%s locator %s %q matched one element but its DOM identity could not be bound", action, opts.By, query),
+				ExitCheckFailed,
+				[]string{locatorActionFindCommand(query, opts), "cdp doctor --json"},
+			)
+		}
+		result.Matches[0].ResolvedBackendNodeID = backendNodeID
+	}
 	return selector, &result, nil
+}
+
+func publicActionSelector(query, selector string, locator *locatorFindResult) string {
+	if semanticLocatorNeedsIdentityBinding(locator) {
+		return query
+	}
+	return selector
+}
+
+func queryBackendNodeID(ctx context.Context, session *cdp.PageSession, selector string) (int, error) {
+	var doc struct {
+		Root struct {
+			NodeID int `json:"nodeId"`
+		} `json:"root"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.getDocument", map[string]any{"depth": 0, "pierce": true}, &doc); err != nil || doc.Root.NodeID == 0 {
+		if err != nil {
+			return 0, fmt.Errorf("get DOM document: %w", err)
+		}
+		return 0, fmt.Errorf("get DOM document: missing root node")
+	}
+	var query struct {
+		NodeID int `json:"nodeId"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.querySelector", map[string]any{"nodeId": doc.Root.NodeID, "selector": selector}, &query); err != nil || query.NodeID == 0 {
+		if err != nil {
+			return 0, fmt.Errorf("resolve DOM node: %w", err)
+		}
+		return 0, fmt.Errorf("resolve DOM node: no match")
+	}
+	var described struct {
+		Node struct {
+			BackendNodeID int `json:"backendNodeId"`
+		} `json:"node"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.describeNode", map[string]any{"nodeId": query.NodeID}, &described); err != nil || described.Node.BackendNodeID == 0 {
+		if err != nil {
+			return 0, fmt.Errorf("describe DOM node: %w", err)
+		}
+		return 0, fmt.Errorf("describe DOM node: missing backend identity")
+	}
+	return described.Node.BackendNodeID, nil
 }
 
 func locatorActionRemediations(action, query string, opts locatorActionOptions) []string {

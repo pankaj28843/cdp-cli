@@ -76,6 +76,63 @@ func prepareActionability(result *actionabilityResult, action string, trial, for
 	result.Actionable = actionabilityRequiredChecksPass(*result)
 }
 
+func bindSemanticLocatorIdentity(
+	result *actionabilityResult,
+	locator *locatorFindResult,
+) {
+	if result == nil || !semanticLocatorNeedsIdentityBinding(locator) {
+		return
+	}
+	match := locator.Matches[0]
+	passed := result.Count == 1 &&
+		result.Target.Tag == match.Tag &&
+		result.Target.Role == match.Role &&
+		result.Target.Name == match.Name
+	if match.ResolvedNodeID != "" {
+		passed = passed && result.Target.ID == match.ResolvedNodeID
+	}
+	if result.Checks == nil {
+		result.Checks = map[string]actionabilityCheck{}
+	}
+	message := ""
+	if !passed {
+		message = "resolved node no longer matches the sole semantic locator result"
+	}
+	result.Checks["semantic_identity"] = actionabilityCheck{
+		Required: true,
+		Passed:   passed,
+		Message:  message,
+	}
+	result.RequiredChecks = append(result.RequiredChecks, "semantic_identity")
+	result.Actionable = result.Actionable && passed
+}
+
+func bindSemanticBackendIdentity(result *actionabilityResult, locator *locatorFindResult, actual int, lookupErr error) {
+	if result == nil || !semanticLocatorNeedsIdentityBinding(locator) {
+		return
+	}
+	expected := locator.Matches[0].ResolvedBackendNodeID
+	passed := lookupErr == nil && expected > 0 && actual == expected
+	message := ""
+	if !passed {
+		message = "resolved DOM node identity changed or could not be verified"
+	}
+	if result.Checks == nil {
+		result.Checks = map[string]actionabilityCheck{}
+	}
+	result.Checks["semantic_backend_identity"] = actionabilityCheck{Required: true, Passed: passed, Message: message}
+	result.RequiredChecks = append(result.RequiredChecks, "semantic_backend_identity")
+	result.Actionable = result.Actionable && passed
+}
+
+func semanticLocatorNeedsIdentityBinding(locator *locatorFindResult) bool {
+	if locator == nil || len(locator.Matches) != 1 {
+		return false
+	}
+	match := locator.Matches[0]
+	return match.SelectorAmbiguous || strings.TrimSpace(match.SelectorHint) == ""
+}
+
 func applyForceActionabilitySkips(result *actionabilityResult, action string) {
 	if result.Checks == nil {
 		result.Actionable = false
@@ -221,6 +278,7 @@ func actionabilityExpression(selector, action string) string {
   const nativeEditableTags = new Set(["input", "textarea", "select"]);
   const ariaReadonlyRoles = new Set(["checkbox", "combobox", "grid", "gridcell", "listbox", "radiogroup", "searchbox", "slider", "spinbutton", "switch", "textbox", "treegrid"]);
   const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  %s
   const roleOf = (el) => {
     const explicit = norm(el.getAttribute("role")).split(" ")[0];
     if (explicit) return explicit;
@@ -241,7 +299,6 @@ func actionabilityExpression(selector, action string) string {
     }
     return "";
   };
-  const nameOf = (el) => norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || el.getAttribute("value") || el.innerText || el.textContent || "");
   const disabledInfo = (el) => {
     const tag = el.tagName.toLowerCase();
     const nativeDisableable = nativeDisabledTags.has(tag);
@@ -357,7 +414,7 @@ func actionabilityExpression(selector, action string) string {
             id: el.id || "",
             type: el.getAttribute("type") || "",
             role,
-            name: nameOf(el).slice(0, 240),
+            name: accessibleName(el).slice(0, 240),
             enabled: !disabled,
             disabled,
             editable,
@@ -379,5 +436,5 @@ func actionabilityExpression(selector, action string) string {
       });
     });
   });
-})()`, jsStringLiteral(selector), jsStringLiteral(action))
+})()`, jsStringLiteral(selector), jsStringLiteral(action), accessibleNameHelpersJS())
 }
