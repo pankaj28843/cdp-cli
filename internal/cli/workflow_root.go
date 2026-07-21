@@ -15,6 +15,7 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowSubmitSearchCommand())
 	cmd.AddCommand(a.newWorkflowVisiblePostsCommand())
 	cmd.AddCommand(a.newWorkflowHackerNewsCommand())
+	cmd.AddCommand(a.newWorkflowGoogleMapsDirectionsCommand())
 	cmd.AddCommand(a.newWorkflowConsoleErrorsCommand())
 	cmd.AddCommand(a.newWorkflowNetworkFailuresCommand())
 	cmd.AddCommand(a.newWorkflowPageLoadCommand())

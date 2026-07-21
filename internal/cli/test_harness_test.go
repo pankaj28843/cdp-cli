@@ -1165,6 +1165,25 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		Expression string `json:"expression"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if strings.Contains(req.Expression, "__cdp_cli_google_maps_directions__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"title":               "Hvidegaard Møn to Møn Is - Google Maps",
+					"url":                 "https://www.google.com/maps/dir/?api=1",
+					"visible_text_length": 420,
+					"page_state":          "unknown",
+					"origin_labels":       []string{"Hvidegaard Møn"},
+					"destination_labels":  []string{"Møn Is"},
+					"cards": []map[string]any{
+						{"text": "7 min 5.1 km via Søndersognsvej Fastest route", "role": "button"},
+						{"text": "9 min 6.5 km via Vængesgårdsvej"},
+					},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "Intl.DateTimeFormat().resolvedOptions().timeZone") {
 		return map[string]any{"result": map[string]any{"type": "string", "value": "UTC"}}
 	}

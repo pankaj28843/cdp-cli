@@ -649,6 +649,10 @@ func commandExamples(path string) []string {
 			"cdp workflow hacker-news --limit 10 --json",
 			"cdp workflow hacker-news 'https://news.ycombinator.com/news' --wait 30s --json",
 		},
+		"cdp workflow google-maps-directions": {
+			"cdp --browser-mode headed workflow google-maps-directions 'Kongens Lyngby, Denmark' 'Stege, Denmark' --json",
+			"cdp --browser-mode headed workflow google-maps-directions 'Stege, Denmark' 'Møn Is, Hovgårdsvej 4, 4780 Stege, Denmark' --wait 30s --json",
+		},
 		"cdp workflow perf": {
 			"cdp workflow perf 'https://example.com' --wait 5s --json",
 			"cdp workflow perf 'https://example.com' --wait 5s --trace tmp/perf.local.json --trace-max-bytes 16777216 --redact safe --json",
