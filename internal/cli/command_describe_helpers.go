@@ -625,6 +625,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow action-capture": {
 			"cdp workflow action-capture --action click:'button.submit' --include network,console,dom,text,a11y,screenshot --wait-after 2s --evidence-out-dir tmp/action-capture --json",
+			"cdp workflow action-capture --action click:'button.submit' --include network --include-bodies json,text --body-url-contains /api/ --body-limit 262144 --json",
 			"cdp workflow action-capture --action click:'button.submit' --include screenshot --screenshot-full-page --evidence-out-dir tmp/action-capture --json",
 			"cdp workflow action-capture --action press:Enter --selector 'input[name=q]' --include network,console,dom,text --out tmp/action-capture.json --json",
 		},

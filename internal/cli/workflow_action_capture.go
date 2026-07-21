@@ -40,13 +40,16 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	var a11yDepth int
 	var a11yLimit int
 	var storageDiff bool
+	var includeBodies string
+	var bodyLimit int
+	var bodyURLContains string
 	cmd := &cobra.Command{
 		Use:   "action-capture",
 		Short: "Capture browser evidence around one declared page action",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if waitBefore < 0 || waitAfter < 0 || limit < 0 || a11yDepth < 0 || a11yLimit < 0 {
-				return commandError("usage", "usage", "--wait-before, --wait-after, --limit, --a11y-depth, and --a11y-limit must be non-negative", ExitUsage, []string{"cdp workflow action-capture --action press:Enter --json"})
+			if waitBefore < 0 || waitAfter < 0 || limit < 0 || a11yDepth < 0 || a11yLimit < 0 || bodyLimit <= 0 {
+				return commandError("usage", "usage", "--wait-before, --wait-after, --limit, --a11y-depth, and --a11y-limit must be non-negative; --body-limit must be positive", ExitUsage, []string{"cdp workflow action-capture --action press:Enter --body-limit 262144 --json"})
 			}
 			evidenceOutDir = strings.TrimSpace(evidenceOutDir)
 			includeSet := parseCSVSet(include)
@@ -58,6 +61,18 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 			}
 			if invalid := invalidActionCaptureIncludes(includeSet); len(invalid) > 0 {
 				return commandError("usage", "usage", fmt.Sprintf("unknown action-capture include %q", invalid[0]), ExitUsage, []string{"cdp workflow action-capture --include network,websocket,console,dom,text,a11y --json"})
+			}
+			rawBodyKinds := parseCSVSet(includeBodies)
+			if invalid := invalidBodyKinds(rawBodyKinds); len(invalid) > 0 {
+				return commandError("usage", "usage", "--include-bodies only accepts json, text, base64, all, or none", ExitUsage, []string{"cdp workflow action-capture --include network --include-bodies json,text --json"})
+			}
+			bodyKinds := parseBodyKinds(includeBodies)
+			bodyURLContains = strings.TrimSpace(bodyURLContains)
+			if len(bodyKinds) > 0 && !includeSet["network"] {
+				return commandError("usage", "usage", "--include-bodies requires --include network", ExitUsage, []string{"cdp workflow action-capture --include network --include-bodies json,text --json"})
+			}
+			if bodyURLContains != "" && len(bodyKinds) == 0 {
+				return commandError("usage", "usage", "--body-url-contains requires --include-bodies", ExitUsage, []string{"cdp workflow action-capture --include network --include-bodies json --body-url-contains /api/ --json"})
 			}
 			if includeSet["a11y"] && evidenceOutDir == "" {
 				return commandError("usage", "usage", "--include a11y requires --evidence-out-dir because accessibility snapshots may include page content", ExitUsage, []string{"cdp workflow action-capture --action click:button --include dom,text,a11y --evidence-out-dir tmp/action-capture --json"})
@@ -169,6 +184,9 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 			workflowReport := map[string]any{
 				"name":               "action-capture",
 				"include":            setKeys(includeSet),
+				"include_bodies":     setKeys(bodyKinds),
+				"body_limit":         bodyLimit,
+				"body_url_contains":  bodyURLContains,
 				"wait_before":        durationString(waitBefore),
 				"wait_after":         durationString(waitAfter),
 				"before_at":          beforeAt,
@@ -185,13 +203,13 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 			}
 			if evidenceOutDir != "" {
 				report["evidence"] = evidenceReport
-				report["local_artifact_warning"] = "action capture artifacts may include local page content, headers, tokens, and message data; keep these artifacts local"
+				report["local_artifact_warning"] = actionCaptureArtifactWarning(len(bodyKinds) > 0)
 			}
 			if len(artifacts) > 0 {
 				report["artifacts"] = artifacts
 			}
 			if includeSet["network"] || includeSet["websocket"] || includeSet["console"] {
-				requests, websockets, messages, err := collectActionCaptureEvents(ctx, client, session.SessionID, includeSet, limit, preActionEvents)
+				requests, websockets, messages, err := collectActionCaptureEvents(ctx, client, session.SessionID, includeSet, limit, bodyKinds, bodyLimit, bodyURLContains, preActionEvents)
 				if err != nil {
 					collectorErrors = append(collectorErrors, collectorError("events", err))
 				} else {
@@ -218,6 +236,9 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 						}
 					}
 				}
+			}
+			if len(bodyKinds) > 0 {
+				report["local_capture_warning"] = "action capture response bodies may include tokens and private message data; keep this output local"
 			}
 			if includeSet["text"] {
 				var text textResult
@@ -264,7 +285,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 				}
 			}
 			if strings.TrimSpace(outPath) != "" {
-				report["local_artifact_warning"] = "action capture artifacts may include local page content, headers, tokens, and message data; keep these artifacts local"
+				report["local_artifact_warning"] = actionCaptureArtifactWarning(len(bodyKinds) > 0)
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
 					return commandError("internal", "internal", fmt.Sprintf("marshal action capture report: %v", err), ExitInternal, []string{"cdp workflow action-capture --json"})
@@ -299,7 +320,18 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	cmd.Flags().IntVar(&a11yDepth, "a11y-depth", 4, "maximum accessibility tree depth for --include a11y evidence")
 	cmd.Flags().IntVar(&a11yLimit, "a11y-limit", 100, "maximum accessibility nodes per before/after --include a11y artifact")
 	cmd.Flags().BoolVar(&storageDiff, "storage-diff", false, "include before/after storage diff evidence")
+	cmd.Flags().StringVar(&includeBodies, "include-bodies", "none", "opt-in comma-separated response body kinds: json,text,base64,all")
+	cmd.Flags().IntVar(&bodyLimit, "body-limit", 256*1024, "positive maximum response body bytes to include")
+	cmd.Flags().StringVar(&bodyURLContains, "body-url-contains", "", "with --include-bodies, only include response bodies whose request URL contains this text")
 	return cmd
+}
+
+func actionCaptureArtifactWarning(includesBodies bool) string {
+	content := "local page content, headers, tokens, and message data"
+	if includesBodies {
+		content = "local page content, headers, tokens, response bodies, and message data"
+	}
+	return "action capture artifacts may include " + content + "; keep these artifacts local"
 }
 
 func invalidActionCaptureIncludes(includeSet map[string]bool) []string {
@@ -725,7 +757,7 @@ func captureWorkflowScreenshot(ctx context.Context, session *cdp.PageSession, ou
 	return map[string]any{"type": artifactType, "path": writtenPath, "bytes": len(shot.Data), "format": shot.Format, "full_page": fullPage}, nil
 }
 
-func collectActionCaptureEvents(ctx context.Context, client browserEventClient, sessionID string, includeSet map[string]bool, limit int, initialEvents []cdp.Event) ([]networkCaptureRecord, []networkCaptureRecord, []consoleMessage, error) {
+func collectActionCaptureEvents(ctx context.Context, client browserEventClient, sessionID string, includeSet map[string]bool, limit int, bodyKinds map[string]bool, bodyLimit int, bodyURLContains string, initialEvents []cdp.Event) ([]networkCaptureRecord, []networkCaptureRecord, []consoleMessage, error) {
 	recordsByID := map[string]*networkCaptureRecord{}
 	var order []string
 	ensure := func(id string) *networkCaptureRecord {
@@ -825,6 +857,15 @@ func collectActionCaptureEvents(ctx context.Context, client browserEventClient, 
 		if len(messages) > limit {
 			messages = messages[:limit]
 		}
+	}
+	for i := range requests {
+		if !shouldCaptureResponseBody(requests[i], bodyKinds) || (bodyURLContains != "" && !strings.Contains(requests[i].URL, bodyURLContains)) {
+			continue
+		}
+		if err := enrichResponseBody(ctx, client, sessionID, &requests[i], bodyLimit); err != nil {
+			return nil, nil, nil, err
+		}
+		redactAndBoundCaptureBody(requests[i].Body, nil, "")
 	}
 	for i := range messages {
 		messages[i].ID = i

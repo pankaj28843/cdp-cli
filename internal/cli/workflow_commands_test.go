@@ -522,7 +522,11 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 				Value    string `json:"value"`
 			} `json:"result"`
 		} `json:"action"`
-		Requests    []map[string]any `json:"requests"`
+		Requests []struct {
+			Body *struct {
+				Text string `json:"text"`
+			} `json:"body,omitempty"`
+		} `json:"requests"`
 		WebSockets  []map[string]any `json:"websockets"`
 		Messages    []map[string]any `json:"messages"`
 		StorageDiff struct {
@@ -643,6 +647,11 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 	if len(got.Requests) == 0 || len(got.WebSockets) == 0 || len(got.Messages) == 0 || got.Artifact.Path != outPath {
 		t.Fatalf("workflow action-capture collectors = %+v, want network, websocket, console, and artifact", got)
 	}
+	for _, request := range got.Requests {
+		if request.Body != nil {
+			t.Fatalf("workflow action-capture default request body = %+v, want bodies omitted unless explicitly enabled", request.Body)
+		}
+	}
 	wantEvidence := map[string]string{
 		"workflow-action-capture-before-screenshot": filepath.Join(evidenceDir, "action-capture.before.screenshot.png"),
 		"workflow-action-capture-before-text":       filepath.Join(evidenceDir, "action-capture.before.text.json"),
@@ -723,6 +732,133 @@ func TestWorkflowActionCaptureJSON(t *testing.T) {
 	}
 	if _, err := os.Stat(afterPath); err != nil {
 		t.Fatalf("after screenshot was not written: %v", err)
+	}
+}
+
+func TestWorkflowActionCaptureIncludesSelectedBoundedResponseBodies(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "action-capture",
+		"--action", "press:Enter",
+		"--selector", "body",
+		"--wait-before", "0s",
+		"--wait-after", "0s",
+		"--include", "network",
+		"--include-bodies", "json",
+		"--body-limit", "8",
+		"--body-url-contains", "/app",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow action-capture exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Workflow struct {
+			IncludeBodies []string `json:"include_bodies"`
+			BodyLimit     int      `json:"body_limit"`
+			BodyURL       string   `json:"body_url_contains"`
+		} `json:"workflow"`
+		Requests []struct {
+			ID   string `json:"id"`
+			Body *struct {
+				Text      string `json:"text"`
+				Bytes     int    `json:"bytes"`
+				Truncated bool   `json:"truncated"`
+			} `json:"body,omitempty"`
+		} `json:"requests"`
+		LocalCaptureWarning string `json:"local_capture_warning"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow action-capture output is invalid JSON: %v", err)
+	}
+	if len(got.Workflow.IncludeBodies) != 1 || got.Workflow.IncludeBodies[0] != "json" || got.Workflow.BodyLimit != 8 || got.Workflow.BodyURL != "/app" {
+		t.Fatalf("workflow action-capture body options = %+v, want json bodies bounded at 8 bytes", got.Workflow)
+	}
+	var bodyText string
+	var bodyBytes int
+	var truncated bool
+	for _, request := range got.Requests {
+		if request.ID == "request-ok" && request.Body != nil {
+			bodyText = request.Body.Text
+			bodyBytes = request.Body.Bytes
+			truncated = request.Body.Truncated
+		}
+	}
+	if bodyText != `{"ok":tr` || bodyBytes <= 8 || !truncated {
+		t.Fatalf("workflow action-capture response body = text %q bytes %d truncated %t, want bounded JSON body", bodyText, bodyBytes, truncated)
+	}
+	if !strings.Contains(got.LocalCaptureWarning, "response bodies") || !strings.Contains(got.LocalCaptureWarning, "local") {
+		t.Fatalf("workflow action-capture local warning = %q, want response-body privacy warning", got.LocalCaptureWarning)
+	}
+}
+
+func TestWorkflowActionCaptureBodyURLFilterOmitsNonMatchingBodies(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "action-capture",
+		"--action", "press:Enter",
+		"--selector", "body",
+		"--wait-before", "0s",
+		"--wait-after", "0s",
+		"--include", "network",
+		"--include-bodies", "json",
+		"--body-url-contains", "/only-this-endpoint",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow action-capture exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		Requests []struct {
+			Body *struct{} `json:"body,omitempty"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow action-capture output is invalid JSON: %v", err)
+	}
+	for _, request := range got.Requests {
+		if request.Body != nil {
+			t.Fatalf("workflow action-capture filtered request body = %+v, want bodies omitted for URL mismatch", request.Body)
+		}
+	}
+}
+
+func TestWorkflowActionCaptureRejectsInvalidBodyOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "kind", args: []string{"--include-bodies", "video"}, want: "--include-bodies"},
+		{name: "limit", args: []string{"--body-limit", "0"}, want: "--body-limit"},
+		{name: "without network", args: []string{"--include", "console", "--include-bodies", "json"}, want: "requires --include network"},
+		{name: "url without bodies", args: []string{"--body-url-contains", "/api"}, want: "requires --include-bodies"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"workflow", "action-capture", "--action", "press:Enter", "--selector", "body", "--json"}, tt.args...)
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitUsage {
+				t.Fatalf("workflow action-capture exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+			}
+			if !strings.Contains(out.String(), tt.want) {
+				t.Fatalf("workflow action-capture error = %s, want %q", out.String(), tt.want)
+			}
+		})
 	}
 }
 
