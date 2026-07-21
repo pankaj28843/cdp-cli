@@ -681,6 +681,7 @@ func commandExamples(path string) []string {
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json",
 		},
 		"cdp workflow web-research serp": {
+			"printf '%s\\t%s\\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries-exact-date.txt && cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries-exact-date.txt --serp google --out-dir tmp/research/exact-date --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --result-pages 2 --out-dir tmp/research-all --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp duckduckgo --fallback-serp google --result-pages 2 --out-dir tmp/research-ddg --json",

@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSchemaCatalogInvariants(t *testing.T) {
 	catalog := schemaCatalog()
@@ -98,6 +101,22 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 	}
 }
 
+func TestSchemaCatalogWebResearchQueryContract(t *testing.T) {
+	catalog := schemaCatalog()
+	workflow := catalog["workflow-web-research-serp"]
+	query := catalog["web-research-query"]
+
+	if !catalogSchemaFieldContains(workflow, "queries", "array<web_research_query>", "query<TAB>", "applied only to Google", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026") {
+		t.Fatalf("workflow schema does not expose the custom-date query contract: %+v", workflow)
+	}
+	if !catalogSchemaFieldContains(query, "query", "string", "non-empty") {
+		t.Fatalf("query schema does not expose the required query column: %+v", query)
+	}
+	if !catalogSchemaFieldContains(query, "time_filter", "string", "Google tbs", "ignored by other engines", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026") {
+		t.Fatalf("query schema does not expose the optional Google time filter: %+v", query)
+	}
+}
+
 func TestSchemaCatalogBrowserModeContracts(t *testing.T) {
 	catalog := schemaCatalog()
 	cases := map[string][]string{
@@ -161,6 +180,21 @@ func catalogSchemaHasField(info schemaInfo, name string) bool {
 		if field.Name == name {
 			return true
 		}
+	}
+	return false
+}
+
+func catalogSchemaFieldContains(info schemaInfo, name, fieldType string, fragments ...string) bool {
+	for _, field := range info.Fields {
+		if field.Name != name || field.Type != fieldType {
+			continue
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(field.Description, fragment) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

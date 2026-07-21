@@ -70,6 +70,99 @@ func TestWorkflowA11yJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowWebResearchSERPHelp(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--help"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research serp --help exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	for _, want := range []string{
+		"query<TAB>google-tbs-time-filter",
+		"Blank lines and lines whose first non-space",
+		"character is # are ignored",
+		"applies it only to Google; other engines",
+		"cdr:1,cd_min:07/01/2026,cd_max:07/01/2026",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("workflow web-research serp --help missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestDescribeWorkflowWebResearchSERP(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	code := cli.Execute(context.Background(), []string{"describe", "--command", "workflow web-research serp", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("describe workflow web-research serp exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK       bool `json:"ok"`
+		Commands struct {
+			Examples []string `json:"examples"`
+			Flags    []struct {
+				Name  string `json:"name"`
+				Usage string `json:"usage"`
+			} `json:"flags"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("describe workflow web-research serp output is invalid JSON: %v", err)
+	}
+	if !got.OK {
+		t.Fatalf("describe workflow web-research serp output indicates failure: %s", out.String())
+	}
+	var queryFileUsage string
+	for _, flag := range got.Commands.Flags {
+		if flag.Name == "query-file" {
+			queryFileUsage = flag.Usage
+			break
+		}
+	}
+	for _, want := range []string{"query<TAB>Google tbs time filter", "# comment rows ignored"} {
+		if !strings.Contains(queryFileUsage, want) {
+			t.Fatalf("describe query-file usage %q missing %q", queryFileUsage, want)
+		}
+	}
+	for _, want := range []string{"printf '%s\\t%s\\n'", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026", "--browser-mode headed", "--serp google"} {
+		if !hasExampleContaining(got.Commands.Examples, want) {
+			t.Fatalf("describe examples %#v missing %q", got.Commands.Examples, want)
+		}
+	}
+}
+
+func TestWorkflowWebResearchSERPRejectsMalformedQueryBeforeBrowser(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("CDP_STATE_DIR", stateDir)
+	queryFile := filepath.Join(stateDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("valid query\n\tcdr:1,cd_min:07/01/2026,cd_max:07/01/2026\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("malformed query exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		Class               string   `json:"err_class"`
+		Message             string   `json:"message"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("malformed query output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "usage" || got.Class != "usage" || !strings.Contains(got.Message, "invalid query file line 2") || !strings.Contains(got.Message, "query column must not be empty") {
+		t.Fatalf("malformed query error = %+v", got)
+	}
+	if len(got.RemediationCommands) != 1 || !strings.Contains(got.RemediationCommands[0], "query<TAB>") && !strings.Contains(got.RemediationCommands[0], "printf '%s\\t%s\\n'") {
+		t.Fatalf("malformed query remediation = %#v", got.RemediationCommands)
+	}
+}
+
 func TestWorkflowSubmitSearchFillEnterWaitURLJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

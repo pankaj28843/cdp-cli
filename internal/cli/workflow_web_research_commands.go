@@ -46,7 +46,20 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serp",
 		Short: "Collect rendered SERP artifacts and deduped research candidates",
-		Args:  cobra.NoArgs,
+		Long: `Collect rendered SERP artifacts and deduped research candidates.
+
+The query file is line-oriented. Blank lines and lines whose first non-space
+character is # are ignored. Each remaining row has one of these forms:
+
+  query
+  query<TAB>google-tbs-time-filter
+
+The optional second column is an opaque Google tbs value. cdp retains it as
+time_filter in output metadata and applies it only to Google; other engines
+ignore it.`,
+		Example: `  printf '%s\t%s\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries.txt
+  cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --out-dir tmp/research --json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 || blockedFailureThreshold < 0 {
 				return commandError("usage", "usage", "--wait, --max-candidates, --parallel, --result-pages, --blocked-failure-threshold, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --result-pages 3 --out-dir tmp/research --fast-fail-blocked --json"})
@@ -530,7 +543,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 			return a.render(ctx, fmt.Sprintf("web-research-serp\t%d queries\t%d candidates", len(queries), len(candidates)), report)
 		},
 	}
-	cmd.Flags().StringVar(&queryFile, "query-file", "", "newline-delimited search queries to sample")
+	cmd.Flags().StringVar(&queryFile, "query-file", "", "query file: query or query<TAB>Google tbs time filter per row; blank and # comment rows ignored")
 	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google, bing, brave, duckduckgo, kagi, all, or a comma-separated engine list")
 	cmd.Flags().StringVar(&fallbackSerp, "fallback-serp", "auto", "fallback SERP after blocked zero-candidate primary runs: auto, none, google, bing, brave, duckduckgo, or kagi")
 	cmd.Flags().IntVar(&maxCandidates, "max-candidates", 100, "maximum deduped candidates to emit; use 0 for no limit")

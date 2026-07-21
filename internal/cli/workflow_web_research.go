@@ -39,25 +39,38 @@ func readWebResearchQueries(path string) ([]webResearchQuery, error) {
 		return nil, commandError("read_failed", "filesystem", fmt.Sprintf("read query file %s: %v", path, err), ExitUsage, []string{"printf 'agentic engineering\\n' > tmp/queries.txt"})
 	}
 	queries := make([]webResearchQuery, 0)
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
+	for lineIndex, rawLine := range strings.Split(string(b), "\n") {
+		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		query := webResearchQuery{Text: line}
-		if strings.Contains(line, "\t") {
-			parts := strings.SplitN(line, "\t", 2)
-			query.Text = strings.TrimSpace(parts[0])
+		parts := strings.Split(rawLine, "\t")
+		if len(parts) > 2 {
+			return nil, invalidWebResearchQueryRow(lineIndex+1, "expected query or query<TAB>Google tbs time filter; found more than two columns")
+		}
+		query := webResearchQuery{Text: strings.TrimSpace(parts[0])}
+		if query.Text == "" {
+			return nil, invalidWebResearchQueryRow(lineIndex+1, "query column must not be empty")
+		}
+		if len(parts) == 2 {
 			query.TimeFilter = strings.TrimSpace(parts[1])
 		}
-		if query.Text != "" {
-			queries = append(queries, query)
-		}
+		queries = append(queries, query)
 	}
 	if len(queries) == 0 {
 		return nil, commandError("usage", "usage", "query file contained no queries", ExitUsage, []string{"printf 'agentic engineering\\n' > tmp/queries.txt"})
 	}
 	return queries, nil
+}
+
+func invalidWebResearchQueryRow(line int, detail string) error {
+	return commandError(
+		"usage",
+		"usage",
+		fmt.Sprintf("invalid query file line %d: %s", line, detail),
+		ExitUsage,
+		[]string{"printf '%s\\t%s\\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/queries.txt"},
+	)
 }
 
 func readWebResearchURLs(path string, maxPages int) ([]string, error) {

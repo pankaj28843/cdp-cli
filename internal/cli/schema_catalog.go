@@ -2005,16 +2005,24 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-web-research-serp": {
 			Name:        "workflow-web-research-serp",
-			Description: "Batched multi-engine SERP sampling with rendered artifacts and deduped research candidates.",
+			Description: "Batched multi-engine SERP sampling with rendered artifacts and deduped research candidates. Query-file rows are query or query<TAB>Google tbs time filter; blank rows and rows whose first non-space character is # are ignored.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when every SERP was sampled without extraction failures or block-page failures."},
-				{Name: "queries", Type: "array<object>", Required: true, Description: "Input queries with optional time filters."},
+				{Name: "queries", Type: "array<web_research_query>", Required: true, Description: "Parsed query-file rows in query or query<TAB>Google tbs time filter form. The optional second column is retained as time_filter and applied only to Google as the opaque tbs value; other engines ignore it. Exact-date example: cdr:1,cd_min:07/01/2026,cd_max:07/01/2026."},
 				{Name: "serps", Type: "array<object>", Required: true, Description: "Per-engine, per-query rendered extraction summaries and artifact references."},
 				{Name: "candidates", Type: "array<web_research_candidate>", Required: true, Description: "Deduped candidates with engine, query, SERP page, rank on page, global rank, title, source, preview, URL, and type."},
 				{Name: "warnings", Type: "array<string>", Required: true, Description: "Workflow-level warnings, including zero-candidate blocked SERP runs."},
 				{Name: "failures", Type: "array<object>", Required: true, Description: "Per-query failures surfaced for agent judgment, including engine-specific serp_blocked and auth-required pages."},
 				{Name: "artifacts", Type: "object", Required: true, Description: "queries.json, candidates.json, and candidates.tsv paths."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Selected SERP engines, reusable engine lanes, fallback SERP metadata, primary/fallback counts, scheduled result pages, progress mode, fast-fail settings, parallelism, output directory, and next commands."},
+			},
+		},
+		"web-research-query": {
+			Name:        "web-research-query",
+			Description: "One parsed web-research query-file row. The source row is query or query<TAB>Google tbs time filter.",
+			Fields: []schemaField{
+				{Name: "query", Type: "string", Required: true, Description: "Trimmed non-empty search query from the first column."},
+				{Name: "time_filter", Type: "string", Required: false, Description: "Opaque Google tbs value from the optional second column. It is retained in output metadata, applied only to Google, and ignored by other engines. Exact-date example: cdr:1,cd_min:07/01/2026,cd_max:07/01/2026."},
 			},
 		},
 		"workflow-web-research-extract": {

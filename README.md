@@ -61,6 +61,23 @@ Multi-engine SERP research runs engines concurrently and reuses one workflow tab
 lane per engine, so large query files avoid opening a fresh tab for every
 engine/query/page combination.
 
+### Exact-Date Google Queries
+
+Web-research query files are line-oriented. Blank lines and lines whose first
+non-space character is `#` are ignored. Each remaining row is either `query` or
+`query<TAB>google-tbs-time-filter`. The second column is retained as
+`time_filter` in output metadata and applied only to Google; other engines
+ignore it.
+
+Create a row containing a literal tab and run a headed Google search for an
+exact date:
+
+```bash
+mkdir -p tmp/research
+printf '%s\t%s\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries-exact-date.txt
+cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries-exact-date.txt --serp google --out-dir tmp/research/exact-date --json
+```
+
 ## Browser Runtime Modes
 
 `headed` is the default. It uses the visible, human-approved Chrome/default-profile
