@@ -152,6 +152,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	var createTargetErrors atomic.Int64
 	var attachTargetErrors sync.Map
 	var runtimeEvaluateErrors sync.Map
+	var renderedExtractReadinessCalls sync.Map
 	var scrolledSelectors sync.Map
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		if server == nil {
@@ -796,7 +797,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					if _, loaded := runtimeEvaluateErrors.LoadOrStore(targetID, true); !loaded {
 						resp["error"] = map[string]any{"code": -32000, "message": "execution context was destroyed"}
 					} else {
-						resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
+						resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, targetInfos)
 						events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 						events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 						events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -805,7 +806,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 					}
 				} else {
-					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors)
+					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, targetInfos)
 					events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -1160,7 +1161,7 @@ func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, p
 	}
 }
 
-func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool, scrolledSelectors *sync.Map) map[string]any {
+func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool, scrolledSelectors, renderedExtractReadinessCalls *sync.Map, targetInfos []map[string]any) map[string]any {
 	var req struct {
 		Expression string `json:"expression"`
 	}
@@ -1622,6 +1623,22 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 				},
 			}
 		}
+		domSignature := "ready"
+		changesAfterReady := fakeAnyTargetBool(targetInfos, "fakeRenderedExtractChangesAfterReady")
+		consistencyUnavailable := fakeAnyTargetBool(targetInfos, "fakeRenderedExtractConsistencyUnavailable")
+		if changesAfterReady || consistencyUnavailable {
+			counterValue, _ := renderedExtractReadinessCalls.LoadOrStore(sessionID, &atomic.Int64{})
+			readinessCall := counterValue.(*atomic.Int64).Add(1)
+			if consistencyUnavailable && readinessCall > 1 {
+				return map[string]any{
+					"result":           map[string]any{"type": "undefined"},
+					"exceptionDetails": map[string]any{"text": "synthetic post-capture readiness exception"},
+				}
+			}
+			if changesAfterReady && readinessCall > 1 {
+				domSignature = "changed-after-ready"
+			}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -1635,7 +1652,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 					"selected_word_count":  12,
 					"body_text_length":     96,
 					"body_html_length":     256,
-					"dom_signature":        "ready",
+					"dom_signature":        domSignature,
 				},
 			},
 		}

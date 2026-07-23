@@ -351,9 +351,32 @@ fi
   | jq -e '.ok == true and .action == "trial" and .click.trial == true and .click.clicked == false and .locator.strict == true and .resolved_selector == "button#action" and .actionability.trial == true and .actionability.actionable == true and .actionability.checks.visible.passed == true and .actionability.checks.stable.passed == true and .actionability.checks.receives_events.passed == true and .actionability.checks.enabled.passed == true' >/dev/null
 "$binary" click "#covered-action" --force --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "clicked" and .click.force == true and .click.clicked == true and .actionability.force == true and .actionability.actionable == true and (.actionability.skipped_checks | index("receives_events")) and .actionability.checks.receives_events.required == false and .actionability.checks.receives_events.skipped == true and .actionability.checks.receives_events.passed == false and .actionability.checks.enabled.passed == true' >/dev/null
+hydrated_dir="$state_dir/rendered-extract-hydrated"
+hydrated_report="$state_dir/rendered-extract-hydrated.json"
+"$binary" eval '(() => { const main = document.querySelector("main"); main.innerHTML = "<p>Loading</p>"; setTimeout(() => { main.innerHTML = "<article><h1>Hydrated extraction marker</h1><p>The delayed application content now contains enough meaningful words to satisfy every configured extraction quality threshold.</p><p>This second sentence proves the workflow waited for hydrated content and then observed a full stable interval before capture.</p></article>"; }, 800); return true; })()' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .result.value == true' >/dev/null
+"$binary" workflow rendered-extract --url-contains "$app_url" --selector main --state-dir "$state_dir/cdp-state" --out-dir "$hydrated_dir" --min-visible-words 12 --min-markdown-words 12 --min-html-chars 64 --wait 5s --settle 1s --json >"$hydrated_report"
+jq -e --arg dir "$hydrated_dir" '
+  .ok == true and
+  .workflow.created_page == false and
+  .workflow.reused_page == true and
+  .workflow.closed == false and
+  .readiness.thresholds_met == true and
+  .readiness.content_settled_seen == true and
+  .readiness.outcome == "settled" and
+  .readiness.settle == "1s" and
+  (.readiness.settled_for | type == "string" and . != "0s") and
+  .readiness.poll_count >= 3 and
+  .readiness.capture_consistency_checked == true and
+  .readiness.capture_consistent == true and
+  .quality.passed == true and
+  .artifacts.visible_txt == ($dir + "/visible.txt")
+' "$hydrated_report" >/dev/null
+require_artifact "$hydrated_dir/visible.txt"
+grep -F "Hydrated extraction marker" "$hydrated_dir/visible.txt" >/dev/null
 rendered_dir="$state_dir/rendered-extract"
 "$binary" workflow rendered-extract "$app_url" --state-dir "$state_dir/cdp-state" --out-dir "$rendered_dir" --wait 5s --json \
-  | jq -e --arg dir "$rendered_dir" '.ok == true and .workflow.name == "rendered-extract" and .readiness.navigated_from_about_blank == true and .target.url != "about:blank" and .quality.visible_word_count > 5 and .quality.html_length > 64 and .artifacts.visible_txt == ($dir + "/visible.txt") and .artifacts.markdown == ($dir + "/page.md") and .artifacts.links_json == ($dir + "/links.json")' >/dev/null
+  | jq -e --arg dir "$rendered_dir" '.ok == true and .workflow.name == "rendered-extract" and .readiness.navigated_from_about_blank == true and .readiness.thresholds_met == true and .readiness.content_settled_seen == true and .readiness.outcome == "settled" and .readiness.capture_consistency_checked == true and .readiness.capture_consistent == true and .target.url != "about:blank" and .quality.passed == true and .quality.visible_word_count > 5 and .quality.html_length > 64 and .artifacts.visible_txt == ($dir + "/visible.txt") and .artifacts.markdown == ($dir + "/page.md") and .artifacts.links_json == ($dir + "/links.json")' >/dev/null
 require_artifact "$rendered_dir/visible.txt"
 require_artifact "$rendered_dir/html.json"
 require_artifact "$rendered_dir/page.md"
@@ -368,7 +391,7 @@ rendered_blocked_out="$state_dir/rendered-extract-not-a-directory"
 printf 'synthetic fixture\n' >"$rendered_blocked_out"
 rendered_failure_json="$state_dir/rendered-extract-failure.json"
 set +e
-"$binary" workflow rendered-extract "$app_url" --state-dir "$state_dir/cdp-state" --out-dir "$rendered_blocked_out" --wait 1s --json >"$rendered_failure_json"
+"$binary" workflow rendered-extract "$app_url" --state-dir "$state_dir/cdp-state" --out-dir "$rendered_blocked_out" --wait 1s --settle 0s --json >"$rendered_failure_json"
 rendered_failure_code=$?
 set -e
 test "$rendered_failure_code" -eq 10
@@ -657,13 +680,24 @@ require_artifact "$state_dir/storage.local.json"
   | jq -e --arg path "$state_dir/demo.png" '.ok == true and .screenshot.path == $path and .screenshot.bytes > 0' >/dev/null
 require_artifact "$state_dir/demo.png"
 mkdir -p "$state_dir/debug-bundle"
-"$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url?token=demo-secret" --since 2s --out-dir "$state_dir/debug-bundle" --run-id demo-run --task-id demo-debug-bundle --stage demo-debug --json \
-  | jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.trigger == "navigate" and .workflow.reloaded == false and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.bundle.schema_version == "cdp-evidence-bundle/v1") and .bundle.default_json == "artifact_references" and (.bundle.public_safe_artifacts >= 1) and (.bundle.local_only_artifacts >= 1) and (.bundle.commands[0].task_id == "demo-debug-bundle") and (.bundle.commands[0].artifact_path == $path) and (.bundle.stages[0].name == "demo-debug") and (has("requests") | not) and (.artifacts | length >= 8) and (.artifact_list[] | select(.type == "workflow-debug-bundle-command-log" and .classification == "public_safe"))' >/dev/null
+debug_bundle_report="$state_dir/debug-bundle.json"
+"$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url?token=demo-secret" --since 2s --out-dir "$state_dir/debug-bundle" --run-id demo-run --task-id demo-debug-bundle --stage demo-debug --json >"$debug_bundle_report"
+jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.trigger == "navigate" and .workflow.reloaded == false and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.bundle.schema_version == "cdp-evidence-bundle/v1") and .bundle.default_json == "artifact_references" and (.bundle.public_safe_artifacts >= 1) and (.bundle.local_only_artifacts >= 1) and (.bundle.commands[0].task_id == "demo-debug-bundle") and (.bundle.commands[0].artifact_path == $path) and (.bundle.stages[0].name == "demo-debug") and (has("requests") | not) and (.artifacts | length >= 8) and (.artifact_list[] | select(.type == "workflow-debug-bundle-command-log" and .classification == "public_safe"))' "$debug_bundle_report" >/dev/null
+debug_bundle_target_id="$(jq -er '.target.id | select(length > 0)' "$debug_bundle_report")"
 require_artifact "$state_dir/debug-bundle/debug-bundle.bundle.json"
 require_artifact "$state_dir/debug-bundle/debug-bundle.command-log.jsonl"
 require_artifact "$state_dir/debug-bundle/debug-bundle.stage-log.json"
-"$binary" protocol exec Page.captureScreenshot --url-contains "$app_url" --params '{"format":"png"}' --save "$state_dir/protocol-shot.png" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e --arg path "$state_dir/protocol-shot.png" '.ok == true and .artifact.path == $path and .artifact.bytes > 0 and .result.data.omitted == true' >/dev/null
+protocol_shot_report="$state_dir/protocol-shot.json"
+if ! "$binary" protocol exec Page.captureScreenshot --target "$debug_bundle_target_id" --params '{"format":"png"}' --save "$state_dir/protocol-shot.png" --state-dir "$state_dir/cdp-state" --json >"$protocol_shot_report"; then
+  echo "protocol screenshot command failed:" >&2
+  sed -n '1,120p' "$protocol_shot_report" >&2
+  exit 1
+fi
+if ! jq -e --arg path "$state_dir/protocol-shot.png" '.ok == true and .artifact.path == $path and .artifact.bytes > 0 and .result.data.omitted == true' "$protocol_shot_report" >/dev/null; then
+  echo "protocol screenshot assertion failed:" >&2
+  sed -n '1,120p' "$protocol_shot_report" >&2
+  exit 1
+fi
 require_artifact "$state_dir/protocol-shot.png"
 
 if [[ -n "${CDP_E2E_REAL_BUNDLE_URL:-}" ]]; then

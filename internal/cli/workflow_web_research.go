@@ -15,6 +15,7 @@ type webResearchQuery struct {
 }
 
 type webResearchCandidate struct {
+	QueryIndex int    `json:"-"`
 	Serp       string `json:"serp"`
 	Query      string `json:"query"`
 	TimeFilter string `json:"time_filter,omitempty"`
@@ -27,6 +28,67 @@ type webResearchCandidate struct {
 	Preview    string `json:"preview,omitempty"`
 	URL        string `json:"url"`
 	Type       string `json:"type,omitempty"`
+}
+
+type webResearchQueryCoverage struct {
+	Query               string `json:"query"`
+	TimeFilter          string `json:"time_filter,omitempty"`
+	ProducedCandidates  int    `json:"produced_candidates"`
+	DuplicateCandidates int    `json:"duplicate_candidates"`
+	SelectedCandidates  int    `json:"selected_candidates"`
+	OmittedByCap        int    `json:"omitted_by_cap"`
+	BlockedPages        int    `json:"blocked_pages"`
+	FailedPages         int    `json:"failed_pages"`
+	Productive          bool   `json:"productive"`
+	Represented         bool   `json:"represented"`
+}
+
+func selectFairWebResearchCandidates(queries []webResearchQuery, pool []webResearchCandidate, maxCandidates int) ([]webResearchCandidate, []webResearchQueryCoverage) {
+	coverage := make([]webResearchQueryCoverage, len(queries))
+	buckets := make([][]webResearchCandidate, len(queries))
+	for index, query := range queries {
+		coverage[index] = webResearchQueryCoverage{Query: query.Text, TimeFilter: query.TimeFilter}
+	}
+	for _, candidate := range pool {
+		if candidate.QueryIndex < 0 || candidate.QueryIndex >= len(queries) || normalizeResearchURL(candidate.URL) == "" {
+			continue
+		}
+		buckets[candidate.QueryIndex] = append(buckets[candidate.QueryIndex], candidate)
+		coverage[candidate.QueryIndex].ProducedCandidates++
+		coverage[candidate.QueryIndex].Productive = true
+	}
+
+	selected := make([]webResearchCandidate, 0)
+	positions := make([]int, len(queries))
+	seen := map[string]bool{}
+	for {
+		progressed := false
+		for queryIndex := range buckets {
+			for positions[queryIndex] < len(buckets[queryIndex]) {
+				candidate := buckets[queryIndex][positions[queryIndex]]
+				positions[queryIndex]++
+				progressed = true
+				key := normalizeResearchURL(candidate.URL)
+				if seen[key] {
+					coverage[queryIndex].DuplicateCandidates++
+					continue
+				}
+				seen[key] = true
+				if maxCandidates > 0 && len(selected) >= maxCandidates {
+					coverage[queryIndex].OmittedByCap++
+					continue
+				}
+				selected = append(selected, candidate)
+				coverage[queryIndex].SelectedCandidates++
+				coverage[queryIndex].Represented = true
+				break
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	return selected, coverage
 }
 
 func readWebResearchQueries(path string) ([]webResearchQuery, error) {

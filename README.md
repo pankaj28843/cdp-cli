@@ -255,6 +255,28 @@ make install
 make e2e-installed
 ```
 
+The public-web extraction lane is intentionally opt-in and is not part of
+default CI. It exercises the installed binary against 12 real documentation
+URLs and requires every URL to pass by default:
+
+```bash
+make install
+make e2e-web-research-live-installed
+CDP_E2E_BROWSER_MODE=headed make e2e-web-research-live-installed
+```
+
+Headless runs use an isolated temporary daemon. Headed runs only reuse an
+already-approved, usable headed daemon and never start, repair, or stop it; do
+not browse in that Chrome session while the headed check is running. Override
+the corpus with `CDP_E2E_URL_FILE` containing 10–20 unique, fragment-free
+HTTP(S) URLs. `CDP_E2E_MIN_SUCCESS` may relax a diagnostic run but cannot be
+lower than 10; the default remains the full corpus size. Failed runs retain
+their temporary evidence path, while successful evidence is removed unless
+`CDP_E2E_KEEP_ARTIFACTS=1`. Retained `run-metadata.json` and `evidence.json`
+record the exact URL set, browser mode, UTC timestamps, requested/final URLs,
+readiness outcomes, and failure classes. The real-site lane is diagnostic;
+deterministic synthetic tests remain the merge gate.
+
 `make install` copies the binary to `$(HOME)/.local/bin` by default. Override
 with `PREFIX=/usr/local` or another install prefix.
 

@@ -33,6 +33,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	var candidateOut string
 	var outDir string
 	var wait time.Duration
+	var settle time.Duration
 	var waitUntil string
 	var parallel int
 	var resultPages int
@@ -61,8 +62,11 @@ ignore it.`,
   cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --out-dir tmp/research --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 || blockedFailureThreshold < 0 {
-				return commandError("usage", "usage", "--wait, --max-candidates, --parallel, --result-pages, --blocked-failure-threshold, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --result-pages 3 --out-dir tmp/research --fast-fail-blocked --json"})
+			if wait < 0 || settle < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 || blockedFailureThreshold < 0 {
+				return commandError("usage", "usage", "--wait, --settle, --max-candidates, --parallel, --result-pages, --blocked-failure-threshold, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --result-pages 3 --out-dir tmp/research --fast-fail-blocked --json"})
+			}
+			if wait > 0 && settle > wait {
+				return commandError("usage", "usage", "--settle must not exceed positive --wait", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --wait 15s --settle 2s --json"})
 			}
 			progress = strings.TrimSpace(strings.ToLower(progress))
 			if progress == "" {
@@ -182,6 +186,7 @@ ignore it.`,
 					RawURL:             queryURL,
 					Selector:           "body",
 					Wait:               wait,
+					Settle:             settle,
 					WaitUntil:          waitUntil,
 					Formats:            "snapshot,text,html,markdown,links",
 					OutDir:             filepath.Join(artifactRoot, webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
@@ -392,45 +397,65 @@ ignore it.`,
 			}
 			fallbackTriggered := false
 			fallbackReason := ""
+			resultCount := len(queries) * resultPages
+			serpReports := make([]map[string]any, 0, resultCount)
+			failures := make([]map[string]any, 0)
+			warnings := make([]string, 0)
+			candidatePool := make([]webResearchCandidate, 0)
+			queryCandidateSeen := make([]map[string]bool, len(queries))
+			queryProducedCandidates := make([]int, len(queries))
+			queryDuplicateCandidates := make([]int, len(queries))
+			queryOmittedByPoolCap := make([]int, len(queries))
+			queryBlockedPages := make([]int, len(queries))
+			queryFailedPages := make([]int, len(queries))
+			for index := range queryCandidateSeen {
+				queryCandidateSeen[index] = map[string]bool{}
+			}
 
-			processResults := func(results []serpResult, serpReports []map[string]any, failures []map[string]any, warnings []string, candidates []webResearchCandidate, seen map[string]bool) ([]map[string]any, []map[string]any, []string, []webResearchCandidate) {
+			processResults := func(results []serpResult) {
 				for _, result := range results {
 					if result.Err != nil {
 						failures = append(failures, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": classifyWorkflowSERPFailure(result.Err, result.Result), "error": result.Err.Error()})
+						if result.QueryIndex >= 0 && result.QueryIndex < len(queryFailedPages) {
+							queryFailedPages[result.QueryIndex]++
+						}
 						continue
 					}
 					serpReports = append(serpReports, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
 					if blocked, signals := detectSERPBlocked(result.Result); blocked {
 						failures = append(failures, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": "serp_blocked", "message": result.Serp + " served a consent, CAPTCHA, auth, or bot-check page", "signals": signals})
 						warnings = append(warnings, fmt.Sprintf("%s SERP page %d for query %q was blocked by a consent, CAPTCHA, auth, or bot-check page", result.Serp, result.SerpPage, result.Query.Text))
+						if result.QueryIndex >= 0 && result.QueryIndex < len(queryBlockedPages) {
+							queryBlockedPages[result.QueryIndex]++
+						}
+						continue
+					}
+					if result.QueryIndex < 0 || result.QueryIndex >= len(queries) {
 						continue
 					}
 					for _, link := range result.Result.Links.Results {
 						key := normalizeResearchURL(link.URL)
-						if key == "" || seen[key] {
+						if key == "" {
 							continue
 						}
-						seen[key] = true
-						globalRank := (result.SerpPage-1)*10 + link.Rank
-						candidates = append(candidates, webResearchCandidate{Serp: result.Serp, Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, SerpPage: result.SerpPage, RankOnPage: link.Rank, GlobalRank: globalRank, Rank: globalRank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
-						if maxCandidates > 0 && len(candidates) >= maxCandidates {
-							break
+						if queryCandidateSeen[result.QueryIndex][key] {
+							queryDuplicateCandidates[result.QueryIndex]++
+							continue
 						}
-					}
-					if maxCandidates > 0 && len(candidates) >= maxCandidates {
-						break
+						queryCandidateSeen[result.QueryIndex][key] = true
+						queryProducedCandidates[result.QueryIndex]++
+						if maxCandidates > 0 && queryProducedCandidates[result.QueryIndex] > maxCandidates {
+							queryOmittedByPoolCap[result.QueryIndex]++
+							continue
+						}
+						globalRank := (result.SerpPage-1)*10 + link.Rank
+						candidatePool = append(candidatePool, webResearchCandidate{QueryIndex: result.QueryIndex, Serp: result.Serp, Query: result.Query.Text, TimeFilter: result.Query.TimeFilter, SerpPage: result.SerpPage, RankOnPage: link.Rank, GlobalRank: globalRank, Rank: globalRank, Title: link.Title, Source: link.DisplayURL, Preview: link.Snippet, URL: link.URL, Type: link.Type})
 					}
 				}
-				return serpReports, failures, warnings, candidates
 			}
 
-			resultCount := len(queries) * resultPages
-			serpReports := make([]map[string]any, 0, resultCount)
-			failures := make([]map[string]any, 0)
-			warnings := make([]string, 0)
-			candidates := make([]webResearchCandidate, 0)
-			seen := map[string]bool{}
-			serpReports, failures, warnings, candidates = processResults(primaryResults, serpReports, failures, warnings, candidates, seen)
+			processResults(primaryResults)
+			candidates, queryCoverage := selectFairWebResearchCandidates(queries, candidatePool, maxCandidates)
 			primaryFailureCount := len(failures)
 			primaryBlockedFailures := countSERPFailures(failures, "serp_blocked")
 			primaryCandidateCount := len(candidates)
@@ -446,10 +471,31 @@ ignore it.`,
 				fallbackResults, fallbackStats, fallbackLane := runBatch(resolvedFallbackSerp, filepath.Join(outDir, "fallback-serps", resolvedFallbackSerp), parallel)
 				stats = append(stats, fallbackStats)
 				engineLanes = append(engineLanes, fallbackLane)
-				serpReports, failures, warnings, candidates = processResults(fallbackResults, serpReports, failures, warnings, candidates, seen)
+				processResults(fallbackResults)
+				candidates, queryCoverage = selectFairWebResearchCandidates(queries, candidatePool, maxCandidates)
 				if fallbackStats.FastFail {
 					warnings = append(warnings, fmt.Sprintf("%s fallback SERP sampling stopped early after %d consecutive blocked pages", resolvedFallbackSerp, fallbackStats.Blocked))
 				}
+			}
+			productiveQueryCount := 0
+			representedQueryCount := 0
+			for index := range queryCoverage {
+				queryCoverage[index].ProducedCandidates = queryProducedCandidates[index]
+				queryCoverage[index].DuplicateCandidates += queryDuplicateCandidates[index]
+				queryCoverage[index].OmittedByCap += queryOmittedByPoolCap[index]
+				queryCoverage[index].BlockedPages = queryBlockedPages[index]
+				queryCoverage[index].FailedPages = queryFailedPages[index]
+				queryCoverage[index].Productive = queryProducedCandidates[index] > 0
+				if queryCoverage[index].Productive {
+					productiveQueryCount++
+				}
+				if queryCoverage[index].Represented {
+					representedQueryCount++
+				}
+			}
+			omittedQueryCount := productiveQueryCount - representedQueryCount
+			if omittedQueryCount > 0 {
+				warnings = append(warnings, fmt.Sprintf("candidate cap or cross-query deduplication left %d productive queries without a selected candidate; inspect query_coverage", omittedQueryCount))
 			}
 			if len(candidates) == 0 && len(failures) > 0 {
 				warnings = append(warnings, "SERP sampling produced zero candidates because one or more pages were blocked or failed")
@@ -496,12 +542,13 @@ ignore it.`,
 				}
 			}
 			report := map[string]any{
-				"ok":         len(failures) == 0,
-				"queries":    queries,
-				"serps":      serpReports,
-				"candidates": candidates,
-				"warnings":   warnings,
-				"failures":   failures,
+				"ok":             len(failures) == 0,
+				"queries":        queries,
+				"serps":          serpReports,
+				"candidates":     candidates,
+				"query_coverage": queryCoverage,
+				"warnings":       warnings,
+				"failures":       failures,
 				"artifacts": map[string]string{
 					"queries_json":    queriesPath,
 					"candidates_json": candidateOut,
@@ -521,6 +568,9 @@ ignore it.`,
 					"fallback_triggered":        fallbackTriggered,
 					"fallback_reason":           fallbackReason,
 					"query_count":               len(queries),
+					"productive_query_count":    productiveQueryCount,
+					"represented_query_count":   representedQueryCount,
+					"omitted_query_count":       omittedQueryCount,
 					"candidate_count":           len(candidates),
 					"failure_count":             len(failures),
 					"primary_candidate_count":   primaryCandidateCount,
@@ -549,13 +599,14 @@ ignore it.`,
 	cmd.Flags().IntVar(&maxCandidates, "max-candidates", 100, "maximum deduped candidates to emit; use 0 for no limit")
 	cmd.Flags().StringVar(&candidateOut, "candidate-out", "", "path for deduped candidates JSON")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for SERP artifacts and candidate files")
-	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for each rendered SERP")
-	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for each rendered SERP; use 0 for one immediate sample")
+	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
+	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
 	cmd.Flags().IntVar(&parallel, "parallel", 3, "maximum parallel SERP tabs, capped at 3")
 	cmd.Flags().IntVar(&resultPages, "result-pages", 1, "SERP result pages per query to sample, capped at 3")
-	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
-	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
-	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
+	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "enabled readiness and post-capture quality minimum for visible words; use 0 to disable")
+	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "enabled post-capture quality minimum for Markdown words; use 0 to disable")
+	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "enabled readiness and post-capture quality minimum for extracted HTML characters; use 0 to disable")
 	cmd.Flags().StringVar(&progress, "progress", "none", "progress event stream: none or stderr")
 	cmd.Flags().BoolVar(&fastFailBlocked, "fast-fail-blocked", false, "stop SERP sampling early after repeated consent, CAPTCHA, auth, or bot-check pages")
 	cmd.Flags().IntVar(&blockedFailureThreshold, "blocked-failure-threshold", 3, "consecutive blocked SERP pages required before --fast-fail-blocked stops scheduling")
@@ -627,6 +678,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 	var parallel int
 	var outDir string
 	var wait time.Duration
+	var settle time.Duration
 	var waitUntil string
 	var selector string
 	var minVisibleWords int
@@ -637,8 +689,11 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 		Short: "Extract selected research pages with bounded tab concurrency",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || maxPages < 0 || parallel < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
-				return commandError("usage", "usage", "--wait, --max-pages, --parallel, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research extract --url-file tmp/urls.txt --json"})
+			if wait < 0 || settle < 0 || maxPages < 0 || parallel < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 {
+				return commandError("usage", "usage", "--wait, --settle, --max-pages, --parallel, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research extract --url-file tmp/urls.txt --json"})
+			}
+			if wait > 0 && settle > wait {
+				return commandError("usage", "usage", "--settle must not exceed positive --wait", ExitUsage, []string{"cdp workflow web-research extract --url-file tmp/urls.txt --wait 15s --settle 2s --json"})
 			}
 			urls, err := readWebResearchURLs(urlFile, maxPages)
 			if err != nil {
@@ -696,6 +751,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 						RawURL:             rawURL,
 						Selector:           selector,
 						Wait:               wait,
+						Settle:             settle,
 						WaitUntil:          waitUntil,
 						Formats:            "snapshot,text,html,markdown,links",
 						OutDir:             filepath.Join(outDir, fmt.Sprintf("%03d-%s", idx+1, webResearchURLSlug(rawURL))),
@@ -759,6 +815,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 			qualities := make([]map[string]any, 0, len(urls))
 			failures := make([]map[string]any, 0)
 			warnings := make([]string, 0)
+			qualityFailureCount := 0
 			for _, result := range collected {
 				if result.Err != nil {
 					failures = append(failures, map[string]any{"url": result.URL, "error": result.Err.Error(), "err_class": classifyWorkflowExtractFailure(result.Err)})
@@ -768,6 +825,19 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 				quality, _ := result.Result.Report["quality"].(map[string]any)
 				artifacts, _ := result.Result.Report["artifacts"].(map[string]string)
 				qualities = append(qualities, map[string]any{"url": result.URL, "quality": quality, "warnings": result.Result.Warnings, "artifacts": artifacts})
+				qualityPassed, _ := quality["passed"].(bool)
+				if !qualityPassed {
+					qualityFailureCount++
+					pageFailureCount++
+					failures = append(failures, map[string]any{
+						"url":       result.URL,
+						"err_class": "quality_gate_failed",
+						"error":     "captured artifacts did not satisfy every enabled extraction quality gate",
+						"retryable": true,
+						"quality":   quality,
+						"artifacts": artifacts,
+					})
+				}
 				for _, warning := range result.Result.Warnings {
 					warnings = append(warnings, result.URL+": "+warning)
 				}
@@ -804,7 +874,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 				return err
 			}
 			retryParallel := saferWebResearchRetryParallel(effectiveParallel, backpressureApplied)
-			retryCommandPath, err := writeArtifactFile(filepath.Join(outDir, "retry-command.sh"), []byte(webResearchRetryCommand(urlFile, outDir, wait, waitUntil, selector, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, retryParallel)))
+			retryCommandPath, err := writeArtifactFile(filepath.Join(outDir, "retry-command.sh"), []byte(webResearchRetryCommand(urlFile, outDir, wait, settle, waitUntil, selector, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, retryParallel)))
 			if err != nil {
 				return err
 			}
@@ -822,6 +892,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 					"page_count":              len(pages),
 					"failure_count":           len(failures),
 					"page_failures":           pageFailureCount,
+					"quality_failure_count":   qualityFailureCount,
 					"infrastructure_failures": infrastructureFailureCount,
 					"warning_count":           len(warnings),
 					"max_pages":               maxPages,
@@ -845,12 +916,13 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 	cmd.Flags().IntVar(&maxPages, "max-pages", 100, "maximum URLs to extract; use 0 for no limit")
 	cmd.Flags().IntVar(&parallel, "parallel", 4, "maximum parallel page tabs; default 4, hard-capped at 10 and bounded by remaining tab budget")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for page artifacts")
-	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for each rendered page")
-	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for each rendered page; use 0 for one immediate sample")
+	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
+	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
-	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
-	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
-	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
+	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "enabled readiness and post-capture quality minimum for visible words; use 0 to disable")
+	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "enabled post-capture quality minimum for Markdown words; use 0 to disable")
+	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "enabled readiness and post-capture quality minimum for extracted HTML characters; use 0 to disable")
 	return cmd
 }
 
@@ -937,7 +1009,7 @@ func saferWebResearchRetryParallel(effectiveParallel int, backpressureApplied bo
 	return parallel
 }
 
-func webResearchRetryCommand(urlFile, outDir string, wait time.Duration, waitUntil, selector string, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, parallel int) string {
+func webResearchRetryCommand(urlFile, outDir string, wait, settle time.Duration, waitUntil, selector string, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, parallel int) string {
 	failedURLFile := filepath.Join(outDir, "failed-urls.txt")
 	parts := []string{
 		"cdp", "workflow", "web-research", "extract",
@@ -945,6 +1017,7 @@ func webResearchRetryCommand(urlFile, outDir string, wait time.Duration, waitUnt
 		"--out-dir", outDir,
 		"--parallel", fmt.Sprint(parallel),
 		"--wait", wait.String(),
+		"--settle", settle.String(),
 		"--wait-until", waitUntil,
 		"--selector", selector,
 		"--min-visible-words", fmt.Sprint(minVisibleWords),

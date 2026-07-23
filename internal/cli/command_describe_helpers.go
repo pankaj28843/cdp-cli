@@ -671,7 +671,7 @@ func commandExamples(path string) []string {
 			"cdp workflow page-load --target <target-id> --wait 30s --ready-file tmp/page-load.ready.json --json",
 		},
 		"cdp workflow rendered-extract": {
-			"cdp workflow rendered-extract 'https://example.com' --out-dir tmp/rendered-example --json",
+			"cdp workflow rendered-extract 'https://example.com' --wait 20s --settle 2s --out-dir tmp/rendered-example --json",
 			"cdp workflow rendered-extract --target <target-id> --reload --out-dir tmp/rendered-existing --json",
 			"cdp workflow rendered-extract --url-contains localhost --out-dir tmp/rendered-selected --json",
 			"cdp workflow rendered-extract 'https://www.google.com/search?q=agentic+engineering&safe=active&tbs=qdr:m' --serp google --out-dir tmp/rendered-google --json",
@@ -682,13 +682,13 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow web-research serp": {
 			"printf '%s\\t%s\\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries-exact-date.txt && cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries-exact-date.txt --serp google --out-dir tmp/research/exact-date --json",
-			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --wait 20s --settle 2s --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --result-pages 2 --out-dir tmp/research-all --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp duckduckgo --fallback-serp google --result-pages 2 --out-dir tmp/research-ddg --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp bing --result-pages 3 --fast-fail-blocked --blocked-failure-threshold 3 --progress stderr --json",
 		},
 		"cdp workflow web-research extract": {
-			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 4 --out-dir tmp/research/pages --json",
+			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 4 --wait 20s --settle 2s --out-dir tmp/research/pages --json",
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --allow-over-budget --json # supervised high-stress cap",
 		},
 	}

@@ -1476,7 +1476,7 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	outDir := t.TempDir()
 	rawURL := "https://www.google.com/search?q=agentic+engineering+2026+evolutions&safe=active&tbs=qdr:m"
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "rendered-extract", rawURL, "--serp", "google", "--out-dir", outDir, "--wait", "1500ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "rendered-extract", rawURL, "--serp", "google", "--out-dir", outDir, "--wait", "1500ms", "--settle", "1s", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow rendered-extract exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -1485,12 +1485,14 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 		OK        bool                 `json:"ok"`
 		Target    struct{ URL string } `json:"target"`
 		Readiness struct {
-			NavigatedFromAboutBlank bool   `json:"navigated_from_about_blank"`
-			DocumentReadyState      string `json:"document_ready_state"`
-			UsefulContentSeen       bool   `json:"useful_content_seen"`
-			ContentStableSeen       bool   `json:"content_stable_seen"`
-			StablePolls             int    `json:"stable_polls"`
-			PollCount               int    `json:"poll_count"`
+			NavigatedFromAboutBlank   bool   `json:"navigated_from_about_blank"`
+			DocumentReadyState        string `json:"document_ready_state"`
+			UsefulContentSeen         bool   `json:"useful_content_seen"`
+			ContentStableSeen         bool   `json:"content_stable_seen"`
+			CaptureConsistencyChecked bool   `json:"capture_consistency_checked"`
+			CaptureConsistent         bool   `json:"capture_consistent"`
+			StablePolls               int    `json:"stable_polls"`
+			PollCount                 int    `json:"poll_count"`
 		} `json:"readiness"`
 		Artifacts struct {
 			VisibleJSON string `json:"visible_json"`
@@ -1520,7 +1522,7 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("workflow rendered-extract output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Workflow.Name != "rendered-extract" || !got.Workflow.Closed || !got.Readiness.NavigatedFromAboutBlank || got.Readiness.DocumentReadyState != "complete" || !got.Readiness.UsefulContentSeen || !got.Readiness.ContentStableSeen || got.Readiness.StablePolls < 2 || got.Readiness.PollCount < 3 {
+	if !got.OK || got.Workflow.Name != "rendered-extract" || !got.Workflow.Closed || !got.Readiness.NavigatedFromAboutBlank || got.Readiness.DocumentReadyState != "complete" || !got.Readiness.UsefulContentSeen || !got.Readiness.ContentStableSeen || !got.Readiness.CaptureConsistencyChecked || !got.Readiness.CaptureConsistent || got.Readiness.StablePolls < 2 || got.Readiness.PollCount < 3 {
 		t.Fatalf("workflow rendered-extract metadata = %+v readiness=%+v", got.Workflow, got.Readiness)
 	}
 	if got.Target.URL == "about:blank" || got.Links.Query != "agentic engineering 2026 evolutions" || got.Links.TimeFilter != "qdr:m" || got.Links.Serp != "google" {
@@ -1549,6 +1551,36 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	}
 }
 
+func TestRenderedExtractionCommandsRejectSettleBeyondPositiveWait(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "rendered-extract", args: []string{"workflow", "rendered-extract", "https://example.test/app", "--wait", "1s", "--settle", "2s", "--json"}},
+		{name: "web-research-serp", args: []string{"workflow", "web-research", "serp", "--wait", "1s", "--settle", "2s", "--json"}},
+		{name: "web-research-extract", args: []string{"workflow", "web-research", "extract", "--wait", "1s", "--settle", "2s", "--json"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), tc.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitUsage {
+				t.Fatalf("exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+			}
+			var got struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("invalid JSON error: %v; stdout=%s", err, out.String())
+			}
+			if got.Code != "usage" || !strings.Contains(got.Message, "--settle must not exceed positive --wait") {
+				t.Fatalf("error = %+v", got)
+			}
+		})
+	}
+}
+
 func TestWorkflowRenderedExtractReusesReloadsAndKeepsExistingTarget(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{
 		"targetId": "existing-page-123",
@@ -1569,6 +1601,7 @@ func TestWorkflowRenderedExtractReusesReloadsAndKeepsExistingTarget(t *testing.T
 		"--ignore-cache",
 		"--out-dir", outDir,
 		"--wait", "1500ms",
+		"--settle", "1s",
 		"--min-visible-words", "1",
 		"--min-markdown-words", "1",
 		"--min-html-chars", "1",
@@ -1735,7 +1768,7 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 	}
 	outDir := filepath.Join(tmpDir, "research")
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--result-pages", "2", "--max-candidates", "20", "--parallel", "3", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--result-pages", "2", "--max-candidates", "20", "--parallel", "3", "--out-dir", outDir, "--wait", "250ms", "--settle", "0", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -1797,6 +1830,71 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 	}
 }
 
+func TestWorkflowWebResearchSERPCapRetainsAllQueryReportsAndCoverage(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("first query\nsecond query\nthird query\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "web-research", "serp",
+		"--query-file", queryFile,
+		"--max-candidates", "1",
+		"--result-pages", "2",
+		"--parallel", "1",
+		"--out-dir", filepath.Join(tmpDir, "research"),
+		"--wait", "250ms",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research serp exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		SERPs      []json.RawMessage `json:"serps"`
+		Candidates []json.RawMessage `json:"candidates"`
+		Coverage   []struct {
+			Query               string `json:"query"`
+			ProducedCandidates  int    `json:"produced_candidates"`
+			DuplicateCandidates int    `json:"duplicate_candidates"`
+			SelectedCandidates  int    `json:"selected_candidates"`
+			Productive          bool   `json:"productive"`
+			Represented         bool   `json:"represented"`
+		} `json:"query_coverage"`
+		Workflow struct {
+			QueryCount            int `json:"query_count"`
+			ProductiveQueryCount  int `json:"productive_query_count"`
+			RepresentedQueryCount int `json:"represented_query_count"`
+			OmittedQueryCount     int `json:"omitted_query_count"`
+			CompletedResultPages  int `json:"completed_result_pages"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research serp output is invalid JSON: %v", err)
+	}
+	if len(got.SERPs) != 6 || got.Workflow.CompletedResultPages != 6 {
+		t.Fatalf("SERP reports=%d workflow=%+v, want every fetched query report retained", len(got.SERPs), got.Workflow)
+	}
+	if len(got.Candidates) != 1 || len(got.Coverage) != 3 {
+		t.Fatalf("candidates=%d coverage=%+v, want capped candidate plus every query", len(got.Candidates), got.Coverage)
+	}
+	if got.Workflow.QueryCount != 3 || got.Workflow.ProductiveQueryCount != 3 || got.Workflow.RepresentedQueryCount != 1 || got.Workflow.OmittedQueryCount != 2 {
+		t.Fatalf("workflow coverage = %+v", got.Workflow)
+	}
+	if !got.Coverage[0].Represented || got.Coverage[0].SelectedCandidates != 1 || got.Coverage[0].ProducedCandidates != 1 || got.Coverage[0].DuplicateCandidates != 1 || got.Coverage[1].DuplicateCandidates != 2 || got.Coverage[2].DuplicateCandidates != 2 {
+		t.Fatalf("query coverage = %+v, want same-query plus cross-query duplicate visibility", got.Coverage)
+	}
+}
+
 func TestWorkflowWebResearchSERPSupportsMultipleEngines(t *testing.T) {
 	engines := []string{"google", "bing", "brave", "duckduckgo", "kagi"}
 	for _, engine := range engines {
@@ -1812,7 +1910,7 @@ func TestWorkflowWebResearchSERPSupportsMultipleEngines(t *testing.T) {
 			}
 			outDir := filepath.Join(tmpDir, "research")
 			var out, errOut bytes.Buffer
-			code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", engine, "--result-pages", "1", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+			code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", engine, "--result-pages", "1", "--out-dir", outDir, "--wait", "250ms", "--settle", "0", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 			if code != cli.ExitOK {
 				t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 			}
@@ -1851,7 +1949,7 @@ func TestWorkflowWebResearchSERPRunsMultipleEnginesInOneCommand(t *testing.T) {
 	}
 	outDir := filepath.Join(tmpDir, "research")
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", "google,bing", "--fallback-serp", "none", "--result-pages", "1", "--parallel", "3", "--out-dir", outDir, "--wait", "1s", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", "google,bing", "--fallback-serp", "none", "--result-pages", "1", "--parallel", "3", "--out-dir", outDir, "--wait", "1s", "--settle", "0", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -1916,7 +2014,7 @@ func TestWorkflowWebResearchSERPFastFailsBlockedPages(t *testing.T) {
 	}
 	outDir := filepath.Join(tmpDir, "research")
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--result-pages", "3", "--fast-fail-blocked", "--blocked-failure-threshold", "2", "--progress", "stderr", "--parallel", "1", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--result-pages", "3", "--fast-fail-blocked", "--blocked-failure-threshold", "2", "--progress", "stderr", "--parallel", "1", "--out-dir", outDir, "--wait", "250ms", "--settle", "0", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -2001,7 +2099,7 @@ func TestWorkflowWebResearchSERPFallsBackAfterBlockedPrimary(t *testing.T) {
 	}
 	outDir := filepath.Join(tmpDir, "research")
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", "duckduckgo", "--result-pages", "1", "--parallel", "1", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "serp", "--query-file", queryFile, "--serp", "duckduckgo", "--result-pages", "1", "--parallel", "1", "--out-dir", outDir, "--wait", "250ms", "--settle", "0", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow web-research serp exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -2075,7 +2173,7 @@ func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 	}
 	outDir := filepath.Join(tmpDir, "pages")
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "extract", "--url-file", urlFile, "--max-pages", "1", "--parallel", "10", "--out-dir", outDir, "--wait", "250ms", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"workflow", "web-research", "extract", "--url-file", urlFile, "--max-pages", "1", "--parallel", "10", "--out-dir", outDir, "--wait", "250ms", "--settle", "0", "--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("workflow web-research extract exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -2132,6 +2230,251 @@ func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 	}
 	if len(got.Quality) != 1 || len(got.Quality[0].Warnings) != 0 {
 		t.Fatalf("workflow web-research extract quality = %+v", got.Quality)
+	}
+}
+
+func TestWorkflowWebResearchExtractPreservesArtifactsForRetryableQualityFailure(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "urls.txt")
+	if err := os.WriteFile(urlFile, []byte("https://example.test/story\n"), 0o600); err != nil {
+		t.Fatalf("write url file: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "web-research", "extract",
+		"--url-file", urlFile,
+		"--out-dir", filepath.Join(tmpDir, "pages"),
+		"--parallel", "1",
+		"--wait", "250ms",
+		"--settle", "0",
+		"--min-visible-words", "1000",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research extract exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Pages []struct {
+			Report struct {
+				Artifacts map[string]string `json:"artifacts"`
+			} `json:"report"`
+		} `json:"pages"`
+		Quality []struct {
+			Quality struct {
+				Passed bool `json:"passed"`
+			} `json:"quality"`
+		} `json:"quality"`
+		Failures []struct {
+			URL       string `json:"url"`
+			ErrClass  string `json:"err_class"`
+			Retryable bool   `json:"retryable"`
+		} `json:"failures"`
+		Workflow struct {
+			PageCount           int `json:"page_count"`
+			FailureCount        int `json:"failure_count"`
+			QualityFailureCount int `json:"quality_failure_count"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research extract output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Workflow.PageCount != 1 || got.Workflow.FailureCount != 1 || got.Workflow.QualityFailureCount != 1 {
+		t.Fatalf("quality-failure summary = %+v, ok=%v", got.Workflow, got.OK)
+	}
+	if len(got.Pages) != 1 || len(got.Pages[0].Report.Artifacts) == 0 || len(got.Quality) != 1 || got.Quality[0].Quality.Passed {
+		t.Fatalf("captured page/quality = pages=%+v quality=%+v; artifacts must survive", got.Pages, got.Quality)
+	}
+	if len(got.Failures) != 1 || got.Failures[0].ErrClass != "quality_gate_failed" || !got.Failures[0].Retryable || got.Failures[0].URL == "" {
+		t.Fatalf("failures = %+v, want retryable quality_gate_failed", got.Failures)
+	}
+}
+
+func TestWorkflowWebResearchExtractClassifiesCaptureMismatchForCallerRetry(t *testing.T) {
+	testWorkflowWebResearchExtractQualityFailure(t, webResearchExtractQualityFailureCase{
+		fakeTargetFlag:      "fakeRenderedExtractChangesAfterReady",
+		wait:                "250ms",
+		settle:              "0",
+		wantOutcome:         "settled",
+		wantChecked:         true,
+		wantReadinessPassed: true,
+		warning:             "changed while capture",
+	})
+}
+
+func TestWorkflowWebResearchExtractClassifiesUnavailableCaptureCheckForCallerRetry(t *testing.T) {
+	testWorkflowWebResearchExtractQualityFailure(t, webResearchExtractQualityFailureCase{
+		fakeTargetFlag:      "fakeRenderedExtractConsistencyUnavailable",
+		wait:                "250ms",
+		settle:              "0",
+		wantOutcome:         "settled",
+		wantReadinessPassed: true,
+		warning:             "could not be verified",
+		wantCollectorError:  true,
+	})
+}
+
+func TestWorkflowWebResearchExtractClassifiesUnsettledReadinessForCallerRetry(t *testing.T) {
+	testWorkflowWebResearchExtractQualityFailure(t, webResearchExtractQualityFailureCase{
+		wait:                "100ms",
+		settle:              "100ms",
+		wantOutcome:         "wait_expired",
+		wantChecked:         true,
+		wantConsistent:      true,
+		wantReadinessPassed: false,
+		warning:             "deadline expired",
+	})
+}
+
+type webResearchExtractQualityFailureCase struct {
+	fakeTargetFlag      string
+	wait                string
+	settle              string
+	wantOutcome         string
+	wantChecked         bool
+	wantConsistent      bool
+	wantReadinessPassed bool
+	warning             string
+	wantCollectorError  bool
+}
+
+func testWorkflowWebResearchExtractQualityFailure(t *testing.T, testCase webResearchExtractQualityFailureCase) {
+	t.Helper()
+	target := map[string]any{
+		"targetId": "page-1",
+		"type":     "page",
+		"title":    "Synthetic",
+		"url":      "https://example.test/",
+		"attached": false,
+	}
+	if testCase.fakeTargetFlag != "" {
+		target[testCase.fakeTargetFlag] = true
+	}
+	server := newFakeCDPServer(t, []map[string]any{target})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "urls.txt")
+	if err := os.WriteFile(urlFile, []byte("https://example.test/story\n"), 0o600); err != nil {
+		t.Fatalf("write url file: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "web-research", "extract",
+		"--url-file", urlFile,
+		"--out-dir", filepath.Join(tmpDir, "pages"),
+		"--parallel", "1",
+		"--wait", testCase.wait,
+		"--settle", testCase.settle,
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research extract exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK    bool `json:"ok"`
+		Pages []struct {
+			Report struct {
+				Readiness struct {
+					Outcome                   string `json:"outcome"`
+					CaptureConsistencyChecked bool   `json:"capture_consistency_checked"`
+					CaptureConsistent         bool   `json:"capture_consistent"`
+				} `json:"readiness"`
+				Artifacts map[string]string `json:"artifacts"`
+				Quality   struct {
+					Passed                    bool `json:"passed"`
+					ThresholdsPassed          bool `json:"thresholds_passed"`
+					ReadinessPassed           bool `json:"readiness_passed"`
+					CaptureConsistencyChecked bool `json:"capture_consistency_checked"`
+					CaptureConsistent         bool `json:"capture_consistent"`
+				} `json:"quality"`
+				Warnings []string `json:"warnings"`
+			} `json:"report"`
+		} `json:"pages"`
+		Failures []struct {
+			URL       string            `json:"url"`
+			ErrClass  string            `json:"err_class"`
+			Retryable bool              `json:"retryable"`
+			Artifacts map[string]string `json:"artifacts"`
+		} `json:"failures"`
+		Workflow struct {
+			FailureCount          int  `json:"failure_count"`
+			QualityFailureCount   int  `json:"quality_failure_count"`
+			RetriedAfterReconnect bool `json:"retried_after_reconnect"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("workflow web-research extract output is invalid JSON: %v", err)
+	}
+	if len(got.Pages) != 1 {
+		t.Fatalf("pages = %+v, want one captured page", got.Pages)
+	}
+	page := got.Pages[0].Report
+	if page.Readiness.Outcome != testCase.wantOutcome ||
+		page.Readiness.CaptureConsistencyChecked != testCase.wantChecked ||
+		page.Readiness.CaptureConsistent != testCase.wantConsistent {
+		t.Fatalf("readiness = %+v, want outcome=%q checked=%v consistent=%v", page.Readiness, testCase.wantOutcome, testCase.wantChecked, testCase.wantConsistent)
+	}
+	if page.Quality.Passed || !page.Quality.ThresholdsPassed ||
+		page.Quality.ReadinessPassed != testCase.wantReadinessPassed ||
+		page.Quality.CaptureConsistencyChecked != testCase.wantChecked ||
+		page.Quality.CaptureConsistent != testCase.wantConsistent ||
+		len(page.Artifacts) == 0 || page.Artifacts["diagnostics_json"] == "" {
+		t.Fatalf("quality/artifacts = %+v/%+v, want failed quality with preserved artifacts", page.Quality, page.Artifacts)
+	}
+	if len(page.Warnings) == 0 || !strings.Contains(strings.Join(page.Warnings, "\n"), testCase.warning) {
+		t.Fatalf("warnings = %v, want %q warning", page.Warnings, testCase.warning)
+	}
+	if got.OK || got.Workflow.FailureCount != 1 || got.Workflow.QualityFailureCount != 1 || got.Workflow.RetriedAfterReconnect {
+		t.Fatalf("summary = %+v, ok=%v; capture consistency failure must be emitted without an internal retry", got.Workflow, got.OK)
+	}
+	if len(got.Failures) != 1 || got.Failures[0].URL != "https://example.test/story" ||
+		got.Failures[0].ErrClass != "quality_gate_failed" || !got.Failures[0].Retryable ||
+		len(got.Failures[0].Artifacts) == 0 {
+		t.Fatalf("failures = %+v, want retryable quality_gate_failed", got.Failures)
+	}
+
+	diagnosticsPayload, err := os.ReadFile(page.Artifacts["diagnostics_json"])
+	if err != nil {
+		t.Fatalf("read diagnostics artifact: %v", err)
+	}
+	var diagnostics struct {
+		Readiness struct {
+			CaptureConsistencyChecked bool `json:"capture_consistency_checked"`
+			CaptureConsistent         bool `json:"capture_consistent"`
+		} `json:"readiness"`
+		CollectorErrors []struct {
+			Collector string `json:"collector"`
+			Error     string `json:"error"`
+		} `json:"collector_errors"`
+	}
+	if err := json.Unmarshal(diagnosticsPayload, &diagnostics); err != nil {
+		t.Fatalf("diagnostics artifact is invalid JSON: %v", err)
+	}
+	if diagnostics.Readiness.CaptureConsistencyChecked != testCase.wantChecked ||
+		diagnostics.Readiness.CaptureConsistent != testCase.wantConsistent {
+		t.Fatalf("diagnostics readiness = %+v, want checked=%v consistent=%v", diagnostics.Readiness, testCase.wantChecked, testCase.wantConsistent)
+	}
+	hasConsistencyError := false
+	for _, collectorError := range diagnostics.CollectorErrors {
+		if collectorError.Collector == "capture_consistency" && collectorError.Error != "" {
+			hasConsistencyError = true
+		}
+	}
+	if hasConsistencyError != testCase.wantCollectorError {
+		t.Fatalf("diagnostics collector errors = %+v, want capture-consistency error=%v", diagnostics.CollectorErrors, testCase.wantCollectorError)
 	}
 }
 

@@ -89,10 +89,13 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"stop-state-classify",
 		"protocol-examples",
 		"storage",
+		"rendered-extract-readiness",
+		"rendered-extract-quality",
 		"workflow-rendered-extract",
 		"workflow-submit-search",
 		"workflow-web-research-serp",
 		"workflow-web-research-extract",
+		"web-research-query-coverage",
 	}
 	for _, name := range critical {
 		if _, ok := catalog[name]; !ok {
@@ -114,6 +117,62 @@ func TestSchemaCatalogWebResearchQueryContract(t *testing.T) {
 	}
 	if !catalogSchemaFieldContains(query, "time_filter", "string", "Google tbs", "ignored by other engines", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026") {
 		t.Fatalf("query schema does not expose the optional Google time filter: %+v", query)
+	}
+}
+
+func TestSchemaCatalogRenderedExtractAndQueryCoverageContracts(t *testing.T) {
+	catalog := schemaCatalog()
+	readiness := catalog["rendered-extract-readiness"]
+	quality := catalog["rendered-extract-quality"]
+	serp := catalog["workflow-web-research-serp"]
+	coverage := catalog["web-research-query-coverage"]
+	extract := catalog["workflow-web-research-extract"]
+
+	if !catalogSchemaFieldContains(readiness, "outcome", "string", "immediate", "wait_expired") ||
+		!catalogSchemaFieldContains(readiness, "settle", "duration", "fingerprint") ||
+		!catalogSchemaFieldContains(readiness, "thresholds_met", "boolean", "every enabled") ||
+		!catalogSchemaFieldContains(readiness, "capture_consistent", "boolean", "post-capture") ||
+		!catalogSchemaFieldContains(readiness, "network_idle_seen", "boolean", "Always false") {
+		t.Fatalf("rendered readiness schema is incomplete: %+v", readiness)
+	}
+	if !catalogSchemaFieldContains(quality, "passed", "boolean", "readiness completed", "every enabled", "consistency") ||
+		!catalogSchemaFieldContains(quality, "thresholds_passed", "boolean", "every enabled") ||
+		!catalogSchemaFieldContains(quality, "readiness_passed", "boolean", "wait_expired") ||
+		!catalogSchemaFieldContains(quality, "capture_consistency_checked", "boolean", "post-capture") ||
+		!catalogSchemaFieldContains(quality, "capture_consistent", "boolean", "fingerprints matched") ||
+		!catalogSchemaFieldContains(quality, "thresholds", "object", "zero disables") {
+		t.Fatalf("rendered quality schema is incomplete: %+v", quality)
+	}
+	if !catalogSchemaFieldContains(serp, "query_coverage", "array<web_research_query_coverage>", "Input-order") ||
+		!catalogSchemaFieldContains(coverage, "duplicate_candidates", "number", "within this query", "earlier query") ||
+		!catalogSchemaFieldContains(coverage, "omitted_by_cap", "number", "global candidate cap") {
+		t.Fatalf("query coverage schema is incomplete: workflow=%+v coverage=%+v", serp, coverage)
+	}
+	for _, field := range []string{
+		"selector_match_count",
+		"selected_text_length",
+		"selected_html_length",
+		"selected_word_count",
+		"body_text_length",
+		"body_html_length",
+		"element_count",
+		"navigated_from_about_blank",
+		"load_seen",
+		"dom_stable_seen",
+		"text_stable_seen",
+		"html_stable_seen",
+		"content_grew_seen",
+		"stable_polls",
+		"poll_count",
+		"useful_content_seen",
+		"error",
+	} {
+		if !catalogSchemaHasField(readiness, field) {
+			t.Fatalf("rendered readiness schema is missing emitted field %q: %+v", field, readiness)
+		}
+	}
+	if !catalogSchemaFieldContains(extract, "ok", "boolean", "passed every enabled quality gate") {
+		t.Fatalf("web research extract schema does not expose quality-gated success: %+v", extract)
 	}
 }
 

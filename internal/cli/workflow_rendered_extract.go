@@ -16,29 +16,129 @@ import (
 )
 
 type renderedExtractReadiness struct {
-	URL                     string `json:"url"`
-	DocumentReadyState      string `json:"document_ready_state"`
-	SelectorMatched         bool   `json:"selector_matched"`
-	SelectorMatchCount      int    `json:"selector_match_count"`
-	SelectedTextLength      int    `json:"selected_text_length"`
-	SelectedHTMLLength      int    `json:"selected_html_length"`
-	SelectedWordCount       int    `json:"selected_word_count"`
-	BodyTextLength          int    `json:"body_text_length"`
-	BodyHTMLLength          int    `json:"body_html_length"`
-	ElementCount            int    `json:"element_count"`
-	DOMSignature            string `json:"dom_signature,omitempty"`
-	NavigatedFromAboutBlank bool   `json:"navigated_from_about_blank"`
-	LoadSeen                bool   `json:"load_seen"`
-	NetworkIdleSeen         bool   `json:"network_idle_seen"`
-	DOMStableSeen           bool   `json:"dom_stable_seen"`
-	TextStableSeen          bool   `json:"text_stable_seen"`
-	HTMLStableSeen          bool   `json:"html_stable_seen"`
-	ContentStableSeen       bool   `json:"content_stable_seen"`
-	ContentGrewSeen         bool   `json:"content_grew_seen"`
-	StablePolls             int    `json:"stable_polls"`
-	PollCount               int    `json:"poll_count"`
-	UsefulContentSeen       bool   `json:"useful_content_seen"`
-	Error                   string `json:"error,omitempty"`
+	URL                       string `json:"url"`
+	DocumentReadyState        string `json:"document_ready_state"`
+	SelectorMatched           bool   `json:"selector_matched"`
+	SelectorMatchCount        int    `json:"selector_match_count"`
+	SelectedTextLength        int    `json:"selected_text_length"`
+	SelectedHTMLLength        int    `json:"selected_html_length"`
+	SelectedWordCount         int    `json:"selected_word_count"`
+	BodyTextLength            int    `json:"body_text_length"`
+	BodyHTMLLength            int    `json:"body_html_length"`
+	ElementCount              int    `json:"element_count"`
+	DOMSignature              string `json:"dom_signature,omitempty"`
+	NavigatedFromAboutBlank   bool   `json:"navigated_from_about_blank"`
+	LoadSeen                  bool   `json:"load_seen"`
+	NetworkIdleSeen           bool   `json:"network_idle_seen"`
+	DOMStableSeen             bool   `json:"dom_stable_seen"`
+	TextStableSeen            bool   `json:"text_stable_seen"`
+	HTMLStableSeen            bool   `json:"html_stable_seen"`
+	ContentStableSeen         bool   `json:"content_stable_seen"`
+	ContentGrewSeen           bool   `json:"content_grew_seen"`
+	StablePolls               int    `json:"stable_polls"`
+	PollCount                 int    `json:"poll_count"`
+	UsefulContentSeen         bool   `json:"useful_content_seen"`
+	ThresholdsMet             bool   `json:"thresholds_met"`
+	ContentSettledSeen        bool   `json:"content_settled_seen"`
+	Settle                    string `json:"settle"`
+	SettledFor                string `json:"settled_for"`
+	Outcome                   string `json:"outcome"`
+	CaptureConsistencyChecked bool   `json:"capture_consistency_checked"`
+	CaptureConsistent         bool   `json:"capture_consistent"`
+	Error                     string `json:"error,omitempty"`
+}
+
+type renderedExtractReadinessPolicy struct {
+	WaitUntil    string
+	MinWords     int
+	MinHTMLChars int
+	Settle       time.Duration
+}
+
+type renderedExtractReadinessTracker struct {
+	last            renderedExtractReadiness
+	hasLast         bool
+	stableSince     time.Time
+	settling        bool
+	stablePolls     int
+	pollCount       int
+	contentGrewSeen bool
+}
+
+func (t *renderedExtractReadinessTracker) Observe(sample renderedExtractReadiness, now time.Time, policy renderedExtractReadinessPolicy) (renderedExtractReadiness, bool) {
+	t.pollCount++
+	sample.NavigatedFromAboutBlank = sample.URL != "" && sample.URL != "about:blank"
+	sample.LoadSeen = sample.DocumentReadyState == "complete"
+	sample.DOMStableSeen = t.hasLast && sample.DOMSignature != "" && sample.DOMSignature == t.last.DOMSignature
+	sample.TextStableSeen = t.hasLast && sample.SelectedTextLength == t.last.SelectedTextLength && sample.SelectedWordCount == t.last.SelectedWordCount && sample.BodyTextLength == t.last.BodyTextLength
+	sample.HTMLStableSeen = t.hasLast && sample.SelectedHTMLLength == t.last.SelectedHTMLLength && sample.BodyHTMLLength == t.last.BodyHTMLLength && sample.ElementCount == t.last.ElementCount
+	sample.ContentStableSeen = sample.DOMStableSeen
+	if t.hasLast && (sample.SelectedTextLength > t.last.SelectedTextLength || sample.SelectedWordCount > t.last.SelectedWordCount || sample.SelectedHTMLLength > t.last.SelectedHTMLLength || sample.BodyTextLength > t.last.BodyTextLength || sample.BodyHTMLLength > t.last.BodyHTMLLength || sample.ElementCount > t.last.ElementCount) {
+		t.contentGrewSeen = true
+	}
+	sample.ContentGrewSeen = t.contentGrewSeen
+	if sample.ContentStableSeen {
+		t.stablePolls++
+	} else {
+		t.stablePolls = 0
+	}
+	sample.StablePolls = t.stablePolls
+	sample.PollCount = t.pollCount
+	sample.NetworkIdleSeen = false
+	wordsMet := policy.MinWords <= 0 || sample.SelectedWordCount >= policy.MinWords
+	htmlMet := policy.MinHTMLChars <= 0 || sample.SelectedHTMLLength >= policy.MinHTMLChars
+	sample.ThresholdsMet = wordsMet && htmlMet
+	sample.UsefulContentSeen = sample.NavigatedFromAboutBlank && sample.SelectorMatched && sample.ThresholdsMet
+	sample.Settle = policy.Settle.String()
+	sample.SettledFor = time.Duration(0).String()
+
+	eligible := false
+	switch policy.WaitUntil {
+	case "load":
+		eligible = sample.NavigatedFromAboutBlank && sample.LoadSeen
+		if eligible {
+			sample.Outcome = "load"
+			t.last = sample
+			t.hasLast = true
+			return sample, true
+		}
+	case "dom-stable":
+		eligible = sample.UsefulContentSeen
+	default:
+		eligible = sample.UsefulContentSeen
+	}
+
+	if !eligible {
+		t.settling = false
+		t.stableSince = time.Time{}
+	} else if policy.Settle <= 0 {
+		sample.ContentSettledSeen = true
+		sample.Outcome = "settled"
+		t.last = sample
+		t.hasLast = true
+		return sample, true
+	} else {
+		if !t.settling || !sample.ContentStableSeen {
+			t.stableSince = now
+			t.settling = true
+		}
+		settledFor := now.Sub(t.stableSince)
+		if settledFor < 0 {
+			settledFor = 0
+		}
+		sample.SettledFor = settledFor.String()
+		if sample.ContentStableSeen && settledFor >= policy.Settle {
+			sample.ContentSettledSeen = true
+			sample.Outcome = "settled"
+			t.last = sample
+			t.hasLast = true
+			return sample, true
+		}
+	}
+
+	t.last = sample
+	t.hasLast = true
+	return sample, false
 }
 
 type renderedExtractLinks struct {
@@ -70,6 +170,7 @@ type renderedExtractOptions struct {
 	TitleContains      string
 	Selector           string
 	Wait               time.Duration
+	Settle             time.Duration
 	WaitUntil          string
 	Formats            string
 	OutDir             string
@@ -234,6 +335,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	var titleContains string
 	var selector string
 	var wait time.Duration
+	var settle time.Duration
 	var waitUntil string
 	var formats string
 	var outDir string
@@ -264,6 +366,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 				TitleContains:      titleContains,
 				Selector:           selector,
 				Wait:               wait,
+				Settle:             settle,
 				WaitUntil:          waitUntil,
 				Formats:            formats,
 				OutDir:             outDir,
@@ -293,15 +396,16 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected existing page before extraction")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload the selected existing page while bypassing cache")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
-	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for useful rendered content and a quiet stability window")
-	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness gate: useful-content, load, or dom-stable; useful-content waits for SPA-aware content stability")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for rendered readiness; use 0 for one immediate sample")
+	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
+	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
 	cmd.Flags().StringVar(&formats, "formats", "snapshot,text,html,markdown,links", "comma-separated artifacts: snapshot,text,html,markdown,links,all")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for rendered extraction artifacts")
 	cmd.Flags().StringVar(&serp, "serp", "auto", "SERP extractor: auto, google, or none")
 	cmd.Flags().IntVar(&limit, "limit", 80, "maximum visible text snapshot items; use 0 for no limit")
-	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "warning threshold for visible text word count")
-	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "warning threshold for Markdown word count")
-	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "warning threshold for extracted HTML character count")
+	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "enabled readiness and post-capture quality minimum for visible words; use 0 to disable")
+	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "enabled post-capture quality minimum for Markdown words; use 0 to disable")
+	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "enabled readiness and post-capture quality minimum for extracted HTML characters; use 0 to disable")
 	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
 	return cmd
 }
@@ -367,8 +471,11 @@ func (a *app) resolveUniqueRenderedExtractTarget(ctx context.Context, client cdp
 }
 
 func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExtractOptions) (result renderedExtractResult, retErr error) {
-	if options.Wait < 0 || options.Limit < 0 || options.MinVisibleWords < 0 || options.MinMarkdownWords < 0 || options.MinHTMLChars < 0 {
-		return renderedExtractResult{}, commandError("usage", "usage", "--wait, --limit, and quality thresholds must be non-negative", ExitUsage, []string{options.UsageCommand + " https://example.com --json"})
+	if options.Wait < 0 || options.Settle < 0 || options.Limit < 0 || options.MinVisibleWords < 0 || options.MinMarkdownWords < 0 || options.MinHTMLChars < 0 {
+		return renderedExtractResult{}, commandError("usage", "usage", "--wait, --settle, --limit, and quality thresholds must be non-negative", ExitUsage, []string{options.UsageCommand + " https://example.com --json"})
+	}
+	if options.Wait > 0 && options.Settle > options.Wait {
+		return renderedExtractResult{}, commandError("usage", "usage", "--settle must not exceed positive --wait", ExitUsage, []string{options.UsageCommand + " https://example.com --wait 15s --settle 2s --json"})
 	}
 	options.WaitUntil = strings.TrimSpace(options.WaitUntil)
 	if options.WaitUntil == "" {
@@ -501,7 +608,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		}
 	}
 
-	readiness, err := waitForRenderedExtractReadiness(ctx, session, options.Selector, options.Wait, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
+	readiness, err := waitForRenderedExtractReadiness(ctx, session, options.Selector, options.Wait, options.Settle, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
 	if err != nil {
 		return renderedExtractResult{}, err
 	}
@@ -534,9 +641,18 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if err != nil {
 		return renderedExtractResult{}, err
 	}
+	postCaptureReadiness, consistencyErr := collectRenderedExtractReadiness(ctx, session, options.Selector)
+	if consistencyErr != nil {
+		collectorErrors = append(collectorErrors, collectorError("capture_consistency", consistencyErr))
+	} else {
+		applyRenderedExtractCaptureConsistency(&readiness, postCaptureReadiness)
+	}
 
 	visibleWordCount := wordCount(visibleText)
 	markdownWordCount := wordCount(markdown)
+	thresholdsPassed := renderedExtractQualityPassed(visibleWordCount, markdownWordCount, htmlLength, options.MinVisibleWords, options.MinMarkdownWords, options.MinHTMLChars)
+	readinessPassed := renderedExtractReadinessQualityPassed(readiness)
+	qualityPassed := renderedExtractPostCaptureQualityPassed(thresholdsPassed, readiness)
 	warnings := renderedExtractWarnings(readiness, visibleText, snapshot.Count, visibleWordCount, htmlLength, markdownWordCount, len(links.Results), options.MinVisibleWords, options.MinHTMLChars, options.MinMarkdownWords, serpMode)
 	artifactPaths := map[string]string{}
 	artifactList := []map[string]any{}
@@ -621,12 +737,22 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		"artifacts":     artifactPaths,
 		"artifact_list": artifactList,
 		"quality": map[string]any{
-			"snapshot_count":       snapshot.Count,
-			"visible_word_count":   visibleWordCount,
-			"html_length":          htmlLength,
-			"markdown_word_count":  markdownWordCount,
-			"external_link_count":  len(links.Results),
-			"selector_match_count": readiness.SelectorMatchCount,
+			"passed":                      qualityPassed,
+			"thresholds_passed":           thresholdsPassed,
+			"readiness_passed":            readinessPassed,
+			"capture_consistency_checked": readiness.CaptureConsistencyChecked,
+			"capture_consistent":          readiness.CaptureConsistent,
+			"snapshot_count":              snapshot.Count,
+			"visible_word_count":          visibleWordCount,
+			"html_length":                 htmlLength,
+			"markdown_word_count":         markdownWordCount,
+			"external_link_count":         len(links.Results),
+			"selector_match_count":        readiness.SelectorMatchCount,
+			"thresholds": map[string]int{
+				"min_visible_words":  options.MinVisibleWords,
+				"min_markdown_words": options.MinMarkdownWords,
+				"min_html_chars":     options.MinHTMLChars,
+			},
 		},
 		"links":    map[string]any{"count": len(links.Results), "query": links.Query, "time_filter": links.TimeFilter, "serp": links.Serp},
 		"warnings": warnings,
@@ -638,6 +764,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			"frame_id":         frameID,
 			"selector":         options.Selector,
 			"wait":             durationString(options.Wait),
+			"settle":           durationString(options.Settle),
 			"wait_until":       options.WaitUntil,
 			"formats":          setKeys(formatSet),
 			"serp":             serpMode,
@@ -697,69 +824,98 @@ func renderedExtractSERPMode(rawURL, mode string) string {
 	}
 }
 
-func waitForRenderedExtractReadiness(ctx context.Context, session *cdp.PageSession, selector string, wait time.Duration, waitUntil string, minWords, minHTMLChars int) (renderedExtractReadiness, error) {
+func waitForRenderedExtractReadiness(ctx context.Context, session *cdp.PageSession, selector string, wait, settle time.Duration, waitUntil string, minWords, minHTMLChars int) (renderedExtractReadiness, error) {
 	return waitForRenderedExtractReadinessFunc(ctx, func(ctx context.Context, selector string) (renderedExtractReadiness, error) {
 		return collectRenderedExtractReadiness(ctx, session, selector)
-	}, selector, wait, waitUntil, minWords, minHTMLChars, 500*time.Millisecond)
+	}, selector, wait, settle, waitUntil, minWords, minHTMLChars, 500*time.Millisecond)
 }
 
-func waitForRenderedExtractReadinessFunc(ctx context.Context, collect func(context.Context, string) (renderedExtractReadiness, error), selector string, wait time.Duration, waitUntil string, minWords, minHTMLChars int, pollInterval time.Duration) (renderedExtractReadiness, error) {
+func waitForRenderedExtractReadinessFunc(ctx context.Context, collect func(context.Context, string) (renderedExtractReadiness, error), selector string, wait, settle time.Duration, waitUntil string, minWords, minHTMLChars int, pollInterval time.Duration) (renderedExtractReadiness, error) {
 	deadline := time.Now().Add(wait)
-	var last renderedExtractReadiness
-	stablePolls := 0
-	pollCount := 0
-	contentGrewSeen := false
+	tracker := renderedExtractReadinessTracker{}
+	policy := renderedExtractReadinessPolicy{WaitUntil: waitUntil, MinWords: minWords, MinHTMLChars: minHTMLChars, Settle: settle}
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
 	}
-	for {
+	deadlineReadiness := func() renderedExtractReadiness {
+		readiness := tracker.last
+		readiness.Settle = policy.Settle.String()
+		if readiness.SettledFor == "" {
+			readiness.SettledFor = time.Duration(0).String()
+		}
+		readiness.Outcome = "wait_expired"
+		return readiness
+	}
+	contextError := func() error {
+		return commandError("timeout", "timeout", ctx.Err().Error(), ExitTimeout, []string{"cdp workflow rendered-extract <url> --wait 30s --json"})
+	}
+	if err := ctx.Err(); err != nil {
+		return renderedExtractReadiness{}, contextError()
+	}
+	if wait == 0 {
 		readiness, err := collect(ctx, selector)
 		if err != nil {
 			return renderedExtractReadiness{}, err
 		}
-		pollCount++
-		readiness.NavigatedFromAboutBlank = readiness.URL != "" && readiness.URL != "about:blank"
-		readiness.LoadSeen = readiness.DocumentReadyState == "complete"
-		readiness.DOMStableSeen = readiness.DOMSignature != "" && readiness.DOMSignature == last.DOMSignature
-		readiness.TextStableSeen = pollCount > 1 && readiness.SelectedTextLength == last.SelectedTextLength && readiness.SelectedWordCount == last.SelectedWordCount && readiness.BodyTextLength == last.BodyTextLength
-		readiness.HTMLStableSeen = pollCount > 1 && readiness.SelectedHTMLLength == last.SelectedHTMLLength && readiness.BodyHTMLLength == last.BodyHTMLLength && readiness.ElementCount == last.ElementCount
-		readiness.ContentStableSeen = readiness.TextStableSeen && readiness.HTMLStableSeen
-		if pollCount > 1 && (readiness.SelectedTextLength > last.SelectedTextLength || readiness.SelectedWordCount > last.SelectedWordCount || readiness.SelectedHTMLLength > last.SelectedHTMLLength || readiness.BodyTextLength > last.BodyTextLength || readiness.BodyHTMLLength > last.BodyHTMLLength || readiness.ElementCount > last.ElementCount) {
-			contentGrewSeen = true
+		readiness, _ = tracker.Observe(readiness, time.Now(), policy)
+		readiness.Outcome = "immediate"
+		return readiness, nil
+	}
+
+	waitCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	type collectResult struct {
+		readiness renderedExtractReadiness
+		err       error
+	}
+	for {
+		if ctx.Err() != nil {
+			return renderedExtractReadiness{}, contextError()
 		}
-		readiness.ContentGrewSeen = contentGrewSeen
-		if readiness.ContentStableSeen {
-			stablePolls++
-		} else {
-			stablePolls = 0
+		if !time.Now().Before(deadline) {
+			return deadlineReadiness(), nil
 		}
-		readiness.StablePolls = stablePolls
-		readiness.PollCount = pollCount
-		readiness.NetworkIdleSeen = readiness.ContentStableSeen
-		readiness.UsefulContentSeen = readiness.NavigatedFromAboutBlank && readiness.SelectorMatched && (readiness.SelectedWordCount >= minWords || readiness.SelectedHTMLLength >= minHTMLChars)
-		last = readiness
-		switch waitUntil {
-		case "load":
-			if readiness.NavigatedFromAboutBlank && readiness.LoadSeen {
-				return readiness, nil
-			}
-		case "dom-stable":
-			if readiness.NavigatedFromAboutBlank && readiness.DOMStableSeen && readiness.StablePolls >= 2 {
-				return readiness, nil
-			}
-		default:
-			if readiness.UsefulContentSeen && readiness.StablePolls >= 2 {
-				return readiness, nil
-			}
-		}
-		if wait == 0 || time.Now().After(deadline) {
-			return last, nil
-		}
-		timer := time.NewTimer(pollInterval)
+		resultCh := make(chan collectResult, 1)
+		go func() {
+			readiness, err := collect(waitCtx, selector)
+			resultCh <- collectResult{readiness: readiness, err: err}
+		}()
+
+		var result collectResult
 		select {
-		case <-ctx.Done():
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return renderedExtractReadiness{}, contextError()
+			}
+			return deadlineReadiness(), nil
+		case result = <-resultCh:
+		}
+		if ctx.Err() != nil {
+			return renderedExtractReadiness{}, contextError()
+		}
+		now := time.Now()
+		if !now.Before(deadline) {
+			return deadlineReadiness(), nil
+		}
+		if result.err != nil {
+			return renderedExtractReadiness{}, result.err
+		}
+		readiness, ready := tracker.Observe(result.readiness, now, policy)
+		if ready {
+			return readiness, nil
+		}
+		sleepFor := pollInterval
+		if remaining := time.Until(deadline); remaining < sleepFor {
+			sleepFor = remaining
+		}
+		timer := time.NewTimer(sleepFor)
+		select {
+		case <-waitCtx.Done():
 			timer.Stop()
-			return renderedExtractReadiness{}, commandError("timeout", "timeout", ctx.Err().Error(), ExitTimeout, []string{"cdp workflow rendered-extract <url> --wait 30s --json"})
+			if ctx.Err() != nil {
+				return renderedExtractReadiness{}, contextError()
+			}
+			return deadlineReadiness(), nil
 		case <-timer.C:
 		}
 	}
@@ -790,6 +946,14 @@ func renderedExtractReadinessExpression(selector string) string {
     const text = normalize(value);
     return text ? text.split(/\s+/).filter(Boolean).length : 0;
   };
+	const hash = (value) => {
+	  let result = 2166136261;
+	  for (let index = 0; index < value.length; index++) {
+		result ^= value.charCodeAt(index);
+		result = Math.imul(result, 16777619);
+	  }
+	  return (result >>> 0).toString(16).padStart(8, "0");
+	};
   let elements = [];
   try {
     elements = Array.from(document.querySelectorAll(selector));
@@ -816,9 +980,33 @@ func renderedExtractReadinessExpression(selector string) string {
     body_text_length: bodyText.length,
 	  body_html_length: bodyHTML.length,
 	  element_count: elementCount,
-	  dom_signature: [location.href, document.readyState || "", elements.length, normalize(text).length, html.length, bodyText.length, bodyHTML.length, elementCount].join("|")
+	  dom_signature: "v2|" + [location.href, document.readyState || "", elements.length, hash(normalize(text)), hash(html)].join("|")
 	};
 })()`, string(selectorJSON))
+}
+
+func renderedExtractQualityPassed(visibleWords, markdownWords, htmlChars, minVisibleWords, minMarkdownWords, minHTMLChars int) bool {
+	return (minVisibleWords <= 0 || visibleWords >= minVisibleWords) &&
+		(minMarkdownWords <= 0 || markdownWords >= minMarkdownWords) &&
+		(minHTMLChars <= 0 || htmlChars >= minHTMLChars)
+}
+
+func renderedExtractPostCaptureQualityPassed(thresholdsPassed bool, readiness renderedExtractReadiness) bool {
+	return thresholdsPassed && renderedExtractReadinessQualityPassed(readiness) && readiness.CaptureConsistencyChecked && readiness.CaptureConsistent
+}
+
+func renderedExtractReadinessQualityPassed(readiness renderedExtractReadiness) bool {
+	switch readiness.Outcome {
+	case "immediate", "load", "settled":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyRenderedExtractCaptureConsistency(readiness *renderedExtractReadiness, postCapture renderedExtractReadiness) {
+	readiness.CaptureConsistencyChecked = true
+	readiness.CaptureConsistent = readiness.DOMSignature != "" && postCapture.DOMSignature != "" && readiness.DOMSignature == postCapture.DOMSignature
 }
 
 func collectRenderedExtractLinks(ctx context.Context, session *cdp.PageSession, requestedURL, sourceURL, serpMode string) (renderedExtractLinks, error) {
@@ -987,6 +1175,16 @@ func wordCount(text string) int {
 
 func renderedExtractWarnings(readiness renderedExtractReadiness, visibleText string, snapshotCount, visibleWords, htmlLength, markdownWords, externalLinks, minVisibleWords, minHTMLChars, minMarkdownWords int, serpMode string) []string {
 	var warnings []string
+	if readiness.Outcome == "wait_expired" && !readiness.ThresholdsMet {
+		warnings = append(warnings, "rendered-content deadline expired before every enabled readiness threshold passed")
+	} else if readiness.Outcome == "wait_expired" && !readiness.ContentSettledSeen {
+		warnings = append(warnings, "rendered-content deadline expired before the content fingerprint remained quiet for the configured settle duration")
+	}
+	if !readiness.CaptureConsistencyChecked {
+		warnings = append(warnings, "post-capture content consistency could not be verified")
+	} else if !readiness.CaptureConsistent {
+		warnings = append(warnings, "selected content changed while capture artifacts were collected")
+	}
 	if !readiness.NavigatedFromAboutBlank {
 		warnings = append(warnings, "target remained about:blank or did not report a final URL")
 	}

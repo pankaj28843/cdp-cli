@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,7 +22,11 @@ func TestEventsTapIsSessionScopedAndDurationBounded(t *testing.T) {
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
-	readyFile := filepath.Join(t.TempDir(), "tap.ready.json")
+	readyDir := t.TempDir()
+	if err := os.Chmod(readyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	readyFile := filepath.Join(readyDir, "tap.ready.json")
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"events", "tap", "--target", "event-tap-page", "--enable", "network", "--match", "Network.requestWillBeSent", "--duration", "1s", "--max-events", "1", "--ready-file", readyFile, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
