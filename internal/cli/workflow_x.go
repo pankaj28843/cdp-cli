@@ -77,7 +77,8 @@ func (a *app) newWorkflowXCollectionCommand(use, short string) *cobra.Command {
 			if final.HandleChanged {
 				closeError := closePage()
 				coverage := dynamicSourceCoverage(nil, xPossibleRecordKinds(final.Kind), "invalid", "profile_handle_changed_requires_stable_account_verification", "profile_identity", "", true)
-				return a.render(ctx, "", map[string]any{"ok": true, "request": request, "kind": final.Kind, "records": []x.Record{}, "coverage": coverage, "workflow": map[string]any{"name": "x-collect", "count": 0, "limit": limit, "status": "invalid", "partial_reason": "profile_handle_changed_requires_stable_account_verification", "interactions": 0, "created_page": true, "closed": closeError == "", "close_error": closeError}})
+				workflow := map[string]any{"name": "x-collect", "count": 0, "limit": limit, "status": "invalid", "partial_reason": "profile_handle_changed_requires_stable_account_verification", "interactions": 0, "created_page": true, "closed": closeError == "", "close_error": closeError}
+				return a.render(ctx, xCollectionMarkdown(request.URL, final.Kind, nil, workflow, coverage), map[string]any{"ok": true, "request": request, "kind": final.Kind, "records": []x.Record{}, "coverage": coverage, "workflow": workflow})
 			}
 			status, interactions := "partial", 0
 			var records []x.Record
