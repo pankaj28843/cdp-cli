@@ -398,7 +398,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique existing page whose title contains this text")
 	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected existing page before extraction")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload the selected existing page while bypassing cache")
-	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector for readiness and generic capture/fallback; arXiv auto honors custom roots, while Hacker News auto uses semantic story/comment roots")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector for readiness and generic capture/fallback; auto uses semantic roots for arXiv/Hacker News plus strict X, LinkedIn, and Reddit post, thread, and profile-feed routes")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for rendered readiness; use 0 for one immediate sample")
 	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
@@ -601,7 +601,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		contentPlan.Rewritten = false
 	}
 	navigationURL := contentPlan.NavigationURL
-	captureSelector := contentPlan.GenericSelector
+	captureSelector := renderedExtractCaptureSelector(contentPlan)
 	serpMode := renderedExtractSERPMode(rawURL, options.Serp)
 
 	collectorErrors, teardownCollectors := enablePageLoadCollectorsWithTeardown(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
@@ -661,11 +661,35 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	markdown := htmlToResearchMarkdown(pageHTML)
 	contentProvenance := newRenderedExtractContentProvenance(contentPlan, finalURL)
 	contentWarnings := make([]string, 0, 1)
+	var discussionExpansion renderedExtractDiscussionExpansion
+	var preExpansionReadiness *renderedExtractReadiness
 	if contentPlan.Strategy != renderedExtractContentStrategyLegacyHTML {
 		if !nativeContentEligible {
 			applyRenderedExtractGenericFallback(&contentProvenance, contentPlan, "resolved final URL does not match the planned native content profile")
 		} else {
 			contentProvenance.NativeAttempted = true
+			if renderedExtractContentHasExpandableDiscussion(contentPlan) {
+				discussionExpansion.Status = "unknown"
+				expansion, expansionErr := expandRenderedExtractDiscussion(ctx, session, contentPlan)
+				if expansionErr != nil {
+					contentWarnings = append(contentWarnings, "native "+string(contentPlan.Profile)+" discussion expansion was unavailable: "+expansionErr.Error())
+				} else {
+					discussionExpansion = expansion
+					if discussionExpansion.Status == "" {
+						discussionExpansion.Status = "unknown"
+						contentWarnings = append(contentWarnings, "native "+string(contentPlan.Profile)+" discussion expansion returned no terminal status")
+					}
+				}
+			}
+			if renderedExtractContentHasExpandableDiscussion(contentPlan) && discussionExpansion.Interactions > 0 {
+				before := readiness
+				preExpansionReadiness = &before
+				rebased, rebaselineErr := waitForRenderedExtractReadiness(ctx, session, captureSelector, options.Wait, options.Settle, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
+				if rebaselineErr != nil {
+					return renderedExtractResult{}, rebaselineErr
+				}
+				readiness = rebased
+			}
 			contentCapture, contentErr := collectRenderedExtractContent(ctx, session, contentPlan)
 			switch {
 			case contentErr != nil:
@@ -677,6 +701,17 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			default:
 				contentProvenance.NativeSucceeded = true
 				contentProvenance.ItemCount = contentCapture.ItemCount
+				contentProvenance.DiscussionCount = contentCapture.DiscussionCount
+				if contentCapture.DiscussionCount > 0 || renderedExtractContentHasExpandableDiscussion(contentPlan) || contentPlan.Profile == renderedExtractContentProfileHackerNews {
+					contentProvenance.DiscussionLimit = renderedExtractDiscussionLimit
+					contentProvenance.DiscussionStatus = discussionExpansion.Status
+					contentProvenance.DiscussionInteractions = discussionExpansion.Interactions
+					if contentCapture.DiscussionCount >= renderedExtractDiscussionLimit {
+						contentProvenance.DiscussionStatus = "ceiling"
+					} else if contentProvenance.DiscussionStatus == "" && contentPlan.Profile == renderedExtractContentProfileHackerNews {
+						contentProvenance.DiscussionStatus = "exhausted"
+					}
+				}
 				if strings.TrimSpace(contentCapture.RootSelector) != "" {
 					contentProvenance.RootSelector = contentCapture.RootSelector
 				}
@@ -741,6 +776,9 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			fmt.Sprintf("cdp html %s --target %s --diagnose-empty --json", captureSelector, createdID),
 			fmt.Sprintf("cdp workflow debug-bundle --target %s --out-dir %s --json", createdID, filepath.Join(options.OutDir, "debug-bundle")),
 		},
+	}
+	if preExpansionReadiness != nil {
+		diagnostics["pre_expansion_readiness"] = *preExpansionReadiness
 	}
 	diagnosticsPayload, err := json.MarshalIndent(diagnostics, "", "  ")
 	if err != nil {
@@ -835,7 +873,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			"cleanup":           renderedExtractCleanupResult{TargetID: createdID},
 			"cleanup_command":   "",
 			"collector_errors":  collectorErrors,
-			"partial":           len(collectorErrors) > 0,
+			"partial":           renderedExtractWorkflowPartial(qualityPassed, collectorErrors),
 		},
 	}
 	if len(warnings) > 0 || len(collectorErrors) > 0 {
@@ -1051,6 +1089,10 @@ func renderedExtractQualityPassed(visibleWords, markdownWords, htmlChars, minVis
 
 func renderedExtractPostCaptureQualityPassed(thresholdsPassed bool, readiness renderedExtractReadiness) bool {
 	return thresholdsPassed && renderedExtractReadinessQualityPassed(readiness) && readiness.CaptureConsistencyChecked && readiness.CaptureConsistent
+}
+
+func renderedExtractWorkflowPartial(qualityPassed bool, collectorErrors []map[string]string) bool {
+	return !qualityPassed || len(collectorErrors) > 0
 }
 
 func renderedExtractReadinessQualityPassed(readiness renderedExtractReadiness) bool {

@@ -153,6 +153,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	var attachTargetErrors sync.Map
 	var runtimeEvaluateErrors sync.Map
 	var renderedExtractReadinessCalls sync.Map
+	var redditUserRecordCalls sync.Map
+	var xProfileRecordCalls sync.Map
 	var scrolledSelectors sync.Map
 	var navigatedURLs sync.Map
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
@@ -799,7 +801,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					if _, loaded := runtimeEvaluateErrors.LoadOrStore(targetID, true); !loaded {
 						resp["error"] = map[string]any{"code": -32000, "message": "execution context was destroyed"}
 					} else {
-						resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &navigatedURLs, targetInfos)
+						resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &redditUserRecordCalls, &xProfileRecordCalls, &navigatedURLs, targetInfos)
 						events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 						events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 						events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -808,7 +810,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 					}
 				} else {
-					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &navigatedURLs, targetInfos)
+					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &redditUserRecordCalls, &xProfileRecordCalls, &navigatedURLs, targetInfos)
 					events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -1172,11 +1174,82 @@ func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, p
 	}
 }
 
-func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool, scrolledSelectors, renderedExtractReadinessCalls, navigatedURLs *sync.Map, targetInfos []map[string]any) map[string]any {
+func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool, scrolledSelectors, renderedExtractReadinessCalls, redditUserRecordCalls, xProfileRecordCalls, navigatedURLs *sync.Map, targetInfos []map[string]any) map[string]any {
 	var req struct {
 		Expression string `json:"expression"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if strings.Contains(req.Expression, "window.scrollTo(0, document.body.scrollHeight)") {
+		scrolledSelectors.Store(sessionID+":x-profile", true)
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_rendered_discussion_expand__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"status":       "exhausted",
+					"interactions": 2,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_hn_thread_records__") {
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": []map[string]any{{"kind": "story", "id": "46641042", "canonical_url": "/item?id=46641042"}, {"kind": "comment", "id": "46642165", "canonical_url": "/item?id=46642165", "depth": 0}, {"kind": "comment", "id": "46644995", "canonical_url": "/item?id=46644995", "depth": 1, "parent_id": "46642165"}}}}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_arxiv_paper__") {
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"paper": map[string]any{"identifier": "2604.12374v2", "canonical_url": "/abs/2604.12374v2", "title": "Synthetic paper"}, "references": []map[string]any{{"id": "ref-1", "paper_identifier": "2604.12374v2", "text": "Synthetic reference"}}}}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_linkedin_progress__") {
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"terminal_extent": 1000}}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_reddit_thread_records__") {
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": []map[string]any{
+			{"kind": "submission", "id": "t3_1v010h6", "canonical_url": "/r/codex/comments/1v010h6/the_sun_came_out/", "subreddit": "codex", "root_thread_id": "t3_1v010h6", "author": "op", "title": "Synthetic root", "discovery_surface": "thread_root"},
+			{"kind": "comment", "id": "t1_ozckogc", "canonical_url": "/r/codex/comments/1v010h6/the_sun_came_out/comment/ozckogc/", "subreddit": "codex", "root_thread_id": "t3_1v010h6", "parent_id": "t3_1v010h6", "author": "reply", "discovery_surface": "thread_comment_tree"},
+		}}}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_x_records__") {
+		if strings.Contains(req.Expression, "isThread = true") {
+			return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": []map[string]any{
+				{"kind": "post", "id": "2079610838143623371", "canonical_url": "/karpathy/status/2079610838143623371", "handle": "karpathy", "root_status_id": "2079610838143623371", "body": "Synthetic root", "discovery_surface": "thread_root"},
+				{"kind": "reply", "id": "2079610838143623999", "canonical_url": "/reply/status/2079610838143623999", "handle": "reply", "root_status_id": "2079610838143623371", "body": "Synthetic reply", "discovery_surface": "conversation"},
+			}}}}
+		}
+		calls, _ := xProfileRecordCalls.LoadOrStore(sessionID, 0)
+		xProfileRecordCalls.Store(sessionID, calls.(int)+1)
+		records := []map[string]any{{"kind": "post", "id": "2079610838143623371", "canonical_url": "/karpathy/status/2079610838143623371", "handle": "karpathy", "root_status_id": "2079610838143623371", "body": "Synthetic profile post", "discovery_surface": "profile_posts"}}
+		if _, scrolled := scrolledSelectors.Load(sessionID + ":x-profile"); scrolled && calls.(int) > 0 {
+			records = []map[string]any{
+				{"kind": "post", "id": "2079610838143623999", "canonical_url": "/karpathy/status/2079610838143623999", "handle": "karpathy", "root_status_id": "2079610838143623999", "body": "Synthetic second post", "discovery_surface": "profile_posts"},
+				{"kind": "post", "id": "2079610838143624000", "canonical_url": "/karpathy/status/2079610838143624000", "handle": "karpathy", "root_status_id": "2079610838143624000", "body": "Synthetic third post", "discovery_surface": "profile_posts"},
+			}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": records}}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_linkedin_records__") {
+		if strings.Contains(req.Expression, "isThread = true") {
+			return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": []map[string]any{
+				{"kind": "activity", "id": "7482842673645584386", "data_urn": "urn:li:activity:7482842673645584386", "canonical_url": "/posts/example-activity-7482842673645584386-9aSD/", "activity_id": "7482842673645584386", "timestamp": "2026-07-24T00:00:00Z", "discovery_surface": "activity_root"},
+				{"kind": "comment", "id": "urn:li:comment:(activity:7482842673645584386,7482842673645584387)", "canonical_url": "/posts/example-activity-7482842673645584386-9aSD/", "activity_id": "7482842673645584386", "body": "Synthetic reply", "discovery_surface": "activity_comment"},
+			}}}}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": []map[string]any{
+			{"kind": "activity", "id": "7482842673645584386", "data_urn": "urn:li:activity:7482842673645584386", "canonical_url": "/posts/example-activity-7482842673645584386-9aSD/", "activity_id": "7482842673645584386", "company": "the-pragmatic-engineer", "timestamp": "2026-07-24T00:00:00Z", "discovery_surface": "company_posts"},
+			{"kind": "activity", "id": "7482842673645584387", "data_urn": "urn:li:activity:7482842673645584387", "canonical_url": "/posts/example-activity-7482842673645584387-9aSD/", "activity_id": "7482842673645584387", "company": "the-pragmatic-engineer", "timestamp": "2026-07-24T00:01:00Z", "discovery_surface": "company_posts"},
+		}}}}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_reddit_user_records__") {
+		calls, _ := redditUserRecordCalls.LoadOrStore(sessionID, 0)
+		redditUserRecordCalls.Store(sessionID, calls.(int)+1)
+		records := []map[string]any{{"kind": "submission", "id": "t3_1v010h6", "canonical_url": "/r/codex/comments/1v010h6/the_sun_came_out/", "subreddit": "codex", "root_thread_id": "t3_1v010h6", "author": "celticpaladin", "title": "Synthetic submission", "discovery_surface": "user_submission"}}
+		if calls.(int) > 0 {
+			records = []map[string]any{
+				{"kind": "comment", "id": "t1_ozckogc", "canonical_url": "/r/codex/comments/1v010h6/the_sun_came_out/comment/ozckogc/", "subreddit": "codex", "root_thread_id": "t3_1v010h6", "author": "celticpaladin", "discovery_surface": "user_comment"},
+				{"kind": "comment", "id": "t1_second", "canonical_url": "/r/codex/comments/1v010h6/the_sun_came_out/comment/second/", "subreddit": "codex", "root_thread_id": "t3_1v010h6", "author": "celticpaladin", "discovery_surface": "user_comment"},
+			}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": records}}}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_rendered_content__") {
 		if fakeAnyTargetBool(targetInfos, "fakeRenderedContentFailure") {
 			return map[string]any{
@@ -1214,6 +1287,81 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 						"markdown":      "# Synthetic HN discussion\n\n[Source](https://example.test/story) · [HN discussion](https://news.ycombinator.com/item?id=46641042)\n\n## Comments (2)\n\n- **alice** · [1 hour ago](https://news.ycombinator.com/item?id=101)\n\n    Parent comment.\n\n    - **bob** · [45 minutes ago](https://news.ycombinator.com/item?id=102)\n\n        Nested reply.",
 						"root_selector": "table.fatitem, table.comment-tree",
 						"item_count":    2,
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "x"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":         "# Synthetic X post\n\nSynthetic author · 2026-07-24T00:00:00.000Z\n\nNative X extraction excludes reply chrome.\n\n## Replies (1)\n\n- A synthetic reply.",
+						"root_selector":    `article[data-testid="tweet"]`,
+						"item_count":       2,
+						"discussion_count": 1,
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "x-profile"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":      "# X profile @karpathy\n\n## [Post](https://x.com/karpathy/status/2079610838143623371)\n\nA full synthetic profile post.",
+						"root_selector": `article[data-testid="tweet"]`,
+						"item_count":    1,
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "reddit-user-profile"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":      "# Reddit profile u/celticpaladin\n\n## [Comment](https://www.reddit.com/r/codex/comments/1v010h6/the_sun_came_out/comment/ozckogc/)\n\nA synthetic profile comment.",
+						"root_selector": "shreddit-feed shreddit-profile-comment",
+						"item_count":    1,
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "linkedin-company-posts"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":      "# LinkedIn company the-pragmatic-engineer\n\n## Activity 7482842673645584386\n\nA synthetic company post.",
+						"root_selector": `[role="article"][data-urn^="urn:li:activity:"]`,
+						"item_count":    1,
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "linkedin"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":         "# Synthetic LinkedIn post\n\nNative LinkedIn extraction excludes recommendations.\n\n## Comments (1)\n\n- A synthetic comment.",
+						"root_selector":    ".feed-shared-update-v2",
+						"item_count":       2,
+						"discussion_count": 1,
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "reddit"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":         "# Synthetic Reddit post\n\nNative Reddit extraction captures bounded rendered comments only.\n\n## Rendered comments (1)\n\n- A rendered comment.",
+						"root_selector":    "shreddit-post",
+						"item_count":       2,
+						"discussion_count": 1,
 					},
 				},
 			}

@@ -244,6 +244,29 @@ func TestPlanRenderedExtractContent(t *testing.T) {
 	}
 }
 
+func TestRenderedExtractSocialProfileExpressionsKeepPrimaryIdentityBoundaries(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		url  string
+		want []string
+	}{
+		{"https://x.com/karpathy", []string{"article.querySelector(\"article\")", "[data-testid=\"User-Name\"]", "tweet-text-show-more-link", "/status/"}},
+		{"https://www.reddit.com/user/CelticPaladin/", []string{"shreddit-profile-comment", "thread for ", "a[href^=\"/user/\"]"}},
+		{"https://www.linkedin.com/company/the-pragmatic-engineer/posts/", []string{".update-components-actor__meta", "data-urn^=\"urn:li:activity:\"", "more.click()"}},
+	} {
+		plan, err := planRenderedExtractContent(tt.url, "body", "auto")
+		if err != nil {
+			t.Fatalf("plan %q: %v", tt.url, err)
+		}
+		expression := renderedExtractContentExpression(plan)
+		for _, token := range tt.want {
+			if !strings.Contains(expression, token) {
+				t.Fatalf("%q expression lost identity boundary %q", tt.url, token)
+			}
+		}
+	}
+}
+
 func TestPlanRenderedExtractContentRejectsUnknownMode(t *testing.T) {
 	t.Parallel()
 
@@ -286,6 +309,27 @@ func TestRenderedExtractContentNativeEligibleUsesResolvedURL(t *testing.T) {
 			t.Parallel()
 			if got := renderedExtractContentNativeEligible(tt.plan, tt.finalURL); got != tt.want {
 				t.Fatalf("renderedExtractContentNativeEligible(%+v, %q) = %v, want %v", tt.plan, tt.finalURL, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderedExtractCaptureSelectorUsesNativeSemanticRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name, rawURL, mode, want string
+	}{
+		{"X post", "https://x.com/karpathy/status/2079610838143623371", "auto", `article[data-testid="tweet"]`},
+		{"Reddit thread", "https://www.reddit.com/r/codex/comments/1v010h6/the_sun_came_out/", "auto", "shreddit-post"},
+		{"arXiv paper", "https://arxiv.org/html/2604.12374v1", "auto", "article.ltx_document"},
+		{"generic override", "https://x.com/karpathy/status/2079610838143623371", "generic", "body"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := planRenderedExtractContent(tt.rawURL, "body", tt.mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := renderedExtractCaptureSelector(plan); got != tt.want {
+				t.Fatalf("capture selector = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -337,5 +381,10 @@ func TestRenderedExtractContentExpressionPreservesDiscussionIndentation(t *testi
 	if !strings.Contains(expression, `.replace(/^[ \t]+$/gm, "")`) ||
 		strings.Contains(expression, `.replace(/\n[ \t]+/g, "\n")`) {
 		t.Fatalf("rendered content expression does not preserve structured Markdown indentation: %s", expression)
+	}
+	for _, want := range []string{`slice(0, 500)`, `Math.min(8`, `102400`} {
+		if !strings.Contains(expression, want) {
+			t.Fatalf("rendered HN discussion expression is missing bound %q", want)
+		}
 	}
 }

@@ -935,7 +935,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for each rendered page; use 0 for one immediate sample")
 	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
-	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector for readiness and generic capture/fallback; arXiv auto honors custom roots, while Hacker News auto uses semantic story/comment roots")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector for readiness and generic capture/fallback; auto uses semantic roots for arXiv/Hacker News plus strict X, LinkedIn, and Reddit post, thread, and profile-feed routes")
 	cmd.Flags().StringVar(&contentExtractor, "content-extractor", "auto", "content extractor: auto selects native source profiles; generic preserves legacy HTML conversion")
 	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "enabled readiness and post-capture quality minimum for visible words; use 0 to disable")
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "enabled post-capture quality minimum for Markdown words; use 0 to disable")

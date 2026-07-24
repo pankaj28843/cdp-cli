@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/pankaj28843/cdp-cli/internal/sourcecollect/hackernews"
 	"github.com/spf13/cobra"
 )
 
@@ -97,6 +98,85 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 30, "maximum number of stories to return; use 0 for no limit")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long to wait for Hacker News story rows")
 	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.AddCommand(a.newWorkflowHackerNewsCollectCommand())
+	return cmd
+}
+
+func (a *app) newWorkflowHackerNewsCollectCommand() *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{Use: "collect <hn-item-url>", Short: "Collect normalized Hacker News thread records", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		req, err := hackernews.Parse(args[0])
+		if err != nil {
+			return commandError("invalid_hacker_news_url", "usage", err.Error(), ExitUsage, nil)
+		}
+		if limit < 1 || limit > 500 {
+			return commandError("invalid_limit", "usage", "--limit must be between 1 and 500", ExitUsage, nil)
+		}
+		ctx, cancel := a.commandContextWithDefault(cmd, 30*time.Second)
+		defer cancel()
+		client, closeClient, err := a.browserCDPClient(ctx)
+		if err != nil {
+			return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
+		}
+		target, err := a.createWorkflowPageTarget(ctx, client, req.URL, "hacker-news-collect")
+		if err != nil {
+			_ = closeClient(ctx)
+			return err
+		}
+		session, err := cdp.AttachToTargetWithClient(ctx, client, target, closeClient)
+		if err != nil {
+			_ = cdp.CloseTargetWithClient(ctx, client, target)
+			_ = closeClient(ctx)
+			return commandError("connection_failed", "connection", err.Error(), ExitConnection, nil)
+		}
+		defer session.Close(ctx)
+		defer cdp.CloseTargetWithClient(ctx, client, target)
+		if _, err = session.Navigate(ctx, req.URL); err != nil {
+			return commandError("hacker_news_navigation_failed", "connection", err.Error(), ExitConnection, nil)
+		}
+		ready, err := waitForRenderedExtractReadiness(ctx, session, "body", 10*time.Second, 0, "load", 0, 0)
+		if err != nil {
+			return err
+		}
+		if !renderedExtractReadinessQualityPassed(ready) {
+			return commandError("hacker_news_navigation_not_ready", "timeout", "Hacker News item page did not finish loading", ExitTimeout, nil)
+		}
+		if err := hackernews.ValidateFinalURL(req, ready.URL); err != nil {
+			return commandError("hacker_news_identity_changed", "check_failed", err.Error(), ExitCheckFailed, nil)
+		}
+		ready, err = waitForRenderedExtractReadiness(ctx, session, "tr.athing", 10*time.Second, 0, "useful-content", 1, 1)
+		if err != nil {
+			return err
+		}
+		if !renderedExtractReadinessQualityPassed(ready) {
+			return commandError("hacker_news_content_not_ready", "timeout", "Hacker News item rows did not reach useful content", ExitTimeout, nil)
+		}
+		if err := hackernews.ValidateFinalURL(req, ready.URL); err != nil {
+			return commandError("hacker_news_identity_changed", "check_failed", err.Error(), ExitCheckFailed, nil)
+		}
+		result, err := session.Evaluate(ctx, hackernews.ThreadExpression(req.ItemID, limit), true)
+		if err != nil || result.Exception != nil {
+			return commandError("hacker_news_collection_failed", "runtime", "Hacker News collection expression failed", ExitCheckFailed, nil)
+		}
+		page, err := hackernews.DecodeThreadPage(req, result.Object.Value)
+		if err != nil {
+			return commandError("invalid_hacker_news_collection", "check_failed", err.Error(), ExitCheckFailed, nil)
+		}
+		status, reason := "exhausted", ""
+		if len(page.Records) >= limit {
+			status, reason = "partial", "requested_limit_without_exhaustion_proof"
+		}
+		observed, missing := []string{"story"}, []string(nil)
+		if len(page.Records) > 1 {
+			observed = append(observed, "comment")
+		}
+		if status != "exhausted" {
+			missing = []string{"comment"}
+		}
+		coverage := staticSourceCoverage(observed, missing, status, reason)
+		return a.render(ctx, "", map[string]any{"ok": true, "request": req, "kind": "thread", "records": page.Records, "coverage": coverage, "workflow": map[string]any{"name": "hacker-news-collect", "count": len(page.Records), "limit": limit, "status": status, "partial_reason": reason, "interactions": 0}})
+	}}
+	cmd.Flags().IntVar(&limit, "limit", 500, "maximum source-native records to collect (1-500)")
 	return cmd
 }
 

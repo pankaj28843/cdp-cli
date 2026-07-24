@@ -649,6 +649,25 @@ func commandExamples(path string) []string {
 			"cdp workflow hacker-news --limit 10 --json",
 			"cdp workflow hacker-news 'https://news.ycombinator.com/news' --wait 30s --json",
 		},
+		"cdp workflow hacker-news collect": {"cdp --browser-mode headed workflow hacker-news collect 'https://news.ycombinator.com/item?id=46641042' --limit 500 --json"},
+		"cdp workflow reddit posts": {
+			"cdp --browser-mode headed workflow reddit posts 'https://www.reddit.com/r/formula1/top/?t=week' --limit 200 --json",
+			"cdp workflow reddit posts 'https://www.reddit.com/r/golang/new/' --limit 100 --json",
+		},
+		"cdp workflow reddit collect": {
+			"cdp --browser-mode headed workflow reddit collect 'https://www.reddit.com/r/formula1/top/?t=week' --limit 200 --json",
+			"cdp --browser-mode headed workflow reddit collect 'https://www.reddit.com/r/codex/comments/1v010h6/the_sun_came_out/' --limit 500 --json",
+			"cdp --browser-mode headed workflow reddit collect 'https://www.reddit.com/user/celticpaladin/comments/' --limit 200 --json",
+		},
+		"cdp workflow x collect": {
+			"cdp --browser-mode headed workflow x collect 'https://x.com/karpathy/status/2079610838143623371' --limit 500 --json",
+			"cdp --browser-mode headed workflow x collect 'https://x.com/karpathy' --limit 200 --json",
+		},
+		"cdp workflow linkedin collect": {
+			"cdp --browser-mode headed workflow linkedin collect 'https://www.linkedin.com/posts/example-activity-7482842673645584386-9aSD/' --limit 500 --json",
+			"cdp --browser-mode headed workflow linkedin collect 'https://www.linkedin.com/company/the-pragmatic-engineer/posts/' --limit 200 --json",
+		},
+		"cdp workflow arxiv collect": {"cdp --browser-mode headed workflow arxiv collect 'https://arxiv.org/abs/2604.12374' --json"},
 		"cdp workflow google-maps-directions": {
 			"cdp --browser-mode headed workflow google-maps-directions 'Kongens Lyngby, Denmark' 'Stege, Denmark' --json",
 			"cdp --browser-mode headed workflow google-maps-directions 'Stege, Denmark' 'Møn Is, Hovgårdsvej 4, 4780 Stege, Denmark' --wait 30s --json",
@@ -674,6 +693,12 @@ func commandExamples(path string) []string {
 			"cdp workflow rendered-extract 'https://example.com' --wait 20s --settle 2s --out-dir tmp/rendered-example --json",
 			"cdp --browser-mode headed workflow rendered-extract 'https://arxiv.org/pdf/2603.26487' --content-extractor auto --out-dir tmp/rendered-arxiv --json",
 			"cdp --browser-mode headed workflow rendered-extract 'https://news.ycombinator.com/item?id=46641042' --content-extractor auto --out-dir tmp/rendered-hn --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://x.com/karpathy/status/2079610838143623371' --content-extractor auto --out-dir tmp/rendered-x --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://x.com/karpathy' --content-extractor auto --out-dir tmp/rendered-x-profile --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://www.linkedin.com/posts/example-activity-7482842673645584386-9aSD' --content-extractor auto --out-dir tmp/rendered-linkedin --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://www.linkedin.com/company/example/posts/' --content-extractor auto --out-dir tmp/rendered-linkedin-company --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://www.reddit.com/r/example/comments/1abc234/a_post/' --content-extractor auto --out-dir tmp/rendered-reddit --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://www.reddit.com/user/example/' --content-extractor auto --out-dir tmp/rendered-reddit-user --json",
 			"cdp workflow rendered-extract --target <target-id> --reload --out-dir tmp/rendered-existing --json",
 			"cdp workflow rendered-extract --url-contains localhost --out-dir tmp/rendered-selected --json",
 			"cdp workflow rendered-extract 'https://www.google.com/search?q=agentic+engineering&safe=active&tbs=qdr:m' --serp google --out-dir tmp/rendered-google --json",

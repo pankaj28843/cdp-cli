@@ -1617,7 +1617,7 @@ func TestWorkflowRenderedExtractUsesArxivSemanticContentProfile(t *testing.T) {
 	}
 	if got.Workflow.RequestedURL != rawURL ||
 		got.Workflow.NavigationURL != "https://arxiv.org/html/2603.26487" ||
-		got.Workflow.Selector != "body" {
+		got.Workflow.Selector != "article.ltx_document" {
 		t.Fatalf("arxiv workflow = %+v", got.Workflow)
 	}
 	markdown, err := os.ReadFile(got.Artifacts.Markdown)
@@ -1813,7 +1813,7 @@ func TestWorkflowRenderedExtractArxivNativeFailureKeepsGenericBodyFallback(t *te
 		got.Content.PlannedStrategy != "semantic-dom" || got.Content.Strategy != "legacy-html" ||
 		got.Content.Representation != "rendered-html" || got.Content.RootSelector != "body" ||
 		!got.Content.NativeAttempted || got.Content.NativeSucceeded || !got.Content.FallbackUsed ||
-		got.Workflow.Selector != "body" {
+		got.Workflow.Selector != "article.ltx_document" {
 		t.Fatalf("arxiv native fallback provenance = %+v; workflow=%+v", got.Content, got.Workflow)
 	}
 	markdown, err := os.ReadFile(got.Artifacts.Markdown)
@@ -1871,7 +1871,7 @@ func TestWorkflowRenderedExtractArxivRedirectMismatchUsesGenericBodyFallback(t *
 	if got.Content.Strategy != "legacy-html" || got.Content.Representation != "rendered-html" ||
 		got.Content.RootSelector != "body" || got.Content.NativeAttempted || !got.Content.FallbackUsed ||
 		!strings.Contains(got.Content.FallbackReason, "resolved final URL") ||
-		got.Workflow.FinalURL != "https://example.test/article" || got.Workflow.Selector != "body" {
+		got.Workflow.FinalURL != "https://example.test/article" || got.Workflow.Selector != "article.ltx_document" {
 		t.Fatalf("arxiv redirect fallback content=%+v workflow=%+v", got.Content, got.Workflow)
 	}
 }

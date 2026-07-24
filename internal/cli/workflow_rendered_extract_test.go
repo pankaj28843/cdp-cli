@@ -307,3 +307,15 @@ func TestApplyRenderedExtractCaptureConsistencyDetectsChange(t *testing.T) {
 		t.Fatalf("capture consistency warnings = %v", warnings)
 	}
 }
+
+func TestRenderedExtractWorkflowPartialIncludesFailedQuality(t *testing.T) {
+	if !renderedExtractWorkflowPartial(false, nil) {
+		t.Fatal("failed quality must mark the workflow partial")
+	}
+	if !renderedExtractWorkflowPartial(true, []map[string]string{{"collector": "capture_consistency", "error": "changed"}}) {
+		t.Fatal("collector error must mark the workflow partial")
+	}
+	if renderedExtractWorkflowPartial(true, nil) {
+		t.Fatal("clean quality without collector errors must not be partial")
+	}
+}

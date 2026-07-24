@@ -1,4 +1,4 @@
-.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-web-research-live-installed fmt fmt-check install leak-check test verify vet
+.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-public-sources-installed e2e-web-research-live-installed fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
 PREFIX ?= $(HOME)/.local
@@ -64,6 +64,9 @@ e2e-demo-installed:
 		exit 2; \
 	fi; \
 	bash scripts/e2e_demo.sh "$$cdp_bin"
+
+e2e-public-sources-installed:
+	go run ./cmd/e2e-public-sources --cdp "$$(command -v cdp)"
 
 e2e-web-research-live-installed:
 	@cdp_bin="$$(command -v cdp)"; \

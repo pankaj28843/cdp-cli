@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "max_parallel": 2,
+  "fixtures": [
+    {"name": "x-karpathy-post", "platform": "x", "url": "https://x.com/karpathy/status/2079610838143623371", "workflow": "x-collect", "kind": "post_thread", "purpose": "public long-form post from a prominent account; exercises root-post and reply collection", "min_records": 1},
+    {"name": "linkedin-pragmatic-engineer-post", "platform": "linkedin", "url": "https://www.linkedin.com/posts/the-pragmatic-engineer_what-is-loop-engineering-looking-closer-activity-7482842673645584386-9aSD/", "workflow": "linkedin-collect", "kind": "activity_thread", "purpose": "public activity permalink with visible discussion controls", "min_records": 1},
+    {"name": "reddit-formula1-top-week", "platform": "reddit", "url": "https://www.reddit.com/r/formula1/top/?t=week", "workflow": "reddit-collect", "kind": "subreddit_listing", "purpose": "large public subreddit using an explicit ranking window", "min_records": 1},
+    {"name": "reddit-codex-thread", "platform": "reddit", "url": "https://www.reddit.com/r/codex/comments/1v010h6/the_sun_came_out/", "workflow": "reddit-collect", "kind": "thread", "purpose": "public discussion permalink; exercises thread and comment identity", "min_records": 1},
+    {"name": "reddit-celticpaladin-profile", "platform": "reddit", "url": "https://www.reddit.com/user/celticpaladin/comments/", "workflow": "reddit-collect", "kind": "user_profile", "purpose": "public profile comment listing; exercises profile route ownership", "min_records": 1},
+    {"name": "hacker-news-discussion", "platform": "hacker-news", "url": "https://news.ycombinator.com/item?id=46641042", "workflow": "hacker-news-collect", "kind": "thread", "purpose": "public Hacker News item with server-rendered comment tree", "min_records": 2},
+    {"name": "arxiv-paper", "platform": "arxiv", "url": "https://arxiv.org/html/2604.12374v1", "workflow": "arxiv-collect", "kind": "paper", "purpose": "public version-pinned arXiv HTML paper; exercises paper metadata and empty-reference handling", "min_records": 0}
+  ]
+}

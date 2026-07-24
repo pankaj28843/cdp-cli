@@ -93,6 +93,13 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"rendered-extract-readiness",
 		"rendered-extract-quality",
 		"workflow-rendered-extract",
+		"workflow-reddit-posts",
+		"workflow-reddit-collect",
+		"workflow-x-collect",
+		"workflow-linkedin-collect",
+		"workflow-hacker-news-collect",
+		"workflow-arxiv-collect",
+		"source-collection-coverage",
 		"workflow-submit-search",
 		"workflow-web-research-serp",
 		"workflow-web-research-extract",
@@ -102,6 +109,96 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		if _, ok := catalog[name]; !ok {
 			t.Fatalf("schemaCatalog() missing critical schema %q", name)
 		}
+	}
+}
+
+func TestSchemaCatalogRedditCollectorContract(t *testing.T) {
+	workflow := schemaCatalog()["workflow-reddit-posts"]
+	if !catalogSchemaFieldContains(workflow, "request", "object", "subreddit", "sort") ||
+		!catalogSchemaFieldContains(workflow, "threads", "array<reddit_thread>", "same-subreddit", "t3") ||
+		!catalogSchemaFieldContains(workflow, "next_cursor", "string", "never proves", "exhausted") ||
+		!catalogSchemaFieldContains(workflow, "workflow", "object", "partial reason", "cleanup") {
+		t.Fatalf("Reddit collector schema is incomplete: %+v", workflow)
+	}
+}
+
+func TestSchemaCatalogRedditCollectContract(t *testing.T) {
+	workflow := schemaCatalog()["workflow-reddit-collect"]
+	if !catalogSchemaFieldContains(workflow, "kind", "string", "subreddit_listing", "thread", "user_profile") ||
+		!catalogSchemaFieldContains(workflow, "records", "array<reddit_record>", "canonical identity", "discovery surface") ||
+		!catalogSchemaFieldContains(workflow, "coverage", "source_collection_coverage", "possibly missing", "termination evidence") {
+		t.Fatalf("Reddit collect schema is incomplete: %+v", workflow)
+	}
+}
+
+func TestSchemaCatalogDynamicCollectorCoverageContract(t *testing.T) {
+	for _, name := range []string{"workflow-x-collect", "workflow-linkedin-collect"} {
+		workflow := schemaCatalog()[name]
+		if !catalogSchemaFieldContains(workflow, "coverage", "source_collection_coverage", "possibly missing", "termination evidence") {
+			t.Fatalf("%s coverage schema is incomplete: %+v", name, workflow)
+		}
+	}
+}
+
+func TestSchemaCatalogNativeCollectorInteractionsContract(t *testing.T) {
+	for _, name := range []string{
+		"workflow-reddit-posts",
+		"workflow-reddit-collect",
+		"workflow-x-collect",
+		"workflow-linkedin-collect",
+		"workflow-hacker-news-collect",
+		"workflow-arxiv-collect",
+	} {
+		workflow := schemaCatalog()[name]
+		if !catalogSchemaFieldContains(workflow, "workflow", "object", "interactions") {
+			t.Fatalf("%s workflow schema does not document interactions: %+v", name, workflow)
+		}
+	}
+}
+
+func TestSchemaCatalogSourceCollectionCoverageContract(t *testing.T) {
+	coverage := schemaCatalog()["source-collection-coverage"]
+	if !catalogSchemaFieldContains(coverage, "observed_record_kinds", "array<string>", "observed") ||
+		!catalogSchemaFieldContains(coverage, "possibly_missing_record_kinds", "array<string>", "not prove") ||
+		!catalogSchemaFieldContains(coverage, "continuation", "string", "continuation surface") ||
+		!catalogSchemaFieldContains(coverage, "unresolved_controls", "boolean", "exhausted") ||
+		!catalogSchemaFieldContains(coverage, "decode_rejections", "number", "exhausted") ||
+		!catalogSchemaFieldContains(coverage, "termination_evidence", "array<string>", "terminal") {
+		t.Fatalf("source collection coverage schema is incomplete: %+v", coverage)
+	}
+}
+
+func TestSchemaCatalogXCollectContract(t *testing.T) {
+	workflow := schemaCatalog()["workflow-x-collect"]
+	if !catalogSchemaFieldContains(workflow, "kind", "string", "post_thread", "profile_posts") ||
+		!catalogSchemaFieldContains(workflow, "records", "array<x_record>", "canonical status", "root status") ||
+		!catalogSchemaFieldContains(workflow, "workflow", "object", "hard 500", "partial reason") {
+		t.Fatalf("X collect schema is incomplete: %+v", workflow)
+	}
+}
+
+func TestSchemaCatalogLinkedInCollectContract(t *testing.T) {
+	workflow := schemaCatalog()["workflow-linkedin-collect"]
+	if !catalogSchemaFieldContains(workflow, "kind", "string", "activity_thread", "company_posts") ||
+		!catalogSchemaFieldContains(workflow, "records", "array<linkedin_record>", "activity", "comment") ||
+		!catalogSchemaFieldContains(workflow, "workflow", "object", "hard 500", "partial reason") {
+		t.Fatalf("LinkedIn collect schema is incomplete: %+v", workflow)
+	}
+}
+
+func TestSchemaCatalogHackerNewsAndArxivCollectContracts(t *testing.T) {
+	catalog := schemaCatalog()
+	if workflow := catalog["workflow-hacker-news-collect"]; !catalogSchemaFieldContains(workflow, "kind", "string", "thread") ||
+		!catalogSchemaFieldContains(workflow, "records", "array<hacker_news_record>", "story", "comment") ||
+		!catalogSchemaFieldContains(workflow, "coverage", "source_collection_coverage", "possibly missing", "termination evidence") ||
+		!catalogSchemaFieldContains(workflow, "workflow", "object", "hard 500", "partial reason") {
+		t.Fatalf("Hacker News collect schema is incomplete: %+v", workflow)
+	}
+	if workflow := catalog["workflow-arxiv-collect"]; !catalogSchemaFieldContains(workflow, "paper", "arxiv_paper", "version-pinned") ||
+		!catalogSchemaFieldContains(workflow, "references", "array<arxiv_reference>", "exact paper identity") ||
+		!catalogSchemaFieldContains(workflow, "coverage", "source_collection_coverage", "possibly missing", "termination evidence") ||
+		!catalogSchemaFieldContains(workflow, "workflow", "object", "hard 500", "partial reason") {
+		t.Fatalf("arXiv collect schema is incomplete: %+v", workflow)
 	}
 }
 
@@ -133,7 +230,7 @@ func TestSchemaCatalogRenderedExtractAndQueryCoverageContracts(t *testing.T) {
 
 	if !catalogSchemaFieldContains(rendered, "content", "rendered_extract_content", "Source-profile") ||
 		!catalogSchemaFieldContains(rendered, "workflow", "workflow_summary", "navigation", "content_extractor") ||
-		!catalogSchemaFieldContains(content, "profile", "string", "arxiv", "hacker-news") ||
+		!catalogSchemaFieldContains(content, "profile", "string", "arxiv", "hacker-news", "x-profile", "reddit-user-profile", "linkedin-company-posts") ||
 		!catalogSchemaFieldContains(content, "planned_strategy", "string", "semantic-dom", "discussion-tree") ||
 		!catalogSchemaFieldContains(content, "strategy", "string", "Effective", "fallbacks", "legacy-html") ||
 		!catalogSchemaFieldContains(content, "planned_representation", "string", "before navigation") ||
@@ -141,6 +238,10 @@ func TestSchemaCatalogRenderedExtractAndQueryCoverageContracts(t *testing.T) {
 		!catalogSchemaFieldContains(content, "representation_rewritten", "boolean", "PDF", "TeX-source") ||
 		!catalogSchemaFieldContains(content, "native_succeeded", "boolean", "semantic Markdown") ||
 		!catalogSchemaFieldContains(content, "fallback_reason", "string", "mismatch", "capture") ||
+		!catalogSchemaFieldContains(content, "item_count", "number", "social root", "discussion") ||
+		!catalogSchemaFieldContains(content, "discussion_limit", "number", "500") ||
+		!catalogSchemaFieldContains(content, "discussion_status", "string", "ceiling", "partial", "unknown", "invalid") ||
+		!catalogSchemaFieldContains(content, "discussion_interactions", "number", "load-more") ||
 		!catalogSchemaFieldContains(content, "representations", "object", "html", "pdf", "source", "abstract") {
 		t.Fatalf("rendered content-profile schema is incomplete: workflow=%+v content=%+v", rendered, content)
 	}
