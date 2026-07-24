@@ -154,6 +154,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	var runtimeEvaluateErrors sync.Map
 	var renderedExtractReadinessCalls sync.Map
 	var scrolledSelectors sync.Map
+	var navigatedURLs sync.Map
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		if server == nil {
 			http.Error(w, "test server was not initialized", http.StatusInternalServerError)
@@ -381,6 +382,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				blocksAllSERPs := strings.Contains(lowerURL, "serp+block+fixture") || strings.Contains(lowerURL, "serp%20block%20fixture") || strings.Contains(lowerURL, "serp-block-fixture") || strings.Contains(lowerURL, "serp block fixture")
 				blocksDuckDuckGo := (strings.Contains(lowerURL, "duck-only-block") || strings.Contains(lowerURL, "duck+only+block") || strings.Contains(lowerURL, "duck%20only%20block")) && strings.Contains(lowerURL, "duckduckgo.com")
 				blockedSessions[req.SessionID] = blocksAllSERPs || blocksDuckDuckGo
+				navigatedURLs.Store(req.SessionID, params.URL)
 				resp["result"] = map[string]any{"frameId": "frame-1"}
 			} else if req.Method == "Page.enable" {
 				resp["result"] = map[string]any{}
@@ -797,7 +799,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					if _, loaded := runtimeEvaluateErrors.LoadOrStore(targetID, true); !loaded {
 						resp["error"] = map[string]any{"code": -32000, "message": "execution context was destroyed"}
 					} else {
-						resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, targetInfos)
+						resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &navigatedURLs, targetInfos)
 						events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 						events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 						events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -806,7 +808,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						applySyntheticTargetAfterWait(targets, req.SessionID, req.Params)
 					}
 				} else {
-					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, targetInfos)
+					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &navigatedURLs, targetInfos)
 					events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -1115,6 +1117,15 @@ func fakeAnyTargetBool(targetInfos []map[string]any, key string) bool {
 	return false
 }
 
+func fakeAnyTargetString(targetInfos []map[string]any, key string) string {
+	for _, target := range targetInfos {
+		if value, ok := target[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func fakeTargetBool(targetInfos []map[string]any, targetID, key string) bool {
 	for _, target := range targetInfos {
 		if target["targetId"] == targetID && fakeMapBool(target, key) {
@@ -1161,11 +1172,53 @@ func applySyntheticTargetAfterWait(targets []map[string]any, sessionID string, p
 	}
 }
 
-func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool, scrolledSelectors, renderedExtractReadinessCalls *sync.Map, targetInfos []map[string]any) map[string]any {
+func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlocked bool, scrolledSelectors, renderedExtractReadinessCalls, navigatedURLs *sync.Map, targetInfos []map[string]any) map[string]any {
 	var req struct {
 		Expression string `json:"expression"`
 	}
 	_ = json.Unmarshal(params, &req)
+	if strings.Contains(req.Expression, "__cdp_cli_rendered_content__") {
+		if fakeAnyTargetBool(targetInfos, "fakeRenderedContentFailure") {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":      "",
+						"root_selector": "body",
+						"item_count":    0,
+						"error": map[string]any{
+							"name":    "SyntheticError",
+							"message": "synthetic native content failure",
+						},
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "arxiv"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":      "# Synthetic arXiv Paper\n\nA rendered paper with $x^2$ and a [supporting source](https://example.test/source).\n\n## Results\n\nSemantic extraction works.",
+						"root_selector": "article.ltx_document",
+						"item_count":    2,
+					},
+				},
+			}
+		}
+		if strings.Contains(req.Expression, `const profile = "hacker-news"`) {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"markdown":      "# Synthetic HN discussion\n\n[Source](https://example.test/story) · [HN discussion](https://news.ycombinator.com/item?id=46641042)\n\n## Comments (2)\n\n- **alice** · [1 hour ago](https://news.ycombinator.com/item?id=101)\n\n    Parent comment.\n\n    - **bob** · [45 minutes ago](https://news.ycombinator.com/item?id=102)\n\n        Nested reply.",
+						"root_selector": "table.fatitem, table.comment-tree",
+						"item_count":    2,
+					},
+				},
+			}
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_google_maps_directions__") {
 		return map[string]any{
 			"result": map[string]any{
@@ -1624,6 +1677,13 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			}
 		}
 		domSignature := "ready"
+		pageURL := "https://www.google.com/search?q=agentic+engineering+2026+evolutions&safe=active&tbs=qdr:m"
+		if navigated, ok := navigatedURLs.Load(sessionID); ok && strings.TrimSpace(fmt.Sprint(navigated)) != "" {
+			pageURL = fmt.Sprint(navigated)
+		}
+		if finalURL := fakeAnyTargetString(targetInfos, "fakeRenderedExtractFinalURL"); finalURL != "" {
+			pageURL = finalURL
+		}
 		changesAfterReady := fakeAnyTargetBool(targetInfos, "fakeRenderedExtractChangesAfterReady")
 		consistencyUnavailable := fakeAnyTargetBool(targetInfos, "fakeRenderedExtractConsistencyUnavailable")
 		if changesAfterReady || consistencyUnavailable {
@@ -1643,7 +1703,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			"result": map[string]any{
 				"type": "object",
 				"value": map[string]any{
-					"url":                  "https://www.google.com/search?q=agentic+engineering+2026+evolutions&safe=active&tbs=qdr:m",
+					"url":                  pageURL,
 					"document_ready_state": "complete",
 					"selector_matched":     true,
 					"selector_match_count": 1,

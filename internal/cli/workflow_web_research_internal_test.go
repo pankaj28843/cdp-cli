@@ -120,8 +120,13 @@ func TestSelectFairWebResearchCandidatesCapBelowProductiveQueriesUsesInputOrder(
 }
 
 func TestWebResearchRetryCommandPreservesSettle(t *testing.T) {
-	command := webResearchRetryCommand("tmp/urls.txt", "tmp/pages", 20*time.Second, 3*time.Second, "useful-content", "main", 12, 10, 8, 256, 2)
-	for _, want := range []string{"--wait 20s", "--settle 3s", "--wait-until useful-content", "--selector main"} {
+	execution := webResearchRetryExecutionContext{
+		BrowserMode: "headed",
+		StateDir:    "/tmp/cdp state",
+		Connection:  "research-browser",
+	}
+	command := webResearchRetryCommand("tmp/pages", execution, 20*time.Second, 3*time.Second, "useful-content", "main", "auto", 12, 10, 8, 256, 2)
+	for _, want := range []string{"--browser-mode headed", "--state-dir '/tmp/cdp state'", "--connection research-browser", "--wait 20s", "--settle 3s", "--wait-until useful-content", "--selector main", "--content-extractor auto"} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("retry command %q missing %q", command, want)
 		}

@@ -681,6 +681,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 	var settle time.Duration
 	var waitUntil string
 	var selector string
+	var contentExtractor string
 	var minVisibleWords int
 	var minMarkdownWords int
 	var minHTMLChars int
@@ -694,6 +695,13 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 			}
 			if wait > 0 && settle > wait {
 				return commandError("usage", "usage", "--settle must not exceed positive --wait", ExitUsage, []string{"cdp workflow web-research extract --url-file tmp/urls.txt --wait 15s --settle 2s --json"})
+			}
+			contentExtractor = strings.TrimSpace(strings.ToLower(contentExtractor))
+			if contentExtractor == "" {
+				contentExtractor = "auto"
+			}
+			if contentExtractor != "auto" && contentExtractor != "generic" {
+				return commandError("usage", "usage", "--content-extractor must be auto or generic", ExitUsage, []string{"cdp workflow web-research extract --url-file tmp/urls.txt --content-extractor auto --json"})
 			}
 			urls, err := readWebResearchURLs(urlFile, maxPages)
 			if err != nil {
@@ -756,6 +764,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 						Formats:            "snapshot,text,html,markdown,links",
 						OutDir:             filepath.Join(outDir, fmt.Sprintf("%03d-%s", idx+1, webResearchURLSlug(rawURL))),
 						Serp:               "none",
+						ContentExtractor:   contentExtractor,
 						Limit:              80,
 						MinVisibleWords:    minVisibleWords,
 						MinMarkdownWords:   minMarkdownWords,
@@ -874,7 +883,13 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 				return err
 			}
 			retryParallel := saferWebResearchRetryParallel(effectiveParallel, backpressureApplied)
-			retryCommandPath, err := writeArtifactFile(filepath.Join(outDir, "retry-command.sh"), []byte(webResearchRetryCommand(urlFile, outDir, wait, settle, waitUntil, selector, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, retryParallel)))
+			retryContext := webResearchRetryExecutionContext{
+				BrowserMode: a.browserModeName(),
+				StateDir:    a.opts.stateDir,
+				Connection:  a.opts.connection,
+				BrowserURL:  a.opts.browserURL,
+			}
+			retryCommandPath, err := writeArtifactFile(filepath.Join(outDir, "retry-command.sh"), []byte(webResearchRetryCommand(outDir, retryContext, wait, settle, waitUntil, selector, contentExtractor, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, retryParallel)))
 			if err != nil {
 				return err
 			}
@@ -904,6 +919,7 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 					"remaining_url_count":     len(remainingURLs),
 					"initial_resource_budget": initialBudget,
 					"retry_parallel":          retryParallel,
+					"content_extractor":       contentExtractor,
 					"retry_artifacts":         map[string]string{"failed_urls": failedURLsPath, "remaining_urls": remainingURLsPath, "retry_command": retryCommandPath},
 					"out_dir":                 outDir,
 					"next_commands":           []string{"jq '.[] | select((.warnings | length) > 0)' " + qualityPath, "jq -r '.[].url' " + failuresPath, "sh " + retryCommandPath},
@@ -919,7 +935,8 @@ func (a *app) newWorkflowWebResearchExtractCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for each rendered page; use 0 for one immediate sample")
 	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
-	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector for readiness and generic capture/fallback; arXiv auto honors custom roots, while Hacker News auto uses semantic story/comment roots")
+	cmd.Flags().StringVar(&contentExtractor, "content-extractor", "auto", "content extractor: auto selects native source profiles; generic preserves legacy HTML conversion")
 	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "enabled readiness and post-capture quality minimum for visible words; use 0 to disable")
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "enabled post-capture quality minimum for Markdown words; use 0 to disable")
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "enabled readiness and post-capture quality minimum for extracted HTML characters; use 0 to disable")
@@ -1009,26 +1026,50 @@ func saferWebResearchRetryParallel(effectiveParallel int, backpressureApplied bo
 	return parallel
 }
 
-func webResearchRetryCommand(urlFile, outDir string, wait, settle time.Duration, waitUntil, selector string, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, parallel int) string {
+type webResearchRetryExecutionContext struct {
+	BrowserMode string
+	StateDir    string
+	Connection  string
+	BrowserURL  string
+}
+
+func webResearchRetryCommand(outDir string, execution webResearchRetryExecutionContext, wait, settle time.Duration, waitUntil, selector, contentExtractor string, maxPages, minVisibleWords, minMarkdownWords, minHTMLChars, parallel int) string {
 	failedURLFile := filepath.Join(outDir, "failed-urls.txt")
 	parts := []string{
-		"cdp", "workflow", "web-research", "extract",
+		"cdp", "--browser-mode", execution.BrowserMode,
+	}
+	for _, option := range []struct {
+		flag  string
+		value string
+	}{
+		{flag: "--state-dir", value: execution.StateDir},
+		{flag: "--connection", value: execution.Connection},
+		{flag: "--browser-url", value: execution.BrowserURL},
+	} {
+		if strings.TrimSpace(option.value) != "" {
+			parts = append(parts, option.flag, option.value)
+		}
+	}
+	parts = append(parts,
+		"workflow", "web-research", "extract",
 		"--url-file", failedURLFile,
 		"--out-dir", outDir,
+	)
+	if maxPages > 0 {
+		parts = append(parts, "--max-pages", fmt.Sprint(maxPages))
+	}
+	parts = append(parts,
 		"--parallel", fmt.Sprint(parallel),
 		"--wait", wait.String(),
 		"--settle", settle.String(),
 		"--wait-until", waitUntil,
 		"--selector", selector,
+		"--content-extractor", contentExtractor,
 		"--min-visible-words", fmt.Sprint(minVisibleWords),
 		"--min-markdown-words", fmt.Sprint(minMarkdownWords),
 		"--min-html-chars", fmt.Sprint(minHTMLChars),
 		"--json",
-	}
-	if maxPages > 0 {
-		parts = append(parts[:8], append([]string{"--max-pages", fmt.Sprint(maxPages)}, parts[8:]...)...)
-	}
-	_ = urlFile
+	)
 	quoted := make([]string, 0, len(parts))
 	for _, part := range parts {
 		quoted = append(quoted, shellQuote(part))

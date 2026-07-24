@@ -672,6 +672,8 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow rendered-extract": {
 			"cdp workflow rendered-extract 'https://example.com' --wait 20s --settle 2s --out-dir tmp/rendered-example --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://arxiv.org/pdf/2603.26487' --content-extractor auto --out-dir tmp/rendered-arxiv --json",
+			"cdp --browser-mode headed workflow rendered-extract 'https://news.ycombinator.com/item?id=46641042' --content-extractor auto --out-dir tmp/rendered-hn --json",
 			"cdp workflow rendered-extract --target <target-id> --reload --out-dir tmp/rendered-existing --json",
 			"cdp workflow rendered-extract --url-contains localhost --out-dir tmp/rendered-selected --json",
 			"cdp workflow rendered-extract 'https://www.google.com/search?q=agentic+engineering&safe=active&tbs=qdr:m' --serp google --out-dir tmp/rendered-google --json",
@@ -689,6 +691,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow web-research extract": {
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --max-pages 100 --parallel 4 --wait 20s --settle 2s --out-dir tmp/research/pages --json",
+			"cdp --browser-mode headed workflow web-research extract --url-file tmp/research/arxiv-hn-urls.txt --content-extractor auto --out-dir tmp/research/source-aware-pages --json",
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --allow-over-budget --json # supervised high-stress cap",
 		},
 	}

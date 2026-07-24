@@ -1551,6 +1551,384 @@ func TestWorkflowRenderedExtractJSON(t *testing.T) {
 	}
 }
 
+func TestWorkflowRenderedExtractUsesArxivSemanticContentProfile(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outDir := t.TempDir()
+	rawURL := "https://arxiv.org/pdf/2603.26487"
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", rawURL,
+		"--content-extractor", "auto",
+		"--out-dir", outDir,
+		"--wait", "0",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow rendered-extract arxiv exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Content struct {
+			Mode                    string `json:"mode"`
+			Profile                 string `json:"profile"`
+			Strategy                string `json:"strategy"`
+			Representation          string `json:"representation"`
+			RepresentationRewritten bool   `json:"representation_rewritten"`
+			NativeAttempted         bool   `json:"native_attempted"`
+			NativeSucceeded         bool   `json:"native_succeeded"`
+			FallbackUsed            bool   `json:"fallback_used"`
+			RootSelector            string `json:"root_selector"`
+			Representations         struct {
+				HTML   string `json:"html"`
+				PDF    string `json:"pdf"`
+				Source string `json:"source"`
+			} `json:"representations"`
+		} `json:"content"`
+		Artifacts struct {
+			Markdown string `json:"markdown"`
+		} `json:"artifacts"`
+		Workflow struct {
+			RequestedURL  string `json:"requested_url"`
+			NavigationURL string `json:"navigation_url"`
+			FinalURL      string `json:"final_url"`
+			Selector      string `json:"selector"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode arxiv rendered extraction: %v", err)
+	}
+	if got.Content.Mode != "auto" || got.Content.Profile != "arxiv" || got.Content.Strategy != "semantic-dom" ||
+		got.Content.Representation != "html" || !got.Content.RepresentationRewritten ||
+		!got.Content.NativeAttempted || !got.Content.NativeSucceeded || got.Content.FallbackUsed ||
+		got.Content.RootSelector != "article.ltx_document" {
+		t.Fatalf("arxiv content provenance = %+v", got.Content)
+	}
+	if got.Content.Representations.HTML != "https://arxiv.org/html/2603.26487" ||
+		got.Content.Representations.PDF != "https://arxiv.org/pdf/2603.26487" ||
+		got.Content.Representations.Source != "https://arxiv.org/src/2603.26487" {
+		t.Fatalf("arxiv representations = %+v", got.Content.Representations)
+	}
+	if got.Workflow.RequestedURL != rawURL ||
+		got.Workflow.NavigationURL != "https://arxiv.org/html/2603.26487" ||
+		got.Workflow.Selector != "body" {
+		t.Fatalf("arxiv workflow = %+v", got.Workflow)
+	}
+	markdown, err := os.ReadFile(got.Artifacts.Markdown)
+	if err != nil {
+		t.Fatalf("read arxiv markdown: %v", err)
+	}
+	for _, want := range []string{"# Synthetic arXiv Paper", "## Results", "$x^2$", "[supporting source](https://example.test/source)"} {
+		if !strings.Contains(string(markdown), want) {
+			t.Fatalf("arxiv markdown missing %q:\n%s", want, string(markdown))
+		}
+	}
+}
+
+func TestWorkflowRenderedExtractUsesHackerNewsDiscussionProfile(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	outDir := t.TempDir()
+	rawURL := "https://news.ycombinator.com/item?id=46641042"
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", rawURL,
+		"--out-dir", outDir,
+		"--wait", "0",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow rendered-extract HN exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Content struct {
+			Mode            string `json:"mode"`
+			Profile         string `json:"profile"`
+			Strategy        string `json:"strategy"`
+			Representation  string `json:"representation"`
+			NativeAttempted bool   `json:"native_attempted"`
+			NativeSucceeded bool   `json:"native_succeeded"`
+			FallbackUsed    bool   `json:"fallback_used"`
+			ItemCount       int    `json:"item_count"`
+		} `json:"content"`
+		Artifacts struct {
+			Markdown string `json:"markdown"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode HN rendered extraction: %v", err)
+	}
+	if got.Content.Mode != "auto" || got.Content.Profile != "hacker-news" ||
+		got.Content.Strategy != "discussion-tree" || got.Content.Representation != "discussion" ||
+		!got.Content.NativeAttempted || !got.Content.NativeSucceeded || got.Content.FallbackUsed ||
+		got.Content.ItemCount != 2 {
+		t.Fatalf("HN content provenance = %+v", got.Content)
+	}
+	markdown, err := os.ReadFile(got.Artifacts.Markdown)
+	if err != nil {
+		t.Fatalf("read HN markdown: %v", err)
+	}
+	for _, want := range []string{
+		"# Synthetic HN discussion",
+		"## Comments (2)",
+		"- **alice** · [1 hour ago](https://news.ycombinator.com/item?id=101)",
+		"    - **bob** · [45 minutes ago](https://news.ycombinator.com/item?id=102)",
+	} {
+		if !strings.Contains(string(markdown), want) {
+			t.Fatalf("HN markdown missing %q:\n%s", want, string(markdown))
+		}
+	}
+	if strings.Contains(string(markdown), "Hacker Newsnew | past") {
+		t.Fatalf("HN markdown retained navigation chrome:\n%s", string(markdown))
+	}
+}
+
+func TestWorkflowRenderedExtractFallsBackWhenNativeContentFails(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":                   "native-content-failure",
+		"type":                       "page",
+		"url":                        "https://example.test/",
+		"title":                      "Native content failure fixture",
+		"fakeRenderedContentFailure": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", "https://news.ycombinator.com/item?id=46641042",
+		"--out-dir", t.TempDir(),
+		"--wait", "0",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("native content fallback exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Content struct {
+			Profile               string `json:"profile"`
+			PlannedStrategy       string `json:"planned_strategy"`
+			Strategy              string `json:"strategy"`
+			PlannedRepresentation string `json:"planned_representation"`
+			Representation        string `json:"representation"`
+			RootSelector          string `json:"root_selector"`
+			NativeAttempted       bool   `json:"native_attempted"`
+			NativeSucceeded       bool   `json:"native_succeeded"`
+			FallbackUsed          bool   `json:"fallback_used"`
+			FallbackReason        string `json:"fallback_reason"`
+		} `json:"content"`
+		Warnings  []string `json:"warnings"`
+		Artifacts struct {
+			Markdown        string `json:"markdown"`
+			DiagnosticsJSON string `json:"diagnostics_json"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode native content fallback: %v", err)
+	}
+	if got.Content.Profile != "hacker-news" ||
+		got.Content.PlannedStrategy != "discussion-tree" || got.Content.Strategy != "legacy-html" ||
+		got.Content.PlannedRepresentation != "discussion" || got.Content.Representation != "rendered-html" ||
+		got.Content.RootSelector != "body" ||
+		!got.Content.NativeAttempted || got.Content.NativeSucceeded ||
+		!got.Content.FallbackUsed || !strings.Contains(got.Content.FallbackReason, "synthetic native content failure") {
+		t.Fatalf("native content fallback provenance = %+v", got.Content)
+	}
+	if !testContainsSubstring(got.Warnings, "fell back to generic HTML conversion") {
+		t.Fatalf("native content fallback warnings = %+v", got.Warnings)
+	}
+	for _, path := range []string{got.Artifacts.Markdown, got.Artifacts.DiagnosticsJSON} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("native content fallback artifact %q: %v", path, err)
+		}
+	}
+}
+
+func TestWorkflowRenderedExtractArxivNativeFailureKeepsGenericBodyFallback(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":                   "arxiv-native-content-failure",
+		"type":                       "page",
+		"url":                        "https://example.test/",
+		"title":                      "arXiv native content failure fixture",
+		"fakeRenderedContentFailure": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", "https://arxiv.org/pdf/2603.26487",
+		"--out-dir", t.TempDir(),
+		"--wait", "0",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("arxiv native fallback exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Content struct {
+			Profile         string `json:"profile"`
+			PlannedStrategy string `json:"planned_strategy"`
+			Strategy        string `json:"strategy"`
+			Representation  string `json:"representation"`
+			RootSelector    string `json:"root_selector"`
+			NativeAttempted bool   `json:"native_attempted"`
+			NativeSucceeded bool   `json:"native_succeeded"`
+			FallbackUsed    bool   `json:"fallback_used"`
+		} `json:"content"`
+		Artifacts struct {
+			Markdown string `json:"markdown"`
+		} `json:"artifacts"`
+		Workflow struct {
+			Selector string `json:"selector"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode arxiv native fallback: %v", err)
+	}
+	if got.Content.Profile != "arxiv" ||
+		got.Content.PlannedStrategy != "semantic-dom" || got.Content.Strategy != "legacy-html" ||
+		got.Content.Representation != "rendered-html" || got.Content.RootSelector != "body" ||
+		!got.Content.NativeAttempted || got.Content.NativeSucceeded || !got.Content.FallbackUsed ||
+		got.Workflow.Selector != "body" {
+		t.Fatalf("arxiv native fallback provenance = %+v; workflow=%+v", got.Content, got.Workflow)
+	}
+	markdown, err := os.ReadFile(got.Artifacts.Markdown)
+	if err != nil {
+		t.Fatalf("read arxiv fallback markdown: %v", err)
+	}
+	if !strings.Contains(string(markdown), "Synthetic main text") {
+		t.Fatalf("arxiv fallback did not retain generic body Markdown:\n%s", string(markdown))
+	}
+}
+
+func TestWorkflowRenderedExtractArxivRedirectMismatchUsesGenericBodyFallback(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":                    "arxiv-redirect-mismatch",
+		"type":                        "page",
+		"url":                         "https://example.test/",
+		"title":                       "arXiv redirect mismatch fixture",
+		"fakeRenderedExtractFinalURL": "https://example.test/article",
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", "https://arxiv.org/pdf/2603.26487",
+		"--out-dir", t.TempDir(),
+		"--wait", "0",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("arxiv redirect fallback exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Content struct {
+			Strategy        string `json:"strategy"`
+			Representation  string `json:"representation"`
+			RootSelector    string `json:"root_selector"`
+			NativeAttempted bool   `json:"native_attempted"`
+			FallbackUsed    bool   `json:"fallback_used"`
+			FallbackReason  string `json:"fallback_reason"`
+		} `json:"content"`
+		Workflow struct {
+			FinalURL string `json:"final_url"`
+			Selector string `json:"selector"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode arxiv redirect fallback: %v", err)
+	}
+	if got.Content.Strategy != "legacy-html" || got.Content.Representation != "rendered-html" ||
+		got.Content.RootSelector != "body" || got.Content.NativeAttempted || !got.Content.FallbackUsed ||
+		!strings.Contains(got.Content.FallbackReason, "resolved final URL") ||
+		got.Workflow.FinalURL != "https://example.test/article" || got.Workflow.Selector != "body" {
+		t.Fatalf("arxiv redirect fallback content=%+v workflow=%+v", got.Content, got.Workflow)
+	}
+}
+
+func TestWorkflowRenderedExtractGenericContentOverride(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	rawURL := "https://arxiv.org/pdf/2603.26487"
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", rawURL,
+		"--content-extractor", "generic",
+		"--out-dir", t.TempDir(),
+		"--wait", "0",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow rendered-extract generic override exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var got struct {
+		Content struct {
+			Mode            string `json:"mode"`
+			Profile         string `json:"profile"`
+			NativeAttempted bool   `json:"native_attempted"`
+		} `json:"content"`
+		Workflow struct {
+			NavigationURL string `json:"navigation_url"`
+			Selector      string `json:"selector"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode generic rendered extraction: %v", err)
+	}
+	if got.Content.Mode != "generic" || got.Content.Profile != "generic" || got.Content.NativeAttempted ||
+		got.Workflow.NavigationURL != rawURL || got.Workflow.Selector != "body" {
+		t.Fatalf("generic override content=%+v workflow=%+v", got.Content, got.Workflow)
+	}
+}
+
+func TestWorkflowRenderedExtractRejectsUnknownContentExtractor(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", "https://example.test/article",
+		"--content-extractor", "native-only",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("unknown content extractor exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+}
+
 func TestRenderedExtractionCommandsRejectSettleBeyondPositiveWait(t *testing.T) {
 	cases := []struct {
 		name string
@@ -2230,6 +2608,85 @@ func TestWorkflowWebResearchExtractJSON(t *testing.T) {
 	}
 	if len(got.Quality) != 1 || len(got.Quality[0].Warnings) != 0 {
 		t.Fatalf("workflow web-research extract quality = %+v", got.Quality)
+	}
+}
+
+func TestWorkflowWebResearchExtractPropagatesContentExtractor(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "urls.txt")
+	if err := os.WriteFile(urlFile, []byte("https://news.ycombinator.com/item?id=46641042\n"), 0o600); err != nil {
+		t.Fatalf("write url file: %v", err)
+	}
+	outDir := filepath.Join(tmpDir, "pages")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"--browser-mode", "headed",
+		"workflow", "web-research", "extract",
+		"--url-file", urlFile,
+		"--content-extractor", "auto",
+		"--parallel", "1",
+		"--out-dir", outDir,
+		"--wait", "0",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("web-research content extractor exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Pages []struct {
+			Report struct {
+				Content struct {
+					Profile         string `json:"profile"`
+					NativeSucceeded bool   `json:"native_succeeded"`
+				} `json:"content"`
+			} `json:"report"`
+		} `json:"pages"`
+		Artifacts struct {
+			RetryCommand string `json:"retry_command"`
+		} `json:"artifacts"`
+		Workflow struct {
+			ContentExtractor string `json:"content_extractor"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode web-research content extractor output: %v", err)
+	}
+	if len(got.Pages) != 1 || got.Pages[0].Report.Content.Profile != "hacker-news" || !got.Pages[0].Report.Content.NativeSucceeded {
+		t.Fatalf("web-research content profile pages = %+v", got.Pages)
+	}
+	if got.Workflow.ContentExtractor != "auto" {
+		t.Fatalf("web-research content extractor workflow = %+v", got.Workflow)
+	}
+	retryCommand, err := os.ReadFile(got.Artifacts.RetryCommand)
+	if err != nil {
+		t.Fatalf("read retry command: %v", err)
+	}
+	for _, want := range []string{"--browser-mode headed", "--content-extractor auto"} {
+		if !strings.Contains(string(retryCommand), want) {
+			t.Fatalf("retry command did not preserve %q:\n%s", want, string(retryCommand))
+		}
+	}
+}
+
+func TestWorkflowWebResearchExtractRejectsUnknownContentExtractor(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "web-research", "extract",
+		"--url-file", filepath.Join(t.TempDir(), "urls.txt"),
+		"--content-extractor", "native-only",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("unknown web-research content extractor exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
 	}
 }
 

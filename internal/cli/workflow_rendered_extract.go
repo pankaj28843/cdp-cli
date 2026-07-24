@@ -175,6 +175,7 @@ type renderedExtractOptions struct {
 	Formats            string
 	OutDir             string
 	Serp               string
+	ContentExtractor   string
 	Limit              int
 	MinVisibleWords    int
 	MinMarkdownWords   int
@@ -340,6 +341,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	var formats string
 	var outDir string
 	var serp string
+	var contentExtractor string
 	var limit int
 	var minVisibleWords int
 	var minMarkdownWords int
@@ -371,6 +373,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 				Formats:            formats,
 				OutDir:             outDir,
 				Serp:               serp,
+				ContentExtractor:   contentExtractor,
 				Limit:              limit,
 				MinVisibleWords:    minVisibleWords,
 				MinMarkdownWords:   minMarkdownWords,
@@ -395,13 +398,14 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique existing page whose title contains this text")
 	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected existing page before extraction")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload the selected existing page while bypassing cache")
-	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract rendered research content from")
+	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector for readiness and generic capture/fallback; arXiv auto honors custom roots, while Hacker News auto uses semantic story/comment roots")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for rendered readiness; use 0 for one immediate sample")
 	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
 	cmd.Flags().StringVar(&formats, "formats", "snapshot,text,html,markdown,links", "comma-separated artifacts: snapshot,text,html,markdown,links,all")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for rendered extraction artifacts")
 	cmd.Flags().StringVar(&serp, "serp", "auto", "SERP extractor: auto, google, or none")
+	cmd.Flags().StringVar(&contentExtractor, "content-extractor", "auto", "content extractor: auto selects native source profiles; generic preserves legacy HTML conversion")
 	cmd.Flags().IntVar(&limit, "limit", 80, "maximum visible text snapshot items; use 0 for no limit")
 	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "enabled readiness and post-capture quality minimum for visible words; use 0 to disable")
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "enabled post-capture quality minimum for Markdown words; use 0 to disable")
@@ -490,6 +494,13 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	}
 	if options.Serp != "auto" && options.Serp != "none" && !isWebResearchSupportedSERP(options.Serp) {
 		return renderedExtractResult{}, commandError("usage", "usage", "--serp must be auto, none, or one of: "+webResearchSERPList(), ExitUsage, []string{options.UsageCommand + " 'https://www.google.com/search?q=test' --serp google --json"})
+	}
+	options.ContentExtractor = strings.TrimSpace(strings.ToLower(options.ContentExtractor))
+	if options.ContentExtractor == "" {
+		options.ContentExtractor = "auto"
+	}
+	if options.ContentExtractor != "auto" && options.ContentExtractor != "generic" {
+		return renderedExtractResult{}, commandError("usage", "usage", "--content-extractor must be auto or generic", ExitUsage, []string{options.UsageCommand + " https://example.com --content-extractor auto --json"})
 	}
 
 	fallback := options.Wait + 15*time.Second
@@ -581,6 +592,16 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if rawURL == "" {
 		return renderedExtractResult{}, commandError("target_url_missing", "usage", "selected page has no URL to extract", ExitUsage, []string{"cdp pages --json", options.UsageCommand + " https://example.com --json"})
 	}
+	contentPlan, err := planRenderedExtractContent(rawURL, options.Selector, options.ContentExtractor)
+	if err != nil {
+		return renderedExtractResult{}, commandError("usage", "usage", err.Error(), ExitUsage, []string{options.UsageCommand + " https://example.com --content-extractor auto --json"})
+	}
+	if !createdPage && strings.TrimSpace(options.RawURL) == "" && contentPlan.NavigationURL != rawURL {
+		contentPlan.NavigationURL = rawURL
+		contentPlan.Rewritten = false
+	}
+	navigationURL := contentPlan.NavigationURL
+	captureSelector := contentPlan.GenericSelector
 	serpMode := renderedExtractSERPMode(rawURL, options.Serp)
 
 	collectorErrors, teardownCollectors := enablePageLoadCollectorsWithTeardown(ctx, client, session.SessionID, map[string]bool{"navigation": true, "network": true})
@@ -595,7 +616,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if createdPage || (reusedPage && strings.TrimSpace(options.RawURL) != "") {
 		trigger = "navigate"
 		var navigateErr error
-		frameID, navigateErr = session.Navigate(ctx, rawURL)
+		frameID, navigateErr = session.Navigate(ctx, navigationURL)
 		if navigateErr != nil {
 			collectorErrors = append(collectorErrors, collectorError("navigation", navigateErr))
 		}
@@ -608,26 +629,27 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		}
 	}
 
-	readiness, err := waitForRenderedExtractReadiness(ctx, session, options.Selector, options.Wait, options.Settle, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
+	readiness, err := waitForRenderedExtractReadiness(ctx, session, captureSelector, options.Wait, options.Settle, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
 	if err != nil {
 		return renderedExtractResult{}, err
 	}
 	finalURL := readiness.URL
 	if strings.TrimSpace(finalURL) == "" {
-		finalURL = rawURL
+		finalURL = navigationURL
 	}
+	nativeContentEligible := renderedExtractContentNativeEligible(contentPlan, finalURL)
 	target := cdp.TargetInfo{TargetID: createdID, Type: "page", URL: finalURL}
 
-	snapshot, err := collectPageSnapshot(ctx, session, options.Selector, options.Limit, 1)
+	snapshot, err := collectPageSnapshot(ctx, session, captureSelector, options.Limit, 1)
 	if err != nil {
 		return renderedExtractResult{}, err
 	}
 	var htmlResult htmlResult
-	if err := evaluateJSONValue(ctx, session, htmlExpression(options.Selector, 1, 0), options.WorkflowName+" html", &htmlResult); err != nil {
+	if err := evaluateJSONValue(ctx, session, htmlExpression(captureSelector, 1, 0), options.WorkflowName+" html", &htmlResult); err != nil {
 		return renderedExtractResult{}, err
 	}
 	if htmlResult.Error != nil {
-		return renderedExtractResult{}, invalidSelectorError(options.Selector, htmlResult.Error, options.UsageCommand+" https://example.com --selector body --json")
+		return renderedExtractResult{}, invalidSelectorError(captureSelector, htmlResult.Error, options.UsageCommand+" https://example.com --selector body --json")
 	}
 	pageHTML := ""
 	htmlLength := 0
@@ -637,11 +659,42 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	}
 	visibleText := strings.Join(snapshotTextValues(snapshot.Items), "\n")
 	markdown := htmlToResearchMarkdown(pageHTML)
+	contentProvenance := newRenderedExtractContentProvenance(contentPlan, finalURL)
+	contentWarnings := make([]string, 0, 1)
+	if contentPlan.Strategy != renderedExtractContentStrategyLegacyHTML {
+		if !nativeContentEligible {
+			applyRenderedExtractGenericFallback(&contentProvenance, contentPlan, "resolved final URL does not match the planned native content profile")
+		} else {
+			contentProvenance.NativeAttempted = true
+			contentCapture, contentErr := collectRenderedExtractContent(ctx, session, contentPlan)
+			switch {
+			case contentErr != nil:
+				applyRenderedExtractGenericFallback(&contentProvenance, contentPlan, contentErr.Error())
+			case contentCapture.Error != nil:
+				applyRenderedExtractGenericFallback(&contentProvenance, contentPlan, contentCapture.Error.Name+": "+contentCapture.Error.Message)
+			case strings.TrimSpace(contentCapture.Markdown) == "":
+				applyRenderedExtractGenericFallback(&contentProvenance, contentPlan, "native extractor returned empty Markdown")
+			default:
+				contentProvenance.NativeSucceeded = true
+				contentProvenance.ItemCount = contentCapture.ItemCount
+				if strings.TrimSpace(contentCapture.RootSelector) != "" {
+					contentProvenance.RootSelector = contentCapture.RootSelector
+				}
+				markdown = strings.TrimSpace(contentCapture.Markdown)
+				if contentPlan.Profile == renderedExtractContentProfileArxiv {
+					markdown = prependArxivRepresentationLinks(markdown, contentPlan.Representations)
+				}
+			}
+		}
+		if contentProvenance.FallbackUsed {
+			contentWarnings = append(contentWarnings, "native "+string(contentPlan.Profile)+" content extraction fell back to generic HTML conversion: "+contentProvenance.FallbackReason)
+		}
+	}
 	links, err := collectRenderedExtractLinks(ctx, session, rawURL, finalURL, serpMode)
 	if err != nil {
 		return renderedExtractResult{}, err
 	}
-	postCaptureReadiness, consistencyErr := collectRenderedExtractReadiness(ctx, session, options.Selector)
+	postCaptureReadiness, consistencyErr := collectRenderedExtractReadiness(ctx, session, captureSelector)
 	if consistencyErr != nil {
 		collectorErrors = append(collectorErrors, collectorError("capture_consistency", consistencyErr))
 	} else {
@@ -654,6 +707,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	readinessPassed := renderedExtractReadinessQualityPassed(readiness)
 	qualityPassed := renderedExtractPostCaptureQualityPassed(thresholdsPassed, readiness)
 	warnings := renderedExtractWarnings(readiness, visibleText, snapshot.Count, visibleWordCount, htmlLength, markdownWordCount, len(links.Results), options.MinVisibleWords, options.MinHTMLChars, options.MinMarkdownWords, serpMode)
+	warnings = append(warnings, contentWarnings...)
 	artifactPaths := map[string]string{}
 	artifactList := []map[string]any{}
 	writeArtifact := func(key, artifactType, path string, payload []byte) error {
@@ -679,11 +733,12 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	}
 	diagnostics := map[string]any{
 		"readiness":        readiness,
+		"content":          contentProvenance,
 		"warnings":         warnings,
 		"collector_errors": collectorErrors,
 		"suggested_commands": []string{
-			fmt.Sprintf("cdp snapshot --target %s --selector %s --diagnose-empty --json", createdID, options.Selector),
-			fmt.Sprintf("cdp html %s --target %s --diagnose-empty --json", options.Selector, createdID),
+			fmt.Sprintf("cdp snapshot --target %s --selector %s --diagnose-empty --json", createdID, captureSelector),
+			fmt.Sprintf("cdp html %s --target %s --diagnose-empty --json", captureSelector, createdID),
 			fmt.Sprintf("cdp workflow debug-bundle --target %s --out-dir %s --json", createdID, filepath.Join(options.OutDir, "debug-bundle")),
 		},
 	}
@@ -734,6 +789,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		"ok":            true,
 		"target":        pageRow(target),
 		"readiness":     readiness,
+		"content":       contentProvenance,
 		"artifacts":     artifactPaths,
 		"artifact_list": artifactList,
 		"quality": map[string]any{
@@ -757,27 +813,29 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		"links":    map[string]any{"count": len(links.Results), "query": links.Query, "time_filter": links.TimeFilter, "serp": links.Serp},
 		"warnings": warnings,
 		"workflow": map[string]any{
-			"name":             options.WorkflowName,
-			"trigger":          trigger,
-			"requested_url":    rawURL,
-			"final_url":        finalURL,
-			"frame_id":         frameID,
-			"selector":         options.Selector,
-			"wait":             durationString(options.Wait),
-			"settle":           durationString(options.Settle),
-			"wait_until":       options.WaitUntil,
-			"formats":          setKeys(formatSet),
-			"serp":             serpMode,
-			"created_page":     createdPage,
-			"reused_page":      reusedPage,
-			"reloaded":         reloaded,
-			"ignore_cache":     options.IgnoreCache,
-			"closed":           false,
-			"close_error":      "",
-			"cleanup":          renderedExtractCleanupResult{TargetID: createdID},
-			"cleanup_command":  "",
-			"collector_errors": collectorErrors,
-			"partial":          len(collectorErrors) > 0,
+			"name":              options.WorkflowName,
+			"trigger":           trigger,
+			"requested_url":     rawURL,
+			"navigation_url":    navigationURL,
+			"final_url":         finalURL,
+			"frame_id":          frameID,
+			"selector":          captureSelector,
+			"wait":              durationString(options.Wait),
+			"settle":            durationString(options.Settle),
+			"wait_until":        options.WaitUntil,
+			"formats":           setKeys(formatSet),
+			"serp":              serpMode,
+			"content_extractor": options.ContentExtractor,
+			"created_page":      createdPage,
+			"reused_page":       reusedPage,
+			"reloaded":          reloaded,
+			"ignore_cache":      options.IgnoreCache,
+			"closed":            false,
+			"close_error":       "",
+			"cleanup":           renderedExtractCleanupResult{TargetID: createdID},
+			"cleanup_command":   "",
+			"collector_errors":  collectorErrors,
+			"partial":           len(collectorErrors) > 0,
 		},
 	}
 	if len(warnings) > 0 || len(collectorErrors) > 0 {

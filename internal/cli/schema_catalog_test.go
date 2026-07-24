@@ -89,6 +89,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"stop-state-classify",
 		"protocol-examples",
 		"storage",
+		"rendered-extract-content",
 		"rendered-extract-readiness",
 		"rendered-extract-quality",
 		"workflow-rendered-extract",
@@ -122,12 +123,27 @@ func TestSchemaCatalogWebResearchQueryContract(t *testing.T) {
 
 func TestSchemaCatalogRenderedExtractAndQueryCoverageContracts(t *testing.T) {
 	catalog := schemaCatalog()
+	content := catalog["rendered-extract-content"]
 	readiness := catalog["rendered-extract-readiness"]
 	quality := catalog["rendered-extract-quality"]
+	rendered := catalog["workflow-rendered-extract"]
 	serp := catalog["workflow-web-research-serp"]
 	coverage := catalog["web-research-query-coverage"]
 	extract := catalog["workflow-web-research-extract"]
 
+	if !catalogSchemaFieldContains(rendered, "content", "rendered_extract_content", "Source-profile") ||
+		!catalogSchemaFieldContains(rendered, "workflow", "workflow_summary", "navigation", "content_extractor") ||
+		!catalogSchemaFieldContains(content, "profile", "string", "arxiv", "hacker-news") ||
+		!catalogSchemaFieldContains(content, "planned_strategy", "string", "semantic-dom", "discussion-tree") ||
+		!catalogSchemaFieldContains(content, "strategy", "string", "Effective", "fallbacks", "legacy-html") ||
+		!catalogSchemaFieldContains(content, "planned_representation", "string", "before navigation") ||
+		!catalogSchemaFieldContains(content, "representation", "string", "Effective", "rendered-html") ||
+		!catalogSchemaFieldContains(content, "representation_rewritten", "boolean", "PDF", "TeX-source") ||
+		!catalogSchemaFieldContains(content, "native_succeeded", "boolean", "semantic Markdown") ||
+		!catalogSchemaFieldContains(content, "fallback_reason", "string", "mismatch", "capture") ||
+		!catalogSchemaFieldContains(content, "representations", "object", "html", "pdf", "source", "abstract") {
+		t.Fatalf("rendered content-profile schema is incomplete: workflow=%+v content=%+v", rendered, content)
+	}
 	if !catalogSchemaFieldContains(readiness, "outcome", "string", "immediate", "wait_expired") ||
 		!catalogSchemaFieldContains(readiness, "settle", "duration", "fingerprint") ||
 		!catalogSchemaFieldContains(readiness, "thresholds_met", "boolean", "every enabled") ||
