@@ -12,10 +12,10 @@ import (
 )
 
 func (a *app) newWorkflowLinkedInCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "linkedin", Short: "Collect LinkedIn source-native records"}
+	cmd := &cobra.Command{Use: "linkedin", Short: "Collect LinkedIn source-native records", Long: "Collect a LinkedIn activity discussion or company posts from a validated URL. Plain output is detailed Markdown; use --json or --jq for structured processing."}
 	var limit int
 	var wait time.Duration
-	collect := &cobra.Command{Use: "collect <linkedin-url>", Short: "Collect normalized records from a discovered LinkedIn URL", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	collect := &cobra.Command{Use: "collect <linkedin-url>", Short: "Collect normalized records from a discovered LinkedIn URL", Long: "Collect a validated LinkedIn activity or company-posts URL. Plain stdout is detailed Markdown; --json and --jq preserve source-normalized fields.", Example: "  cdp workflow linkedin collect 'https://www.linkedin.com/posts/example-activity-123/' > activity.md\n  cdp workflow linkedin collect 'https://www.linkedin.com/company/example/posts/' --jq '.records[] | .body'\n  cdp schema workflow-linkedin-collect --json", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		request, err := linkedin.Parse(args[0])
 		if err != nil {
 			return commandError("invalid_linkedin_url", "usage", err.Error(), ExitUsage, nil)
@@ -109,7 +109,8 @@ func (a *app) newWorkflowLinkedInCommand() *cobra.Command {
 			continuation = "discussion_" + status
 		}
 		coverage := dynamicSourceCoverage(observed, missing, status, reason, continuation, "", status != "exhausted" && status != "ceiling")
-		return a.render(ctx, "", map[string]any{"ok": true, "request": final, "kind": final.Kind, "records": records, "coverage": coverage, "workflow": map[string]any{"name": "linkedin-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": reason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}})
+		workflow := map[string]any{"name": "linkedin-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": reason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}
+		return a.render(ctx, linkedInCollectionMarkdown(final.URL, final.Kind, records, workflow, coverage), map[string]any{"ok": true, "request": final, "kind": final.Kind, "records": records, "coverage": coverage, "workflow": workflow})
 	}}
 	collect.Flags().IntVar(&limit, "limit", 100, "maximum source-native records to collect (1-500)")
 	collect.Flags().DurationVar(&wait, "wait", 10*time.Second, "how long to wait for visible LinkedIn source records")

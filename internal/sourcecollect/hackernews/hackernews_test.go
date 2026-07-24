@@ -33,8 +33,8 @@ func TestValidateFinalURLPreservesItemIdentity(t *testing.T) {
 
 func TestDecodeThreadReconstructsParentsFromIndentStack(t *testing.T) {
 	request, _ := Parse("https://news.ycombinator.com/item?id=46641042")
-	good := json.RawMessage(`{"records":[{"kind":"story","id":"46641042","canonical_url":"/item?id=46641042"},{"kind":"comment","id":"46642165","canonical_url":"/item?id=46642165","depth":0},{"kind":"comment","id":"46644995","canonical_url":"/item?id=46644995","depth":1,"parent_id":"46642165"},{"kind":"comment","id":"46645895","canonical_url":"/item?id=46645895","depth":1,"parent_id":"46642165"}]}`)
-	if page, err := DecodeThreadPage(request, good); err != nil || len(page.Records) != 4 {
+	good := json.RawMessage(`{"records":[{"kind":"story","id":"46641042","canonical_url":"/item?id=46641042","title":"A synthetic story","author":"alice"},{"kind":"comment","id":"46642165","canonical_url":"/item?id=46642165","depth":0,"body":"A useful comment","author":"bob"},{"kind":"comment","id":"46644995","canonical_url":"/item?id=46644995","depth":1,"parent_id":"46642165","body":"Nested"},{"kind":"comment","id":"46645895","canonical_url":"/item?id=46645895","depth":1,"parent_id":"46642165"}]}`)
+	if page, err := DecodeThreadPage(request, good); err != nil || len(page.Records) != 4 || page.Records[1].Body != "A useful comment" {
 		t.Fatalf("DecodeThreadPage() = %+v, %v", page, err)
 	}
 	bad := json.RawMessage(`{"records":[{"kind":"story","id":"46641042","canonical_url":"/item?id=46641042"},{"kind":"comment","id":"46642165","canonical_url":"/item?id=46642165","depth":0},{"kind":"comment","id":"46644995","canonical_url":"/item?id=46644995","depth":1,"parent_id":"46641042"}]}`)
@@ -45,7 +45,7 @@ func TestDecodeThreadReconstructsParentsFromIndentStack(t *testing.T) {
 
 func TestThreadExpressionUsesStableRowsAndIndentStack(t *testing.T) {
 	expression := ThreadExpression("46641042", 501)
-	for _, want := range []string{"__cdp_cli_hn_thread_records__", "tr.athing.comtr", "td.ind img", "parent_id", "500"} {
+	for _, want := range []string{"__cdp_cli_hn_thread_records__", "tr.athing.comtr", "td.ind img", "parent_id", ".commtext", ".hnuser", "500"} {
 		if !strings.Contains(expression, want) {
 			t.Fatalf("expression missing %q", want)
 		}

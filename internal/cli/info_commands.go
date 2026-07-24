@@ -997,9 +997,11 @@ func exitCodeRows(catalog []errorInfo) []map[string]any {
 
 func (a *app) newSchemaCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "schema [name]",
-		Short: "Print stable JSON output schemas",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     "schema [name]",
+		Short:   "Print stable JSON output schemas",
+		Long:    "Print stable JSON output schemas for machine-readable command results. Use a named schema before writing a jq query; omit the name to list schemas.",
+		Example: "  cdp schema workflow-x-collect --json\n  cdp workflow x collect 'https://x.com/karpathy/status/2079610838143623371' --jq '.records[] | {handle, body}'",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()

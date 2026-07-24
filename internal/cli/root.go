@@ -104,7 +104,7 @@ func (a *app) newRoot() *cobra.Command {
 
 	root.PersistentFlags().BoolVar(&a.opts.json, "json", false, "emit JSON on stdout")
 	root.PersistentFlags().BoolVar(&a.opts.compact, "compact", false, "emit compact JSON without indentation")
-	root.PersistentFlags().StringVar(&a.opts.jq, "jq", "", "filter JSON output with jq expression; implies --json")
+	root.PersistentFlags().StringVar(&a.opts.jq, "jq", "", "filter the success JSON envelope with a jq expression; implies --json (example: --jq '.records[] | .body')")
 	root.PersistentFlags().BoolVar(&a.opts.debug, "debug", false, "write debug details to stderr")
 	root.PersistentFlags().DurationVar(&a.opts.timeout, "timeout", 0, "ceiling-bound command execution, such as 30s or 2m")
 	root.PersistentFlags().StringVar(&a.opts.profile, "profile", config.DefaultProfile, "named cdp-cli profile to use")

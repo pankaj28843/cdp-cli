@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -13,7 +12,7 @@ import (
 )
 
 func (a *app) newWorkflowXCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "x", Short: "Collect X source-native records"}
+	cmd := &cobra.Command{Use: "x", Short: "Collect X source-native records", Long: "Collect a post thread or profile posts from a validated X URL. Plain output is detailed Markdown; use --json or --jq for structured processing."}
 	cmd.AddCommand(a.newWorkflowXCollectionCommand("collect <x-url>", "Collect normalized records from a discovered X URL"))
 	return cmd
 }
@@ -23,9 +22,11 @@ func (a *app) newWorkflowXCollectionCommand(use, short string) *cobra.Command {
 	var wait time.Duration
 	var keepOpen bool
 	cmd := &cobra.Command{
-		Use:   use,
-		Short: short,
-		Args:  cobra.ExactArgs(1),
+		Use:     use,
+		Short:   short,
+		Long:    "Collect a validated X post thread or profile. Plain stdout is a detailed Markdown export suitable for redirection; --json preserves normalized records and --jq selects from that JSON.",
+		Example: "  cdp workflow x collect 'https://x.com/karpathy/status/2079610838143623371' > post.md\n  cdp workflow x collect 'https://x.com/karpathy/status/2079610838143623371' --jq '.records[] | {handle, body}'\n  cdp schema workflow-x-collect --json",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			request, err := x.Parse(args[0])
 			if err != nil {
@@ -168,7 +169,8 @@ func (a *app) newWorkflowXCollectionCommand(use, short string) *cobra.Command {
 				continuation = "discussion_" + status
 			}
 			coverage := dynamicSourceCoverage(observed, missing, status, partialReason, continuation, "", status != "exhausted" && status != "ceiling")
-			return a.render(ctx, xRecordLines(records), map[string]any{"ok": true, "request": final, "kind": final.Kind, "records": records, "coverage": coverage, "workflow": map[string]any{"name": "x-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}})
+			workflow := map[string]any{"name": "x-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}
+			return a.render(ctx, xCollectionMarkdown(final.URL, final.Kind, records, workflow, coverage), map[string]any{"ok": true, "request": final, "kind": final.Kind, "records": records, "coverage": coverage, "workflow": workflow})
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum source-native records to collect (1-500)")
@@ -241,14 +243,6 @@ func collectVisibleXRecords(ctx context.Context, session *cdp.PageSession, reque
 		return nil, commandError("invalid_x_collection", "check_failed", err.Error(), ExitCheckFailed, nil)
 	}
 	return page.Records, nil
-}
-
-func xRecordLines(records []x.Record) string {
-	lines := make([]string, 0, len(records))
-	for _, record := range records {
-		lines = append(lines, fmt.Sprintf("%s · @%s · %s", record.Kind, record.Handle, record.CanonicalURL))
-	}
-	return strings.Join(lines, "\n")
 }
 
 func xRecordKinds(records []x.Record, kind x.Kind) (observed, possiblyMissing []string) {

@@ -1194,7 +1194,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_hn_thread_records__") {
-		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": []map[string]any{{"kind": "story", "id": "46641042", "canonical_url": "/item?id=46641042"}, {"kind": "comment", "id": "46642165", "canonical_url": "/item?id=46642165", "depth": 0}, {"kind": "comment", "id": "46644995", "canonical_url": "/item?id=46644995", "depth": 1, "parent_id": "46642165"}}}}}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"records": []map[string]any{{"kind": "story", "id": "46641042", "canonical_url": "/item?id=46641042", "title": "Synthetic HN story", "author": "alice"}, {"kind": "comment", "id": "46642165", "canonical_url": "/item?id=46642165", "depth": 0, "body": "Synthetic HN comment", "author": "bob"}, {"kind": "comment", "id": "46644995", "canonical_url": "/item?id=46644995", "depth": 1, "parent_id": "46642165", "body": "Synthetic nested reply"}}}}}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_arxiv_paper__") {
 		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"paper": map[string]any{"identifier": "2604.12374v2", "canonical_url": "/abs/2604.12374v2", "title": "Synthetic paper"}, "references": []map[string]any{{"id": "ref-1", "paper_identifier": "2604.12374v2", "text": "Synthetic reference"}}}}}

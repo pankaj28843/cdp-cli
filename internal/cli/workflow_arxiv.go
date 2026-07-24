@@ -9,8 +9,8 @@ import (
 )
 
 func (a *app) newWorkflowArxivCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "arxiv", Short: "Collect arXiv source-native records"}
-	cmd.AddCommand(&cobra.Command{Use: "collect <paper-url>", Short: "Collect a version-pinned paper and references", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "arxiv", Short: "Collect arXiv source-native records", Long: "Collect a version-pinned arXiv paper and its bounded references. Plain output is detailed Markdown; use --json or --jq for structured processing."}
+	cmd.AddCommand(&cobra.Command{Use: "collect <paper-url>", Short: "Collect a version-pinned paper and references", Long: "Collect a version-pinned arXiv paper. Plain stdout is detailed Markdown with paper metadata and references; --json and --jq preserve normalized fields.", Example: "  cdp workflow arxiv collect 'https://arxiv.org/abs/2604.12374v2' > paper.md\n  cdp workflow arxiv collect 'https://arxiv.org/abs/2604.12374v2' --jq '.references[] | .text'\n  cdp schema workflow-arxiv-collect --json", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		req, err := arxiv.Parse(args[0])
 		if err != nil {
 			return commandError("invalid_arxiv_url", "usage", err.Error(), ExitUsage, nil)
@@ -81,7 +81,8 @@ func (a *app) newWorkflowArxivCommand() *cobra.Command {
 			missing = []string{"reference"}
 		}
 		coverage := staticSourceCoverage(observed, missing, status, reason)
-		return a.render(ctx, "", map[string]any{"ok": true, "request": final, "kind": "paper", "paper": page.Paper, "references": page.References, "coverage": coverage, "workflow": map[string]any{"name": "arxiv-collect", "count": len(page.References), "limit": 500, "status": status, "partial_reason": reason, "interactions": 0}})
+		workflow := map[string]any{"name": "arxiv-collect", "count": len(page.References), "limit": 500, "status": status, "partial_reason": reason, "interactions": 0}
+		return a.render(ctx, arxivCollectionMarkdown(final.URL, page.Paper, page.References, workflow, coverage), map[string]any{"ok": true, "request": final, "kind": "paper", "paper": page.Paper, "references": page.References, "coverage": coverage, "workflow": workflow})
 	}})
 	return cmd
 }

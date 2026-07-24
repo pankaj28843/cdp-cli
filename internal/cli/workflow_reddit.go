@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -13,7 +12,7 @@ import (
 )
 
 func (a *app) newWorkflowRedditCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "reddit", Short: "Collect Reddit source-native records"}
+	cmd := &cobra.Command{Use: "reddit", Short: "Collect Reddit source-native records", Long: "Collect subreddit listings, threads, or user profiles from validated Reddit URLs. Plain output is detailed Markdown; use --json or --jq for structured processing."}
 	cmd.AddCommand(a.newWorkflowRedditCollectionCommand("collect <reddit-url>", "Collect normalized records from a discovered Reddit URL", ""))
 	cmd.AddCommand(a.newWorkflowRedditCollectionCommand("posts <subreddit-listing-url>", "Collect normalized threads from a Reddit subreddit listing", reddit.KindSubredditListing))
 	return cmd
@@ -28,9 +27,11 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 	var wait time.Duration
 	var keepOpen bool
 	cmd := &cobra.Command{
-		Use:   use,
-		Short: short,
-		Args:  cobra.ExactArgs(1),
+		Use:     use,
+		Short:   short,
+		Long:    "Collect a validated Reddit source. Supported URL identity determines listing, thread, or profile behavior. Plain stdout is detailed Markdown; --json and --jq expose normalized records.",
+		Example: "  cdp workflow reddit collect 'https://www.reddit.com/r/formula1/top/?t=week' > subreddit.md\n  cdp workflow reddit collect 'https://www.reddit.com/r/formula1/comments/example/' --jq '.records[] | {author, body}'\n  cdp schema workflow-reddit-collect --json",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			request, err := reddit.ParseExpected(args[0], expected)
 			if err != nil {
@@ -163,7 +164,8 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 					continuation = "discussion_" + expansionStatus
 				}
 				coverage := dynamicSourceCoverage(observed, missing, expansionStatus, partialReason, continuation, "", expansionStatus != "exhausted" && expansionStatus != "ceiling")
-				return a.render(ctx, redditRecordLines(records), map[string]any{"ok": true, "request": request, "kind": request.Kind, "records": records, "coverage": coverage, "workflow": map[string]any{"name": "reddit-collect", "count": len(records), "limit": limit, "status": expansionStatus, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}})
+				workflow := map[string]any{"name": "reddit-collect", "count": len(records), "limit": limit, "status": expansionStatus, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}
+				return a.render(ctx, redditCollectionMarkdown(request.URL, request.Kind, records, nil, workflow, coverage), map[string]any{"ok": true, "request": request, "kind": request.Kind, "records": records, "coverage": coverage, "workflow": workflow})
 			}
 			deadline := time.Now().Add(wait)
 			traversal := reddit.NewTraversal()
@@ -216,7 +218,8 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 				missing = []string{"listing_thread"}
 			}
 			coverage := dynamicSourceCoverage([]string{"listing_thread"}, missing, status, partialReason, "listing_cursor", lastCursor, lastCursor != "")
-			return a.render(ctx, strings.Join(redditThreadLines(collected), "\n"), map[string]any{"ok": true, "request": request, "kind": request.Kind, "threads": collected, "next_cursor": lastCursor, "coverage": coverage, "workflow": map[string]any{"name": "reddit-collect", "count": len(collected), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": 0, "last_cursor": lastCursor, "created_page": true, "closed": closeError == "", "close_error": closeError}})
+			workflow := map[string]any{"name": "reddit-collect", "count": len(collected), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": 0, "last_cursor": lastCursor, "created_page": true, "closed": closeError == "", "close_error": closeError}
+			return a.render(ctx, redditCollectionMarkdown(request.URL, request.Kind, nil, collected, workflow, coverage), map[string]any{"ok": true, "request": request, "kind": request.Kind, "threads": collected, "next_cursor": lastCursor, "coverage": coverage, "workflow": workflow})
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum source-native records to collect (1-500)")
@@ -267,14 +270,6 @@ func redditThreadLines(threads []reddit.Thread) []string {
 		lines = append(lines, fmt.Sprintf("%s · %d points · %d comments · %s", thread.Title, thread.Score, thread.CommentCount, thread.Permalink))
 	}
 	return lines
-}
-
-func redditRecordLines(records []reddit.Record) string {
-	lines := make([]string, 0, len(records))
-	for _, record := range records {
-		lines = append(lines, fmt.Sprintf("%s · %s · %s", record.Kind, record.Author, record.CanonicalURL))
-	}
-	return strings.Join(lines, "\n")
 }
 
 func redditRecordKinds(records []reddit.Record) (observed, possiblyMissing []string) {

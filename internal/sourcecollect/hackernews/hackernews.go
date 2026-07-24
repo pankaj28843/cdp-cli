@@ -23,6 +23,10 @@ type Record struct {
 	Kind         RecordKind `json:"kind"`
 	ID           string     `json:"id"`
 	CanonicalURL string     `json:"canonical_url"`
+	Title        string     `json:"title,omitempty"`
+	Body         string     `json:"body,omitempty"`
+	Author       string     `json:"author,omitempty"`
+	Timestamp    string     `json:"timestamp,omitempty"`
 	Depth        int        `json:"depth,omitempty"`
 	ParentID     string     `json:"parent_id,omitempty"`
 }
@@ -108,5 +112,5 @@ func ThreadExpression(itemID string, limit int) string {
 	if limit > 500 {
 		limit = 500
 	}
-	return fmt.Sprintf(`(() => { "__cdp_cli_hn_thread_records__"; const root=%q, limit=%d, records=[], stack=[]; const own=(row,s)=>Array.from(row.querySelectorAll(s)).filter(n=>n.closest("tr.athing.comtr")===row); const link=(row)=>{const a=own(row,'a[href*="item?id="]').find(a=>{try{return new URL(a.href,location.href).searchParams.get("id")===row.id}catch(_){return false}});return a?"/item?id="+row.id:""}; records.push({kind:"story",id:root,canonical_url:"/item?id="+root}); for(const row of Array.from(document.querySelectorAll("tr.athing.comtr"))){if(records.length>=limit)break;const id=row.id,url=link(row),indent=Number((own(row,"td.ind img")[0]||{}).width||0)/40;if(!/^\d+$/.test(id)||!url||!Number.isInteger(indent)||indent<0||indent>stack.length)continue;stack.length=indent;const parent_id=indent?stack[indent-1]:"";records.push({kind:"comment",id,canonical_url:url,depth:indent,parent_id});stack.push(id)} return {records}; })()`, itemID, limit)
+	return fmt.Sprintf(`(() => { "__cdp_cli_hn_thread_records__"; const root=%q, limit=%d, records=[], stack=[], text=n=>String(n&&n.innerText||"").replace(/\s+/g," ").trim(), own=(row,s)=>Array.from(row.querySelectorAll(s)).filter(n=>n.closest("tr.athing.comtr")===row), link=(row)=>{const a=own(row,'a[href*="item?id="]').find(a=>{try{return new URL(a.href,location.href).searchParams.get("id")===row.id}catch(_){return false}});return a?"/item?id="+row.id:""}; const story=document.querySelector("tr.athing"); records.push({kind:"story",id:root,canonical_url:"/item?id="+root,title:text(story&&story.querySelector(".titleline")),author:text(story&&story.nextElementSibling&&story.nextElementSibling.querySelector(".hnuser")),timestamp:text(story&&story.nextElementSibling&&story.nextElementSibling.querySelector(".age"))}); for(const row of Array.from(document.querySelectorAll("tr.athing.comtr"))){if(records.length>=limit)break;const id=row.id,url=link(row),indent=Number((own(row,"td.ind img")[0]||{}).width||0)/40;if(!/^\d+$/.test(id)||!url||!Number.isInteger(indent)||indent<0||indent>stack.length)continue;stack.length=indent;const parent_id=indent?stack[indent-1]:"";records.push({kind:"comment",id,canonical_url:url,depth:indent,parent_id,body:text(own(row,".commtext")[0]),author:text(own(row,".hnuser")[0]),timestamp:text(own(row,".age")[0])});stack.push(id)} return {records}; })()`, itemID, limit)
 }

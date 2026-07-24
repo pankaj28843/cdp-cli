@@ -41,6 +41,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hacker-news [url]",
 		Short: "Open Hacker News and summarize visible stories",
+		Long:  "Summarize the Hacker News front page or collect a canonical item thread. Native collection plain output is detailed Markdown; use --json or --jq for structured processing.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 30*time.Second)
@@ -104,7 +105,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 
 func (a *app) newWorkflowHackerNewsCollectCommand() *cobra.Command {
 	var limit int
-	cmd := &cobra.Command{Use: "collect <hn-item-url>", Short: "Collect normalized Hacker News thread records", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "collect <hn-item-url>", Short: "Collect normalized Hacker News thread records", Long: "Collect a canonical Hacker News item discussion. Plain stdout is detailed Markdown containing the story and rendered comments; --json and --jq expose normalized records.", Example: "  cdp workflow hacker-news collect 'https://news.ycombinator.com/item?id=46641042' > discussion.md\n  cdp workflow hacker-news collect 'https://news.ycombinator.com/item?id=46641042' --jq '.records[] | {author, body}'\n  cdp schema workflow-hacker-news-collect --json", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		req, err := hackernews.Parse(args[0])
 		if err != nil {
 			return commandError("invalid_hacker_news_url", "usage", err.Error(), ExitUsage, nil)
@@ -174,7 +175,8 @@ func (a *app) newWorkflowHackerNewsCollectCommand() *cobra.Command {
 			missing = []string{"comment"}
 		}
 		coverage := staticSourceCoverage(observed, missing, status, reason)
-		return a.render(ctx, "", map[string]any{"ok": true, "request": req, "kind": "thread", "records": page.Records, "coverage": coverage, "workflow": map[string]any{"name": "hacker-news-collect", "count": len(page.Records), "limit": limit, "status": status, "partial_reason": reason, "interactions": 0}})
+		workflow := map[string]any{"name": "hacker-news-collect", "count": len(page.Records), "limit": limit, "status": status, "partial_reason": reason, "interactions": 0}
+		return a.render(ctx, hackerNewsCollectionMarkdown(req.URL, page.Records, workflow, coverage), map[string]any{"ok": true, "request": req, "kind": "thread", "records": page.Records, "coverage": coverage, "workflow": workflow})
 	}}
 	cmd.Flags().IntVar(&limit, "limit", 500, "maximum source-native records to collect (1-500)")
 	return cmd
