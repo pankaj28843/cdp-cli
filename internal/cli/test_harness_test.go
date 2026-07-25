@@ -452,14 +452,37 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{"nodeId": nodeID}
 			} else if req.Method == "DOM.describeNode" {
 				var params struct {
-					NodeID int `json:"nodeId"`
+					NodeID        int `json:"nodeId"`
+					BackendNodeID int `json:"backendNodeId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
-				backendNodeID := params.NodeID + 100
-				if params.NodeID == 4 && fakeSemanticReplacementDescribeAttempts.Add(1) >= 2 {
-					backendNodeID++
+				if params.BackendNodeID > 0 {
+					localName := "input"
+					nodeName := "INPUT"
+					attributes := []string{"type", "file", "multiple", "", "accept", ".epub,application/epub+zip"}
+					if params.BackendNodeID == 248 {
+						attributes = []string{"type", "file", "accept", ".epub"}
+					}
+					if params.BackendNodeID == 249 {
+						localName = "button"
+						nodeName = "BUTTON"
+						attributes = []string{"type", "button"}
+					}
+					resp["result"] = map[string]any{"node": map[string]any{
+						"nodeId":        0,
+						"backendNodeId": params.BackendNodeID,
+						"nodeType":      1,
+						"nodeName":      nodeName,
+						"localName":     localName,
+						"attributes":    attributes,
+					}}
+				} else {
+					backendNodeID := params.NodeID + 100
+					if params.NodeID == 4 && fakeSemanticReplacementDescribeAttempts.Add(1) >= 2 {
+						backendNodeID++
+					}
+					resp["result"] = map[string]any{"node": map[string]any{"nodeId": params.NodeID, "backendNodeId": backendNodeID}}
 				}
-				resp["result"] = map[string]any{"node": map[string]any{"nodeId": params.NodeID, "backendNodeId": backendNodeID}}
 			} else if req.Method == "DOM.setFileInputFiles" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Emulation.setDeviceMetricsOverride" || req.Method == "Emulation.clearDeviceMetricsOverride" || req.Method == "Emulation.setUserAgentOverride" || req.Method == "Emulation.setGeolocationOverride" || req.Method == "Emulation.clearGeolocationOverride" || req.Method == "Emulation.setEmulatedMedia" || req.Method == "Emulation.setTimezoneOverride" || req.Method == "Emulation.setLocaleOverride" || req.Method == "Emulation.setCPUThrottlingRate" || req.Method == "Network.emulateNetworkConditions" {

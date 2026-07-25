@@ -6,7 +6,7 @@ patterns=(
   'Personal/Code'
   '\.config/'
   'hosts\.yml'
-  'Token:'
+  '(^|[^[:alnum:]_])Token:'
   'chrome-devtools:'
   '--autoConnect --logFile'
   '127\.0\.0\.1:[0-9]+'

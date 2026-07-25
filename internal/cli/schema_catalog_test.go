@@ -85,6 +85,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"daemon-health",
 		"daemon-logs",
 		"pages",
+		"file-chooser",
 		"page-cleanup",
 		"stop-state-classify",
 		"protocol-examples",

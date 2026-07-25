@@ -111,7 +111,7 @@ func TestPlanRenderedExtractContent(t *testing.T) {
 			wantProfile:        "hacker-news",
 			wantStrategy:       "discussion-tree",
 			wantNavigationURL:  "https://news.ycombinator.com/item?id=46641042",
-			wantSelector:       "body",
+			wantSelector:       "table.fatitem",
 			wantRepresentation: "discussion",
 			wantDomainMatched:  true,
 		},

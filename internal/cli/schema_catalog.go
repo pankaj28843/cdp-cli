@@ -1186,6 +1186,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector resolved from a locator before file-input validation."},
 			},
 		},
+		"file-chooser": {
+			Name:        "file-chooser",
+			Description: "Validate a detached Page.fileChooserOpened backend node and optionally assign one or more local files through CDP without printing file contents.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when file assignment completed or --trial checks passed."},
+				{Name: "action", Type: "string", Required: true, Description: "Action name: files_set for assignment or trial for non-mutating validation."},
+				{Name: "target", Type: "page", Required: true, Description: "Explicit selected page target metadata."},
+				{Name: "file_chooser", Type: "file_chooser_result", Required: true, Description: "Backend node identity, input type, multiplicity, accept hint, file basenames/count, assignment state, and content omission marker."},
+			},
+		},
 		"frames": {
 			Name:        "frames",
 			Description: "List the frame tree for the selected target.",

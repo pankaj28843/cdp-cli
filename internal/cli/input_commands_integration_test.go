@@ -1836,6 +1836,178 @@ func TestFileTrialByLabelLocatorJSON(t *testing.T) {
 	}
 }
 
+func TestFileChooserTrialByBackendNodeJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Detached Upload", "url": "https://example.test/upload", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	firstPath := filepath.Join(t.TempDir(), "first.epub")
+	secondPath := filepath.Join(t.TempDir(), "second.epub")
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.WriteFile(path, []byte("synthetic upload"), 0o600); err != nil {
+			t.Fatalf("WriteFile %s returned error: %v", path, err)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "chooser", "247", firstPath, secondPath, "--target", "page-1", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("file chooser trial exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Target struct {
+			ID string `json:"id"`
+		} `json:"target"`
+		FileChooser struct {
+			BackendNodeID  int      `json:"backend_node_id"`
+			Tag            string   `json:"tag"`
+			Type           string   `json:"type"`
+			Multiple       bool     `json:"multiple"`
+			Accept         string   `json:"accept"`
+			Trial          bool     `json:"trial"`
+			FilesSet       bool     `json:"files_set"`
+			FileCount      int      `json:"file_count"`
+			FileNames      []string `json:"file_names"`
+			ContentOmitted bool     `json:"content_omitted"`
+		} `json:"file_chooser"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("file chooser trial output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "trial" || got.Target.ID != "page-1" || got.FileChooser.BackendNodeID != 247 || got.FileChooser.Tag != "input" || got.FileChooser.Type != "file" || !got.FileChooser.Multiple || got.FileChooser.Accept != ".epub,application/epub+zip" || !got.FileChooser.Trial || got.FileChooser.FilesSet || got.FileChooser.FileCount != 2 || !got.FileChooser.ContentOmitted {
+		t.Fatalf("file chooser trial = %+v, want detached multiple-input evidence", got)
+	}
+	if len(got.FileChooser.FileNames) != 2 || got.FileChooser.FileNames[0] != "first.epub" || got.FileChooser.FileNames[1] != "second.epub" {
+		t.Fatalf("file chooser names = %#v, want both basenames", got.FileChooser.FileNames)
+	}
+}
+
+func TestFileChooserSetsMultipleFilesByBackendNodeJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Detached Upload", "url": "https://example.test/upload", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	firstPath := filepath.Join(t.TempDir(), "first.epub")
+	secondPath := filepath.Join(t.TempDir(), "second.epub")
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.WriteFile(path, []byte("synthetic upload"), 0o600); err != nil {
+			t.Fatalf("WriteFile %s returned error: %v", path, err)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "chooser", "247", firstPath, secondPath, "--target", "page-1", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("file chooser set exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK          bool   `json:"ok"`
+		Action      string `json:"action"`
+		FileChooser struct {
+			BackendNodeID  int      `json:"backend_node_id"`
+			Trial          bool     `json:"trial"`
+			FilesSet       bool     `json:"files_set"`
+			FileCount      int      `json:"file_count"`
+			FileNames      []string `json:"file_names"`
+			ContentOmitted bool     `json:"content_omitted"`
+		} `json:"file_chooser"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("file chooser set output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Action != "files_set" || got.FileChooser.BackendNodeID != 247 || got.FileChooser.Trial || !got.FileChooser.FilesSet || got.FileChooser.FileCount != 2 || len(got.FileChooser.FileNames) != 2 || !got.FileChooser.ContentOmitted {
+		t.Fatalf("file chooser set = %+v, want two assigned files without contents", got)
+	}
+}
+
+func TestFileChooserRejectsMultipleFilesForSingleInput(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Detached Upload", "url": "https://example.test/upload", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	firstPath := filepath.Join(t.TempDir(), "first.epub")
+	secondPath := filepath.Join(t.TempDir(), "second.epub")
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.WriteFile(path, []byte("synthetic upload"), 0o600); err != nil {
+			t.Fatalf("WriteFile %s returned error: %v", path, err)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "chooser", "248", firstPath, secondPath, "--target", "page-1", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("single file chooser exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("single file chooser output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "file_multiplicity" {
+		t.Fatalf("single file chooser = %+v, want file_multiplicity", got)
+	}
+}
+
+func TestFileChooserRejectsNonFileBackendNode(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Detached Upload", "url": "https://example.test/upload", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	uploadPath := filepath.Join(t.TempDir(), "upload.epub")
+	if err := os.WriteFile(uploadPath, []byte("synthetic upload"), 0o600); err != nil {
+		t.Fatalf("WriteFile upload returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "chooser", "249", uploadPath, "--target", "page-1", "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("non-file chooser exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("non-file chooser output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "invalid_target" {
+		t.Fatalf("non-file chooser = %+v, want invalid_target", got)
+	}
+}
+
+func TestFileChooserRequiresExplicitTarget(t *testing.T) {
+	uploadPath := filepath.Join(t.TempDir(), "upload.epub")
+	if err := os.WriteFile(uploadPath, []byte("synthetic upload"), 0o600); err != nil {
+		t.Fatalf("WriteFile upload returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"file", "chooser", "247", uploadPath, "--trial", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("file chooser without target exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("file chooser without target output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "target_required" {
+		t.Fatalf("file chooser without target = %+v, want target_required", got)
+	}
+}
+
 func TestFileInvalidTargetJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

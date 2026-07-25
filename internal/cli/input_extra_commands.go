@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,21 @@ type fileResult struct {
 	Tag            string     `json:"tag,omitempty"`
 	Type           string     `json:"type,omitempty"`
 	Error          *evalError `json:"error,omitempty"`
+}
+
+type fileChooserResult struct {
+	BackendNodeID  int      `json:"backend_node_id"`
+	NodeID         int      `json:"node_id,omitempty"`
+	Tag            string   `json:"tag"`
+	Type           string   `json:"type"`
+	Multiple       bool     `json:"multiple"`
+	Accept         string   `json:"accept,omitempty"`
+	Trial          bool     `json:"trial,omitempty"`
+	FilesSet       bool     `json:"files_set"`
+	FileCount      int      `json:"file_count"`
+	Paths          []string `json:"paths"`
+	FileNames      []string `json:"file_names"`
+	ContentOmitted bool     `json:"content_omitted"`
 }
 
 type scrollViewportEvidence struct {
@@ -680,7 +696,152 @@ func (a *app) newFileCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "resolve and validate the file input without assigning the local file")
+	cmd.AddCommand(a.newFileChooserCommand())
 	return cmd
+}
+
+func (a *app) newFileChooserCommand() *cobra.Command {
+	var targetID string
+	var trial bool
+	cmd := &cobra.Command{
+		Use:   "chooser <backend-node-id> <path> [path...]",
+		Short: "Set one or more files on a detached DevTools file chooser",
+		Long:  "Validate a Page.fileChooserOpened backend node, then assign one or more local files through DOM.setFileInputFiles. An explicit page target is required because backend node IDs are target-scoped. File contents are never printed.",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(targetID) == "" {
+				return commandError("target_required", "usage", "file chooser requires an explicit --target because backend node IDs are target-scoped", ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json", "cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json"})
+			}
+			backendNodeID, err := strconv.Atoi(args[0])
+			if err != nil || backendNodeID <= 0 {
+				return commandError("invalid_backend_node", "usage", fmt.Sprintf("backend node ID must be a positive integer: %q", args[0]), ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json"})
+			}
+			absPaths, fileNames, err := normalizeChooserFilePaths(args[1:])
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			session, target, err := a.attachPageSession(ctx, targetID, "", "")
+			if err != nil {
+				return err
+			}
+			defer session.Close(ctx)
+
+			result, err := describeFileChooserNode(ctx, session, backendNodeID, args[1:], fileNames, trial)
+			if err != nil {
+				return err
+			}
+			report := map[string]any{
+				"ok":           true,
+				"action":       "files_set",
+				"target":       pageRow(target),
+				"file_chooser": result,
+			}
+			if trial {
+				report["action"] = "trial"
+				return a.render(ctx, fmt.Sprintf("trial\t%s\t%d\t%d", target.TargetID, backendNodeID, len(fileNames)), report)
+			}
+			if err := execSessionJSON(ctx, session, "DOM.setFileInputFiles", map[string]any{
+				"backendNodeId": backendNodeID,
+				"files":         absPaths,
+			}, nil); err != nil {
+				return commandError("file_set_failed", "connection", fmt.Sprintf("set files on chooser backend node %d: %v", backendNodeID, err), ExitConnection, []string{"cdp protocol describe DOM.setFileInputFiles --json", "cdp file chooser " + strconv.Itoa(backendNodeID) + " <path> --target " + shellQuote(target.TargetID) + " --trial --json"})
+			}
+			result.FilesSet = true
+			report["file_chooser"] = result
+			return a.render(ctx, fmt.Sprintf("files\t%s\t%d\t%d", target.TargetID, backendNodeID, len(fileNames)), report)
+		},
+	}
+	cmd.Flags().StringVar(&targetID, "target", "", "explicit page target id or unique prefix that emitted Page.fileChooserOpened")
+	cmd.Flags().BoolVar(&trial, "trial", false, "validate the backend node and local files without assigning them")
+	return cmd
+}
+
+func normalizeChooserFilePaths(paths []string) ([]string, []string, error) {
+	absPaths := make([]string, 0, len(paths))
+	fileNames := make([]string, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, nil, commandError("usage", "usage", fmt.Sprintf("file path is not readable: %v", err), ExitUsage, []string{"cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json"})
+		}
+		if !info.Mode().IsRegular() {
+			return nil, nil, commandError("usage", "usage", fmt.Sprintf("file path is not a regular file: %s", path), ExitUsage, []string{"cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json"})
+		}
+		handle, err := os.Open(path)
+		if err != nil {
+			return nil, nil, commandError("usage", "usage", fmt.Sprintf("file path is not readable: %v", err), ExitUsage, []string{"cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json"})
+		}
+		if err := handle.Close(); err != nil {
+			return nil, nil, commandError("usage", "usage", fmt.Sprintf("close file after readability check: %v", err), ExitUsage, nil)
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, nil, commandError("usage", "usage", fmt.Sprintf("resolve file path %s: %v", path, err), ExitUsage, []string{"cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json"})
+		}
+		absPaths = append(absPaths, absPath)
+		fileNames = append(fileNames, filepath.Base(path))
+	}
+	return absPaths, fileNames, nil
+}
+
+func describeFileChooserNode(ctx context.Context, session *cdp.PageSession, backendNodeID int, paths, fileNames []string, trial bool) (fileChooserResult, error) {
+	var description struct {
+		Node struct {
+			NodeID        int      `json:"nodeId"`
+			BackendNodeID int      `json:"backendNodeId"`
+			NodeType      int      `json:"nodeType"`
+			NodeName      string   `json:"nodeName"`
+			LocalName     string   `json:"localName"`
+			Attributes    []string `json:"attributes"`
+		} `json:"node"`
+	}
+	if err := execSessionJSON(ctx, session, "DOM.describeNode", map[string]any{
+		"backendNodeId": backendNodeID,
+		"depth":         0,
+	}, &description); err != nil {
+		return fileChooserResult{}, commandError("invalid_backend_node", "usage", fmt.Sprintf("describe chooser backend node %d: %v", backendNodeID, err), ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json", "cdp protocol describe DOM.describeNode --json"})
+	}
+	node := description.Node
+	attributes := make(map[string]string, len(node.Attributes)/2)
+	for index := 0; index+1 < len(node.Attributes); index += 2 {
+		attributes[strings.ToLower(node.Attributes[index])] = node.Attributes[index+1]
+	}
+	tag := strings.ToLower(strings.TrimSpace(node.LocalName))
+	if tag == "" {
+		tag = strings.ToLower(strings.TrimSpace(node.NodeName))
+	}
+	inputType := strings.ToLower(strings.TrimSpace(attributes["type"]))
+	multiple := false
+	if _, present := attributes["multiple"]; present {
+		multiple = true
+	}
+	result := fileChooserResult{
+		BackendNodeID:  backendNodeID,
+		NodeID:         node.NodeID,
+		Tag:            tag,
+		Type:           inputType,
+		Multiple:       multiple,
+		Accept:         attributes["accept"],
+		Trial:          trial,
+		FilesSet:       false,
+		FileCount:      len(paths),
+		Paths:          append([]string(nil), paths...),
+		FileNames:      append([]string(nil), fileNames...),
+		ContentOmitted: true,
+	}
+	if node.BackendNodeID != backendNodeID {
+		return result, commandErrorWithData("invalid_backend_node", "usage", fmt.Sprintf("DOM.describeNode returned backend node %d for requested node %d", node.BackendNodeID, backendNodeID), ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json"}, map[string]any{"file_chooser": result})
+	}
+	if node.NodeType != 1 || tag != "input" || inputType != "file" {
+		return result, commandErrorWithData("invalid_target", "usage", fmt.Sprintf("backend node %d is %s[type=%s], not input[type=file]", backendNodeID, tag, inputType), ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json"}, map[string]any{"file_chooser": result})
+	}
+	if len(paths) > 1 && !multiple {
+		return result, commandErrorWithData("file_multiplicity", "usage", fmt.Sprintf("backend node %d is a single-file input but %d files were requested", backendNodeID, len(paths)), ExitUsage, []string{"cdp file chooser " + strconv.Itoa(backendNodeID) + " <one-path> --target <target-id> --trial --json"}, map[string]any{"file_chooser": result})
+	}
+	return result, nil
 }
 
 func fileCommandResultError(selector string, err *evalError) error {
