@@ -163,3 +163,20 @@ func TestConversationIdentityAndPromptBudgetFailClosed(t *testing.T) {
 		t.Fatalf("over-budget result validation: %v", err)
 	}
 }
+
+func TestConversationListAcceptsRenderedRowsWithoutLegacyMarkers(
+	t *testing.T,
+) {
+	if conversationListReady(listObservation{}) {
+		t.Fatal("empty observation was treated as rendered history")
+	}
+	if !conversationListReady(listObservation{DrawerReady: true}) {
+		t.Fatal("legacy drawer markers were not accepted")
+	}
+	if !conversationListReady(listObservation{
+		RenderedTitles: 6,
+		OmittedNoID:    6,
+	}) {
+		t.Fatal("visible title-only rows were not accepted")
+	}
+}

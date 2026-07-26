@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/admission"
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -108,7 +109,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 	if config.ObservationTimeout <= 0 {
 		config.ObservationTimeout = defaultObservationTimeout
 	}
-	if config.ObservationAttempts <= 0 {
+	if config.ObservationAttempts < defaultObservationAttempts {
 		config.ObservationAttempts = defaultObservationAttempts
 	}
 	baseData := AuthRefreshData{
@@ -307,6 +308,68 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 		)
 	}
 
+	var cookies map[string]string
+	readiness, readinessErr := authreadiness.WaitForEvidence(
+		ctx,
+		session,
+		config.ObservationAttempts,
+		config.ObservationTimeout,
+		250*time.Millisecond,
+		func(observationCtx context.Context) (bool, error) {
+			observedCookies, cookieErr := readClaudeCookies(
+				observationCtx,
+				session,
+			)
+			if cookieErr != nil {
+				return false, cookieErr
+			}
+			baseData.CookieCount = len(observedCookies)
+			baseData.SessionCookieObserved =
+				hasSessionCookie(observedCookies)
+			if !baseData.SessionCookieObserved {
+				return false, nil
+			}
+			cookies = observedCookies
+			return true, nil
+		},
+	)
+	if readinessErr != nil || readiness.ObservationFailed() {
+		_ = lease.MarkIncomplete(context.Background())
+		return authRefreshFailure(
+			runID,
+			config.BuildCommit,
+			webagent.StagePrepared,
+			target,
+			pendingCleanup,
+			"claude_auth_readiness_failed",
+			"connection",
+			"Claude auth readiness could not complete its bounded load, reload, hard-reload, and grace-wait sequence",
+			"",
+			baseData,
+			authRefreshNextCommands(runID, pendingCleanup),
+		)
+	}
+	if !readiness.Observed {
+		_ = lease.MarkIncomplete(context.Background())
+		baseData.AuthState = "evidence_not_observed"
+		return authRefreshFailure(
+			runID,
+			config.BuildCommit,
+			webagent.StageObserveTerminal,
+			target,
+			pendingCleanup,
+			"claude_auth_evidence_not_observed",
+			"auth",
+			"Claude auth evidence was not observed after initial load, reload, cache-bypassing hard reload, and final grace wait; the browser session may still be active",
+			"",
+			baseData,
+			[]string{
+				"cdp workflow agent claude auth refresh --json",
+				fmt.Sprintf("cdp workflow agent recovery inspect %s --json", runID),
+			},
+		)
+	}
+
 	existing := loadExistingTemplate(ctx, config.Store)
 	observation, found, err := observeAuthRequest(
 		ctx,
@@ -332,46 +395,18 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 			authRefreshNextCommands(runID, pendingCleanup),
 		)
 	}
-
-	cookies, err := readClaudeCookies(ctx, session)
-	if err != nil {
+	if !found {
 		_ = lease.MarkIncomplete(context.Background())
-		return authRefreshFailure(
-			runID,
-			config.BuildCommit,
-			webagent.StagePrepared,
-			target,
-			pendingCleanup,
-			"claude_cookie_observation_failed",
-			"connection",
-			"Claude cookie evidence could not be read from the exact headed target",
-			"",
-			baseData,
-			authRefreshNextCommands(runID, pendingCleanup),
-		)
-	}
-	sessionObserved := hasSessionCookie(cookies)
-	baseData.CookieCount = len(cookies)
-	baseData.SessionCookieObserved = sessionObserved
-	if !found || !sessionObserved {
-		_ = lease.MarkIncomplete(context.Background())
-		baseData.AuthState = "signed_out"
-		code := "claude_signed_out"
-		message := "Signed-in Claude evidence was not observed"
-		if sessionObserved {
-			baseData.AuthState = "request_not_observed"
-			code = "claude_list_request_not_observed"
-			message = "Signed-in Claude list request evidence was not observed"
-		}
+		baseData.AuthState = "request_not_observed"
 		return authRefreshFailure(
 			runID,
 			config.BuildCommit,
 			webagent.StageObserveTerminal,
 			target,
 			pendingCleanup,
-			code,
+			"claude_list_request_not_observed",
 			"auth",
-			message,
+			"Signed-in Claude list request evidence was not observed",
 			"",
 			baseData,
 			[]string{
@@ -490,40 +525,54 @@ func observeAuthRequest(
 	wait time.Duration,
 ) (authObservation, bool, error) {
 	observer := networkObserver{records: map[string]*requestRecord{}}
-	for attempt := 1; attempt <= attempts; attempt++ {
-		if attempt > 1 {
-			if err := session.Reload(ctx, false); err != nil {
-				return authObservation{}, false, err
+	var selected authObservation
+	readiness, err := authreadiness.WaitForEvidence(
+		ctx,
+		session,
+		attempts,
+		wait,
+		time.Millisecond,
+		func(observationCtx context.Context) (bool, error) {
+			readCtx, cancelRead, sliceErr :=
+				authreadiness.SubObservationContext(
+					observationCtx,
+					250*time.Millisecond,
+				)
+			if sliceErr != nil {
+				return false, sliceErr
 			}
-		}
-		attemptCtx, cancel := context.WithTimeout(ctx, wait)
-		for {
-			event, err := client.ReadEvent(attemptCtx)
-			if err != nil {
-				if attemptCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
-					cancel()
-					if ctx.Err() != nil {
-						return authObservation{}, false, ctx.Err()
-					}
-					break
+			event, readErr := client.ReadEvent(readCtx)
+			readExpired := readCtx.Err() != nil
+			stageExpired := observationCtx.Err() != nil
+			cancelRead()
+			if readErr != nil {
+				if readExpired && !stageExpired {
+					return false, nil
 				}
-				cancel()
-				return authObservation{}, false, err
+				if stageExpired ||
+					errors.Is(readErr, context.DeadlineExceeded) {
+					return false, nil
+				}
+				return false, readErr
 			}
 			if event.SessionID != session.SessionID {
-				continue
+				return false, nil
 			}
 			observer.add(event)
-			if observation, ok := observer.selectObservation(existing); ok {
-				cancel()
-				return observation, true, nil
+			observation, ok := observer.selectObservation(existing)
+			if ok {
+				selected = observation
 			}
-		}
-		if observation, ok := observer.selectObservation(existing); ok {
-			return observation, true, nil
-		}
+			return ok, nil
+		},
+	)
+	if err != nil {
+		return authObservation{}, false, err
 	}
-	return authObservation{}, false, nil
+	if readiness.ObservationFailed() {
+		return authObservation{}, false, readiness.LastObservationError
+	}
+	return selected, readiness.Observed, nil
 }
 
 func (o *networkObserver) add(event cdp.Event) {

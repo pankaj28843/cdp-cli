@@ -27,6 +27,12 @@ architecture is intentionally small: keep browser protocol mechanics in
   resource budget before one target creation, durably record ownership and
   `action_pending` before submission, classify dispatch as `performed`,
   `not_performed`, or `unknown`, and close only the recorded target.
+- Auth readiness is provider-neutral: observe the initial navigation, then an
+  ordinary reload, then a cache-bypassing hard reload with a final grace wait.
+  One overall deadline is divided across at least three stages. Missing
+  evidence remains `auth_evidence_not_observed`; an observation-infrastructure
+  failure remains a connection error and is never converted into a logout
+  claim.
 - Every headed workflow that can activate a tab or dispatch browser input uses
   the canonical owner-only `<state-dir>/locks/headed-browser-input.lock`.
   Browserflow acquires it before target creation, an ask releases it immediately

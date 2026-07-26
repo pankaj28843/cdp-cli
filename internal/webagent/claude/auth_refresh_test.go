@@ -106,8 +106,8 @@ func TestRefreshAuthObservesPrivateStateAndClosesOnlyExactTarget(t *testing.T) {
 	}
 }
 
-func TestRefreshAuthSignedOutAndBudgetFailureRemainTypedAndClean(t *testing.T) {
-	t.Run("signed out", func(t *testing.T) {
+func TestRefreshAuthMissingEvidenceAndBudgetFailureRemainTypedAndClean(t *testing.T) {
+	t.Run("auth evidence not observed", func(t *testing.T) {
 		stateDir := t.TempDir()
 		client := newAuthFakeClient("user-page")
 		client.emitList = false
@@ -115,24 +115,28 @@ func TestRefreshAuthSignedOutAndBudgetFailureRemainTypedAndClean(t *testing.T) {
 		config := newAuthRefreshTestConfig(t, stateDir, client, cdp.BrowserResourceBudgetOptions{
 			MaxTabs: 15, MaxTabsSource: "test", MaxWindows: 5, BrowserMode: "headed",
 		})
-		config.ObservationTimeout = time.Millisecond
+		config.ObservationTimeout = 30 * time.Millisecond
 
 		result := RefreshAuth(context.Background(), config)
 		if result.OK ||
 			result.Error == nil ||
-			result.Error.Code != "claude_signed_out" ||
+			result.Error.Code != "claude_auth_evidence_not_observed" ||
 			result.Error.ErrClass != "auth" ||
 			result.Stage != webagent.StageClosed ||
 			result.Cleanup.State != webagent.CleanupClosed ||
 			result.Evidence.Target == nil ||
 			!result.Evidence.Target.Closed {
-			t.Fatalf("signed-out result = %+v", result)
+			t.Fatalf("missing-evidence result = %+v", result)
 		}
 		if err := result.Validate(); err != nil {
-			t.Fatalf("signed-out result validation: %v", err)
+			t.Fatalf("missing-evidence result validation: %v", err)
 		}
 		if client.hasTarget("owned-1") || !client.hasTarget("user-page") {
-			t.Fatalf("signed-out targets: owned=%v user=%v", client.hasTarget("owned-1"), client.hasTarget("user-page"))
+			t.Fatalf("missing-evidence targets: owned=%v user=%v", client.hasTarget("owned-1"), client.hasTarget("user-page"))
+		}
+		reloadModes := client.reloadModes()
+		if len(reloadModes) != 2 || reloadModes[0] || !reloadModes[1] {
+			t.Fatalf("reload modes = %v, want [false true]", reloadModes)
 		}
 	})
 
@@ -153,6 +157,10 @@ func TestRefreshAuthSignedOutAndBudgetFailureRemainTypedAndClean(t *testing.T) {
 			result.Stage != webagent.StageClosed ||
 			client.callCount("Page.reload") != 2 {
 			t.Fatalf("bounded-timeout result = %+v counts=%+v", result, client.countSnapshot())
+		}
+		reloadModes := client.reloadModes()
+		if len(reloadModes) != 2 || reloadModes[0] || !reloadModes[1] {
+			t.Fatalf("reload modes = %v, want [false true]", reloadModes)
 		}
 		if err := result.Validate(); err != nil {
 			t.Fatalf("bounded-timeout validation: %v", err)
@@ -234,6 +242,41 @@ func TestNetworkObserverRequiresSuccessfulSameOrganizationEvidence(t *testing.T)
 	}
 }
 
+func TestObserveAuthRequestUsesOneTotalTimeoutAcrossReadinessStages(t *testing.T) {
+	client := newAuthFakeClient("user-page")
+	client.emitList = false
+	session, err := cdp.AttachToTargetWithClient(
+		context.Background(),
+		client,
+		"user-page",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("AttachToTargetWithClient: %v", err)
+	}
+
+	started := time.Now()
+	_, found, err := observeAuthRequest(
+		context.Background(),
+		client,
+		session,
+		nil,
+		3,
+		90*time.Millisecond,
+	)
+	elapsed := time.Since(started)
+	if err != nil || found {
+		t.Fatalf("observeAuthRequest = (found=%v, err=%v)", found, err)
+	}
+	if elapsed > 220*time.Millisecond {
+		t.Fatalf("elapsed = %s, total observation timeout was multiplied", elapsed)
+	}
+	reloadModes := client.reloadModes()
+	if len(reloadModes) != 2 || reloadModes[0] || !reloadModes[1] {
+		t.Fatalf("reload modes = %v, want [false true]", reloadModes)
+	}
+}
+
 func newAuthRefreshTestConfig(
 	t *testing.T,
 	stateDir string,
@@ -312,6 +355,7 @@ type authFakeClient struct {
 	renderedDetailText      string
 	renderedDetailPrompt    string
 	renderedDetailStreaming bool
+	reloadIgnoreCache       []bool
 }
 
 func newAuthFakeClient(targetIDs ...string) *authFakeClient {
@@ -390,7 +434,19 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 	switch method {
 	case "Network.enable", "Page.enable", "Runtime.enable":
 		return assignAuthJSON(result, map[string]any{})
-	case "Page.navigate", "Page.reload":
+	case "Page.navigate":
+		if c.emitList {
+			c.events = append(c.events,
+				networkRequestEvent(sessionID, "request-1"),
+				networkResponseEvent(sessionID, "request-1", 200),
+			)
+		}
+		return assignAuthJSON(result, map[string]any{"frameId": "frame-1"})
+	case "Page.reload":
+		c.reloadIgnoreCache = append(
+			c.reloadIgnoreCache,
+			authBoolParam(params, "ignoreCache"),
+		)
 		if c.emitList {
 			c.events = append(c.events,
 				networkRequestEvent(sessionID, "request-1"),
@@ -546,6 +602,12 @@ func (c *authFakeClient) countSnapshot() map[string]int {
 	return out
 }
 
+func (c *authFakeClient) reloadModes() []bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]bool(nil), c.reloadIgnoreCache...)
+}
+
 func networkRequestEvent(sessionID, requestID string) cdp.Event {
 	return cdp.Event{
 		SessionID: sessionID,
@@ -583,6 +645,14 @@ func authStringParam(params any, key string) string {
 	var values map[string]any
 	_ = json.Unmarshal(data, &values)
 	value, _ := values[key].(string)
+	return value
+}
+
+func authBoolParam(params any, key string) bool {
+	data, _ := json.Marshal(params)
+	var values map[string]any
+	_ = json.Unmarshal(data, &values)
+	value, _ := values[key].(bool)
 	return value
 }
 

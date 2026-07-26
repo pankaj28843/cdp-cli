@@ -45,6 +45,16 @@ request template needed for that replay.
 Normal JSON output reports only safe readiness, counts, timestamps, stages,
 target lifecycle, cleanup proof, and executable next commands.
 
+Auth refresh uses one shared bounded readiness sequence: observe the initial
+navigation, observe one ordinary reload, then observe one cache-bypassing hard
+reload and keep observing through a final grace wait. Missing UI, cookie, or
+request evidence after that sequence reports `auth_evidence_not_observed`.
+The command divides one overall deadline across the three stages; a terminal
+CDP observation error remains a connection failure instead of being relabeled
+as auth absence. Absence is not proof that the human-authenticated browser
+session is logged out. A caller should retry only when the result also proves
+no provider mutation occurred and exact target cleanup completed.
+
 The browser-wide headed-input lease is separate from those provider state
 classes:
 
@@ -86,12 +96,14 @@ explicitly requests an incompatible headless mode. It:
 2. checks the headed tab/window budget;
 3. creates and attaches exactly one fresh target;
 4. enables Network on that exact session and navigates to Claude `/new`;
-5. accepts only a successful HTTPS GET whose request and response agree on the
+5. observes the initial load, one ordinary reload, and one cache-bypassing hard
+   reload plus its final grace wait before reporting missing auth evidence;
+6. accepts only a successful HTTPS GET whose request and response agree on the
    observed organization/list endpoint;
-6. reads current Claude cookies from the same session and requires
+7. reads current Claude cookies from the same session and requires
    `sessionKey` or `sessionKeyLC`;
-7. persists the private validated replay template;
-8. records terminal lifecycle state and exact-closes only the owned target.
+8. persists the private validated replay template;
+9. records terminal lifecycle state and exact-closes only the owned target.
 
 No prompt is inserted and no raw input action is dispatched. Live acceptance
 must compare successful conversation-list fingerprints before and after and
@@ -161,7 +173,8 @@ cdp --timeout 1m workflow agent gemini calibration cleanup --json
 The browser-free capability result combines the installed static operation
 contract with the last safe runtime observation. `doctor` reads only local auth
 and runtime evidence. `auth refresh` owns one fresh headed target, observes the
-signed-in surface and session-cookie names, stores only booleans and a
+signed-in surface and session-cookie names across the shared bounded readiness
+sequence, stores only booleans and a
 timestamp, submits no prompt, and exact-closes. `capabilities refresh` similarly
 observes the unique mode picker, mode labels, upload control, and current
 deep-research selection; it does not select a new mode or submit.

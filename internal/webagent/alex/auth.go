@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -131,44 +132,6 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					cleanupCommands(runID, pending),
 				)
 			}
-			var identity browserIdentity
-			_, err := pollUntil(
-				ctx,
-				config.Timeout,
-				config.PollInterval,
-				func() (bool, error) {
-					if err := observeBrowserIdentity(ctx, session, &identity); err != nil {
-						return false, err
-					}
-					return strings.HasPrefix(
-						identity.URL,
-						Origin+"/courses/",
-					) && identity.BodyReady &&
-						strings.TrimSpace(identity.UserAgent) != "", nil
-				},
-			)
-			if err != nil {
-				_ = lease.MarkIncomplete(context.Background())
-				return operationFailure(
-					runID,
-					config.BuildCommit,
-					webagent.OperationAuthRefresh,
-					webagent.StageAttached,
-					"browser_observed_request_template",
-					target,
-					pending,
-					nil,
-					"alex_auth_page_not_ready",
-					"auth",
-					"Signed-in ByteByteGo page evidence did not become ready",
-					"",
-					data,
-					[]string{
-						"Sign in to ByteByteGo in headed Chrome.",
-						"cdp workflow agent alex auth refresh --json",
-					},
-				)
-			}
 			if err := lease.MarkPrepared(ctx); err != nil {
 				return operationFailure(
 					runID,
@@ -188,36 +151,71 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 				)
 			}
 
+			var identity browserIdentity
 			var cookies map[string]string
-			for attempt := 1; attempt <= 3; attempt++ {
-				data.ObservationAttempts = attempt
-				observed, observeErr := observeCookies(ctx, session)
-				if observeErr == nil {
+			readiness, readinessErr := authreadiness.WaitForEvidence(
+				ctx,
+				session,
+				3,
+				config.Timeout,
+				config.PollInterval,
+				func(observationCtx context.Context) (bool, error) {
+					if err := observeBrowserIdentity(
+						observationCtx,
+						session,
+						&identity,
+					); err != nil {
+						return false, err
+					}
+					pageEvidenceReady := strings.HasPrefix(
+						identity.URL,
+						Origin+"/courses/",
+					) && identity.BodyReady &&
+						strings.TrimSpace(identity.UserAgent) != ""
+					if !pageEvidenceReady {
+						return false, nil
+					}
+					observed, observeErr := observeCookies(
+						observationCtx,
+						session,
+					)
+					if observeErr != nil {
+						return false, observeErr
+					}
 					data.CookieCount = len(observed)
 					csrf := decodedCookieValue(observed["csrf-token"])
 					token := observed["token"]
-					if csrf != "" && token != "" && !jwtExpired(token, nowFor(config.Now)) {
-						cookies = observed
-						break
+					if csrf == "" || token == "" ||
+						jwtExpired(token, nowFor(config.Now)) {
+						return false, nil
 					}
-				}
-				if attempt < 3 {
-					if reloadErr := session.Reload(ctx, true); reloadErr != nil {
-						break
-					}
-					_, _ = pollUntil(
-						ctx,
-						10*time.Second,
-						config.PollInterval,
-						func() (bool, error) {
-							return pageReady(ctx, session, chapterURL)
-						},
-					)
-				}
-			}
-			if cookies == nil {
+					cookies = observed
+					return true, nil
+				},
+			)
+			data.ObservationAttempts = readiness.Attempt
+			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
-				data.AuthState = "missing_browser_auth"
+				return operationFailure(
+					runID,
+					config.BuildCommit,
+					webagent.OperationAuthRefresh,
+					webagent.StagePrepared,
+					"browser_observed_request_template",
+					target,
+					pending,
+					nil,
+					"alex_auth_readiness_failed",
+					"connection",
+					"Ask Alex auth readiness could not complete its bounded load, reload, hard-reload, and grace-wait sequence",
+					"",
+					data,
+					cleanupCommands(runID, pending),
+				)
+			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				data.AuthState = "evidence_not_observed"
 				return operationFailure(
 					runID,
 					config.BuildCommit,
@@ -227,13 +225,12 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					target,
 					pending,
 					nil,
-					"alex_signed_out",
+					"alex_auth_evidence_not_observed",
 					"auth",
-					"ByteByteGo token and CSRF cookie evidence was not observed after three bounded attempts",
+					"ByteByteGo auth evidence was not observed after initial load, reload, cache-bypassing hard reload, and final grace wait; the browser session may still be active",
 					"",
 					data,
 					[]string{
-						"Sign in to ByteByteGo in headed Chrome.",
 						"cdp workflow agent alex auth refresh --json",
 					},
 				)

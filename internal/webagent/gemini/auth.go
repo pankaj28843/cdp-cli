@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
@@ -28,6 +29,7 @@ type AuthRefreshData struct {
 	SchemaVersion         string `json:"schema_version"`
 	AuthState             string `json:"auth_state"`
 	StatePath             string `json:"state_path"`
+	ComposerReady         bool   `json:"composer_ready"`
 	SignedIn              bool   `json:"signed_in"`
 	SessionCookieObserved bool   `json:"session_cookie_observed"`
 	CookieCount           int    `json:"cookie_count"`
@@ -45,8 +47,8 @@ type DoctorData struct {
 }
 
 type authObservation struct {
-	SignedIn    bool `json:"signed_in"`
-	PromptReady bool `json:"prompt_ready"`
+	ComposerReady bool `json:"composer_ready"`
+	PromptReady   bool `json:"prompt_ready"`
 }
 
 func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result {
@@ -66,6 +68,12 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 			"Gemini owner-only auth state is unavailable", "",
 			data, []string{"cdp doctor --json"},
 		)
+	}
+	if config.Timeout <= 0 {
+		config.Timeout = 30 * time.Second
+	}
+	if config.PollInterval <= 0 {
+		config.PollInterval = 250 * time.Millisecond
 	}
 	return runOwned(
 		ctx,
@@ -101,32 +109,67 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					data, cleanupCommands(runID, pending),
 				)
 			}
+			const readinessAttempts = 3
 			var observation authObservation
-			_, err := pollUntil(ctx, config.Timeout, config.PollInterval, func() (bool, error) {
-				if err := evaluateInto(ctx, session, `(() => {
-				  const editor = document.querySelector('[role=textbox][contenteditable=true]');
-				  return {signed_in: Boolean(editor), prompt_ready: Boolean(editor)};
-				})()`, &observation); err != nil {
-					return false, err
-				}
-				return observation.SignedIn && observation.PromptReady, nil
-			})
-			cookieCount, sessionCookie, cookieErr := observeSessionCookies(ctx, session)
-			data.SignedIn = observation.SignedIn && observation.PromptReady
-			data.SessionCookieObserved = sessionCookie
-			data.CookieCount = cookieCount
-			if err != nil || cookieErr != nil || !data.SignedIn || !sessionCookie {
+			readiness, readinessErr := authreadiness.WaitForEvidence(
+				ctx,
+				session,
+				readinessAttempts,
+				config.Timeout,
+				config.PollInterval,
+				func(observationCtx context.Context) (bool, error) {
+					if err := evaluateInto(observationCtx, session, `(() => {
+					  const editor = document.querySelector('[role=textbox][contenteditable=true]');
+					  return {composer_ready: Boolean(editor), prompt_ready: Boolean(editor)};
+					})()`, &observation); err != nil {
+						return false, err
+					}
+					data.ComposerReady = observation.ComposerReady &&
+						observation.PromptReady
+					cookieCount, sessionCookie, cookieErr :=
+						observeSessionCookies(observationCtx, session)
+					if cookieErr != nil {
+						return false, cookieErr
+					}
+					data.CookieCount = cookieCount
+					data.SessionCookieObserved = sessionCookie
+					data.SignedIn = data.ComposerReady &&
+						data.SessionCookieObserved
+					return data.SignedIn, nil
+				},
+			)
+			if readinessErr != nil {
 				_ = lease.MarkIncomplete(context.Background())
-				data.AuthState = "signed_out"
+				return operationFailure(
+					runID, config.BuildCommit, webagent.OperationAuthRefresh,
+					webagent.StagePrepared, "browser_observed_auth",
+					target, pending, nil, nil,
+					"gemini_auth_readiness_failed", "connection",
+					"Gemini auth readiness could not complete its bounded load, reload, hard-reload, and grace-wait sequence", "",
+					data, cleanupCommands(runID, pending),
+				)
+			}
+			if !data.SignedIn || !data.SessionCookieObserved {
+				_ = lease.MarkIncomplete(context.Background())
+				if readiness.ObservationFailed() {
+					return operationFailure(
+						runID, config.BuildCommit, webagent.OperationAuthRefresh,
+						webagent.StageObserveTerminal, "browser_observed_auth",
+						target, pending, nil, nil,
+						"gemini_cookie_observation_failed", "connection",
+						"Gemini cookie evidence could not be read after the bounded readiness sequence", "",
+						data, cleanupCommands(runID, pending),
+					)
+				}
+				data.AuthState = "evidence_not_observed"
 				return operationFailure(
 					runID, config.BuildCommit, webagent.OperationAuthRefresh,
 					webagent.StageObserveTerminal, "browser_observed_auth",
 					target, pending, nil, nil,
-					"gemini_signed_out", "auth",
-					"Signed-in Gemini browser evidence was not observed", "",
+					"gemini_auth_evidence_not_observed", "auth",
+					"Gemini auth evidence was not observed after initial load, reload, cache-bypassing hard reload, and final grace wait; the browser session may still be active", "",
 					data,
 					[]string{
-						"Sign in to Gemini in headed Chrome.",
 						"cdp workflow agent gemini auth refresh --json",
 					},
 				)

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -94,7 +95,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 	if config.ObservationTimeout <= 0 {
 		config.ObservationTimeout = defaultObservationTimeout
 	}
-	if config.ObservationAttempts <= 0 {
+	if config.ObservationAttempts < defaultObservationAttempts {
 		config.ObservationAttempts = defaultObservationAttempts
 	}
 	return runOwned(
@@ -129,6 +130,60 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					data,
 				)
 			}
+			var cookies map[string]string
+			readiness, readinessErr := authreadiness.WaitForEvidence(
+				ctx,
+				session,
+				config.ObservationAttempts,
+				config.ObservationTimeout,
+				250*time.Millisecond,
+				func(observationCtx context.Context) (bool, error) {
+					observedCookies, cookieErr := readCookies(
+						observationCtx,
+						session,
+					)
+					if cookieErr != nil {
+						return false, cookieErr
+					}
+					data.CookieCount = len(observedCookies)
+					data.SessionCookieObserved =
+						hasSessionCookie(observedCookies)
+					signedIn, uiErr := observeSignedInUI(
+						observationCtx,
+						session,
+					)
+					if uiErr != nil {
+						return false, uiErr
+					}
+					data.SignedInUIObserved = signedIn
+					if !data.SessionCookieObserved ||
+						!data.SignedInUIObserved {
+						return false, nil
+					}
+					cookies = observedCookies
+					return true, nil
+				},
+			)
+			if readinessErr != nil || readiness.ObservationFailed() {
+				_ = lease.MarkIncomplete(context.Background())
+				return authFailure(
+					runID, config, webagent.StagePrepared, target, pending,
+					"chatgpt_auth_observation_failed", "connection",
+					"ChatGPT auth readiness could not complete its bounded load, reload, hard-reload, and grace-wait sequence",
+					data,
+				)
+			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				data.AuthState = "evidence_not_observed"
+				return authFailure(
+					runID, config, webagent.StageObserveTerminal, target, pending,
+					"chatgpt_auth_evidence_not_observed", "auth",
+					"ChatGPT auth evidence was not observed after initial load, reload, cache-bypassing hard reload, and final grace wait; the browser session may still be active",
+					data,
+				)
+			}
+
 			existing := loadExistingTemplate(ctx, config.Store)
 			observation, found, err := observeReadRequest(
 				ctx,
@@ -143,29 +198,6 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					runID, config, webagent.StagePrepared, target, pending,
 					"chatgpt_auth_observation_failed", "connection",
 					"ChatGPT conversation-read request observation failed on the exact headed target",
-					data,
-				)
-			}
-			cookies, err := readCookies(ctx, session)
-			if err != nil {
-				_ = lease.MarkIncomplete(context.Background())
-				return authFailure(
-					runID, config, webagent.StagePrepared, target, pending,
-					"chatgpt_cookie_observation_failed", "connection",
-					"ChatGPT cookie evidence could not be read from the exact headed target",
-					data,
-				)
-			}
-			data.CookieCount = len(cookies)
-			data.SessionCookieObserved = hasSessionCookie(cookies)
-			data.SignedInUIObserved = signedInUIObserved(ctx, session)
-			if !data.SessionCookieObserved || !data.SignedInUIObserved {
-				_ = lease.MarkIncomplete(context.Background())
-				data.AuthState = "signed_out"
-				return authFailure(
-					runID, config, webagent.StageObserveTerminal, target, pending,
-					"chatgpt_signed_out", "auth",
-					"Signed-in ChatGPT UI and session-cookie evidence were not both observed",
 					data,
 				)
 			}
@@ -345,37 +377,54 @@ func observeReadRequest(
 	wait time.Duration,
 ) (readObservation, bool, error) {
 	observer := authNetworkObserver{records: map[string]*authRequestRecord{}}
-	for attempt := 1; attempt <= attempts; attempt++ {
-		if attempt > 1 {
-			if err := session.Reload(ctx, false); err != nil {
-				return readObservation{}, false, err
+	var selected readObservation
+	readiness, err := authreadiness.WaitForEvidence(
+		ctx,
+		session,
+		attempts,
+		wait,
+		time.Millisecond,
+		func(observationCtx context.Context) (bool, error) {
+			readCtx, cancelRead, sliceErr :=
+				authreadiness.SubObservationContext(
+					observationCtx,
+					250*time.Millisecond,
+				)
+			if sliceErr != nil {
+				return false, sliceErr
 			}
-		}
-		attemptCtx, cancel := context.WithTimeout(ctx, wait)
-		for {
-			event, err := client.ReadEvent(attemptCtx)
-			if err != nil {
-				if attemptCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
-					cancel()
-					if ctx.Err() != nil {
-						return readObservation{}, false, ctx.Err()
-					}
-					break
+			event, readErr := client.ReadEvent(readCtx)
+			readExpired := readCtx.Err() != nil
+			stageExpired := observationCtx.Err() != nil
+			cancelRead()
+			if readErr != nil {
+				if readExpired && !stageExpired {
+					return false, nil
 				}
-				cancel()
-				return readObservation{}, false, err
+				if stageExpired ||
+					errors.Is(readErr, context.DeadlineExceeded) {
+					return false, nil
+				}
+				return false, readErr
 			}
 			if event.SessionID != session.SessionID {
-				continue
+				return false, nil
 			}
 			observer.add(event)
-			if observation, ok := observer.selectRead(); ok {
-				cancel()
-				return observation, true, nil
+			observation, ok := observer.selectRead()
+			if ok {
+				selected = observation
 			}
-		}
+			return ok, nil
+		},
+	)
+	if err != nil {
+		return readObservation{}, false, err
 	}
-	return readObservation{}, false, nil
+	if readiness.ObservationFailed() {
+		return readObservation{}, false, readiness.LastObservationError
+	}
+	return selected, readiness.Observed, nil
 }
 
 func (o *authNetworkObserver) add(event cdp.Event) {
@@ -528,24 +577,51 @@ func hasSessionCookie(cookies map[string]string) bool {
 	return false
 }
 
-func signedInUIObserved(ctx context.Context, session *cdp.PageSession) bool {
+func signedInUIObservedWithReadiness(
+	ctx context.Context,
+	session *cdp.PageSession,
+) (bool, error) {
+	const attempts = 3
+	readiness, err := authreadiness.WaitForEvidence(
+		ctx,
+		session,
+		attempts,
+		15*time.Second,
+		250*time.Millisecond,
+		func(observationCtx context.Context) (bool, error) {
+			return observeSignedInUI(observationCtx, session)
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	if readiness.ObservationFailed() {
+		return false, readiness.LastObservationError
+	}
+	return readiness.Observed, nil
+}
+
+func observeSignedInUI(
+	ctx context.Context,
+	session *cdp.PageSession,
+) (bool, error) {
 	var result struct {
 		SignedIn  bool `json:"signed_in"`
 		SignedOut bool `json:"signed_out"`
 	}
-	_, err := pollUntil(ctx, 15*time.Second, 250*time.Millisecond, func() (bool, error) {
-		err := evaluateInto(ctx, session, `(() => {
-		  const text = String(document.body && document.body.innerText || '');
-		  const composer = document.querySelector('#prompt-textarea') ||
-		    document.querySelector('[contenteditable="true"][role="textbox"]');
-		  return {
-		    signed_in: Boolean(composer) || /\b(New chat|Chat history|How can I help)\b/i.test(text),
-		    signed_out: /\b(Log in|Sign up)\b/i.test(text)
-		  };
-		})()`, &result)
-		return err == nil && result.SignedIn && !result.SignedOut, err
-	})
-	return err == nil && result.SignedIn && !result.SignedOut
+	err := evaluateInto(ctx, session, `(() => {
+	  const text = String(document.body && document.body.innerText || '');
+	  const composer = document.querySelector('#prompt-textarea') ||
+	    document.querySelector('[contenteditable="true"][role="textbox"]');
+	  return {
+	    signed_in: Boolean(composer) || /\b(New chat|Chat history|How can I help)\b/i.test(text),
+	    signed_out: /\b(Log in|Sign up)\b/i.test(text)
+	  };
+	})()`, &result)
+	if err != nil {
+		return false, err
+	}
+	return result.SignedIn && !result.SignedOut, nil
 }
 
 func normalizeReplayHeaders(raw map[string]any) map[string]string {

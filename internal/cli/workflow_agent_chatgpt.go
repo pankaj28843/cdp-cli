@@ -111,9 +111,10 @@ func (a *app) newWorkflowAgentChatGPTAuthCommand() *cobra.Command {
 func (a *app) newWorkflowAgentChatGPTConversationsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "conversations",
-		Short: "Read exact stored ChatGPT conversations",
-		Long: "Use browser-observed auth state for bounded stable HTTP reads. " +
-			"These commands never submit, continue, or delete a conversation.",
+		Short: "Read or continue exact stored ChatGPT conversations",
+		Long: "Use browser-observed auth state for bounded stable reads and " +
+			"explicit headed operations on one exact conversation. Read commands " +
+			"do not mutate provider state; continue and delete remain explicit.",
 	}
 	cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsListCommand())
 	cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsContinueCommand())

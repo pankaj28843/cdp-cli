@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -118,17 +119,41 @@ func RefreshAuth(
 					data,
 				)
 			}
-			observation, attempts, panelOpened, newChatOpened, err :=
-				ensureSession(
+			const readinessAttempts = 3
+			stageWait := config.Timeout / readinessAttempts
+			if stageWait <= 0 {
+				stageWait = config.Timeout
+			}
+			var observation sessionObservation
+			var readinessErr error
+			for attempt := 1; attempt <= readinessAttempts; attempt++ {
+				if _, err := authreadiness.PrepareAttempt(
 					ctx,
 					session,
-					config.Timeout,
-					config.PollInterval,
-					false,
-				)
-			data.Attempts = attempts
-			data.PanelOpened = panelOpened
-			data.NewChatOpened = newChatOpened
+					attempt,
+					readinessAttempts,
+				); err != nil {
+					readinessErr = err
+					break
+				}
+				stageObservation, attempts, panelOpened, newChatOpened, err :=
+					ensureSession(
+						ctx,
+						session,
+						stageWait,
+						config.PollInterval,
+						false,
+					)
+				observation = stageObservation
+				data.Attempts += attempts
+				data.PanelOpened = data.PanelOpened || panelOpened
+				data.NewChatOpened = data.NewChatOpened || newChatOpened
+				if err == nil {
+					readinessErr = nil
+					break
+				}
+				readinessErr = err
+			}
 			data.PanelReady = observation.PanelReady
 			data.ComposerReady = observation.ComposerReady
 			data.HistoryReady = observation.HistoryReady
@@ -137,14 +162,14 @@ func RefreshAuth(
 			} else {
 				data.SessionMode = "signed_in"
 			}
-			if err != nil {
+			if readinessErr != nil {
 				_ = lease.MarkIncomplete(context.Background())
 				data.AuthState = "rendered_session_unavailable"
 				return authFailure(
 					runID, config, webagent.StageAttached,
 					target, pending,
 					"tripadvisor_rendered_session_unavailable", "auth",
-					"Tripadvisor AI panel, composer, and history controls did not become ready",
+					"Tripadvisor AI panel, composer, and history controls did not become ready after initial load, reload, cache-bypassing hard reload, and final grace wait; authenticated or anonymous session state may still be active",
 					data,
 				)
 			}

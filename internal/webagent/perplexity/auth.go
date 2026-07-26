@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -86,7 +87,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 	if config.ObservationTimeout <= 0 {
 		config.ObservationTimeout = defaultObservationTimeout
 	}
-	if config.ObservationAttempts <= 0 {
+	if config.ObservationAttempts < defaultObservationAttempts {
 		config.ObservationAttempts = defaultObservationAttempts
 	}
 	return runOwned(
@@ -121,6 +122,51 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					data,
 				)
 			}
+			var cookies map[string]string
+			readiness, readinessErr := authreadiness.WaitForEvidence(
+				ctx,
+				session,
+				config.ObservationAttempts,
+				config.ObservationTimeout,
+				250*time.Millisecond,
+				func(observationCtx context.Context) (bool, error) {
+					observedCookies, cookieErr := readCookies(
+						observationCtx,
+						session,
+					)
+					if cookieErr != nil {
+						return false, cookieErr
+					}
+					data.CookieCount = len(observedCookies)
+					data.SessionCookieObserved =
+						hasSessionCookie(observedCookies)
+					if !data.SessionCookieObserved {
+						return false, nil
+					}
+					cookies = observedCookies
+					return true, nil
+				},
+			)
+			if readinessErr != nil || readiness.ObservationFailed() {
+				_ = lease.MarkIncomplete(context.Background())
+				return authFailure(
+					runID, config, webagent.StagePrepared, target, pending,
+					"perplexity_auth_readiness_failed", "connection",
+					"Perplexity auth readiness could not complete its bounded load, reload, hard-reload, and grace-wait sequence",
+					data,
+				)
+			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				data.AuthState = "evidence_not_observed"
+				return authFailure(
+					runID, config, webagent.StageObserveTerminal, target, pending,
+					"perplexity_auth_evidence_not_observed", "auth",
+					"Perplexity auth evidence was not observed after initial load, reload, cache-bypassing hard reload, and final grace wait; the browser session may still be active",
+					data,
+				)
+			}
+
 			existing := loadExistingTemplate(ctx, config.Store)
 			observation, found, err := observeListRequest(
 				ctx,
@@ -135,28 +181,6 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					runID, config, webagent.StagePrepared, target, pending,
 					"perplexity_auth_observation_failed", "connection",
 					"Perplexity auth request observation failed on the exact headed target",
-					data,
-				)
-			}
-			cookies, err := readCookies(ctx, session)
-			if err != nil {
-				_ = lease.MarkIncomplete(context.Background())
-				return authFailure(
-					runID, config, webagent.StagePrepared, target, pending,
-					"perplexity_cookie_observation_failed", "connection",
-					"Perplexity cookie evidence could not be read from the exact headed target",
-					data,
-				)
-			}
-			data.CookieCount = len(cookies)
-			data.SessionCookieObserved = hasSessionCookie(cookies)
-			if !data.SessionCookieObserved {
-				_ = lease.MarkIncomplete(context.Background())
-				data.AuthState = "signed_out"
-				return authFailure(
-					runID, config, webagent.StageObserveTerminal, target, pending,
-					"perplexity_signed_out", "auth",
-					"Signed-in Perplexity cookie evidence was not observed",
 					data,
 				)
 			}
@@ -337,37 +361,54 @@ func observeListRequest(
 	wait time.Duration,
 ) (listObservation, bool, error) {
 	observer := networkObserver{records: map[string]*requestRecord{}}
-	for attempt := 1; attempt <= attempts; attempt++ {
-		if attempt > 1 {
-			if err := session.Reload(ctx, false); err != nil {
-				return listObservation{}, false, err
+	var selected listObservation
+	readiness, err := authreadiness.WaitForEvidence(
+		ctx,
+		session,
+		attempts,
+		wait,
+		time.Millisecond,
+		func(observationCtx context.Context) (bool, error) {
+			readCtx, cancelRead, sliceErr :=
+				authreadiness.SubObservationContext(
+					observationCtx,
+					250*time.Millisecond,
+				)
+			if sliceErr != nil {
+				return false, sliceErr
 			}
-		}
-		attemptCtx, cancel := context.WithTimeout(ctx, wait)
-		for {
-			event, err := client.ReadEvent(attemptCtx)
-			if err != nil {
-				if attemptCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
-					cancel()
-					if ctx.Err() != nil {
-						return listObservation{}, false, ctx.Err()
-					}
-					break
+			event, readErr := client.ReadEvent(readCtx)
+			readExpired := readCtx.Err() != nil
+			stageExpired := observationCtx.Err() != nil
+			cancelRead()
+			if readErr != nil {
+				if readExpired && !stageExpired {
+					return false, nil
 				}
-				cancel()
-				return listObservation{}, false, err
+				if stageExpired ||
+					errors.Is(readErr, context.DeadlineExceeded) {
+					return false, nil
+				}
+				return false, readErr
 			}
 			if event.SessionID != session.SessionID {
-				continue
+				return false, nil
 			}
 			observer.add(event)
-			if observation, ok := observer.selectList(); ok {
-				cancel()
-				return observation, true, nil
+			observation, ok := observer.selectList()
+			if ok {
+				selected = observation
 			}
-		}
+			return ok, nil
+		},
+	)
+	if err != nil {
+		return listObservation{}, false, err
 	}
-	return listObservation{}, false, nil
+	if readiness.ObservationFailed() {
+		return listObservation{}, false, readiness.LastObservationError
+	}
+	return selected, readiness.Observed, nil
 }
 
 func (o *networkObserver) add(event cdp.Event) {

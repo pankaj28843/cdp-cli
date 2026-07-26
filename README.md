@@ -100,6 +100,15 @@ Capability metadata does not attach to Chrome. Provider doctor/auth/ask/CRUD
 commands are added only after their concrete installed browser workflows pass
 the corresponding safety and usefulness gates.
 
+Auth refresh treats missing browser evidence as uncertainty, not proof of
+logout. Each supported provider gets one initial-load observation, one ordinary
+reload observation, and one final cache-bypassing hard-reload observation
+plus a grace wait on that final page. One overall readiness deadline is divided
+across those three stages; it is never multiplied per stage. If the required
+UI, cookie, or request evidence is still absent, the typed result reports
+`auth_evidence_not_observed` and states that the browser session may remain
+active.
+
 Claude, Gemini, and Grok advertise browser-free `doctor`; no-turn headed `auth
 refresh`; fresh-conversation headed `ask`; list/detail/await/delete
 conversation operations; and explicit one-target `calibrate`. Every browser

@@ -205,7 +205,7 @@ func ListConversations(
 					); err != nil {
 						return false, err
 					}
-					return observation.DrawerReady, nil
+					return conversationListReady(observation), nil
 				},
 			)
 			data.Metadata["list_attempts"] = listAttempts
@@ -216,6 +216,11 @@ func ListConversations(
 			if observation.OmittedNoID > 0 {
 				data.Metadata["identity_policy"] =
 					"title_only_entries_omitted_without_guessing"
+			}
+			if !observation.DrawerReady &&
+				observation.RenderedTitles > 0 {
+				data.Metadata["history_surface"] =
+					"rendered_rows_without_legacy_markers"
 			}
 			if err != nil {
 				_ = lease.MarkIncomplete(context.Background())
@@ -271,6 +276,10 @@ func ListConversations(
 			)
 		},
 	)
+}
+
+func conversationListReady(observation listObservation) bool {
+	return observation.DrawerReady || observation.RenderedTitles > 0
 }
 
 func DetailConversation(

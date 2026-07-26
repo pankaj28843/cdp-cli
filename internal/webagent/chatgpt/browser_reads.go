@@ -326,11 +326,19 @@ func prepareBrowserRead(
 			message:  "ChatGPT stable browser-context read could not prepare the exact target",
 		}
 	}
-	if !signedInUIObserved(ctx, lease.Session()) {
+	signedIn, err := signedInUIObservedWithReadiness(ctx, lease.Session())
+	if err != nil {
 		return &readFailure{
-			code:     "chatgpt_signed_out",
+			code:     "chatgpt_browser_read_readiness_failed",
+			errClass: "connection",
+			message:  "ChatGPT stable browser-context read could not complete its bounded reload sequence",
+		}
+	}
+	if !signedIn {
+		return &readFailure{
+			code:     "chatgpt_auth_evidence_not_observed",
 			errClass: "auth",
-			message:  "Signed-in ChatGPT UI was not observed before the stable read",
+			message:  "ChatGPT auth UI evidence was not observed after initial load, reload, and cache-bypassing hard reload; the browser session may still be active",
 		}
 	}
 	if err := lease.MarkPrepared(ctx); err != nil {
