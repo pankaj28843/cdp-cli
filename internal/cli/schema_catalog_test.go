@@ -47,6 +47,16 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"describe",
 		"doctor",
 		"doctor-capabilities",
+		"webagent-operation",
+		"webagent-capabilities",
+		"webagent-provider-catalog",
+		"webagent-operation-capability",
+		"webagent-action",
+		"webagent-error",
+		"webagent-conversation",
+		"webagent-target",
+		"webagent-evidence",
+		"webagent-cleanup",
 		"error-envelope",
 		"cron",
 		"cron-profile-seed",
@@ -110,6 +120,60 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		if _, ok := catalog[name]; !ok {
 			t.Fatalf("schemaCatalog() missing critical schema %q", name)
 		}
+	}
+}
+
+func TestSchemaCatalogWebAgentContracts(t *testing.T) {
+	catalog := schemaCatalog()
+	operation := catalog["webagent-operation"]
+	for _, field := range []string{
+		"ok",
+		"schema_version",
+		"provider",
+		"operation",
+		"state",
+		"stage",
+		"data",
+		"evidence",
+		"cleanup",
+		"next_commands",
+	} {
+		if !catalogSchemaHasField(operation, field) {
+			t.Fatalf("webagent-operation schema missing %q: %+v", field, operation)
+		}
+	}
+	if !catalogSchemaFieldContains(operation, "action", "webagent_action", "tri-state", "retry") ||
+		!catalogSchemaFieldContains(operation, "error", "webagent_error", "code", "class", "retry") ||
+		!catalogSchemaFieldContains(operation, "data", "provider_specific", "never reduces", "counts") ||
+		!catalogSchemaFieldContains(operation, "cleanup", "webagent_cleanup", "exact target", "recovery") {
+		t.Fatalf("webagent-operation semantics are incomplete: %+v", operation)
+	}
+
+	capabilities := catalog["webagent-capabilities"]
+	if !catalogSchemaFieldContains(capabilities, "operations", "array<webagent_operation_capability>", "status", "support", "side effect", "browser") {
+		t.Fatalf("webagent-capabilities semantics are incomplete: %+v", capabilities)
+	}
+	action := catalog["webagent-action"]
+	if !catalogSchemaFieldContains(action, "dispatch", "string", "performed", "not_performed", "unknown", "retry") ||
+		!catalogSchemaFieldContains(action, "attempt_count", "number", "Bounded", "not_performed") ||
+		!catalogSchemaFieldContains(action, "raw_input_count", "number", "never exceed one") ||
+		!catalogSchemaFieldContains(action, "pending_persisted", "boolean", "before raw input") {
+		t.Fatalf("webagent-action semantics are incomplete: %+v", action)
+	}
+	operationError := catalog["webagent-error"]
+	if !catalogSchemaFieldContains(operationError, "err_class", "string", "failure class") ||
+		!catalogSchemaFieldContains(operationError, "retry_safe", "boolean", "duplicate", "irreversible") ||
+		!catalogSchemaFieldContains(operationError, "retry_at", "string", "never overrides dispatch safety") {
+		t.Fatalf("webagent-error semantics are incomplete: %+v", operationError)
+	}
+	target := catalog["webagent-target"]
+	if !catalogSchemaFieldContains(target, "target_id", "string", "Exact CDP target ID") ||
+		!catalogSchemaFieldContains(target, "closed", "boolean", "exact target disappearance") {
+		t.Fatalf("webagent-target semantics are incomplete: %+v", target)
+	}
+	cleanup := catalog["webagent-cleanup"]
+	if !catalogSchemaFieldContains(cleanup, "recovery_command", "string", "exact recorded target", "never a broad") {
+		t.Fatalf("webagent-cleanup semantics are incomplete: %+v", cleanup)
 	}
 }
 

@@ -1,0 +1,1097 @@
+package chatgpt
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/pankaj28843/cdp-cli/internal/admission"
+	"github.com/pankaj28843/cdp-cli/internal/webagent"
+)
+
+const (
+	ConversationListSchemaVersion   = "chatgpt-conversation-list/v1"
+	ConversationDetailSchemaVersion = "chatgpt-conversation-detail/v1"
+	ConversationDetailRoute         = "/backend-api/conversation/:conversation_id"
+	maxChatGPTResponseBytes         = 32 << 20
+)
+
+var (
+	conversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+	defaultAwaitDelays    = []time.Duration{
+		time.Second,
+		2 * time.Second,
+		3 * time.Second,
+		5 * time.Second,
+		8 * time.Second,
+		13 * time.Second,
+		20 * time.Second,
+		30 * time.Second,
+	}
+)
+
+type ReadConfig struct {
+	Store         *Store
+	Admission     *admission.Gate
+	BrowserConfig *BrowserConfig
+	HTTPClient    *http.Client
+	BuildCommit   string
+	Now           func() time.Time
+	AwaitDelays   []time.Duration
+}
+
+type ConversationSummary struct {
+	ID               string         `json:"conversation_id"`
+	Title            string         `json:"title,omitempty"`
+	ShortDescription string         `json:"short_description"`
+	CreateTime       any            `json:"create_time,omitempty"`
+	UpdateTime       any            `json:"update_time,omitempty"`
+	URL              string         `json:"url"`
+	Metadata         map[string]any `json:"metadata"`
+}
+
+type ConversationListData struct {
+	SchemaVersion string                `json:"schema_version"`
+	StatusCode    int                   `json:"status_code"`
+	Conversations []ConversationSummary `json:"conversations"`
+	ReadMode      string                `json:"read_mode"`
+	Metadata      map[string]any        `json:"metadata"`
+}
+
+type ConversationDetailData struct {
+	SchemaVersion   string         `json:"schema_version"`
+	StatusCode      int            `json:"status_code"`
+	ConversationID  string         `json:"conversation_id"`
+	Text            string         `json:"text"`
+	CompletionState string         `json:"completion_state"`
+	ReadMode        string         `json:"read_mode"`
+	Metadata        map[string]any `json:"metadata"`
+}
+
+type readFailure struct {
+	code         string
+	errClass     string
+	message      string
+	retryAt      time.Time
+	statusCode   int
+	nextCommands []string
+}
+
+func UnavailableRead(
+	buildCommit string,
+	operation webagent.Operation,
+	code string,
+	errClass string,
+	message string,
+) webagent.Result {
+	schema := ConversationDetailSchemaVersion
+	if operation == webagent.OperationConversationsList {
+		schema = ConversationListSchemaVersion
+	}
+	return readFailureResult(
+		webagent.NewRunID(),
+		buildCommit,
+		operation,
+		readFailure{code: code, errClass: errClass, message: message},
+		map[string]any{"schema_version": schema},
+		nil,
+	)
+}
+
+func ListConversations(
+	ctx context.Context,
+	config ReadConfig,
+	limit int,
+	offset int,
+) webagent.Result {
+	runID := webagent.NewRunID()
+	if limit < 1 || limit > 100 || offset < 0 {
+		return readFailureResult(
+			runID,
+			config.BuildCommit,
+			webagent.OperationConversationsList,
+			readFailure{
+				code:     "chatgpt_invalid_list_window",
+				errClass: "usage",
+				message:  "ChatGPT list requires limit between 1 and 100 and a non-negative offset",
+			},
+			map[string]any{
+				"schema_version": ConversationListSchemaVersion,
+				"limit":          limit,
+				"offset":         offset,
+			},
+			nil,
+		)
+	}
+	if config.BrowserConfig != nil {
+		return listConversationsViaBrowser(ctx, config, limit, offset)
+	}
+	template, failure := loadFreshReadTemplate(ctx, config)
+	if failure != nil {
+		return readFailureResult(
+			runID,
+			config.BuildCommit,
+			webagent.OperationConversationsList,
+			*failure,
+			map[string]any{"schema_version": ConversationListSchemaVersion},
+			nil,
+		)
+	}
+	lease, failure := acquireReadAdmission(
+		ctx,
+		config,
+		runID,
+		webagent.OperationConversationsList,
+	)
+	if failure != nil {
+		return readFailureResult(
+			runID,
+			config.BuildCommit,
+			webagent.OperationConversationsList,
+			*failure,
+			map[string]any{"schema_version": ConversationListSchemaVersion},
+			nil,
+		)
+	}
+	data, failure := fetchConversationList(ctx, config, template, limit, offset)
+	if failure != nil {
+		result := readFailureResult(
+			runID,
+			config.BuildCommit,
+			webagent.OperationConversationsList,
+			*failure,
+			data,
+			nil,
+		)
+		return releaseReadAdmission(result, lease, failure.retryAt)
+	}
+	return releaseReadAdmission(
+		readSuccessResult(
+			runID,
+			config.BuildCommit,
+			webagent.OperationConversationsList,
+			webagent.StateReady,
+			data,
+			nil,
+		),
+		lease,
+		time.Time{},
+	)
+}
+
+func DetailConversation(
+	ctx context.Context,
+	config ReadConfig,
+	conversationID string,
+) webagent.Result {
+	return readConversation(ctx, config, conversationID, false, 0)
+}
+
+func AwaitConversation(
+	ctx context.Context,
+	config ReadConfig,
+	conversationID string,
+	timeout time.Duration,
+) webagent.Result {
+	if timeout <= 0 {
+		timeout = 3 * time.Minute
+	}
+	return readConversation(ctx, config, conversationID, true, timeout)
+}
+
+func readConversation(
+	ctx context.Context,
+	config ReadConfig,
+	conversationID string,
+	await bool,
+	timeout time.Duration,
+) webagent.Result {
+	operation := webagent.OperationConversationsDetail
+	if await {
+		operation = webagent.OperationConversationsAwait
+	}
+	conversationID = strings.TrimSpace(conversationID)
+	runID := webagent.NewRunID()
+	if !conversationIDPattern.MatchString(conversationID) {
+		return readFailureResult(
+			runID,
+			config.BuildCommit,
+			operation,
+			readFailure{
+				code:     "chatgpt_invalid_conversation_id",
+				errClass: "usage",
+				message:  "ChatGPT conversation id contains unsupported characters",
+			},
+			map[string]any{
+				"schema_version":   ConversationDetailSchemaVersion,
+				"completion_state": "invalid_request",
+			},
+			nil,
+		)
+	}
+	if config.BrowserConfig != nil {
+		return conversationViaBrowser(
+			ctx,
+			config,
+			conversationID,
+			await,
+			timeout,
+		)
+	}
+	conversation := conversationRef(conversationID)
+	template, failure := loadFreshReadTemplate(ctx, config)
+	if failure != nil {
+		return readFailureResult(
+			runID, config.BuildCommit, operation, *failure,
+			map[string]any{"schema_version": ConversationDetailSchemaVersion},
+			conversation,
+		)
+	}
+	lease, failure := acquireReadAdmission(ctx, config, runID, operation)
+	if failure != nil {
+		return readFailureResult(
+			runID, config.BuildCommit, operation, *failure,
+			map[string]any{"schema_version": ConversationDetailSchemaVersion},
+			conversation,
+		)
+	}
+	deadline := time.Time{}
+	if await {
+		deadline = nowForRead(config).Add(timeout)
+	}
+	delays := config.AwaitDelays
+	if len(delays) == 0 {
+		delays = defaultAwaitDelays
+	}
+	attempts := 0
+	var data ConversationDetailData
+	for {
+		attempts++
+		data, failure = fetchConversationDetail(ctx, config, template, conversationID)
+		if failure != nil ||
+			data.CompletionState != "incomplete" ||
+			!await ||
+			attempts > len(delays) {
+			break
+		}
+		delay := delays[attempts-1]
+		remaining := time.Until(deadline)
+		if config.Now != nil {
+			remaining = deadline.Sub(config.Now())
+		}
+		if remaining <= delay {
+			break
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			failure = &readFailure{
+				code:     "chatgpt_await_canceled",
+				errClass: "timeout",
+				message:  "ChatGPT conversation await was canceled before terminal detail",
+			}
+		case <-timer.C:
+		}
+		if failure != nil {
+			break
+		}
+	}
+	if data.Metadata == nil {
+		data.Metadata = map[string]any{}
+	}
+	data.Metadata["detail_read_attempts"] = attempts
+	if failure != nil {
+		result := readFailureResult(
+			runID, config.BuildCommit, operation, *failure, data, conversation,
+		)
+		return releaseReadAdmission(result, lease, failure.retryAt)
+	}
+	state := webagent.StateTerminal
+	if data.CompletionState != "terminal" {
+		state = webagent.StateIncomplete
+	}
+	return releaseReadAdmission(
+		readSuccessResult(
+			runID, config.BuildCommit, operation, state, data, conversation,
+		),
+		lease,
+		time.Time{},
+	)
+}
+
+func fetchConversationList(
+	ctx context.Context,
+	config ReadConfig,
+	template RequestTemplate,
+	limit int,
+	offset int,
+) (ConversationListData, *readFailure) {
+	data := ConversationListData{
+		SchemaVersion: ConversationListSchemaVersion,
+		Conversations: []ConversationSummary{},
+		ReadMode:      "candidate_http",
+		Metadata: map[string]any{
+			"limit":       limit,
+			"offset":      offset,
+			"order":       "updated",
+			"is_archived": false,
+			"is_starred":  false,
+		},
+	}
+	query := url.Values{}
+	query.Set("offset", strconv.Itoa(offset))
+	query.Set("limit", strconv.Itoa(limit))
+	query.Set("order", "updated")
+	query.Set("is_archived", "false")
+	query.Set("is_starred", "false")
+	endpoint := Origin + ConversationListPath + "?" + query.Encode()
+	request, err := newChatGPTRequest(
+		ctx,
+		template,
+		endpoint,
+		ConversationListPath,
+	)
+	if err != nil {
+		return data, internalReadFailure(
+			"ChatGPT conversation-list request could not be prepared",
+		)
+	}
+	response, failure := doChatGPTRequest(config, request)
+	if failure != nil {
+		data.StatusCode = failure.statusCode
+		return data, failure
+	}
+	defer response.Body.Close()
+	var payload map[string]any
+	if err := decodeBoundedJSON(response.Body, &payload); err != nil {
+		data.StatusCode = response.StatusCode
+		return data, &readFailure{
+			code:       "chatgpt_invalid_list_response",
+			errClass:   "provider",
+			message:    "ChatGPT conversation list returned an invalid bounded response",
+			statusCode: response.StatusCode,
+		}
+	}
+	return parseConversationListPayload(data, payload, response.StatusCode)
+}
+
+func parseConversationListPayload(
+	data ConversationListData,
+	payload map[string]any,
+	statusCode int,
+) (ConversationListData, *readFailure) {
+	items, ok := payload["items"].([]any)
+	if !ok {
+		items, ok = payload["conversations"].([]any)
+	}
+	if !ok {
+		data.StatusCode = statusCode
+		return data, &readFailure{
+			code:       "chatgpt_invalid_list_response",
+			errClass:   "provider",
+			message:    "ChatGPT conversation list did not contain an items array",
+			statusCode: statusCode,
+		}
+	}
+	skipped := 0
+	for _, item := range items {
+		raw, ok := item.(map[string]any)
+		if !ok {
+			skipped++
+			continue
+		}
+		summary, ok := conversationSummaryFromRaw(raw)
+		if !ok {
+			skipped++
+			continue
+		}
+		data.Conversations = append(data.Conversations, summary)
+	}
+	for _, key := range []string{"total", "limit", "offset", "has_missing_conversations"} {
+		if value, exists := boundedScalar(payload[key]); exists {
+			data.Metadata[key] = value
+		}
+	}
+	if skipped > 0 {
+		data.Metadata["skipped_items"] = skipped
+	}
+	data.Metadata["returned_count"] = len(data.Conversations)
+	data.StatusCode = statusCode
+	data.ReadMode = "observed_stable_http"
+	return data, nil
+}
+
+func fetchConversationDetail(
+	ctx context.Context,
+	config ReadConfig,
+	template RequestTemplate,
+	conversationID string,
+) (ConversationDetailData, *readFailure) {
+	data := ConversationDetailData{
+		SchemaVersion:   ConversationDetailSchemaVersion,
+		ConversationID:  conversationID,
+		CompletionState: "incomplete",
+		ReadMode:        "candidate_http",
+		Metadata: map[string]any{
+			"source": "hydrated_conversation_detail",
+		},
+	}
+	path := "/backend-api/conversation/" + url.PathEscape(conversationID)
+	request, err := newChatGPTRequest(
+		ctx,
+		template,
+		Origin+path,
+		ConversationDetailRoute,
+	)
+	if err != nil {
+		return data, internalReadFailure(
+			"ChatGPT conversation-detail request could not be prepared",
+		)
+	}
+	response, failure := doChatGPTRequest(config, request)
+	if failure != nil {
+		data.StatusCode = failure.statusCode
+		return data, failure
+	}
+	defer response.Body.Close()
+	var payload map[string]any
+	if err := decodeBoundedJSON(response.Body, &payload); err != nil {
+		data.StatusCode = response.StatusCode
+		return data, &readFailure{
+			code:       "chatgpt_invalid_detail_response",
+			errClass:   "provider",
+			message:    "ChatGPT conversation detail returned an invalid bounded response",
+			statusCode: response.StatusCode,
+		}
+	}
+	return parseConversationDetailPayload(data, payload, response.StatusCode)
+}
+
+func parseConversationDetailPayload(
+	data ConversationDetailData,
+	payload map[string]any,
+	statusCode int,
+) (ConversationDetailData, *readFailure) {
+	data.StatusCode = statusCode
+	data.ReadMode = "observed_stable_http"
+	extracted := extractConversationText(payload)
+	data.Text = extracted.text
+	data.CompletionState = extracted.completionState
+	for key, value := range extracted.metadata {
+		data.Metadata[key] = value
+	}
+	if id := firstString(payload, "conversation_id", "id"); conversationIDPattern.MatchString(id) {
+		data.ConversationID = id
+	}
+	return data, nil
+}
+
+type extractedConversation struct {
+	text            string
+	completionState string
+	metadata        map[string]any
+}
+
+func extractConversationText(payload map[string]any) extractedConversation {
+	result := extractedConversation{
+		completionState: "incomplete",
+		metadata:        map[string]any{},
+	}
+	mapping, ok := payload["mapping"].(map[string]any)
+	if !ok {
+		return result
+	}
+	current, _ := payload["current_node"].(string)
+	seen := map[string]bool{}
+	nodes := make([]map[string]any, 0)
+	prompt := ""
+	for current != "" && !seen[current] {
+		seen[current] = true
+		raw, ok := mapping[current].(map[string]any)
+		if !ok {
+			break
+		}
+		message, _ := raw["message"].(map[string]any)
+		role := messageRole(message)
+		if role == "user" {
+			prompt = messageText(message, false)
+			break
+		}
+		nodes = append(nodes, raw)
+		current, _ = raw["parent"].(string)
+	}
+	if strings.TrimSpace(prompt) != "" {
+		result.metadata["prompt_fingerprint"] = fingerprintPrompt(prompt)
+	}
+	for _, node := range nodes {
+		message, _ := node["message"].(map[string]any)
+		if messageRole(message) != "assistant" {
+			continue
+		}
+		text := strings.TrimSpace(messageText(message, true))
+		if !terminalAnswerTextValid(text, message) {
+			continue
+		}
+		result.text = text
+		if message["status"] == "finished_successfully" && message["end_turn"] == true {
+			result.completionState = "terminal"
+		}
+		copyResultMetadata(result.metadata, message)
+		return result
+	}
+	return result
+}
+
+func messageRole(message map[string]any) string {
+	author, _ := message["author"].(map[string]any)
+	role, _ := author["role"].(string)
+	return role
+}
+
+func messageText(message map[string]any, allowCode bool) string {
+	content, _ := message["content"].(map[string]any)
+	contentType, _ := content["content_type"].(string)
+	if contentType == "text" || contentType == "multimodal_text" {
+		parts, _ := content["parts"].([]any)
+		var builder strings.Builder
+		for _, part := range parts {
+			if text, ok := part.(string); ok {
+				builder.WriteString(text)
+			}
+		}
+		return builder.String()
+	}
+	if allowCode && contentType == "code" {
+		text, _ := content["text"].(string)
+		return text
+	}
+	return ""
+}
+
+func terminalAnswerTextValid(text string, message map[string]any) bool {
+	text = strings.TrimSpace(text)
+	if text == "" || deepResearchControlPayload(text) {
+		return false
+	}
+	recipient, _ := message["recipient"].(string)
+	if recipient == "" {
+		author, _ := message["author"].(map[string]any)
+		recipient, _ = author["recipient"].(string)
+	}
+	if recipient != "" && recipient != "all" {
+		return false
+	}
+	metadata, _ := message["metadata"].(map[string]any)
+	for _, key := range []string{
+		"system1_search_query",
+		"search_query",
+		"tool_call",
+		"is_visually_hidden_from_conversation",
+	} {
+		if truthy(metadata[key]) {
+			return false
+		}
+	}
+	var control map[string]any
+	if json.Unmarshal([]byte(text), &control) == nil {
+		for _, key := range []string{
+			"search_query", "image_query", "open", "click", "find",
+			"screenshot", "session_id", "connector_settings", "path",
+		} {
+			if _, exists := control[key]; exists {
+				return false
+			}
+		}
+	}
+	lines := nonEmptyLines(text)
+	if len(lines) > 0 {
+		headingsOnly := true
+		for _, line := range lines {
+			if !regexp.MustCompile(`^#{1,6}\s+[^#]+$`).MatchString(line) {
+				headingsOnly = false
+				break
+			}
+		}
+		if headingsOnly {
+			return false
+		}
+	}
+	withoutCitations := regexp.MustCompile(`\[[0-9]+\]\([^)]*\)|\[[0-9]+\]|https?://\S+`).
+		ReplaceAllString(text, "")
+	letters := 0
+	for _, character := range withoutCitations {
+		if unicode.IsLetter(character) {
+			letters++
+		}
+	}
+	return letters >= 2
+}
+
+func deepResearchControlPayload(text string) bool {
+	var payload map[string]any
+	if json.Unmarshal([]byte(strings.TrimSpace(text)), &payload) != nil {
+		return false
+	}
+	path, _ := payload["path"].(string)
+	if strings.HasPrefix(path, "/Deep Research App/") {
+		return true
+	}
+	_, session := payload["session_id"].(string)
+	_, connector := payload["connector_settings"].(map[string]any)
+	return session && connector
+}
+
+func copyResultMetadata(target map[string]any, message map[string]any) {
+	metadata, _ := message["metadata"].(map[string]any)
+	for _, key := range []string{
+		"citations",
+		"content_references",
+		"search_result_groups",
+		"selected_sources",
+		"selected_mcp_sources",
+		"caterpillar_selected_sources",
+		"thinking_effort",
+		"model_slug",
+		"resolved_model_slug",
+	} {
+		if value, exists := metadata[key]; exists && value != nil {
+			target[key] = value
+		}
+	}
+}
+
+func conversationSummaryFromRaw(raw map[string]any) (ConversationSummary, bool) {
+	id := firstString(raw, "id", "conversation_id")
+	if !conversationIDPattern.MatchString(id) {
+		return ConversationSummary{}, false
+	}
+	title := cleanSingleLine(firstString(raw, "title", "name"))
+	preview := cleanSingleLine(firstString(raw, "snippet", "description", "preview"))
+	description := title
+	if description == "" {
+		description = preview
+	}
+	if description == "" {
+		description = "Untitled conversation " + id[:min(8, len(id))]
+	}
+	if len(description) > 200 {
+		description = description[:200]
+	}
+	metadata := map[string]any{}
+	for _, key := range []string{"is_archived", "is_starred", "conversation_template_id"} {
+		if value, ok := boundedScalar(raw[key]); ok {
+			metadata[key] = value
+		}
+	}
+	return ConversationSummary{
+		ID:               id,
+		Title:            title,
+		ShortDescription: description,
+		CreateTime:       raw["create_time"],
+		UpdateTime:       raw["update_time"],
+		URL:              Origin + "/c/" + url.PathEscape(id),
+		Metadata:         metadata,
+	}, true
+}
+
+func newChatGPTRequest(
+	ctx context.Context,
+	template RequestTemplate,
+	rawURL string,
+	targetRoute string,
+) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	for name, value := range template.Headers {
+		lower := strings.ToLower(name)
+		if lower == "content-type" ||
+			lower == "content-length" ||
+			lower == "oai-echo-logs" ||
+			lower == "oai-telemetry" ||
+			lower == "origin" ||
+			lower == "priority" ||
+			strings.HasPrefix(lower, "sec-fetch-") ||
+			lower == "x-conduit-token" ||
+			lower == "x-oai-turn-trace-id" ||
+			strings.HasPrefix(lower, "openai-sentinel-") {
+			continue
+		}
+		request.Header.Set(name, value)
+	}
+	request.Header.Del("Accept-Encoding")
+	request.Header.Set("Accept", "*/*")
+	request.Header.Set("User-Agent", template.BrowserUserAgent)
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("X-OpenAI-Target-Path", parsed.Path)
+	request.Header.Set("X-OpenAI-Target-Route", targetRoute)
+	request.Header.Set("Cookie", template.CookieHeader)
+	return request, nil
+}
+
+func doChatGPTRequest(
+	config ReadConfig,
+	request *http.Request,
+) (*http.Response, *readFailure) {
+	client := config.HTTPClient
+	if client == nil {
+		client = &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, &readFailure{
+			code:     "chatgpt_http_unavailable",
+			errClass: "connection",
+			message:  "ChatGPT candidate HTTP read is unavailable",
+		}
+	}
+	if response.StatusCode == http.StatusOK {
+		return response, nil
+	}
+	_ = response.Body.Close()
+	failure := &readFailure{
+		code:       "chatgpt_http_failed",
+		errClass:   "provider",
+		message:    fmt.Sprintf("ChatGPT candidate HTTP read returned status %d", response.StatusCode),
+		statusCode: response.StatusCode,
+	}
+	switch response.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		failure.code = "chatgpt_browser_context_required"
+		failure.errClass = "auth"
+		failure.message = "ChatGPT candidate HTTP read requires refreshed headed browser auth"
+	case http.StatusTooManyRequests:
+		failure.code = "chatgpt_rate_limited"
+		failure.errClass = "rate_limit"
+		failure.message = "ChatGPT candidate HTTP read was rate limited"
+		failure.retryAt = retryAtFromHeader(
+			response.Header.Get("Retry-After"),
+			nowForRead(config),
+		)
+	}
+	return nil, failure
+}
+
+func decodeBoundedJSON(body io.Reader, target any) error {
+	limited := io.LimitReader(body, maxChatGPTResponseBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 || len(data) > maxChatGPTResponseBytes {
+		return fmt.Errorf("response body is empty or exceeds its bound")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("response contains trailing JSON data")
+	}
+	return nil
+}
+
+func loadFreshReadTemplate(
+	ctx context.Context,
+	config ReadConfig,
+) (RequestTemplate, *readFailure) {
+	if config.Store == nil {
+		return RequestTemplate{}, internalReadFailure(
+			"ChatGPT owner-only auth state is unavailable",
+		)
+	}
+	template, status, err := config.Store.LoadTemplateStatus(
+		ctx,
+		nowForRead(config),
+		DefaultAuthTTL,
+	)
+	if !status.Ready {
+		return RequestTemplate{}, &readFailure{
+			code:     "chatgpt_auth_" + status.State,
+			errClass: "auth",
+			message:  "ChatGPT auth evidence is not ready for candidate HTTP reads",
+		}
+	}
+	if err != nil {
+		return RequestTemplate{}, internalReadFailure(
+			"ChatGPT owner-only auth state could not be loaded",
+		)
+	}
+	return template, nil
+}
+
+func acquireReadAdmission(
+	ctx context.Context,
+	config ReadConfig,
+	runID string,
+	operation webagent.Operation,
+) (*admission.Lease, *readFailure) {
+	if config.Admission == nil {
+		return nil, internalReadFailure(
+			"ChatGPT provider admission is unavailable",
+		)
+	}
+	lease, err := config.Admission.Acquire(ctx, admission.Request{
+		Provider:  string(webagent.ProviderChatGPT),
+		Operation: string(operation),
+		RunID:     runID,
+	})
+	if err == nil {
+		return lease, nil
+	}
+	var blocked *admission.BlockedError
+	if errors.As(err, &blocked) {
+		failure := &readFailure{
+			code:     "chatgpt_admission_blocked",
+			errClass: "admission",
+			message:  blocked.Error(),
+		}
+		if blocked.ResolutionNeeded {
+			failure.nextCommands = []string{"cdp workflow agent admission status chatgpt --json"}
+		} else {
+			failure.retryAt = blocked.RetryAt
+		}
+		return nil, failure
+	}
+	return nil, internalReadFailure(
+		"ChatGPT provider admission state is unavailable",
+	)
+}
+
+func releaseReadAdmission(
+	result webagent.Result,
+	lease *admission.Lease,
+	cooldown time.Time,
+) webagent.Result {
+	if lease == nil {
+		return result
+	}
+	outcome := admission.OutcomeFailed
+	switch {
+	case result.OK && result.State == webagent.StateTerminal:
+		outcome = admission.OutcomeTerminal
+	case result.OK && result.State == webagent.StateIncomplete:
+		outcome = admission.OutcomeIncomplete
+	case result.OK:
+		outcome = admission.OutcomeCompleted
+	case result.Error != nil && result.Error.Code == "chatgpt_rate_limited":
+		outcome = admission.OutcomeRateLimited
+	}
+	if err := lease.Release(admission.Release{
+		Outcome:       outcome,
+		CooldownUntil: cooldown,
+	}); err != nil {
+		return replaceFailure(
+			result,
+			"chatgpt_admission_release_failed",
+			"internal",
+			"ChatGPT provider admission outcome could not be persisted",
+			[]string{"cdp workflow agent chatgpt doctor --json"},
+		)
+	}
+	return result
+}
+
+func readSuccessResult(
+	runID string,
+	buildCommit string,
+	operation webagent.Operation,
+	state webagent.State,
+	data any,
+	conversation *webagent.ConversationRef,
+) webagent.Result {
+	result := operationSuccess(
+		runID,
+		buildCommit,
+		operation,
+		webagent.StageObserveTerminal,
+		readModeFromData(data),
+		nil,
+		webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+		data,
+		nil,
+	)
+	result.State = state
+	result.Conversation = conversation
+	result.Evidence.BrowserMode = "none"
+	return result
+}
+
+func readFailureResult(
+	runID string,
+	buildCommit string,
+	operation webagent.Operation,
+	failure readFailure,
+	data any,
+	conversation *webagent.ConversationRef,
+) webagent.Result {
+	nextCommands := failure.nextCommands
+	if len(nextCommands) == 0 {
+		nextCommands = readNextCommands(operation, conversation)
+	}
+	result := operationFailure(
+		runID,
+		buildCommit,
+		operation,
+		webagent.StageObserveTerminal,
+		readModeFromData(data),
+		nil,
+		webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+		failure.code,
+		failure.errClass,
+		failure.message,
+		data,
+		nextCommands,
+	)
+	result.Conversation = conversation
+	if result.Error != nil && !failure.retryAt.IsZero() {
+		result.Error.RetryAt = failure.retryAt.UTC().Format(time.RFC3339Nano)
+	}
+	result.Evidence.BrowserMode = "none"
+	return result
+}
+
+func readModeFromData(data any) string {
+	switch value := data.(type) {
+	case ConversationListData:
+		if value.ReadMode != "" {
+			return value.ReadMode
+		}
+	case ConversationDetailData:
+		if value.ReadMode != "" {
+			return value.ReadMode
+		}
+	}
+	return "not_started"
+}
+
+func readNextCommands(
+	operation webagent.Operation,
+	conversation *webagent.ConversationRef,
+) []string {
+	commands := []string{"cdp workflow agent chatgpt auth refresh --json"}
+	if conversation != nil && conversation.ID != "" {
+		commands = append(
+			commands,
+			fmt.Sprintf(
+				"cdp workflow agent chatgpt conversations detail %s --json",
+				conversation.ID,
+			),
+		)
+	}
+	return commands
+}
+
+func conversationRef(id string) *webagent.ConversationRef {
+	return &webagent.ConversationRef{
+		ID:  id,
+		URL: Origin + "/c/" + url.PathEscape(id),
+	}
+}
+
+func nowForRead(config ReadConfig) time.Time {
+	if config.Now != nil {
+		return config.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func retryAtFromHeader(value string, now time.Time) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return now.Add(5 * time.Minute)
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return now.Add(time.Duration(seconds) * time.Second)
+	}
+	if parsed, err := http.ParseTime(value); err == nil {
+		return parsed
+	}
+	return now.Add(5 * time.Minute)
+}
+
+func internalReadFailure(message string) *readFailure {
+	return &readFailure{
+		code:     "chatgpt_read_internal",
+		errClass: "internal",
+		message:  message,
+	}
+}
+
+func firstString(raw map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := raw[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func cleanSingleLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func boundedScalar(value any) (any, bool) {
+	switch typed := value.(type) {
+	case string:
+		if len(typed) <= 4096 {
+			return typed, true
+		}
+	case float64, bool:
+		return typed, true
+	}
+	return nil, false
+}
+
+func truthy(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return value != nil
+	}
+}
+
+func nonEmptyLines(text string) []string {
+	lines := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func fingerprintPrompt(prompt string) string {
+	sum := sha256.Sum256([]byte(prompt))
+	return hex.EncodeToString(sum[:])
+}

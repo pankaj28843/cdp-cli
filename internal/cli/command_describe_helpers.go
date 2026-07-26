@@ -145,6 +145,11 @@ func commandExamples(path string) []string {
 			"cdp cron install --artifact-retention 168h --max-log-size 64MiB --dry-run --json",
 			"cdp cron install --cdp-bin $HOME/.local/bin/cdp --json",
 		},
+		"cdp cron run": {
+			"cdp cron run headed-daemon-keepalive --json",
+			"cdp cron run headless-maintenance --json",
+			"cdp cron run artifact-prune --json",
+		},
 		"cdp artifacts": {
 			"cdp artifacts prune --dry-run --json",
 			"cdp artifacts prune --apply --json",
@@ -719,6 +724,32 @@ func commandExamples(path string) []string {
 			"cdp --browser-mode headed workflow web-research extract --url-file tmp/research/arxiv-hn-urls.txt --content-extractor auto --out-dir tmp/research/source-aware-pages --json",
 			"cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --parallel 10 --allow-over-budget --json # supervised high-stress cap",
 		},
+		"cdp workflow agent": {
+			"cdp workflow agent providers --json",
+			"cdp workflow agent admission status chatgpt --json",
+			"cdp workflow agent claude capabilities --json",
+			"cdp workflow agent claude doctor --json",
+			"cdp workflow agent claude auth refresh --json",
+			"printf '%s' 'Review this design.' | cdp workflow agent claude ask --stdin --json",
+			"cdp workflow agent claude conversations list --limit 30 --json",
+			"cdp --timeout 3m workflow agent claude calibrate --json",
+			"cdp workflow agent claude calibration status --json",
+			"cdp workflow agent gemini capabilities --json",
+			"cdp workflow agent gemini capabilities refresh --json",
+			"printf '%s' 'Review this design.' | cdp workflow agent gemini ask --stdin --json",
+			"cdp schema webagent-operation --json",
+		},
+		"cdp workflow agent admission status": {
+			"cdp workflow agent admission status chatgpt --json",
+		},
+		"cdp workflow agent admission resolve": {
+			"cdp workflow agent recovery close <run-id> --json",
+			"cdp workflow agent admission resolve chatgpt <run-id> --acknowledge-unknown --json",
+		},
+		"cdp workflow agent providers": {
+			"cdp workflow agent providers --json",
+			"cdp workflow agent providers --jq '.data.providers[] | {provider, implementation_status}'",
+		},
 	}
 	examples["cdp focus"] = []string{"cdp focus input[name=email] --json"}
 	examples["cdp clear"] = []string{"cdp clear input[name=email] --json"}
@@ -789,6 +820,106 @@ func commandExamples(path string) []string {
 	examples["cdp assert checked"] = []string{"cdp assert checked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert checked Subscribe --by role --role checkbox --poll 100ms --json"}
 	examples["cdp assert unchecked"] = []string{"cdp assert unchecked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert unchecked '#subscribe' --poll 100ms --json"}
 	examples["cdp assert indeterminate"] = []string{"cdp assert indeterminate '#partial-selection' --timeout 5s --json", "cdp assert indeterminate 'Partial selection' --by role --role checkbox --poll 100ms --json"}
+	for _, provider := range []string{"alex", "chatgpt", "claude", "gemini", "grok", "perplexity", "tripadvisor"} {
+		command := "cdp workflow agent " + provider + " capabilities"
+		examples[command] = []string{
+			command + " --json",
+			command + " --jq '.data.operations[] | select(.supported)'",
+		}
+	}
+	examples["cdp workflow agent claude doctor"] = []string{
+		"cdp workflow agent claude doctor --json",
+		"cdp workflow agent claude auth refresh --json",
+	}
+	examples["cdp workflow agent claude auth"] = []string{
+		"cdp workflow agent claude auth refresh --json",
+	}
+	examples["cdp workflow agent claude auth refresh"] = []string{
+		"cdp workflow agent claude auth refresh --json",
+		"cdp workflow agent claude doctor --json",
+	}
+	examples["cdp workflow agent claude ask"] = []string{
+		"cdp workflow agent claude ask 'Review this design.' --json",
+		"printf '%s' 'Review this diff.' | cdp workflow agent claude ask --stdin --json",
+	}
+	examples["cdp workflow agent claude conversations"] = []string{
+		"cdp workflow agent claude conversations list --limit 30 --json",
+		"cdp workflow agent claude conversations detail <conversation-id> --json",
+		"cdp workflow agent claude conversations await <conversation-id> --json",
+		"cdp workflow agent claude conversations delete <conversation-id> --json",
+	}
+	examples["cdp workflow agent claude conversations list"] = []string{
+		"cdp workflow agent claude conversations list --limit 30 --json",
+	}
+	examples["cdp workflow agent claude conversations detail"] = []string{
+		"cdp workflow agent claude conversations detail <conversation-id> --json",
+	}
+	examples["cdp workflow agent claude conversations await"] = []string{
+		"cdp --timeout 3m workflow agent claude conversations await <conversation-id> --json",
+	}
+	examples["cdp workflow agent claude conversations delete"] = []string{
+		"cdp workflow agent claude conversations delete <conversation-id> --json",
+	}
+	examples["cdp workflow agent claude calibrate"] = []string{
+		"cdp --timeout 3m workflow agent claude calibrate --json",
+	}
+	examples["cdp workflow agent claude calibration"] = []string{
+		"cdp workflow agent claude calibration status --json",
+		"cdp --timeout 1m workflow agent claude calibration cleanup --json",
+	}
+	examples["cdp workflow agent claude calibration status"] = []string{
+		"cdp workflow agent claude calibration status --json",
+	}
+	examples["cdp workflow agent claude calibration cleanup"] = []string{
+		"cdp --timeout 1m workflow agent claude calibration cleanup --json",
+	}
+	examples["cdp workflow agent gemini doctor"] = []string{
+		"cdp workflow agent gemini doctor --json",
+		"cdp workflow agent gemini auth refresh --json",
+		"cdp workflow agent gemini capabilities refresh --json",
+	}
+	examples["cdp workflow agent gemini auth"] = []string{
+		"cdp workflow agent gemini auth refresh --json",
+	}
+	examples["cdp workflow agent gemini auth refresh"] = []string{
+		"cdp workflow agent gemini auth refresh --json",
+		"cdp workflow agent gemini doctor --json",
+	}
+	examples["cdp workflow agent gemini ask"] = []string{
+		"cdp workflow agent gemini ask 'Review this design.' --json",
+		"printf '%s' 'Review this diff.' | cdp workflow agent gemini ask --stdin --json",
+	}
+	examples["cdp workflow agent gemini conversations"] = []string{
+		"cdp workflow agent gemini conversations list --limit 30 --json",
+		"cdp workflow agent gemini conversations detail <conversation-id> --json",
+		"cdp workflow agent gemini conversations await <conversation-id> --json",
+		"cdp workflow agent gemini conversations delete <conversation-id> --json",
+	}
+	examples["cdp workflow agent gemini conversations list"] = []string{
+		"cdp workflow agent gemini conversations list --limit 30 --json",
+	}
+	examples["cdp workflow agent gemini conversations detail"] = []string{
+		"cdp workflow agent gemini conversations detail <conversation-id> --json",
+	}
+	examples["cdp workflow agent gemini conversations await"] = []string{
+		"cdp --timeout 3m workflow agent gemini conversations await <conversation-id> --json",
+	}
+	examples["cdp workflow agent gemini conversations delete"] = []string{
+		"cdp workflow agent gemini conversations delete <conversation-id> --json",
+	}
+	examples["cdp workflow agent gemini calibrate"] = []string{
+		"cdp --timeout 3m workflow agent gemini calibrate --json",
+	}
+	examples["cdp workflow agent gemini calibration"] = []string{
+		"cdp workflow agent gemini calibration status --json",
+		"cdp --timeout 1m workflow agent gemini calibration cleanup --json",
+	}
+	examples["cdp workflow agent gemini calibration status"] = []string{
+		"cdp workflow agent gemini calibration status --json",
+	}
+	examples["cdp workflow agent gemini calibration cleanup"] = []string{
+		"cdp --timeout 1m workflow agent gemini calibration cleanup --json",
+	}
 
 	return examples[path]
 }

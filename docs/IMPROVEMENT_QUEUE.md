@@ -7,7 +7,7 @@ research sources.
 
 ## Queue Status
 
-Status checked 2026-05-21.
+Status checked 2026-07-25.
 
 Open loose queue items: **0**.
 
@@ -51,6 +51,7 @@ and PRPs first, then update this ledger with the public-safe plan identifier.
 | Extension support | 16 | planned | `2026-05-21T050405-extension-support.md` | Start with capability discovery and unsupported-state classification. |
 | Frame-scoped execution | 17 | planned | `2026-05-21T050405-frame-scoped-execution.md` | Define explicit frame selector semantics before adding scoped execution. |
 | Protocol workflow compatibility | 18 | planned | `2026-05-21T050405-protocol-workflow-compatibility.md` | Extract workflow requirement sets into a testable registry. |
+| Authenticated provider workflows | 19 | active | `2026-07-25T190109-go-cdp-provider-workflow-migration.md` | Claude, Gemini, and Grok installed verticals and Go wrappers are live-proven; their panel capability paths are migrated. Continue provider-by-provider cutover with Perplexity, then the paid ChatGPT review path. |
 
 ## Empty Queue Policy
 
@@ -87,6 +88,11 @@ and PRPs first, then update this ledger with the public-safe plan identifier.
   checked before any mutating command is exposed.
 - Frame-scoped execution must use explicit frame selection; ambiguous frame
   matches must fail before user code is evaluated.
+- Authenticated provider workflows must use daemon-backed exact-target leases,
+  the canonical browser-wide headed-input lease, owner-only recovery/admission
+  state, and tri-state at-most-once dispatch. Provider capability metadata
+  remains browser-free and an operation stays unsupported until installed and
+  live acceptance proves it.
 
 ## Research Signals
 

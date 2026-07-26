@@ -479,9 +479,9 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 		message = "current user crontab has page cleanup task without explicit browser mode"
 	} else if summary.HasUnflockedCDPTask {
 		status = "warn"
-		message = "current user crontab has cdp daemon or cleanup tasks without flock"
+		message = "current user crontab has cdp daemon or cleanup tasks without exclusive locking"
 	} else {
-		message = "user crontab includes flocked cdp daemon maintenance/keepalive and mode-explicit cleanup"
+		message = "user crontab includes exclusively locked cdp daemon maintenance/keepalive and mode-explicit cleanup"
 	}
 	return map[string]any{
 		"name":    "scheduled-tasks",
@@ -534,6 +534,18 @@ func summarizeCrontab(text string) crontabSummary {
 	summary.StaleManagedTaskIDs = cronTaskIDsByStatus(taskStatuses, "stale")
 	summary.BlockedManagedTaskIDs = cronTaskIDsByStatus(taskStatuses, "blocked")
 	for _, taskStatus := range taskStatuses {
+		if taskStatus.Installed {
+			switch taskStatus.ID {
+			case cronTaskHeadedDaemonKeepalive:
+				summary.HasDaemonKeepalive = true
+				summary.HasHeadedDaemonKeepalive = true
+			case cronTaskHeadlessMaintenance:
+				summary.HasDaemonKeepalive = true
+				summary.HasHeadlessDaemonKeepalive = true
+				summary.HasPageCleanup = true
+				summary.HasModeExplicitPageCleanup = true
+			}
+		}
 		if taskStatus.RequiresManagedProcessSweep && taskStatus.ManagedProcessSweepInstalled {
 			summary.HasManagedProcessSweep = true
 		}
@@ -639,6 +651,9 @@ func scheduledTaskContainsCDPCommand(line string, words ...string) bool {
 }
 
 func scheduledTaskUsesFlock(line string) bool {
+	if scheduledTaskContainsCDPCommand(line, "cron", "run") {
+		return true
+	}
 	fields := strings.Fields(line)
 	for _, field := range fields {
 		if field == "flock" || strings.HasSuffix(field, "/flock") {

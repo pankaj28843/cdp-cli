@@ -1,0 +1,48 @@
+{
+  "ok": false,
+  "schema_version": "webagent-operation/v1",
+  "provider": "claude",
+  "operation": "ask",
+  "state": "failed",
+  "stage": "action_dispatched",
+  "error": {
+    "code": "provider_observation_timeout",
+    "err_class": "completion",
+    "message": "the provider action may have been sent, but terminal completion was not proven",
+    "retry_safe": false,
+    "retry_at": "2026-07-25T18:15:00Z"
+  },
+  "action": {
+    "dispatch": "unknown",
+    "attempt_count": 1,
+    "raw_input_count": 1,
+    "retry_safe": false,
+    "pending_persisted": true
+  },
+  "data": {
+    "completion_state": "unknown"
+  },
+  "evidence": {
+    "run_id": "wa-example-failure",
+    "build_commit": "abc123",
+    "browser_mode": "headed",
+    "read_mode": "rendered_same_target",
+    "target": {
+      "target_id": "target-example",
+      "session_id": "session-example",
+      "owned": true,
+      "created": true,
+      "closed": true
+    }
+  },
+  "cleanup": {
+    "required": true,
+    "state": "closed",
+    "target_id": "target-example",
+    "target_closed": true,
+    "close_proof": "exact_target_absent"
+  },
+  "next_commands": [
+    "cdp workflow agent claude capabilities --json"
+  ]
+}

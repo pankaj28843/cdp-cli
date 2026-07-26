@@ -32,10 +32,13 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	if !strings.Contains(afterFirst, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("crontab after install did not preserve existing lines:\n%s", afterFirst)
 	}
-	for _, want := range []string{"artifacts run-managed --task headed-daemon-keepalive", "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "artifacts run-managed --task headless-maintenance", "--browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h --repair --force --reconnect 30s --health-check --cleanup --cleanup-close --json", "artifacts prune --older-than 168h --max-log-size 64MiB --apply", "headless-maintenance.log", "command -v flock", "--help 2>&1 | grep -q -- '--close'"} {
+	for _, want := range []string{"cron run headed-daemon-keepalive", "--display :0", "--xdg-runtime-dir /run/user/", "cron run headless-maintenance", "--profile-seed-strategy managed", "--profile-seed-if-older-than 6h", "cron run artifact-prune", "--artifact-retention 168h", "--max-log-size 64MiB"} {
 		if !strings.Contains(afterFirst, want) {
 			t.Fatalf("crontab after install missing %q:\n%s", want, afterFirst)
 		}
+	}
+	if strings.Contains(afterFirst, "flock") || strings.Contains(afterFirst, "sh -c") || strings.Contains(afterFirst, "artifacts run-managed") {
+		t.Fatalf("crontab after install exposes shell coordination instead of the Go runner:\n%s", afterFirst)
 	}
 	if strings.Contains(afterFirst, ">> ") {
 		t.Fatalf("crontab after install append-opens a managed log:\n%s", afterFirst)
@@ -63,6 +66,74 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	afterSecond := readFileString(t, crontabPath)
 	if afterSecond != afterFirst {
 		t.Fatalf("idempotent install changed crontab:\nfirst:\n%s\nsecond:\n%s", afterFirst, afterSecond)
+	}
+}
+
+func TestCronInstallAtomicallyMigratesLegacyOwnedHeadedBlock(t *testing.T) {
+	initial := strings.Join([]string{
+		"SHELL=/bin/sh",
+		"0 0 * * * /usr/local/bin/backup",
+		"# cdp-cli headed daemon keepalive BEGIN",
+		"* * * * * /usr/bin/flock -n $HOME/.cdp-cli/locks/keepalive-headed.lock $HOME/.local/bin/cdp daemon keepalive --json",
+		"# cdp-cli headed daemon keepalive END",
+		"",
+	}, "\n")
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var got struct {
+		OK                  bool `json:"ok"`
+		Changed             bool `json:"changed"`
+		LegacyBlocksRemoved int  `json:"legacy_blocks_removed"`
+	}
+	executeCronJSON(t, []string{"cron", "install", "--state-dir", stateDir, "--json"}, &got)
+	if !got.OK || !got.Changed || got.LegacyBlocksRemoved != 1 {
+		t.Fatalf("cron install migration = %+v, want one exact legacy block replaced", got)
+	}
+	after := readFileString(t, crontabPath)
+	if strings.Contains(after, "cdp-cli headed daemon keepalive BEGIN") || strings.Contains(after, "/usr/bin/flock") {
+		t.Fatalf("legacy owned block remains after install:\n%s", after)
+	}
+	if strings.Count(after, "# cdp-cli managed browser runtime tasks") != 1 || !strings.Contains(after, "cron run headed-daemon-keepalive") {
+		t.Fatalf("canonical managed block missing after migration:\n%s", after)
+	}
+	if !strings.Contains(after, "0 0 * * * /usr/local/bin/backup") {
+		t.Fatalf("unrelated user entry was not preserved:\n%s", after)
+	}
+}
+
+func TestCronInstallRejectsOverlongEntryBeforeInvokingCrontab(t *testing.T) {
+	initial := "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+	overlongBinary := "/" + strings.Repeat("x", 1000)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Execute(
+		context.Background(),
+		[]string{"cron", "install", "--dry-run", "--cdp-bin", overlongBinary, "--state-dir", stateDir, "--json"},
+		&stdout,
+		&stderr,
+		cli.BuildInfo{},
+	)
+	if code != cli.ExitUsage {
+		t.Fatalf("overlong cron install exit = %d, want %d; stderr=%s stdout=%s", code, cli.ExitUsage, stderr.String(), stdout.String())
+	}
+	var got struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode overlong cron error: %v\n%s", err, stdout.String())
+	}
+	if got.OK || got.Code != "cron_entry_too_long" || !strings.Contains(got.Message, "portable limit") {
+		t.Fatalf("overlong cron error = %+v, want typed portable-limit rejection", got)
+	}
+	if after := readFileString(t, crontabPath); after != initial {
+		t.Fatalf("overlong dry-run mutated crontab:\n%s", after)
 	}
 }
 
@@ -297,7 +368,7 @@ func TestCronInstallUsesHeadlessSeedConfigDryRun(t *testing.T) {
 		t.Fatalf("cron install dry-run artifact_policy = %+v, want config-backed 336h/8MiB", got.ArtifactPolicy)
 	}
 	block := strings.Join(got.IntendedBlock.Entries, "\n")
-	for _, want := range []string{"--browser-mode headless daemon maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m", "--max-log-size 8MiB", "artifacts prune --older-than 336h --max-log-size 8MiB --apply", "--health-check --cleanup --cleanup-close --json"} {
+	for _, want := range []string{"cron run headless-maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m", "--max-log-size 8MiB", "cron run artifact-prune --artifact-retention 336h --max-log-size 8MiB"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("intended cron block missing %q:\n%s", want, block)
 		}
@@ -355,7 +426,7 @@ func TestCronInstallHeadedOnlyDryRunDoesNotMutateCrontab(t *testing.T) {
 		t.Fatalf("cron install headed dry-run = %+v, want headed keepalive plus daily artifact prune without install", got)
 	}
 	entry := got.IntendedBlock.Entries[0]
-	if !strings.Contains(entry, "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive") || strings.Contains(entry, "--browser-mode headless") || strings.Contains(entry, "cron heal headed") || strings.Contains(entry, " pages ") {
+	if !strings.Contains(entry, "cron run headed-daemon-keepalive") || strings.Contains(entry, "headless-maintenance") || strings.Contains(entry, "cron heal headed") || strings.Contains(entry, " pages ") {
 		t.Fatalf("headed dry-run entry = %q, want headed daemon keepalive only", entry)
 	}
 	if after := readFileString(t, crontabPath); after != initial {
@@ -493,7 +564,7 @@ func TestCronMigratePagesPollingApplyRemovesOnlyLegacyAfterManagedInstalled(t *t
 	if !strings.Contains(after, "SHELL=/bin/sh\n0 0 * * * /usr/local/bin/backup\n") {
 		t.Fatalf("migration did not preserve unmanaged backup line:\n%s", after)
 	}
-	for _, want := range []string{"# cdp-cli managed browser runtime tasks", "--browser-mode headed daemon keepalive --auto-connect --repair --probe passive", "--browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h", "# End cdp-cli managed browser runtime tasks"} {
+	for _, want := range []string{"# cdp-cli managed browser runtime tasks", "cron run headed-daemon-keepalive", "cron run headless-maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h", "# End cdp-cli managed browser runtime tasks"} {
 		if !strings.Contains(after, want) {
 			t.Fatalf("migration did not preserve managed block content %q:\n%s", want, after)
 		}

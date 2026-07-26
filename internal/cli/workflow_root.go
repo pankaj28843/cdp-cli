@@ -26,6 +26,7 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowFeedsCommand())
 	cmd.AddCommand(a.newWorkflowRenderedExtractCommand())
 	cmd.AddCommand(a.newWorkflowWebResearchCommand())
+	cmd.AddCommand(a.newWorkflowAgentCommand())
 	cmd.AddCommand(a.newWorkflowResponsiveAuditCommand())
 	cmd.AddCommand(a.newWorkflowLighthouseCommand())
 	return cmd

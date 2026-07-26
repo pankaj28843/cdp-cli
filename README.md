@@ -15,7 +15,11 @@ accessibility/performance/memory probes, raw CDP
 discovery/examples/exec, Web Storage/cookie/IndexedDB/Cache Storage/service
 worker controls, headed/default-profile and managed-headless browser runtime
 modes, cron-safe `daemon keepalive`, and managed headless maintenance commands
-are in place.
+are in place. Authenticated web-agent workflows now have a provider-neutral,
+capability-backed command and schema surface. Claude, Gemini, and Grok doctor,
+no-turn auth refresh, fresh-conversation ask, list/detail/await/delete, and
+calibration verticals are live-proven; all other provider operations remain
+explicitly planned until their installed vertical is proven.
 
 ## Intended Shape
 
@@ -50,6 +54,16 @@ cdp workflow visible-posts 'https://x.com/<handle>' --limit 5 --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --out-dir tmp/research-all --json
 cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json
+cdp workflow agent providers --json
+cdp workflow agent admission status chatgpt --json
+cdp workflow agent claude capabilities --json
+cdp workflow agent claude doctor --json
+cdp workflow agent claude auth refresh --json
+cdp workflow agent gemini capabilities --json
+cdp workflow agent gemini capabilities refresh --json
+cdp workflow agent grok capabilities --json
+cdp workflow agent grok capabilities refresh --json
+cdp schema webagent-operation --json
 cdp protocol search screenshot --json
 cdp protocol examples Page.captureScreenshot --json
 cdp protocol exec Browser.getVersion --json
@@ -60,6 +74,114 @@ cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format
 Multi-engine SERP research runs engines concurrently and reuses one workflow tab
 lane per engine, so large query files avoid opening a fresh tab for every
 engine/query/page combination.
+
+### Authenticated Provider Workflows
+
+`cdp workflow agent providers --json` is the executable capability catalog for
+authenticated web-agent providers. Each provider also exposes a browser-free
+`capabilities` command. An operation is callable only when its capability has
+`supported=true`; planned and unsupported behavior remains explicit.
+
+All provider operations use the versioned `webagent-operation/v1` outer
+envelope. Provider-specific result data remains under `data`; lifecycle fields
+preserve stage, irreversible-action dispatch, exact conversation identity,
+target evidence, cleanup, and safe next commands. Inspect the contract before
+writing orchestration:
+
+```bash
+cdp workflow agent providers --json
+cdp workflow agent chatgpt capabilities --json
+cdp schema webagent-operation --json
+cdp schema webagent-capabilities --json
+cdp describe --command 'workflow agent' --json
+```
+
+Capability metadata does not attach to Chrome. Provider doctor/auth/ask/CRUD
+commands are added only after their concrete installed browser workflows pass
+the corresponding safety and usefulness gates.
+
+Claude, Gemini, and Grok advertise browser-free `doctor`; no-turn headed `auth
+refresh`; fresh-conversation headed `ask`; list/detail/await/delete
+conversation operations; and explicit one-target `calibrate`. Every browser
+operation owns and exact-closes one fresh target. An ambiguous or performed
+provider mutation is never resubmitted.
+All headed provider workflows share the owner-only
+`<state-dir>/locks/headed-browser-input.lock` before target creation through
+their final raw input; a single-Send ask releases it before answer polling.
+
+Claude reads through its browser-observed stable HTTP shape and lazily uses one
+exact-owned rendered fallback only for a typed browser-context rejection.
+Claude auth refresh observes the organization/list request and keeps the
+private replay template only in owner-only cdp state:
+
+```bash
+cdp workflow agent claude capabilities --jq '.data.operations[] | select(.supported)'
+cdp workflow agent claude auth refresh --json
+cdp workflow agent claude doctor --json
+printf '%s' 'Review this design.' | cdp workflow agent claude ask --stdin --json
+cdp workflow agent claude conversations list --limit 30 --json
+cdp workflow agent claude conversations detail <conversation-id> --json
+cdp workflow agent claude conversations await <conversation-id> --json
+cdp workflow agent claude conversations delete <conversation-id> --json
+cdp --timeout 3m workflow agent claude calibrate --json
+cdp workflow agent claude calibration status --json
+cdp --timeout 1m workflow agent claude calibration cleanup --json
+```
+
+Gemini deliberately stays rendered-only: there is no coded `batchexecute`
+replay. Auth refresh persists only safe signed-in/session-cookie booleans.
+Runtime capability refresh observes the current model mode, available modes,
+and tool controls without submitting a prompt. Conversation listing waits for
+the requested identity count or progressively advances Gemini's history
+scroller to a stable bottom, so a partial first batch is not accepted as
+complete. Post-Send prompt identity uses one strict rendered `Copy prompt`
+control intercepted inside the owned target and hashes the captured prompt
+after outer trim only; it does not write the observed copy through to the
+system clipboard or collapse interior whitespace:
+
+```bash
+cdp workflow agent gemini capabilities --json
+cdp workflow agent gemini auth refresh --json
+cdp workflow agent gemini capabilities refresh --json
+cdp workflow agent gemini doctor --json
+printf '%s' 'Review this design.' | cdp workflow agent gemini ask --stdin --json
+cdp workflow agent gemini conversations list --limit 30 --json
+cdp workflow agent gemini conversations detail <conversation-id> --json
+cdp workflow agent gemini conversations await <conversation-id> --json
+cdp workflow agent gemini conversations delete <conversation-id> --json
+cdp --timeout 3m workflow agent gemini calibrate --json
+cdp workflow agent gemini calibration status --json
+cdp --timeout 1m workflow agent gemini calibration cleanup --json
+```
+
+Grok auth observes the signed-in conversation-list request, while runtime
+capability refresh observes `/rest/modes` and selects only the available
+provider-owned default. Ask verifies the exact prompt and mode, clicks Send
+once, acknowledges the same-target `/c/<id>` route, and returns canonical
+stored detail from the response-node/load-responses sequence. A typed 401/403
+may use one exact-owned rendered fallback. Delete and calibration each resolve
+one strict `Delete Chat` menu item and require the same target to reach `/`
+without the conversation id. Grok prompt identity normalizes only line endings
+and whitespace-only blank lines observed in provider storage; every character
+and indentation on non-empty lines remains identity-significant:
+
+```bash
+cdp workflow agent grok capabilities --json
+cdp workflow agent grok auth refresh --json
+cdp workflow agent grok capabilities refresh --json
+cdp workflow agent grok doctor --json
+printf '%s' 'Review this design.' | cdp workflow agent grok ask --stdin --json
+cdp workflow agent grok conversations list --limit 30 --json
+cdp workflow agent grok conversations detail <conversation-id> --json
+cdp workflow agent grok conversations await <conversation-id> --json
+cdp workflow agent grok conversations delete <conversation-id> --json
+cdp --timeout 3m workflow agent grok calibrate --json
+cdp workflow agent grok calibration status --json
+cdp --timeout 1m workflow agent grok calibration cleanup --json
+```
+
+See `docs/AUTHENTICATED_PROVIDERS.md` for state, recovery, and capability-truth
+rules.
 
 ### Exact-Date Google Queries
 
@@ -159,10 +281,16 @@ cdp cron heal headed --json
 `cdp cron install --json` renders and installs the full managed
 block, including mode-explicit headed daemon keepalive, the canonical
 headless maintenance entry, and one daily artifact-prune task. Both per-minute
-tasks replace owner-only latest-run logs through a hard-bounded writer before
-child output opens the target; they do not append indefinitely. The maintenance entry performs managed-process
+entries are intentionally short `cdp cron run <task-id>` calls. The Go runner
+owns non-blocking advisory locking, exact task dispatch, environment setup, and
+owner-only hard-bounded latest-run log replacement; crontab contains no inline
+shell program. Overlap is a successful typed `already_running` skip. The
+maintenance entry performs managed-process
 sweep, resource preflight, profile seeding, daemon repair, synthetic
 health-check, page cleanup, and summary artifact writes in one ordered flow.
+Headed keepalive is passive: it may repair the daemon against a previously
+approved endpoint, but it never opens provider pages, logs in, accepts consent,
+or submits prompts. Any Chrome approval remains a human action.
 Use `cdp cron diff --json` or
 `cdp cron install --dry-run --json` before installing to inspect the intended
 block without mutating the current crontab. Add an explicit browser mode to render
@@ -241,6 +369,7 @@ selected cdp state directory. Its JSON includes reclaimed PIDs and safety checks
 - Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
 - Browser resource budget: page creation is guarded by a default budget of 15 headed page tabs, 25 headless page tabs, and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; override deliberately with `--max-tabs` or `browser.resource_budget.max_tabs`, and prefer the direct headless cleanup fix: `cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25 --json`.
 - Formal browser invariants: daemon boundary, explicit profile access, lazy discovery, bounded page creation, unambiguous target selection, conservative cleanup, and JSON error envelopes are tracked in `docs/FORMAL_INVARIANTS.md`.
+- Authenticated provider state, capability truth, and exact recovery are documented in `docs/AUTHENTICATED_PROVIDERS.md`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.
 - Evidence bundles by manifest: use `cdp workflow debug-bundle --out-dir tmp/debug-bundle --task-id <task> --json` to arm collectors and hard-reload an existing target with ordinary HTTP cache bypass by default, then write a public-safe bundle manifest, command log, stage log, and local-only browser artifacts by path. `--url` performs one collector-armed cache-bypassing navigation instead of a navigate-plus-reload pair. Use `--reload=false --ignore-cache=false` for passive/cache-faithful observation. This never clears cookies, browser cache, web storage, IndexedDB, CacheStorage, or service workers. Raw request, console, and snapshot payloads stay out of default JSON unless `--inline-payloads` is explicitly set.

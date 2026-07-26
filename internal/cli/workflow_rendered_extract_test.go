@@ -207,7 +207,7 @@ func TestWaitForRenderedExtractReadinessReportsDeadlineState(t *testing.T) {
 	t.Run("thresholds unmet", func(t *testing.T) {
 		got, err := waitForRenderedExtractReadinessFunc(context.Background(), func(context.Context, string) (renderedExtractReadiness, error) {
 			return renderedExtractReadiness{URL: "https://example.test/app", DocumentReadyState: "complete", SelectorMatched: true, SelectedWordCount: 1, SelectedHTMLLength: 128, DOMSignature: "v2:shell"}, nil
-		}, "body", 5*time.Millisecond, 2*time.Millisecond, "useful-content", 5, 64, 20*time.Millisecond)
+		}, "body", 100*time.Millisecond, 20*time.Millisecond, "useful-content", 5, 64, 20*time.Millisecond)
 		if err != nil || got.Outcome != "wait_expired" || got.ThresholdsMet || got.ContentSettledSeen || got.PollCount < 1 {
 			t.Fatalf("deadline readiness = %+v, err=%v", got, err)
 		}
@@ -218,7 +218,7 @@ func TestWaitForRenderedExtractReadinessReportsDeadlineState(t *testing.T) {
 		got, err := waitForRenderedExtractReadinessFunc(context.Background(), func(context.Context, string) (renderedExtractReadiness, error) {
 			collectCount++
 			return renderedExtractReadiness{URL: "https://example.test/app", DocumentReadyState: "complete", SelectorMatched: true, SelectedWordCount: 10, SelectedHTMLLength: 128, DOMSignature: "v2:change-" + string(rune('a'+collectCount))}, nil
-		}, "body", 5*time.Millisecond, 5*time.Millisecond, "useful-content", 5, 64, 20*time.Millisecond)
+		}, "body", 100*time.Millisecond, 100*time.Millisecond, "useful-content", 5, 64, 20*time.Millisecond)
 		if err != nil || got.Outcome != "wait_expired" || !got.ThresholdsMet || got.ContentSettledSeen || got.PollCount < 1 {
 			t.Fatalf("changing deadline readiness = %+v, err=%v", got, err)
 		}

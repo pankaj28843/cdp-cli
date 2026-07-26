@@ -26,6 +26,14 @@ type CommandError struct {
 	Err                 error
 }
 
+type renderedResultExit struct {
+	ExitCode int
+}
+
+func (e *renderedResultExit) Error() string {
+	return "result already rendered"
+}
+
 func (e *CommandError) Error() string {
 	if e.Message != "" {
 		return e.Message

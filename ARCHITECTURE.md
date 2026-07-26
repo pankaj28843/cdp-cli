@@ -10,8 +10,11 @@ architecture is intentionally small: keep browser protocol mechanics in
 - Agent-visible behavior is the product. Every command needs clear help, stable
   JSON, jq-friendly fields, and actionable recovery commands.
 - Browser access is explicit. Default-profile auto-connect requires user
-  approval and the CLI must not persist cookies, headers, screenshots, traces,
-  page text, or private profile data.
+  approval. Default command output and lifecycle state must not persist cookies,
+  headers, screenshots, traces, page text, or private profile data. A concrete
+  authenticated-provider package may persist its explicitly validated replay
+  credential template only under owner-only cdp state; those values never enter
+  recovery/admission files, normal JSON output, logs, or repository artifacts.
 - Browser runtime mode is the primary user-facing selector. `browser_mode`
   chooses the runtime (`headed` or `headless`) for daemon, keepalive, and browser
   commands; `connection_mode` only describes how that daemon reaches Chrome
@@ -20,6 +23,27 @@ architecture is intentionally small: keep browser protocol mechanics in
 - Browser commands use the daemon as their only CDP entry point. The daemon owns
   the approved browser WebSocket and local RPC socket; short CLI invocations
   route through that socket instead of dialing Chrome directly.
+- Authenticated provider workflows use an exact-target transaction. They check
+  resource budget before one target creation, durably record ownership and
+  `action_pending` before submission, classify dispatch as `performed`,
+  `not_performed`, or `unknown`, and close only the recorded target.
+- Every headed workflow that can activate a tab or dispatch browser input uses
+  the canonical owner-only `<state-dir>/locks/headed-browser-input.lock`.
+  Browserflow acquires it before target creation, an ask releases it immediately
+  after its one raw-input Send, and exact target close is the fallback release.
+  This lease is browser-wide and distinct from provider admission: two
+  different providers must not race the same visible Chrome input surface.
+- Provider concurrency and cooldown are cross-process policy. One owner-only
+  admission lease serializes a provider. Ordinary minimum spacing waits inside
+  the caller's existing context, releases/reacquires the state lock, and
+  rechecks atomically; a hard provider cooldown still fails immediately.
+  A disappeared active mutation and any released unknown outcome remain
+  quarantined regardless of elapsed spacing. Only exact settled browserflow
+  evidence, or the exact owner-only direct-action record for a replay with no
+  browser target, plus explicit `--acknowledge-unknown` resolution permits
+  future new work; orphaned read-only runs may be safely abandoned.
+  Spacing/cooldown evidence is persisted without prompts, answers, cookies,
+  headers, tokens, or raw captures.
 - Headless mode launches Chrome with a cdp-owned managed profile under a
   non-default owner-only user data dir and loopback remote debugging. The
   default `managed` seed creates an empty profile. The explicit `copy-default`
@@ -52,10 +76,45 @@ architecture is intentionally small: keep browser protocol mechanics in
 | `internal/cli` | Cobra commands, output shaping, error envelopes | Raw WebSocket protocol loops |
 | `internal/cdp` | CDP transport, target/page helpers, protocol metadata | CLI flag policy |
 | `internal/artifacts` | Retention planning/execution, path and filesystem safety, atomic bounded managed logs | Browser/profile state discovery |
+| `internal/admission` | Cross-process provider serialization, spacing, and cooldown state | Provider mechanics, browser access, or private request data |
+| `internal/browserflow` | Exact target leases, shared headed-input lease, crash recovery journal, phase transitions, and tri-state irreversible-action dispatch | Provider selectors, Cobra, output rendering, or direct Chrome dialing |
+| `internal/webagent` | Stable provider operation envelope, capability catalog, and concrete provider packages below it | Cobra, direct Chrome dialing, sibling-provider imports, or universal selector/workflow DSLs |
 | `internal/browser` | Browser endpoint probing, auto-connect endpoint resolution, managed headless profile metadata and launch helpers | CLI output policy |
 | `internal/daemon` | Mode-specific keepalive runtime files, sockets, logs, process status, runtime client | User-facing command formatting |
 | `internal/state` | Disk-backed connection metadata and mode-scoped page selection | Browser/page content |
 | `internal/output` | JSON, compact JSON, jq filtering | Command semantics |
+
+Concrete provider packages live at `internal/webagent/<provider>`. They may use
+the provider-neutral browserflow and CDP capabilities passed to them, but they
+must not import `internal/cli`, another provider, the browser/daemon runtime, or
+raw WebSocket transport. `internal/cli` constructs commands and renders the
+stable envelope; it does not own provider selectors or lifecycle policy.
+
+Provider credential templates live below
+`<state-dir>/webagent/<provider>/` with `0700` directories and `0600` regular
+files. Atomic state replacement and cross-process file locking come from
+`internal/artifacts`; admission and browserflow journals store lifecycle facts
+only. Claude derives its organization/list shape from a successful exact-session
+headed request, then tries that stable HTTP shape once before a narrowly typed
+rendered fallback. Gemini intentionally remains rendered-only: its owner state
+contains safe auth booleans and observed runtime controls, not cookies or a
+private request template. Its conversation list progressively advances the
+unique rendered history scroller until the requested identity count or a stable
+bottom, so the first partially hydrated batch is not accepted. Grok derives its
+conversation-list request from the exact headed session, separately observes the
+sanitized `/rest/modes` catalog, and uses the stable response-node plus
+load-responses detail sequence after one visible Send. All three providers use
+fresh-conversation asks and can refine an unknown raw delete click only from a
+persisted same-target redirect postcondition. Gemini validates post-Send prompt
+identity by temporarily intercepting the exact rendered `Copy prompt` control
+inside its owned target; the system clipboard is never written, and the captured
+prompt is hashed after outer trim only, so interior whitespace remains
+identity-significant.
+
+Architecture fitness tests mechanically reject Cobra outside `internal/cli`,
+outward browserflow/admission dependencies, provider cross-imports, direct
+Chrome discovery/dial tokens in policy packages, and provider use of raw
+target/input methods that bypass the instrumented workflow boundary.
 
 ## Browser Runtime Modes
 

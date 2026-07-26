@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "schema_version": "webagent-operation/v1",
+  "provider": "claude",
+  "operation": "capabilities",
+  "state": "ready",
+  "stage": "metadata",
+  "data": {
+    "schema_version": "webagent-capabilities/v1",
+    "provider": "claude",
+    "display_name": "Claude",
+    "implementation_status": "partial",
+    "operations": [
+      {
+        "operation": "capabilities",
+        "command": "cdp workflow agent claude capabilities",
+        "status": "implemented",
+        "supported": true,
+        "side_effect": "none",
+        "browser": "none",
+        "summary": "Report the installed provider operation contract without probing the browser."
+      }
+    ]
+  },
+  "evidence": {
+    "run_id": "wa-example-capability",
+    "build_commit": "abc123",
+    "browser_mode": "none",
+    "read_mode": "local_metadata"
+  },
+  "cleanup": {
+    "required": false,
+    "state": "not_required"
+  },
+  "next_commands": [
+    "cdp schema webagent-operation --json"
+  ]
+}

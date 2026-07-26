@@ -75,6 +75,10 @@ func Execute(ctx context.Context, args []string, out, err io.Writer, build Build
 	cmd.SetErr(err)
 
 	if runErr := cmd.ExecuteContext(ctx); runErr != nil {
+		var rendered *renderedResultExit
+		if errors.As(runErr, &rendered) {
+			return rendered.ExitCode
+		}
 		_ = a.renderError(ctx, runErr)
 		return exitCode(runErr)
 	}

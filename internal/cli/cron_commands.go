@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,13 @@ import (
 const (
 	cronManagedBlockStart = "# cdp-cli managed browser runtime tasks"
 	cronManagedBlockEnd   = "# End cdp-cli managed browser runtime tasks"
+	cronLegacyHeadedStart = "# cdp-cli headed daemon keepalive BEGIN"
+	cronLegacyHeadedEnd   = "# cdp-cli headed daemon keepalive END"
+	// Vixie-derived crontabs commonly cap a complete input line at 1000
+	// bytes, including the terminating newline and NUL. Keep generated
+	// entries below that portable boundary and reject custom values that
+	// would exceed it before invoking crontab.
+	cronMaxEntryBytes = 998
 )
 
 type cronRenderOptions struct {
@@ -99,6 +107,7 @@ type cronFlockOwner struct {
 }
 
 var cronFlockOwnerForPath = cronFlockOwnerFromProcLocks
+var cronRunExecutable = os.Executable
 
 func (a *app) newCronCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -109,9 +118,86 @@ func (a *app) newCronCommand() *cobra.Command {
 	cmd.AddCommand(a.newCronStatusCommand())
 	cmd.AddCommand(a.newCronDiffCommand())
 	cmd.AddCommand(a.newCronInstallCommand())
+	cmd.AddCommand(a.newCronRunCommand())
 	cmd.AddCommand(a.newCronMigrateCommand())
 	cmd.AddCommand(a.newCronRemoveCommand())
 	cmd.AddCommand(a.newCronHealCommand())
+	return cmd
+}
+
+func (a *app) newCronRunCommand() *cobra.Command {
+	opts := defaultCronRenderOptions()
+	cmd := &cobra.Command{
+		Use:   "run <task-id>",
+		Short: "Run one cdp-managed cron task with Go-owned locking",
+		Long:  "Run one stable cdp-managed task with a non-blocking owner-only advisory lock, bounded latest-run logging, and typed skip or failure output. Headed keepalive uses passive browser probing and never performs login, consent, prompt submission, or other human actions.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContext(cmd)
+			defer cancel()
+			if err := a.applyCronBrowserMode(cmd, &opts); err != nil {
+				return err
+			}
+			task, ok := managedCronTaskByID(opts, strings.TrimSpace(args[0]))
+			if !ok {
+				return commandError(
+					"unknown_managed_cron_task",
+					"usage",
+					fmt.Sprintf("unknown managed cron task %q", args[0]),
+					ExitUsage,
+					[]string{"cdp cron status --json", "cdp cron install --dry-run --json"},
+				)
+			}
+			store, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			lockPath := filepath.Join(store.Dir, "locks", task.LockName+".lock")
+			lock, acquired, err := artifacts.TryAcquireOwnerOnlyFileLock(lockPath)
+			if err != nil {
+				return commandError("cron_task_lock_failed", "io", fmt.Sprintf("lock managed cron task %s: %v", task.ID, err), ExitInternal, []string{"cdp cron status --json"})
+			}
+			if !acquired {
+				return a.render(ctx, fmt.Sprintf("cron-task\t%s\talready-running", task.ID), map[string]any{
+					"ok":       true,
+					"task":     task.ID,
+					"state":    "already_running",
+					"executed": false,
+					"lock":     lockPath,
+				})
+			}
+
+			result, runErr := runManagedCronTask(ctx, store.Dir, task, opts)
+			releaseErr := lock.Release()
+			data := map[string]any{
+				"ok":       runErr == nil && releaseErr == nil,
+				"task":     task.ID,
+				"state":    "completed",
+				"executed": true,
+				"lock":     lockPath,
+				"result":   result,
+			}
+			if runErr != nil || releaseErr != nil {
+				data["state"] = "failed"
+				return commandErrorWithData(
+					"cron_task_failed",
+					"check_failed",
+					fmt.Sprintf("managed cron task %s failed: %v", task.ID, errors.Join(runErr, releaseErr)),
+					ExitCheckFailed,
+					[]string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"},
+					data,
+				)
+			}
+			return a.render(ctx, fmt.Sprintf("cron-task\t%s\tcompleted", task.ID), data)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Display, "display", opts.Display, "DISPLAY used by passive headed daemon keepalive")
+	cmd.Flags().StringVar(&opts.XDGRuntimeDir, "xdg-runtime-dir", opts.XDGRuntimeDir, "XDG_RUNTIME_DIR used by passive headed daemon keepalive")
+	cmd.Flags().DurationVar(&opts.Reconnect, "reconnect", opts.Reconnect, "daemon reconnect interval")
+	cmd.Flags().StringVar(&opts.SeedStrategy, "profile-seed-strategy", opts.SeedStrategy, "managed headless profile seed strategy")
+	cmd.Flags().DurationVar(&opts.SeedAfter, "profile-seed-if-older-than", opts.SeedAfter, "refresh the managed headless profile when older than this duration")
+	cmd.Flags().DurationVar(&opts.ArtifactRetention, "artifact-retention", opts.ArtifactRetention, "strict retention age for allowlisted historical artifacts")
+	cmd.Flags().StringVar(&opts.MaxLogSize, "max-log-size", opts.MaxLogSize, "hard size bound for managed task logs")
 	return cmd
 }
 
@@ -257,8 +343,12 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 			}
 			summary := summarizeCrontab(current)
 			tasks := managedCronTasks(opts)
+			if err := validateManagedCronTaskEntryLengths(tasks); err != nil {
+				return err
+			}
 			block := managedCronBlock(opts)
-			next := appendCronManagedBlock(withoutCronManagedBlock(current), block)
+			base, legacyBlocksRemoved := withoutLegacyCronOwnedBlocks(withoutCronManagedBlock(current))
+			next := appendCronManagedBlock(base, block)
 			changed := current != next
 			if changed && !dryRun {
 				if err := writeUserCrontab(ctx, next); err != nil {
@@ -270,20 +360,21 @@ func (a *app) newCronInstallCommand() *cobra.Command {
 				installed = extractCronManagedBlock(block)
 			}
 			data := map[string]any{
-				"ok":               true,
-				"browser_mode":     opts.BrowserMode,
-				"profile_seed":     cronProfileSeedMetadata(opts),
-				"artifact_policy":  cronArtifactPolicy(opts),
-				"action":           actionString(changed, "installed", "unchanged"),
-				"changed":          changed,
-				"dry_run":          dryRun,
-				"installed":        !dryRun,
-				"matches_intended": true,
-				"managed_block":    installed,
-				"intended_block":   extractCronManagedBlock(block),
-				"tasks":            cronTaskStatuses(installed.Entries, tasks),
-				"warnings":         cronInstallWarnings(opts, summary),
-				"next_commands":    []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"},
+				"ok":                    true,
+				"browser_mode":          opts.BrowserMode,
+				"profile_seed":          cronProfileSeedMetadata(opts),
+				"artifact_policy":       cronArtifactPolicy(opts),
+				"action":                actionString(changed, "installed", "unchanged"),
+				"changed":               changed,
+				"dry_run":               dryRun,
+				"installed":             !dryRun,
+				"matches_intended":      true,
+				"managed_block":         installed,
+				"intended_block":        extractCronManagedBlock(block),
+				"tasks":                 cronTaskStatuses(installed.Entries, tasks),
+				"legacy_blocks_removed": legacyBlocksRemoved,
+				"warnings":              cronInstallWarnings(opts, summary),
+				"next_commands":         []string{"cdp cron status --json", "cdp doctor --check scheduled-tasks --json"},
 			}
 			if dryRun {
 				data["action"] = actionString(changed, "would_install", "unchanged")
@@ -310,7 +401,7 @@ func (a *app) newCronRemoveCommand() *cobra.Command {
 				return cronCommandError("read crontab", err)
 			}
 			installed := extractCronManagedBlock(current)
-			next := withoutCronManagedBlock(current)
+			next, legacyBlocksRemoved := withoutLegacyCronOwnedBlocks(withoutCronManagedBlock(current))
 			changed := current != next
 			if changed {
 				if err := writeUserCrontab(ctx, next); err != nil {
@@ -318,12 +409,13 @@ func (a *app) newCronRemoveCommand() *cobra.Command {
 				}
 			}
 			data := map[string]any{
-				"ok":            true,
-				"action":        actionString(changed, "removed", "unchanged"),
-				"changed":       changed,
-				"removed":       installed.Installed,
-				"removed_block": installed,
-				"next_commands": []string{"cdp cron status --json", "cdp cron install --json"},
+				"ok":                    true,
+				"action":                actionString(changed, "removed", "unchanged"),
+				"changed":               changed,
+				"removed":               installed.Installed,
+				"removed_block":         installed,
+				"legacy_blocks_removed": legacyBlocksRemoved,
+				"next_commands":         []string{"cdp cron status --json", "cdp cron install --json"},
 			}
 			return a.render(ctx, fmt.Sprintf("cdp cron block %s", data["action"]), data)
 		},
@@ -645,16 +737,15 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 				ID:                 cronTaskHeadedDaemonKeepalive,
 				BrowserMode:        "headed",
 				Schedule:           "* * * * *",
-				LockName:           "keepalive-headed",
+				LockName:           "cron-run-headed-daemon-keepalive",
 				LogName:            "keepalive-headed.log",
 				LogArtifactKey:     "headed_keepalive_log",
 				Purpose:            "Keep the headed daemon healthy with passive probing and noninteractive repair when an approved endpoint already exists.",
-				Command:            fmt.Sprintf("%s --state-dir %s artifacts run-managed --task %s --log %s/keepalive-headed.log --max-log-size %s --json -- env DISPLAY=%s XDG_RUNTIME_DIR=%s %s --state-dir %s --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect %s --display %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadedDaemonKeepalive, logDir, maxLogSize, display, xdgRuntimeDir, cdpBin, logDir, reconnect, display),
-				ProbeWords:         []string{"daemon", "keepalive"},
+				Command:            fmt.Sprintf("%s --state-dir %s cron run %s --display %s --xdg-runtime-dir %s --reconnect %s --max-log-size %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadedDaemonKeepalive, display, xdgRuntimeDir, reconnect, maxLogSize),
+				ProbeWords:         []string{"cron", "run", cronTaskHeadedDaemonKeepalive},
 				ConfigDependencies: []string{"display", "xdg_runtime_dir", "reconnect"},
 				LaunchCapable:      true,
 			},
-			logDir,
 		))
 	}
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headless" {
@@ -663,39 +754,148 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 				ID:                          cronTaskHeadlessMaintenance,
 				BrowserMode:                 "headless",
 				Schedule:                    "* * * * *",
-				LockName:                    "headless-maintenance",
+				LockName:                    "cron-run-headless-maintenance",
 				LogName:                     "headless-maintenance.log",
 				LogArtifactKey:              "headless_maintenance_log",
 				Purpose:                     "Run the canonical managed headless maintenance flow: sweep, resource preflight, profile seed, daemon repair, health-check, cleanup, and summary artifact write.",
-				Command:                     fmt.Sprintf("%s --state-dir %s artifacts run-managed --task %s --log %s/headless-maintenance.log --max-log-size %s --json -- %s --state-dir %s --browser-mode headless daemon maintenance --profile-seed-strategy %s --profile-seed-if-older-than %s --repair --force --reconnect %s --health-check --cleanup --cleanup-close --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadlessMaintenance, logDir, maxLogSize, cdpBin, logDir, seedStrategy, seedAfter, reconnect),
-				ProbeWords:                  []string{"daemon", "maintenance"},
+				Command:                     fmt.Sprintf("%s --state-dir %s cron run %s --profile-seed-strategy %s --profile-seed-if-older-than %s --reconnect %s --max-log-size %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadlessMaintenance, seedStrategy, seedAfter, reconnect, maxLogSize),
+				ProbeWords:                  []string{"cron", "run", cronTaskHeadlessMaintenance},
 				ConfigDependencies:          []string{"reconnect", "headless.profile_seed_strategy", "headless.profile_refresh_after"},
 				LaunchCapable:               true,
 				RequiresManagedProcessSweep: true,
 				ProvidesManagedProcessSweep: true,
 			},
-			logDir,
 		))
 	}
 	tasks = append(tasks, newManagedCronTask(
 		managedCronTask{
 			ID:                 cronTaskArtifactPrune,
 			Schedule:           "23 3 * * *",
-			LockName:           "artifact-prune",
+			LockName:           "cron-run-artifact-prune",
 			LogName:            "artifact-prune/latest.json",
 			LogArtifactKey:     "artifact_retention_summary",
 			Purpose:            "Apply the allowlisted historical-artifact retention policy and hard managed-log bounds once per day.",
-			Command:            fmt.Sprintf("%s --state-dir %s artifacts prune --older-than %s --max-log-size %s --apply --json >/dev/null 2>&1", cdpBin, logDir, retention, maxLogSize),
-			ProbeWords:         []string{"artifacts", "prune"},
+			Command:            fmt.Sprintf("%s --state-dir %s cron run %s --artifact-retention %s --max-log-size %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskArtifactPrune, retention, maxLogSize),
+			ProbeWords:         []string{"cron", "run", cronTaskArtifactPrune},
 			ConfigDependencies: []string{"artifacts.retention", "artifacts.max_log_size"},
 		},
-		logDir,
 	))
 	return tasks
 }
 
-func newManagedCronTask(task managedCronTask, logDir string) managedCronTask {
-	task.CronEntry = fmt.Sprintf("%s %s", task.Schedule, cronLockedCommand(fmt.Sprintf("%s/locks/%s.lock", logDir, task.LockName), task.Command))
+func managedCronTaskByID(opts cronRenderOptions, id string) (managedCronTask, bool) {
+	for _, task := range managedCronTasks(opts) {
+		if task.ID == id {
+			return task, true
+		}
+	}
+	return managedCronTask{}, false
+}
+
+func runManagedCronTask(ctx context.Context, stateDir string, task managedCronTask, opts cronRenderOptions) (map[string]any, error) {
+	executable, err := cronRunExecutable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve cdp executable: %w", err)
+	}
+	args, env, err := managedCronTaskChildSpec(task.ID, stateDir, opts)
+	if err != nil {
+		return nil, err
+	}
+	child := exec.CommandContext(ctx, executable, args...)
+	child.Env = env
+
+	result := map[string]any{
+		"browser_mode": task.BrowserMode,
+	}
+	if task.ID == cronTaskArtifactPrune {
+		child.Stdout = io.Discard
+		child.Stderr = io.Discard
+		err := child.Run()
+		result["artifact"] = filepath.Join(stateDir, task.LogName)
+		return result, err
+	}
+
+	logPath := filepath.Join(stateDir, task.LogName)
+	logResult, runErr := artifacts.WriteBoundedManagedLog(ctx, stateDir, logPath, opts.MaxLogSizeBytes, func(writer io.Writer) error {
+		child.Stdout = writer
+		child.Stderr = writer
+		return child.Run()
+	})
+	result["log"] = logResult
+	return result, runErr
+}
+
+func managedCronTaskChildSpec(taskID, stateDir string, opts cronRenderOptions) ([]string, []string, error) {
+	common := []string{"--state-dir", stateDir}
+	switch taskID {
+	case cronTaskHeadedDaemonKeepalive:
+		args := append(common,
+			"--browser-mode", "headed",
+			"daemon", "keepalive",
+			"--auto-connect",
+			"--repair",
+			"--probe", "passive",
+			"--reconnect", opts.Reconnect.String(),
+			"--display", opts.Display,
+			"--json",
+		)
+		return args, envWithOverrides(os.Environ(), map[string]string{
+			"DISPLAY":         opts.Display,
+			"XDG_RUNTIME_DIR": opts.XDGRuntimeDir,
+		}), nil
+	case cronTaskHeadlessMaintenance:
+		args := append(common,
+			"--browser-mode", "headless",
+			"daemon", "maintenance",
+			"--profile-seed-strategy", cronProfileSeedStrategy(opts),
+			"--profile-seed-if-older-than", cronDurationLiteral(cronProfileSeedAfter(opts)),
+			"--repair",
+			"--force",
+			"--reconnect", opts.Reconnect.String(),
+			"--health-check",
+			"--cleanup",
+			"--cleanup-close",
+			"--json",
+		)
+		return args, os.Environ(), nil
+	case cronTaskArtifactPrune:
+		args := append(common,
+			"artifacts", "prune",
+			"--older-than", cronDurationLiteral(opts.ArtifactRetention),
+			"--max-log-size", artifacts.FormatByteSize(opts.MaxLogSizeBytes),
+			"--apply",
+			"--json",
+		)
+		return args, os.Environ(), nil
+	default:
+		return nil, nil, fmt.Errorf("unknown managed cron task %q", taskID)
+	}
+}
+
+func envWithOverrides(base []string, overrides map[string]string) []string {
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, replace := overrides[key]; replace {
+				continue
+			}
+		}
+		out = append(out, entry)
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		out = append(out, key+"="+overrides[key])
+	}
+	return out
+}
+
+func newManagedCronTask(task managedCronTask) managedCronTask {
+	task.CronEntry = fmt.Sprintf("%s %s", task.Schedule, task.Command)
 	return task
 }
 
@@ -859,9 +1059,20 @@ func cronDurationLiteral(d time.Duration) string {
 	return d.String()
 }
 
-func cronLockedCommand(lockPath, command string) string {
-	quotedCommand := cronValue(command)
-	return fmt.Sprintf("cdp_lock=%s; mkdir -p \"$(dirname \"$cdp_lock\")\"; cdp_flock=$(command -v flock 2>/dev/null || true); if [ -n \"$cdp_flock\" ]; then cdp_flock_close=''; \"$cdp_flock\" --help 2>&1 | grep -q -- '--close' && cdp_flock_close='--close'; \"$cdp_flock\" $cdp_flock_close -n \"$cdp_lock\" sh -c %s; elif mkdir \"$cdp_lock.dir\" 2>/dev/null; then trap 'rmdir \"$cdp_lock.dir\"' EXIT; %s; fi", lockPath, quotedCommand, command)
+func validateManagedCronTaskEntryLengths(tasks []managedCronTask) error {
+	for _, task := range tasks {
+		if len(task.CronEntry) <= cronMaxEntryBytes {
+			continue
+		}
+		return commandError(
+			"cron_entry_too_long",
+			"usage",
+			fmt.Sprintf("managed cron entry %q is %d bytes; portable limit is %d", task.ID, len(task.CronEntry), cronMaxEntryBytes),
+			ExitUsage,
+			[]string{"cdp cron install --dry-run --json", "cdp cron status --json"},
+		)
+	}
+	return nil
 }
 
 func cronValue(value string) string {
@@ -972,6 +1183,32 @@ func withoutCronManagedBlock(text string) string {
 		}
 	}
 	return out.String()
+}
+
+func withoutLegacyCronOwnedBlocks(text string) (string, int) {
+	var out strings.Builder
+	inBlock := false
+	removed := 0
+	for _, chunk := range splitLinesPreserve(text) {
+		line := strings.TrimRight(chunk, "\r\n")
+		switch line {
+		case cronLegacyHeadedStart:
+			if !inBlock {
+				inBlock = true
+				removed++
+			}
+			continue
+		case cronLegacyHeadedEnd:
+			if inBlock {
+				inBlock = false
+				continue
+			}
+		}
+		if !inBlock {
+			out.WriteString(chunk)
+		}
+	}
+	return out.String(), removed
 }
 
 func withoutLegacyPagesPollingCronEntries(text string) (string, []string) {

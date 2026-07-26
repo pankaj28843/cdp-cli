@@ -74,6 +74,7 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" describe --command "daemon health-check" --json | jq -e '.ok == true and .commands.name == "health-check" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--repair"))) and (.commands.examples | any(contains("--require-healthy"))) and (.commands.flags[] | select(.name == "repair")) and (.commands.flags[] | select(.name == "require-healthy")) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
 "$binary" describe --command "cron install" --json | jq -e '.ok == true and .commands.name == "install" and (.commands.examples | any(. == "cdp cron install --json")) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run")) and (.commands.flags[] | select(.name == "artifact-retention")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
+"$binary" describe --command "cron run" --json | jq -e '.ok == true and .commands.name == "run" and (.commands.examples | any(contains("headed-daemon-keepalive"))) and (.commands.examples | any(contains("headless-maintenance"))) and (.commands.examples | any(contains("artifact-prune"))) and (.commands.flags[] | select(.name == "display")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
 "$binary" describe --command "artifacts prune" --json | jq -e '.ok == true and .commands.name == "prune" and (.commands.examples | any(contains("--dry-run"))) and (.commands.examples | any(contains("--apply"))) and (.commands.flags[] | select(.name == "older-than")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
 "$binary" describe --command "artifacts run-managed" --json | jq -e '.ok == true and .commands.name == "run-managed" and (.commands.flags[] | select(.name == "task")) and (.commands.flags[] | select(.name == "log")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
 "$binary" describe --command "cron migrate pages-polling" --json | jq -e '.ok == true and .commands.name == "pages-polling" and (.commands.examples | any(contains("migrate pages-polling --json"))) and (.commands.examples | any(contains("--apply"))) and (.commands.flags[] | select(.name == "apply"))' >/dev/null
@@ -87,6 +88,10 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" describe --command "connection add" --json | jq -e '.ok == true and .commands.name == "add" and (.commands.examples | any(contains("--auto-connect")))' >/dev/null
 "$binary" describe --command "connection select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("connection select")))' >/dev/null
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
+"$binary" describe --command "workflow agent" --json | jq -e '.ok == true and .commands.name == "agent" and (.commands.examples | any(contains("workflow agent claude capabilities"))) and (.commands.examples | any(contains("workflow agent gemini capabilities refresh")))' >/dev/null
+"$binary" --state-dir "$state_dir" workflow agent providers --json | jq -e '.ok == true and .schema_version == "webagent-operation/v1" and .data.schema_version == "webagent-capabilities/v1" and (.data.providers | length == 7) and ([.data.providers[] | select(.provider == "claude" or .provider == "gemini") | .operations[] | select(.supported)] | length == 18)' >/dev/null
+"$binary" --state-dir "$state_dir" workflow agent admission status chatgpt --json | jq -e '.ok == true and .provider == "chatgpt" and .state == "not_found" and .found == false and .resolution_required == false' >/dev/null
+"$binary" --state-dir "$state_dir" workflow agent gemini capabilities --json | jq -e '.ok == true and .provider == "gemini" and .operation == "capabilities" and .data.runtime.state == "missing" and ([.data.operations[] | select(.supported)] | length == 9)' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
 "$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_pages_polling_keepalive | type == "boolean") and (.[0].details.pages_polling_count | type == "number") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].details.has_unflocked_cdp_task | type == "boolean") and (.[0].details.tasks | type == "array") and (.[0].details.last_run_artifacts | type == "object") and (.[0].details.artifact_policy.max_log_size_bytes == 67108864) and (.[0].details.last_cleanup | type == "object") and (.[0].details.managed_processes.checked | type == "boolean") and (.[0].next_commands | index("cdp cron status --json")) and (.[0].next_commands | index("cdp cron diff --json")) and (.[0].next_commands | index("cdp cron install --json")) and (.[0].next_commands | index("cdp --browser-mode headless daemon maintenance --dry-run --json"))' >/dev/null
@@ -105,6 +110,8 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
+"$binary" schema webagent-operation --json | jq -e '.ok == true and .schema.name == "webagent-operation" and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("evidence"))' >/dev/null
+"$binary" schema webagent-capabilities --json | jq -e '.ok == true and .schema.name == "webagent-capabilities" and (.schema.fields | map(.name) | index("operations"))' >/dev/null
 "$binary" schema describe --json | jq -e '.ok == true and .schema.name == "describe" and (.schema.fields | map(.name) | index("commands"))' >/dev/null
 "$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities")) and (.schema.fields | map(.name) | index("bootstrap_path"))' >/dev/null
@@ -222,13 +229,14 @@ CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$bin
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron migrate pages-polling --apply --state-dir "$state_dir" --json | jq -e '.ok == true and .action == "removed" and .dry_run == false and .applied == true and .candidate_count == 1 and .removed_count == 1 and .managed_keepalive_installed == true and (.removed_entries | length == 1)' >/dev/null
 rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
 rg -q 'cdp-cli managed browser runtime tasks' "$fake_crontab_store"
-rg -q -- '--browser-mode headed daemon keepalive --auto-connect --repair --probe passive' "$fake_crontab_store"
-rg -q -- '--browser-mode headless daemon maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h' "$fake_crontab_store"
-rg -q -- 'artifacts run-managed --task headed-daemon-keepalive' "$fake_crontab_store"
-rg -q -- 'artifacts run-managed --task headless-maintenance' "$fake_crontab_store"
-rg -q -- 'artifacts prune --older-than 168h --max-log-size 64MiB --apply' "$fake_crontab_store"
+rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
+rg -q -- 'cron run headless-maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h' "$fake_crontab_store"
+rg -q -- 'cron run artifact-prune --artifact-retention 168h --max-log-size 64MiB' "$fake_crontab_store"
+! rg -q -e 'flock' -e 'sh -c' -e 'artifacts run-managed' "$fake_crontab_store"
+awk 'length($0) > 998 { exit 1 }' "$fake_crontab_store"
 ! rg -q '>> ' "$fake_crontab_store"
 ! rg -q 'cdp pages --browser-mode headed' "$fake_crontab_store"
+"$binary" --state-dir "$state_dir" cron run artifact-prune --json | jq -e '.ok == true and .task == "artifact-prune" and .state == "completed" and .executed == true' >/dev/null
 cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup
@@ -259,18 +267,18 @@ cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup
 EOF_CRONTAB
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 2) and (.intended_block.entries | any(contains("daemon keepalive --auto-connect --repair --probe passive"))) and (.intended_block.entries | any(contains("artifacts prune")))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 2) and (.intended_block.entries | any(contains("cron run headed-daemon-keepalive"))) and (.intended_block.entries | any(contains("cron run artifact-prune")))' >/dev/null
 cron_seed_config="$state_dir/cron-seed-config.json"
 cat >"$cron_seed_config" <<'EOF_CRON_SEED_CONFIG'
 {"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"30m"}},"artifacts":{"retention":"336h","max_log_size":"8MiB"}}
 EOF_CRON_SEED_CONFIG
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --config "$cron_seed_config" cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .profile_seed.strategy == "copy-default" and .profile_seed.if_older_than == "30m" and .profile_seed.if_older_than_seconds == 1800 and .profile_seed.schedule == "*/15 * * * *" and .artifact_policy.retention_seconds == 1209600 and .artifact_policy.max_log_size_bytes == 8388608 and (.intended_block.entries | any(contains("--browser-mode headless daemon maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m"))) and (.intended_block.entries | any(contains("artifacts prune --older-than 336h --max-log-size 8MiB --apply")))' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --config "$cron_seed_config" cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .profile_seed.strategy == "copy-default" and .profile_seed.if_older_than == "30m" and .profile_seed.if_older_than_seconds == 1800 and .profile_seed.schedule == "*/15 * * * *" and .artifact_policy.retention_seconds == 1209600 and .artifact_policy.max_log_size_bytes == 8388608 and (.intended_block.entries | any(contains("cron run headless-maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m"))) and (.intended_block.entries | any(contains("cron run artifact-prune --artifact-retention 336h --max-log-size 8MiB")))' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.managed_block.entries | length == 3)' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == false and .action == "unchanged"' >/dev/null
 rg -q '^SHELL=/bin/sh$' "$fake_crontab_store"
-rg -q -- '--browser-mode headed daemon keepalive --auto-connect --repair --probe passive' "$fake_crontab_store"
+rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
 ! rg -q 'cron heal headed' "$fake_crontab_store"
-rg -q 'command -v flock' "$fake_crontab_store"
+! rg -q -e 'flock' -e 'sh -c' "$fake_crontab_store"
 rg -q -- '--profile-seed-strategy managed' "$fake_crontab_store"
 rg -q -- '--profile-seed-if-older-than 6h' "$fake_crontab_store"
 ! rg -q -e '/usr/bin/flock -n' -e '--strategy copy-default' "$fake_crontab_store"
@@ -565,8 +573,12 @@ printf 'indexeddb-state' > "$profile_copy_source/Default/IndexedDB/https_example
 printf '{"name":"synthetic-extension"}' > "$profile_copy_source/Default/Extensions/abcdefghijklmnop/1.0.0/manifest.json"
 printf 'cache-bytes' > "$profile_copy_source/Default/Cache/Cache_Data/f_000001"
 printf 'runtime-artifact' > "$profile_copy_source/SingletonLock"
+# This fixture proves copy semantics, not ambient host-load policy. Keep it
+# deterministic when the development machine is busy running the full suite.
+profile_seed_config="$state_dir/profile-seed-config.json"
+printf '%s\n' '{"browser":{"resource_budget":{"min_free_memory_mb":1,"min_free_disk_mb":1,"max_load_per_cpu":1000}}}' > "$profile_seed_config"
 profile_seed_json="$state_dir/profile-seed-copy-default.json"
-HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --json >"$profile_seed_json"
+HOME="$profile_copy_home" XDG_CONFIG_HOME="$profile_copy_config_dir" "$binary" --config "$profile_seed_config" --state-dir "$state_dir-copy-default" browser profile seed --strategy copy-default --json >"$profile_seed_json"
 jq -e '.ok == true and .seeded == true and .exists == true and .seed_action == "seeded" and .seed_strategy == "copy-default" and .seed_status_path and .last_seed.schema_version == "cdp-profile-seed-status/v1" and .last_seed.seed_strategy == "copy-default" and .last_seed.seed_action == "seeded" and .managed_browser.browser_mode == "headless" and .managed_browser.profile_seed_strategy == "copy-default" and .managed_browser.default_profile_copied == true and .managed_browser.copied_file_count >= 6 and .resource_preflight.heavy_work_allowed == true and .maintenance.managed_process_sweep.checked == true and (.managed_browser | has("ownership_token") | not) and (.managed_browser | has("process_start_time") | not)' "$profile_seed_json" >/dev/null
 profile_seed_summary="$(jq -r '.seed_status_path' "$profile_seed_json")"
 test -s "$profile_seed_summary"

@@ -33,8 +33,8 @@ func TestSummarizeCrontabDetectsPagesPollingKeepaliveHack(t *testing.T) {
 
 func TestScheduledTasksDoctorCheckReportsCleanupTask(t *testing.T) {
 	check := scheduledTasksStatusForSummary(true, nil, crontabSummary{EntryCount: 2, HasDaemonKeepalive: true, HasHeadlessDaemonKeepalive: true, HasPageCleanup: true, HasModeExplicitPageCleanup: true})
-	if check["status"] != "pass" || check["message"] != "user crontab includes flocked cdp daemon maintenance/keepalive and mode-explicit cleanup" {
-		t.Fatalf("scheduled task check = %+v, want pass message for flocked mode-explicit keepalive and cleanup", check)
+	if check["status"] != "pass" || check["message"] != "user crontab includes exclusively locked cdp daemon maintenance/keepalive and mode-explicit cleanup" {
+		t.Fatalf("scheduled task check = %+v, want pass message for exclusively locked mode-explicit keepalive and cleanup", check)
 	}
 	next, ok := check["next_commands"].([]string)
 	if !ok || !testContainsString(next, "cdp cron status --json") || !testContainsString(next, "cdp cron install --json") || !testContainsString(next, "cdp --browser-mode headless daemon maintenance --dry-run --json") {
@@ -85,8 +85,8 @@ func TestScheduledTasksDoctorCheckWarnsForPagesPollingKeepalive(t *testing.T) {
 
 func TestScheduledTasksDoctorCheckWarnsForUnflockedCDPTask(t *testing.T) {
 	check := scheduledTasksStatusForSummary(true, nil, crontabSummary{EntryCount: 2, HasDaemonKeepalive: true, HasHeadlessDaemonKeepalive: true, HasPageCleanup: true, HasModeExplicitPageCleanup: true, HasUnflockedCDPTask: true})
-	if check["status"] != "warn" || check["message"] != "current user crontab has cdp daemon or cleanup tasks without flock" {
-		t.Fatalf("scheduled task check = %+v, want unflocked task warning", check)
+	if check["status"] != "warn" || check["message"] != "current user crontab has cdp daemon or cleanup tasks without exclusive locking" {
+		t.Fatalf("scheduled task check = %+v, want unlocked task warning", check)
 	}
 	details, ok := check["details"].(map[string]any)
 	if !ok || details["has_unflocked_cdp_task"] != true {
@@ -115,6 +115,9 @@ func TestScheduledTasksDoctorCheckWarnsForAmbiguousCleanupTask(t *testing.T) {
 func TestScheduledTaskUsesFlock(t *testing.T) {
 	if !scheduledTaskUsesFlock("* * * * * /usr/bin/flock -n $HOME/.cdp-cli/locks/cdp.lock cdp daemon keepalive --json") {
 		t.Fatalf("scheduledTaskUsesFlock returned false for flocked command")
+	}
+	if !scheduledTaskUsesFlock("* * * * * $HOME/.local/bin/cdp cron run headed-daemon-keepalive --json") {
+		t.Fatalf("scheduledTaskUsesFlock returned false for Go-owned cron runner")
 	}
 	if scheduledTaskUsesFlock("* * * * * cdp daemon keepalive --json") {
 		t.Fatalf("scheduledTaskUsesFlock returned true for unflocked command")

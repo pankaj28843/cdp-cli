@@ -32,6 +32,122 @@ func withCommandRetrySchemaFields(fields []schemaField, includeLastObservedTarge
 
 func schemaCatalog() map[string]schemaInfo {
 	return map[string]schemaInfo{
+		"webagent-operation": {
+			Name:        "webagent-operation",
+			Description: "Stable outer result envelope for authenticated web-agent provider operations; provider-specific result fields remain under data.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True only when the requested operation completed in the reported state."},
+				{Name: "schema_version", Type: "string", Required: true, Description: "Stable envelope version, currently webagent-operation/v1."},
+				{Name: "provider", Type: "string", Required: true, Description: "Concrete provider name, or catalog for the provider catalog operation."},
+				{Name: "operation", Type: "string", Required: true, Description: "Exact operation such as capabilities, ask, conversations.await, or conversations.delete."},
+				{Name: "state", Type: "string", Required: true, Description: "Agent-facing state such as ready, terminal, incomplete, unsupported, or failed."},
+				{Name: "stage", Type: "string", Required: true, Description: "Last proven workflow stage, preserving whether provider I/O and irreversible action dispatch occurred."},
+				{Name: "error", Type: "webagent_error", Required: false, Description: "Typed failure code, class, safe message, retry safety, and optional retry time; remediation remains in next_commands."},
+				{Name: "action", Type: "webagent_action", Required: false, Description: "Irreversible-action evidence with tri-state dispatch, attempts, durable-pending proof, and retry safety."},
+				{Name: "conversation", Type: "webagent_conversation", Required: false, Description: "Exact provider conversation identity acknowledged by the same owned target."},
+				{Name: "data", Type: "provider_specific", Required: true, Description: "Provider- or operation-specific result data which the shared envelope never reduces to counts."},
+				{Name: "evidence", Type: "webagent_evidence", Required: true, Description: "Run/build/read-mode and optional exact target/session lifecycle evidence."},
+				{Name: "cleanup", Type: "webagent_cleanup", Required: true, Description: "Cleanup state for the exact target and a safe recovery command when cleanup remains pending."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe capability, schema, recovery, or continuation commands valid for this exact state."},
+			},
+		},
+		"webagent-capabilities": {
+			Name:        "webagent-capabilities",
+			Description: "Capability-backed provider contract; planned and unsupported operations remain explicit and are never treated as callable.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Stable capability data version, currently webagent-capabilities/v1."},
+				{Name: "provider", Type: "string", Required: true, Description: "Concrete authenticated web-agent provider."},
+				{Name: "display_name", Type: "string", Required: true, Description: "Human-facing provider name."},
+				{Name: "implementation_status", Type: "string", Required: true, Description: "Overall provider migration state such as partial or implemented."},
+				{Name: "operations", Type: "array<webagent_operation_capability>", Required: true, Description: "Every public provider operation with installed command, status, support, side effect, browser need, and unavailability reason."},
+			},
+		},
+		"webagent-provider-catalog": {
+			Name:        "webagent-provider-catalog",
+			Description: "Installed authenticated provider catalog returned by cdp workflow agent providers.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Stable capability data version, currently webagent-capabilities/v1."},
+				{Name: "providers", Type: "array<webagent_capabilities>", Required: true, Description: "Concrete provider capability contracts in deterministic order."},
+			},
+		},
+		"webagent-operation-capability": {
+			Name:        "webagent-operation-capability",
+			Description: "One installed, planned, or unsupported authenticated provider operation.",
+			Fields: []schemaField{
+				{Name: "operation", Type: "string", Required: true, Description: "Stable operation identity."},
+				{Name: "command", Type: "string", Required: true, Description: "Intended full cdp workflow agent command path."},
+				{Name: "status", Type: "string", Required: true, Description: "implemented, planned, or unsupported."},
+				{Name: "supported", Type: "boolean", Required: true, Description: "True only when the installed command is callable beyond capability metadata."},
+				{Name: "side_effect", Type: "string", Required: true, Description: "none, auth_observation, conversation, destructive, or validation_mutation."},
+				{Name: "browser", Type: "string", Required: true, Description: "none, headed, or provider_defined."},
+				{Name: "summary", Type: "string", Required: true, Description: "Provider-independent intent of the operation."},
+				{Name: "unavailable_by", Type: "string", Required: false, Description: "Why a planned or unsupported operation is not callable."},
+			},
+		},
+		"webagent-action": {
+			Name:        "webagent-action",
+			Description: "Durable evidence for one irreversible provider action.",
+			Fields: []schemaField{
+				{Name: "dispatch", Type: "string", Required: true, Description: "Exactly performed, not_performed, or unknown; only not_performed may retry the action."},
+				{Name: "attempt_count", Type: "number", Required: true, Description: "Bounded dispatcher calls; a proven not_performed outcome may permit another call."},
+				{Name: "raw_input_count", Type: "number", Required: true, Description: "Raw irreversible input attempts; this value must never exceed one per run."},
+				{Name: "retry_safe", Type: "boolean", Required: true, Description: "True only when dispatch is proven not_performed or no irreversible action is required."},
+				{Name: "pending_persisted", Type: "boolean", Required: true, Description: "True when owner-only action_pending state was durably persisted before raw input."},
+			},
+		},
+		"webagent-error": {
+			Name:        "webagent-error",
+			Description: "Typed, sanitized authenticated-provider failure evidence.",
+			Fields: []schemaField{
+				{Name: "code", Type: "string", Required: true, Description: "Stable machine-actionable failure code."},
+				{Name: "err_class", Type: "string", Required: true, Description: "Stable failure class such as usage, connection, auth, provider, completion, cleanup, or unsupported."},
+				{Name: "message", Type: "string", Required: true, Description: "Sanitized operator-facing explanation without private provider payloads."},
+				{Name: "retry_safe", Type: "boolean", Required: true, Description: "True only when repeating the requested operation cannot duplicate an irreversible action."},
+				{Name: "retry_at", Type: "string", Required: false, Description: "RFC3339 time after which retry may be reconsidered; it never overrides dispatch safety."},
+			},
+		},
+		"webagent-conversation": {
+			Name:        "webagent-conversation",
+			Description: "Exact provider conversation identity acknowledged by the owned target.",
+			Fields: []schemaField{
+				{Name: "id", Type: "string", Required: false, Description: "Provider conversation ID when observed."},
+				{Name: "url", Type: "string", Required: false, Description: "Provider conversation URL when observed."},
+			},
+		},
+		"webagent-target": {
+			Name:        "webagent-target",
+			Description: "Exact CDP target/session identity and lifecycle evidence.",
+			Fields: []schemaField{
+				{Name: "target_id", Type: "string", Required: false, Description: "Exact CDP target ID created for this run."},
+				{Name: "session_id", Type: "string", Required: false, Description: "Exact flattened CDP session attached to the target."},
+				{Name: "owned", Type: "boolean", Required: true, Description: "True only when ownership was recorded for this run."},
+				{Name: "created", Type: "boolean", Required: true, Description: "True only when this run created the target."},
+				{Name: "closed", Type: "boolean", Required: true, Description: "True only after exact target disappearance is proven."},
+			},
+		},
+		"webagent-evidence": {
+			Name:        "webagent-evidence",
+			Description: "Privacy-safe operation provenance and target lifecycle evidence.",
+			Fields: []schemaField{
+				{Name: "run_id", Type: "string", Required: true, Description: "Opaque unique operation identity."},
+				{Name: "build_commit", Type: "string", Required: true, Description: "cdp-cli build source revision or unknown for an unmanaged build."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "none, headed, or headless."},
+				{Name: "read_mode", Type: "string", Required: true, Description: "Provider-specific read path such as local_metadata or rendered_same_target."},
+				{Name: "target", Type: "webagent_target", Required: false, Description: "Exact target/session evidence when browser work occurred."},
+			},
+		},
+		"webagent-cleanup": {
+			Name:        "webagent-cleanup",
+			Description: "Exact-target cleanup result and bounded recovery command.",
+			Fields: []schemaField{
+				{Name: "required", Type: "boolean", Required: true, Description: "True when this operation created an owned target that must close."},
+				{Name: "state", Type: "string", Required: true, Description: "not_required, pending, closed, or failed."},
+				{Name: "target_id", Type: "string", Required: false, Description: "Exact workflow-owned target eligible for cleanup."},
+				{Name: "target_closed", Type: "boolean", Required: false, Description: "True only after the exact target is no longer listed."},
+				{Name: "close_proof", Type: "string", Required: false, Description: "Sanitized close or target-destroyed evidence."},
+				{Name: "recovery_command", Type: "string", Required: false, Description: "Safe command scoped to the exact recorded target; never a broad sibling-tab cleanup."},
+			},
+		},
 		"describe": {
 			Name:        "describe",
 			Description: "Command-tree metadata for agent discovery.",
@@ -219,7 +335,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "id", Type: "string", Required: true, Description: "Stable managed task ID such as headed-daemon-keepalive or headless-maintenance."},
 				{Name: "browser_mode", Type: "string", Required: true, Description: "Browser mode this scheduled task targets."},
 				{Name: "schedule", Type: "string", Required: true, Description: "Cron schedule expression."},
-				{Name: "lock_name", Type: "string", Required: true, Description: "Flock lock name used by the rendered task."},
+				{Name: "lock_name", Type: "string", Required: true, Description: "Owner-only advisory lock name acquired inside the Go cron runner."},
 				{Name: "log_name", Type: "string", Required: true, Description: "Local log artifact basename used by the rendered task."},
 				{Name: "purpose", Type: "string", Required: true, Description: "Human-readable task purpose."},
 				{Name: "config_dependencies", Type: "array<string>", Required: false, Description: "Config values that influence the rendered command."},
