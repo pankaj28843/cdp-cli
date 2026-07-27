@@ -469,13 +469,27 @@ func observeAttachment(
 	  );
 	  const files = input && input.files ? Array.from(input.files) : [];
 	  const inputMatch = files.length === 1 && files[0].name === expected;
+	  const escapeRegExp = value => String(value || '')
+	    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	  const providerNameMatches = (actual, wanted) => {
+	    actual = String(actual || '').trim();
+	    wanted = String(wanted || '').trim();
+	    if (actual === wanted) return true;
+	    const dot = wanted.lastIndexOf('.');
+	    const stem = dot > 0 ? wanted.slice(0, dot) : wanted;
+	    const extension = dot > 0 ? wanted.slice(dot) : '';
+	    return new RegExp(
+	      '^' + escapeRegExp(stem) + '\\s*\\(\\d+\\)' +
+	      escapeRegExp(extension) + '$'
+	    ).test(actual);
+	  };
 	  const candidates = composer ? Array.from(composer.querySelectorAll(
 	    '[role="group"][aria-label]'
 	  )).filter(node =>
 	    node.querySelector('button[aria-label^="Remove file "]')
 	  ) : [];
 	  const matchingCandidates = candidates.filter(node =>
-	    String(node.getAttribute('aria-label') || '').trim() === expected
+	    providerNameMatches(node.getAttribute('aria-label'), expected)
 	  );
 	  const matchingNames = matchingCandidates.map(node =>
 	    String(node.getAttribute('aria-label') || '').trim()
@@ -497,7 +511,7 @@ func observeAttachment(
 	    candidates.length === preflightAttachmentCount + 1;
 	  return {
 	    ok: !duplicateRejected && activeComposer &&
-	      renderedAttachmentAdded && renderedNameMatch && !processing,
+	      renderedAttachmentAdded && renderedNameMatch,
 	    input_match: inputMatch,
 	    rendered_attachment_added: renderedAttachmentAdded,
 	    rendered_name_match: renderedNameMatch,
@@ -509,10 +523,6 @@ func observeAttachment(
 	})()`, encodedName, preflightAttachmentCount)
 	if err := evaluateInto(ctx, session, expression, observation); err != nil {
 		return err
-	}
-	if observation.RenderedName != fileName {
-		observation.OK = false
-		observation.RenderedNameMatch = false
 	}
 	return nil
 }

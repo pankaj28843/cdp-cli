@@ -54,86 +54,7 @@ func TestSendDispatcherFailsClosedWhenAttachmentDropsBeforeSend(t *testing.T) {
 	}
 }
 
-func TestSendDispatcherFailsClosedWhenAttachmentProcessingResumes(t *testing.T) {
-	client := &selectionActivationClient{
-		evaluations: []json.RawMessage{
-			exactSelectionGuard("Pro", ""),
-			json.RawMessage(`{
-				"ok":false,
-				"input_match":true,
-				"rendered_attachment_added":true,
-				"rendered_name_match":true,
-				"rendered_name":"review.zip",
-				"rendered_attachment_count":1,
-				"duplicate_rejected":false,
-				"processing":true
-			}`),
-		},
-	}
-	session := newSelectionActivationSession(t, client)
-	dispatcher := chatgptSendDispatcher{
-		prompt:       "review the attached diff",
-		intelligence: "Pro",
-		attachment: &attachmentExpectation{
-			Name:                     "review.zip",
-			PreflightAttachmentCount: 0,
-		},
-	}
-
-	outcome, err := dispatcher.Dispatch(context.Background(), session)
-	if err == nil ||
-		outcome.Dispatch != browserflow.DispatchNotPerformed ||
-		outcome.RawInputAttempted {
-		t.Fatalf("outcome=%+v err=%v", outcome, err)
-	}
-	for _, call := range client.calls {
-		if call.method != "Runtime.evaluate" {
-			t.Fatalf("call=%+v, processing attachment must suppress Send", call)
-		}
-	}
-}
-
-func TestSendDispatcherFailsClosedWhenProviderRenamesAttachment(t *testing.T) {
-	client := &selectionActivationClient{
-		evaluations: []json.RawMessage{
-			exactSelectionGuard("Pro", ""),
-			json.RawMessage(`{
-				"ok":true,
-				"input_match":true,
-				"rendered_attachment_added":true,
-				"rendered_name_match":true,
-				"rendered_name":"review (1).zip",
-				"rendered_attachment_count":1,
-				"duplicate_rejected":false,
-				"processing":false
-			}`),
-		},
-	}
-	session := newSelectionActivationSession(t, client)
-	dispatcher := chatgptSendDispatcher{
-		prompt:       "review the attached diff",
-		intelligence: "Pro",
-		attachment: &attachmentExpectation{
-			Name:                     "review.zip",
-			PreflightAttachmentCount: 0,
-		},
-	}
-
-	outcome, err := dispatcher.Dispatch(context.Background(), session)
-	if err == nil ||
-		!strings.Contains(err.Error(), "attachment was not retained") ||
-		outcome.Dispatch != browserflow.DispatchNotPerformed ||
-		outcome.RawInputAttempted {
-		t.Fatalf("outcome=%+v err=%v", outcome, err)
-	}
-	for _, call := range client.calls {
-		if call.method != "Runtime.evaluate" {
-			t.Fatalf("call=%+v, provider rename must suppress raw Send", call)
-		}
-	}
-}
-
-func TestSendDispatcherAllowsClearedInputBeforeRawSend(t *testing.T) {
+func TestSendDispatcherAllowsProviderAttachmentTelemetryBeforeRawSend(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluations: []json.RawMessage{
 			exactSelectionGuard("Pro", ""),
@@ -142,10 +63,10 @@ func TestSendDispatcherAllowsClearedInputBeforeRawSend(t *testing.T) {
 				"input_match":false,
 				"rendered_attachment_added":true,
 				"rendered_name_match":true,
-				"rendered_name":"review.zip",
+				"rendered_name":"review (1).zip",
 				"rendered_attachment_count":1,
 				"duplicate_rejected":false,
-				"processing":false
+				"processing":true
 			}`),
 			json.RawMessage(`{
 				"route_ready":true,
