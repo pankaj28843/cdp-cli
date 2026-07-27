@@ -164,6 +164,22 @@ type selectionSurface struct {
 	SelectedModel     string             `json:"selected_model"`
 }
 
+func selectionSurfaceReady(
+	current selectionSurface,
+	continuation bool,
+) bool {
+	productsReady := current.ChatCount == 0 &&
+		current.WorkCount == 0 &&
+		continuation
+	if current.ChatCount == 1 && current.WorkCount == 1 {
+		productsReady = current.Chat.Ready
+	}
+	return current.PickerCount == 1 &&
+		current.Picker.Ready &&
+		strings.TrimSpace(current.SelectedThinking) != "" &&
+		productsReady
+}
+
 func selectChatGPT(
 	ctx context.Context,
 	session *cdp.PageSession,
@@ -187,17 +203,7 @@ func selectChatGPT(
 		poll,
 		&surface,
 		func(current selectionSurface) bool {
-			productsReady := current.ChatCount == 0 &&
-				current.WorkCount == 0 &&
-				continuation
-			if current.ChatCount == 1 && current.WorkCount == 1 {
-				productsReady = current.Chat.Ready
-			}
-			return current.Editor.Ready &&
-				current.PickerCount == 1 &&
-				current.Picker.Ready &&
-				strings.TrimSpace(current.SelectedThinking) != "" &&
-				productsReady
+			return selectionSurfaceReady(current, continuation)
 		},
 	); err != nil {
 		return observation, fmt.Errorf("ChatGPT selection controls not ready: %w", err)
@@ -993,10 +999,13 @@ func activateSelectionControl(
 	      const x = left + (right - left) * xFraction;
 	      const y = topEdge + (bottom - topEdge) * yFraction;
 	      const hit = document.elementFromPoint(x, y);
+	      const editorForm = kind === 'editor' ?
+	        control.closest('form') : null;
 	      const sameEditorFormProxy = kind === 'editor' &&
+	        editorForm &&
 	        hit instanceof HTMLElement &&
 	        hit.contains(control) &&
-	        hit.closest('form') === control.closest('form');
+	        hit.closest('form') === editorForm;
 	      if (hit && (
 	        hit === control ||
 	        control.contains(hit) ||

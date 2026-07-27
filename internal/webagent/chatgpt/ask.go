@@ -111,6 +111,19 @@ type selectionObservation struct {
 	Reason              string   `json:"reason"`
 }
 
+func recordSelectionReadiness(
+	metadata map[string]any,
+	surface selectionSurface,
+) {
+	metadata["observed_selection_editor_ready"] = surface.Editor.Ready
+	metadata["observed_selection_chat_count"] = surface.ChatCount
+	metadata["observed_selection_work_count"] = surface.WorkCount
+	metadata["observed_selection_chat_ready"] = surface.Chat.Ready
+	metadata["observed_selection_picker_count"] = surface.PickerCount
+	metadata["observed_selection_picker_ready"] = surface.Picker.Ready
+	metadata["observed_selected_thinking"] = surface.SelectedThinking
+}
+
 type renderedObservation struct {
 	RouteMatches     bool     `json:"route_matches"`
 	ConversationID   string   `json:"conversation_id"`
@@ -330,6 +343,7 @@ func Ask(
 				)
 			}
 			var composer composerObservation
+			var surface selectionSurface
 			readiness, err := authreadiness.WaitForEvidence(
 				ctx,
 				session,
@@ -346,7 +360,7 @@ func Ask(
 					); err != nil {
 						return false, err
 					}
-					return composer.RouteReady &&
+					composerReady := composer.RouteReady &&
 						composer.EditorReady &&
 						composer.EditorCount == 1 &&
 						composer.ChatCount == 1 &&
@@ -354,7 +368,21 @@ func Ask(
 						composer.IntelligenceCount == 1 &&
 						composer.AssistantCount == 0 &&
 						composer.UserMessageCount == 0 &&
-						composer.ConversationID == "", nil
+						composer.ConversationID == ""
+					if !composerReady {
+						return false, nil
+					}
+					if err := observeSelectionSurface(
+						observationCtx,
+						session,
+						&surface,
+					); err != nil {
+						return false, err
+					}
+					return selectionSurfaceReady(
+						surface,
+						false,
+					), nil
 				},
 			)
 			data.Metadata["composer_readiness_attempt"] = readiness.Attempt
@@ -373,12 +401,13 @@ func Ask(
 					composer.AssistantCount
 				data.Metadata["observed_user_message_count"] =
 					composer.UserMessageCount
+				recordSelectionReadiness(data.Metadata, surface)
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
 					"chatgpt_composer_observation_failed", "connection",
-					"ChatGPT fresh-composer observation could not complete its bounded load, reload, hard-reload, and final-grace sequence",
+					"ChatGPT fresh-composer and selection-control observation could not complete its bounded load, reload, hard-reload, and final-grace sequence",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
@@ -394,12 +423,13 @@ func Ask(
 					composer.AssistantCount
 				data.Metadata["observed_user_message_count"] =
 					composer.UserMessageCount
+				recordSelectionReadiness(data.Metadata, surface)
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
 					"chatgpt_composer_not_ready", "provider",
-					"ChatGPT fresh composer was not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
+					"ChatGPT fresh composer and selection controls were not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}

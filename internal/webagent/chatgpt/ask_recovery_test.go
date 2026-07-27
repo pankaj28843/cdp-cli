@@ -12,7 +12,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
-func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) {
+func TestAskRecoversSelectionControlsBeforePromptMutation(t *testing.T) {
 	const (
 		prompt         = "Review ChatGPT live recovery"
 		conversationID = "12345678-1234-1234-1234-123456789abc"
@@ -58,26 +58,26 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 				"model_menu_open":    false,
 			}, nil
 		case strings.Contains(expression, "send_ready:"):
-			ready := len(browser.Reloads) >= 2
-			promptMatches := ready && browser.InsertedText == prompt
+			promptMatches := browser.InsertedText == prompt
 			if browser.InsertedText == "" {
-				promptMatches = ready
+				promptMatches = true
 			}
+			sendReady := browser.InsertedText == prompt
 			return map[string]any{
-				"route_ready":               ready,
-				"editor_ready":              ready,
-				"editor_count":              boolInt(ready),
+				"route_ready":               true,
+				"editor_ready":              true,
+				"editor_count":              1,
 				"prompt_matches":            promptMatches,
 				"inner_text_matches":        promptMatches,
 				"text_content_matches":      promptMatches,
 				"canonical_matches":         promptMatches,
-				"chat_count":                boolInt(ready),
-				"work_count":                boolInt(ready),
-				"chat_selected":             ready,
-				"intelligence_count":        boolInt(ready),
+				"chat_count":                1,
+				"work_count":                1,
+				"chat_selected":             true,
+				"intelligence_count":        1,
 				"selected_intelligence":     "High",
-				"send_count":                boolInt(ready),
-				"send_ready":                ready,
+				"send_count":                boolInt(sendReady),
+				"send_ready":                sendReady,
 				"send_x":                    20,
 				"send_y":                    30,
 				"assistant_count":           0,
