@@ -86,7 +86,6 @@ func TestChatGPTAdvertisesOnlyLiveProvenMutationSurface(t *testing.T) {
 		OperationConversationsAwait:    true,
 		OperationConversationsDelete:   true,
 		OperationArtifactDownload:      true,
-		OperationCalibrate:             true,
 	}
 	for _, capability := range capabilities.Operations {
 		if wantImplemented[capability.Operation] {
@@ -215,7 +214,7 @@ func TestMetadataResultRoundTripsStableEnvelope(t *testing.T) {
 func TestMetadataResultKeepsEmptyNextCommandsAsJSONArray(t *testing.T) {
 	result := NewMetadataResult(
 		ProviderClaude,
-		OperationCalibrate,
+		OperationCapabilities,
 		map[string]any{},
 		"abc123",
 		[]string{},
@@ -533,9 +532,8 @@ func TestResultValidationLinksOwnedTargetAndCleanup(t *testing.T) {
 	}
 
 	result.Cleanup = CleanupEvidence{
-		State:           CleanupPending,
-		TargetID:        "target-owned",
-		RecoveryCommand: "cdp workflow agent recovery close wa-owned-cleanup --json",
+		State:    CleanupPending,
+		TargetID: "target-owned",
 	}
 	if err := result.Validate(); err == nil ||
 		!strings.Contains(err.Error(), "requires required=true") {

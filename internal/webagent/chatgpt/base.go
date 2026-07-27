@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -20,12 +19,10 @@ type EventClient interface {
 }
 
 type BrowserConfig struct {
-	Client            EventClient
-	Engine            *browserflow.Engine
-	Journal           browserflow.Journal
-	Admission         *admission.Gate
-	AdmissionProvider string
-	BuildCommit       string
+	Client      EventClient
+	Engine      *browserflow.Engine
+	Journal     browserflow.Journal
+	BuildCommit string
 }
 
 type ownedCallback func(
@@ -48,7 +45,6 @@ func runOwned(
 	if config.Client == nil ||
 		config.Engine == nil ||
 		config.Journal == nil ||
-		config.Admission == nil ||
 		callback == nil {
 		return operationFailure(
 			runID, config.BuildCommit, operation, webagent.StagePlanned, readMode,
@@ -58,96 +54,6 @@ func runOwned(
 			data, []string{"cdp workflow agent chatgpt doctor --json"},
 		)
 	}
-	admissionProvider := browserAdmissionProvider(config)
-	admissionLease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  admissionProvider,
-		Operation: string(operation),
-		RunID:     runID,
-	})
-	if err != nil {
-		code := "chatgpt_admission_unavailable"
-		errClass := "internal"
-		message := "ChatGPT provider admission state is unavailable"
-		nextCommands := []string{"cdp workflow agent chatgpt doctor --json"}
-		var blocked *admission.BlockedError
-		if errors.As(err, &blocked) {
-			code = "chatgpt_admission_blocked"
-			errClass = "admission"
-			message = blocked.Error()
-			if blocked.ResolutionNeeded {
-				nextCommands = []string{
-					"cdp workflow agent admission status " +
-						admissionProvider + " --json",
-				}
-			}
-		}
-		return operationFailure(
-			runID, config.BuildCommit, operation, webagent.StagePlanned, readMode,
-			nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			code, errClass, message, data,
-			nextCommands,
-		)
-	}
-	defer func() {
-		outcome := admission.OutcomeFailed
-		switch {
-		case result.OK && result.State == webagent.StateTerminal:
-			outcome = admission.OutcomeTerminal
-		case result.OK && result.State == webagent.StateIncomplete:
-			outcome = admission.OutcomeIncomplete
-		case result.OK:
-			outcome = admission.OutcomeCompleted
-		case result.Action != nil &&
-			result.Action.Dispatch == webagent.DispatchPerformed &&
-			durableAcknowledgementObserved(config.Journal, runID):
-			// The command may have failed while reading the answer, but the
-			// journal's immutable acknowledgement transition proves the new
-			// provider turn. A conversation ID carried in the public result is
-			// insufficient because Continue and Delete know it before Send.
-			outcome = admission.OutcomeAcknowledged
-		case result.Action != nil &&
-			(result.Action.Dispatch == webagent.DispatchUnknown ||
-				(result.Action.Dispatch == webagent.DispatchPerformed &&
-					result.State != webagent.StateTerminal)):
-			outcome = admission.OutcomeUnknown
-		}
-		var cooldown time.Time
-		if result.Error != nil && result.Error.RetryAt != "" {
-			cooldown, _ = time.Parse(time.RFC3339Nano, result.Error.RetryAt)
-		}
-		if result.Error != nil &&
-			result.Error.ErrClass == "rate_limit" &&
-			admissionProvider != chatGPTThrottleProvider {
-			if err := persistChatGPTThrottleCooldown(
-				context.Background(),
-				config.Admission,
-				cooldown,
-			); err != nil {
-				result = replaceFailure(
-					result,
-					"chatgpt_throttle_release_failed",
-					"internal",
-					"ChatGPT shared provider cooldown could not be persisted",
-					[]string{
-						"cdp workflow agent admission status chatgpt-rate --json",
-					},
-				)
-			}
-		}
-		if err := admissionLease.Release(admission.Release{
-			Outcome:       outcome,
-			CooldownUntil: cooldown,
-		}); err != nil {
-			result = replaceFailure(
-				result,
-				"chatgpt_admission_release_failed",
-				"internal",
-				"ChatGPT provider admission outcome could not be persisted",
-				[]string{"cdp workflow agent chatgpt doctor --json"},
-			)
-		}
-	}()
-
 	lease, err := config.Engine.Acquire(ctx, browserflow.AcquireRequest{
 		RunID:      runID,
 		Provider:   string(webagent.ProviderChatGPT),
@@ -185,10 +91,9 @@ func runOwned(
 		Created:   true,
 	}
 	pending := webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupPending,
-		TargetID:        lease.TargetID(),
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupPending,
+		TargetID: lease.TargetID(),
 	}
 	defer func() {
 		cleanup, closeErr := lease.Close(context.Background())
@@ -196,10 +101,9 @@ func runOwned(
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{
-				Required:        true,
-				State:           webagent.CleanupFailed,
-				TargetID:        lease.TargetID(),
-				RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+				Required: true,
+				State:    webagent.CleanupFailed,
+				TargetID: lease.TargetID(),
 			}
 			result.Stage = webagent.StageCleanupPending
 			result = replaceFailure(
@@ -225,98 +129,11 @@ func runOwned(
 	return callback(lease, target, pending)
 }
 
-func browserAdmissionProvider(config BrowserConfig) string {
-	if provider := strings.TrimSpace(config.AdmissionProvider); provider != "" {
-		return provider
-	}
-	return string(webagent.ProviderChatGPT)
-}
-
-func durableAcknowledgementObserved(
-	journal browserflow.Journal,
-	runID string,
-) bool {
-	if journal == nil || strings.TrimSpace(runID) == "" {
-		return false
-	}
-	recovery, err := journal.Load(context.Background(), runID)
-	return err == nil && recoveryProvesAcknowledgement(recovery)
-}
-
-func recoveryProvesAcknowledgement(recovery browserflow.Record) bool {
-	operation := webagent.Operation(recovery.Operation)
-	sendOperation := operation == webagent.OperationAsk ||
-		operation == webagent.OperationConversationsContinue
-	return recovery.Provider == string(webagent.ProviderChatGPT) &&
-		sendOperation &&
-		recovery.ActionName == "send" &&
-		recovery.Phase == browserflow.PhaseClosed &&
-		recovery.Cleanup == browserflow.CleanupClosed &&
-		recovery.Dispatch == browserflow.DispatchPerformed &&
-		recovery.ActionAttemptCount == 1 &&
-		recovery.RawInputCount == 1 &&
-		recovery.PendingPersisted &&
-		conversationIDPattern.MatchString(
-			strings.TrimSpace(recovery.ConversationID),
-		)
-}
-
 func conversationAwaitCommand(conversationID string) string {
 	return fmt.Sprintf(
 		"cdp workflow agent chatgpt conversations await %s --wait 40m --timeout 40m30s --json",
 		strings.TrimSpace(conversationID),
 	)
-}
-
-// reconcilePriorSubmittedMutation repairs only a stale released-unknown
-// admission whose lower-level recovery journal already contains stronger
-// provider acknowledgement: one performed Send, an exact conversation ID,
-// and proven owned-target cleanup. This is evidence reconciliation, not a
-// guess that an unknown Send succeeded. Matching fingerprints remain blocked
-// so retrying an interrupted command cannot duplicate the same mutation.
-func reconcilePriorSubmittedMutation(
-	ctx context.Context,
-	config BrowserConfig,
-	currentFingerprint string,
-) (string, error) {
-	currentFingerprint = strings.TrimSpace(currentFingerprint)
-	if currentFingerprint == "" ||
-		config.Admission == nil ||
-		config.Journal == nil {
-		return "", nil
-	}
-	provider := browserAdmissionProvider(config)
-	admissionRecord, found, err := config.Admission.Status(ctx, provider)
-	if err != nil {
-		return "", fmt.Errorf("read prior ChatGPT admission: %w", err)
-	}
-	if !found ||
-		admissionRecord.Phase != admission.PhaseReleased ||
-		admissionRecord.Outcome != admission.OutcomeUnknown {
-		return "", nil
-	}
-	recovery, err := config.Journal.Load(ctx, admissionRecord.RunID)
-	if err != nil {
-		if errors.Is(err, browserflow.ErrRunNotFound) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read prior ChatGPT recovery evidence: %w", err)
-	}
-	if recovery.RunID != admissionRecord.RunID ||
-		recovery.Operation != admissionRecord.Operation ||
-		!recoveryProvesAcknowledgement(recovery) ||
-		strings.TrimSpace(recovery.InputFingerprint) == "" ||
-		recovery.InputFingerprint == currentFingerprint {
-		return "", nil
-	}
-	if _, err := config.Admission.Resolve(ctx, admission.Request{
-		Provider:  provider,
-		Operation: admissionRecord.Operation,
-		RunID:     admissionRecord.RunID,
-	}); err != nil {
-		return "", fmt.Errorf("resolve prior submitted ChatGPT admission: %w", err)
-	}
-	return admissionRecord.RunID, nil
 }
 
 func preparePage(
@@ -577,23 +394,14 @@ func reconcileAcquireFailure(
 		}, webagent.StageClosed
 	}
 	return target, webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupFailed,
-		TargetID:        record.TargetID,
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupFailed,
+		TargetID: record.TargetID,
 	}, webagent.StageCleanupPending
 }
 
-func cleanupCommands(runID string, cleanup webagent.CleanupEvidence) []string {
-	commands := []string{"cdp workflow agent chatgpt doctor --json"}
-	if cleanup.State == webagent.CleanupPending || cleanup.State == webagent.CleanupFailed {
-		commands = append(
-			commands,
-			fmt.Sprintf("cdp workflow agent recovery inspect %s --json", runID),
-			fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
-		)
-	}
-	return commands
+func cleanupCommands(_ string, _ webagent.CleanupEvidence) []string {
+	return nil
 }
 
 func normalizedBuildCommit(value string) string {

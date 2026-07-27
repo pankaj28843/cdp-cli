@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -37,7 +35,6 @@ var defaultAwaitDelays = []time.Duration{
 
 type ReadConfig struct {
 	Store               *Store
-	Admission           *admission.Gate
 	HTTPClient          *http.Client
 	BuildCommit         string
 	Now                 func() time.Time
@@ -145,11 +142,7 @@ func ListConversations(ctx context.Context, config ReadConfig, limit int) webage
 	if failure != nil {
 		return readFailureFrom(runID, config.BuildCommit, webagent.OperationConversationsList, *failure, nil)
 	}
-	lease, blocked := acquireReadAdmission(ctx, config, runID, webagent.OperationConversationsList)
-	if blocked != nil {
-		return readFailureFrom(runID, config.BuildCommit, webagent.OperationConversationsList, *blocked, nil)
-	}
-	result, cooldown := func() (webagent.Result, time.Time) {
+	return func() webagent.Result {
 		data, failure := fetchConversationList(ctx, config, template, limit)
 		if failure != nil {
 			if failure.code == "claude_browser_context_required" &&
@@ -166,7 +159,7 @@ func ListConversations(ctx context.Context, config ReadConfig, limit int) webage
 					if closeRendered != nil {
 						_ = closeRendered(context.Background())
 					}
-					return renderedResult, time.Time{}
+					return renderedResult
 				}
 				failure = &readFailure{
 					code:       "claude_rendered_fallback_unavailable",
@@ -175,7 +168,7 @@ func ListConversations(ctx context.Context, config ReadConfig, limit int) webage
 					statusCode: failure.statusCode,
 				}
 			}
-			return readFailureFrom(runID, config.BuildCommit, webagent.OperationConversationsList, *failure, nil), failure.retryAt
+			return readFailureFrom(runID, config.BuildCommit, webagent.OperationConversationsList, *failure, nil)
 		}
 		return readSuccessResult(
 			runID,
@@ -184,9 +177,8 @@ func ListConversations(ctx context.Context, config ReadConfig, limit int) webage
 			webagent.StateReady,
 			data,
 			nil,
-		), time.Time{}
+		)
 	}()
-	return releaseReadAdmission(result, lease, cooldown)
 }
 
 func DetailConversation(ctx context.Context, config ReadConfig, conversationID string) webagent.Result {
@@ -233,11 +225,6 @@ func readConversation(
 	if failure != nil {
 		return readFailureFrom(runID, config.BuildCommit, operation, *failure, conversationRef(conversationID))
 	}
-	lease, blocked := acquireReadAdmission(ctx, config, runID, operation)
-	if blocked != nil {
-		return readFailureFrom(runID, config.BuildCommit, operation, *blocked, conversationRef(conversationID))
-	}
-
 	deadline := time.Time{}
 	if await {
 		deadline = nowFor(config).Add(timeout)
@@ -298,7 +285,7 @@ func readConversation(
 			if closeRendered != nil {
 				_ = closeRendered(context.Background())
 			}
-			return releaseReadAdmission(renderedResult, lease, time.Time{})
+			return renderedResult
 		}
 		readErr = &readFailure{
 			code:       "claude_rendered_fallback_unavailable",
@@ -312,14 +299,13 @@ func readConversation(
 	}
 	data.Metadata["detail_read_attempts"] = attempt
 	if readErr != nil {
-		result := readFailureFrom(runID, config.BuildCommit, operation, *readErr, conversationRef(conversationID))
-		return releaseReadAdmission(result, lease, readErr.retryAt)
+		return readFailureFrom(runID, config.BuildCommit, operation, *readErr, conversationRef(conversationID))
 	}
 	state := webagent.StateTerminal
 	if data.CompletionState != "terminal" {
 		state = webagent.StateIncomplete
 	}
-	result := readSuccessResult(
+	return readSuccessResult(
 		runID,
 		config.BuildCommit,
 		operation,
@@ -327,7 +313,6 @@ func readConversation(
 		data,
 		conversationRef(conversationID),
 	)
-	return releaseReadAdmission(result, lease, time.Time{})
 }
 
 func fetchConversationList(
@@ -569,66 +554,6 @@ func loadFreshReadTemplate(ctx context.Context, config ReadConfig) (AuthTemplate
 		return AuthTemplate{}, internalReadFailure("Claude owner-only auth state could not be loaded")
 	}
 	return template, nil
-}
-
-func acquireReadAdmission(
-	ctx context.Context,
-	config ReadConfig,
-	runID string,
-	operation webagent.Operation,
-) (*admission.Lease, *readFailure) {
-	if config.Admission == nil {
-		return nil, internalReadFailure("Claude provider admission is unavailable")
-	}
-	lease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  string(webagent.ProviderClaude),
-		Operation: string(operation),
-		RunID:     runID,
-	})
-	if err == nil {
-		return lease, nil
-	}
-	var blocked *admission.BlockedError
-	if errors.As(err, &blocked) {
-		failure := &readFailure{
-			code:     "claude_admission_blocked",
-			errClass: "admission",
-			message:  blocked.Error(),
-		}
-		if blocked.ResolutionNeeded {
-			failure.nextCommands = []string{"cdp workflow agent admission status claude --json"}
-		} else {
-			failure.retryAt = blocked.RetryAt
-		}
-		return nil, failure
-	}
-	return nil, internalReadFailure("Claude provider admission state is unavailable")
-}
-
-func releaseReadAdmission(result webagent.Result, lease *admission.Lease, cooldown time.Time) webagent.Result {
-	if lease == nil {
-		return result
-	}
-	outcome := admission.OutcomeFailed
-	if result.OK && result.State == webagent.StateTerminal {
-		outcome = admission.OutcomeTerminal
-	} else if result.OK && result.State == webagent.StateIncomplete {
-		outcome = admission.OutcomeIncomplete
-	} else if result.OK {
-		outcome = admission.OutcomeCompleted
-	} else if result.Error != nil && result.Error.Code == "claude_rate_limited" {
-		outcome = admission.OutcomeRateLimited
-	}
-	if err := lease.Release(admission.Release{Outcome: outcome, CooldownUntil: cooldown}); err != nil {
-		return replaceReadFailure(
-			result,
-			"claude_admission_release_failed",
-			"internal",
-			"Claude provider admission outcome could not be persisted",
-			time.Time{},
-		)
-	}
-	return result
 }
 
 func readSuccessResult(

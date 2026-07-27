@@ -55,7 +55,7 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 			return map[string]any{}, nil
 		}
 	}
-	engine, journal, gate, err := testsupport.NewRuntime(stateDir, client)
+	engine, journal, err := testsupport.NewRuntime(stateDir, client)
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
@@ -68,7 +68,6 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 			Client:      client,
 			Engine:      engine,
 			Journal:     journal,
-			Admission:   gate,
 			BuildCommit: "test-commit",
 		},
 		Store:           store,

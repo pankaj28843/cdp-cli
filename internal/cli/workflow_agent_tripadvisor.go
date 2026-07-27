@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/tripadvisor"
@@ -128,8 +127,8 @@ func (a *app) newWorkflowAgentTripadvisorAskCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible Tripadvisor request",
-		Long: "Start one fresh Tripadvisor conversation in one fresh exact owned headed target, verify the exact prompt and unique Send control, " +
-			"persist action_pending, click Send once, acknowledge the same-target UUID route, and read a stable rendered answer without resubmitting.",
+		Long: "Open one fresh headed tab, submit the exact prompt with one Send, read the rendered answer, " +
+			"preserve the observed conversation ID, and close only that tab.",
 		Example: "  cdp workflow agent tripadvisor ask 'Compare two rainy-day options.' --json\n" +
 			"  printf '%s' 'Critique this itinerary.' | cdp workflow agent tripadvisor ask --stdin --json",
 		Args: cobra.MaximumNArgs(1),
@@ -444,23 +443,9 @@ func (a *app) tripadvisorBrowserOperationConfig(
 		result := tripadvisorUnavailableOperation(
 			a.build.Commit,
 			operation,
-			"tripadvisor_recovery_unavailable",
+			"tripadvisor_lifecycle_state_unavailable",
 			"internal",
-			"Tripadvisor exact-target recovery state is unavailable",
-		)
-		return tripadvisor.BrowserConfig{}, nil, &result
-	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       store.Dir,
-		MinimumSpacing: tripadvisor.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := tripadvisorUnavailableOperation(
-			a.build.Commit,
-			operation,
-			"tripadvisor_admission_unavailable",
-			"internal",
-			"Tripadvisor provider admission state is unavailable",
+			"Tripadvisor exact-target lifecycle state is unavailable",
 		)
 		return tripadvisor.BrowserConfig{}, nil, &result
 	}
@@ -496,7 +481,6 @@ func (a *app) tripadvisorBrowserOperationConfig(
 		Client:      client,
 		Engine:      engine,
 		Journal:     journal,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 	}, providerStore, nil
 }

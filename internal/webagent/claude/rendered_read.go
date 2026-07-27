@@ -629,10 +629,9 @@ func renderedTargetEvidence(
 		Created:   true,
 	}
 	cleanup := webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupPending,
-		TargetID:        lease.TargetID(),
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupPending,
+		TargetID: lease.TargetID(),
 	}
 	return target, cleanup
 }
@@ -653,10 +652,6 @@ func closeRenderedRead(
 			Required: true,
 			State:    webagent.CleanupFailed,
 			TargetID: lease.TargetID(),
-			RecoveryCommand: fmt.Sprintf(
-				"cdp workflow agent recovery close %s --json",
-				runID,
-			),
 		}
 		result.Stage = webagent.StageCleanupPending
 		*result = replaceReadFailure(

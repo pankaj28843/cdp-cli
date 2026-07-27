@@ -52,7 +52,6 @@ type chatgptContinueDispatcher struct {
 	baselineAssistants int
 	intelligence       string
 	model              string
-	throttle           *heldChatGPTThrottle
 }
 
 func (d chatgptContinueDispatcher) Dispatch(
@@ -98,12 +97,6 @@ func (d chatgptContinueDispatcher) Dispatch(
 		observation.SendX,
 		observation.SendY,
 	)
-	if releaseErr := d.throttle.Release(nil); releaseErr != nil {
-		return outcome, fmt.Errorf(
-			"release ChatGPT shared provider throttle: %w",
-			releaseErr,
-		)
-	}
 	return outcome, clickErr
 }
 
@@ -193,25 +186,6 @@ func ContinueConversation(
 			"ChatGPT owner-only state is unavailable", "", data,
 			[]string{"cdp workflow agent chatgpt doctor --json"},
 		)
-	}
-	reconciledRunID, err := reconcilePriorSubmittedMutation(
-		ctx,
-		config.BrowserConfig,
-		data.PromptFingerprint,
-	)
-	if err != nil {
-		return continueFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, conversationRef(conversationID),
-			"chatgpt_admission_reconcile_failed", "internal",
-			"ChatGPT could not reconcile durable evidence for the prior submitted request",
-			"", data,
-			[]string{"cdp workflow agent admission status chatgpt --json"},
-		)
-	}
-	if reconciledRunID != "" {
-		data.Metadata["reconciled_prior_run_id"] = reconciledRunID
 	}
 	now := nowForContinue(config)
 	_, auth, _ := config.Store.LoadTemplateStatus(
@@ -403,7 +377,6 @@ func ContinueConversation(
 			data.Model = selection.Model
 
 			dispatcher := config.Send
-			var sendThrottle *heldChatGPTThrottle
 			verifyAttempts, verified, verifyErr :=
 				prepareVerifiedContinuationPrompt(
 					ctx,
@@ -452,23 +425,6 @@ func ContinueConversation(
 				)
 			}
 			if dispatcher == nil {
-				var throttleFailure *readFailure
-				sendThrottle, throttleFailure = holdChatGPTThrottle(
-					ctx,
-					config.Admission,
-				)
-				if throttleFailure != nil {
-					_ = lease.MarkIncomplete(context.Background())
-					return continueFailure(
-						runID, config, webagent.StageAttached,
-						target, pending, notPerformed, conversation,
-						throttleFailure.code,
-						throttleFailure.errClass,
-						throttleFailure.message,
-						formatRetryAt(throttleFailure.retryAt),
-						data, cleanupCommands(runID, pending),
-					)
-				}
 				guardErr := prepareSelectionGuardAtSend(
 					ctx,
 					session,
@@ -498,9 +454,6 @@ func ContinueConversation(
 						data.BaselineAssistantTurns,
 						data.Intelligence,
 					) {
-					if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
-						data.Metadata["throttle_release_failed"] = true
-					}
 					_ = lease.MarkIncomplete(context.Background())
 					return continueFailure(
 						runID, config, webagent.StageAttached,
@@ -512,9 +465,6 @@ func ContinueConversation(
 				}
 			}
 			if err := lease.MarkPrepared(ctx); err != nil {
-				if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
-					data.Metadata["throttle_release_failed"] = true
-				}
 				return continueFailure(
 					runID, config, webagent.StageAttached,
 					target, pending, notPerformed, conversation,
@@ -531,19 +481,9 @@ func ContinueConversation(
 					baselineAssistants: data.BaselineAssistantTurns,
 					intelligence:       data.Intelligence,
 					model:              data.Model,
-					throttle:           sendThrottle,
 				}
 			}
 			outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
-			if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
-				data.Metadata["throttle_release_failed"] = true
-				if dispatchErr == nil {
-					dispatchErr = fmt.Errorf(
-						"release ChatGPT shared provider throttle: %w",
-						releaseErr,
-					)
-				}
-			}
 			record := lease.Record()
 			action := actionEvidence(record)
 			if dispatchErr != nil {

@@ -105,7 +105,7 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 			return map[string]any{}, nil
 		}
 	}
-	engine, journal, gate, err := testsupport.NewRuntime(stateDir, client)
+	engine, journal, err := testsupport.NewRuntime(stateDir, client)
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
@@ -118,7 +118,6 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 			Client:      client,
 			Engine:      engine,
 			Journal:     journal,
-			Admission:   gate,
 			BuildCommit: "test-commit",
 		},
 		Store:           store,
@@ -170,7 +169,7 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 	}
 }
 
-func TestAskHoldsSharedThrottleOnlyAcrossArmedSend(t *testing.T) {
+func TestAskAllowsPreparationAndSendWithoutProviderGate(t *testing.T) {
 	const (
 		prompt         = "Review ChatGPT throttle scope"
 		conversationID = "87654321-4321-4321-4321-cba987654321"
@@ -289,7 +288,7 @@ func TestAskHoldsSharedThrottleOnlyAcrossArmedSend(t *testing.T) {
 			return map[string]any{}, nil
 		}
 	}
-	engine, journal, gate, err := testsupport.NewRuntime(stateDir, client)
+	engine, journal, err := testsupport.NewRuntime(stateDir, client)
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
@@ -302,7 +301,6 @@ func TestAskHoldsSharedThrottleOnlyAcrossArmedSend(t *testing.T) {
 			Client:      client,
 			Engine:      engine,
 			Journal:     journal,
-			Admission:   gate,
 			BuildCommit: "test-commit",
 		},
 		Store:           store,
@@ -322,19 +320,6 @@ func TestAskHoldsSharedThrottleOnlyAcrossArmedSend(t *testing.T) {
 	case <-time.After(stageTimeout):
 		t.Fatal("Ask did not reach reversible preparation")
 	}
-	preparationLease, preparationFailure := acquireChatGPTThrottle(
-		context.Background(),
-		gate,
-	)
-	if preparationFailure != nil || preparationLease == nil {
-		t.Fatalf(
-			"shared throttle was blocked during reversible preparation: %+v",
-			preparationFailure,
-		)
-	}
-	if err := releaseChatGPTThrottle(preparationLease, nil); err != nil {
-		t.Fatalf("release preparation probe: %v", err)
-	}
 	releasePreparationBoundary()
 
 	select {
@@ -343,19 +328,6 @@ func TestAskHoldsSharedThrottleOnlyAcrossArmedSend(t *testing.T) {
 		t.Fatalf("Ask ended before Send was armed: %+v", result)
 	case <-time.After(stageTimeout):
 		t.Fatal("Ask did not reach the armed Send boundary")
-	}
-	blockedCtx, cancelBlocked := context.WithTimeout(
-		context.Background(),
-		100*time.Millisecond,
-	)
-	defer cancelBlocked()
-	blockedLease, blockedFailure := acquireChatGPTThrottle(blockedCtx, gate)
-	if blockedLease != nil {
-		_ = releaseChatGPTThrottle(blockedLease, nil)
-		t.Fatal("shared throttle admitted concurrent transport while Send was armed")
-	}
-	if blockedFailure == nil {
-		t.Fatalf("armed Send throttle failure = %+v", blockedFailure)
 	}
 	releaseSendBoundary()
 
@@ -367,16 +339,6 @@ func TestAskHoldsSharedThrottleOnlyAcrossArmedSend(t *testing.T) {
 	}
 	if !result.OK || result.State != webagent.StateTerminal {
 		t.Fatalf("Ask result = %+v, error=%+v", result, result.Error)
-	}
-	afterLease, afterFailure := acquireChatGPTThrottle(
-		context.Background(),
-		gate,
-	)
-	if afterFailure != nil || afterLease == nil {
-		t.Fatalf("shared throttle remained held after Send: %+v", afterFailure)
-	}
-	if err := releaseChatGPTThrottle(afterLease, nil); err != nil {
-		t.Fatalf("release post-Send probe: %v", err)
 	}
 }
 

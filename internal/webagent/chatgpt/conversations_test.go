@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/testsupport"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -37,7 +36,6 @@ func TestBrowserReadFallbackEligible(t *testing.T) {
 		{name: "rate limit code", code: "chatgpt_rate_limited", errClass: "provider", want: false},
 		{name: "rate limit class", code: "chatgpt_http_failed", errClass: "rate_limit", want: false},
 		{name: "usage", code: "chatgpt_invalid_conversation_id", errClass: "usage", want: false},
-		{name: "admission", code: "chatgpt_admission_blocked", errClass: "admission", want: false},
 	}
 
 	for _, test := range tests {
@@ -210,10 +208,6 @@ func TestListConversationsDirectSuccessDoesNotInitializeBrowserFallback(
 	if err := store.SaveTemplate(context.Background(), template); err != nil {
 		t.Fatalf("SaveTemplate: %v", err)
 	}
-	gate, err := admission.New(admission.Config{StateDir: stateDir})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
 	browserFallbackCalled := false
 	client := &http.Client{Transport: roundTripFunc(
 		func(*http.Request) (*http.Response, error) {
@@ -229,7 +223,6 @@ func TestListConversationsDirectSuccessDoesNotInitializeBrowserFallback(
 
 	result := ListConversations(context.Background(), ReadConfig{
 		Store:      store,
-		Admission:  gate,
 		HTTPClient: client,
 		Now:        func() time.Time { return now },
 		BrowserFallback: func(context.Context) (*BrowserConfig, error) {
@@ -275,10 +268,6 @@ func TestAwaitDirectIncompleteHonorsDeadlineWithoutBrowserFallback(
 	if err := store.SaveTemplate(context.Background(), template); err != nil {
 		t.Fatalf("SaveTemplate: %v", err)
 	}
-	gate, err := admission.New(admission.Config{StateDir: stateDir})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
 	payload := `{
 	  "current_node":"tool",
 	  "mapping":{
@@ -319,7 +308,6 @@ func TestAwaitDirectIncompleteHonorsDeadlineWithoutBrowserFallback(
 	browserFallbackCalled := false
 	result := AwaitConversation(context.Background(), ReadConfig{
 		Store:       store,
-		Admission:   gate,
 		HTTPClient:  client,
 		Now:         func() time.Time { return now },
 		AwaitDelays: []time.Duration{time.Second},
@@ -377,10 +365,6 @@ func TestAwaitDeadlineBoundsInflightDirectFetch(t *testing.T) {
 	if err := store.SaveTemplate(context.Background(), template); err != nil {
 		t.Fatalf("SaveTemplate: %v", err)
 	}
-	gate, err := admission.New(admission.Config{StateDir: stateDir})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
 	transportCanceled := false
 	client := &http.Client{Transport: roundTripFunc(
 		func(request *http.Request) (*http.Response, error) {
@@ -396,7 +380,6 @@ func TestAwaitDeadlineBoundsInflightDirectFetch(t *testing.T) {
 	started := time.Now()
 	result := AwaitConversation(context.Background(), ReadConfig{
 		Store:      store,
-		Admission:  gate,
 		HTTPClient: client,
 	}, "conversation-1", 3*time.Second)
 	elapsed := time.Since(started)
@@ -407,74 +390,6 @@ func TestAwaitDeadlineBoundsInflightDirectFetch(t *testing.T) {
 		!result.OK ||
 		result.State != webagent.StateIncomplete {
 		t.Fatalf("AwaitConversation result = %+v", result)
-	}
-}
-
-func TestAwaitDeadlineBoundsDirectAdmissionPreparation(t *testing.T) {
-	now := time.Now().UTC()
-	stateDir := t.TempDir()
-	store, err := NewStore(stateDir)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	template := RequestTemplate{
-		SchemaVersion: AuthTemplateSchemaVersion,
-		Method:        http.MethodGet,
-		URL:           Origin + ConversationListPath,
-		Headers: map[string]string{
-			"user-agent":    "test-agent",
-			"authorization": "Bearer test-only",
-		},
-		Cookies: map[string]string{
-			"__Secure-next-auth.session-token": "test-only",
-		},
-		CookieHeader:     "__Secure-next-auth.session-token=test-only",
-		BrowserUserAgent: "test-agent",
-		CapturedAt:       now.Format(time.RFC3339Nano),
-		Source:           "headed-cdp-observed-read-request",
-	}
-	if err := store.SaveTemplate(context.Background(), template); err != nil {
-		t.Fatalf("SaveTemplate: %v", err)
-	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateDir,
-		MinimumSpacing: time.Second,
-	})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
-	prior, err := gate.Acquire(context.Background(), admission.Request{
-		Provider:  chatGPTReadAdmissionProvider,
-		Operation: string(webagent.OperationConversationsDetail),
-		RunID:     "prior-read",
-	})
-	if err != nil {
-		t.Fatalf("prior read admission: %v", err)
-	}
-	if err := prior.Release(admission.Release{
-		Outcome: admission.OutcomeCompleted,
-	}); err != nil {
-		t.Fatalf("release prior read admission: %v", err)
-	}
-	httpCalls := 0
-	client := &http.Client{Transport: roundTripFunc(
-		func(*http.Request) (*http.Response, error) {
-			httpCalls++
-			return nil, errors.New("HTTP must remain unreachable")
-		},
-	)}
-
-	result := AwaitConversation(context.Background(), ReadConfig{
-		Store:      store,
-		Admission:  gate,
-		HTTPClient: client,
-	}, "conversation-1", 50*time.Millisecond)
-	if result.OK || httpCalls != 0 {
-		t.Fatalf(
-			"result=%+v http_calls=%d",
-			result,
-			httpCalls,
-		)
 	}
 }
 
@@ -510,7 +425,7 @@ func TestPersistBrowserReadStateUsesIndependentBoundedContext(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stateDir := t.TempDir()
 			client := testsupport.NewBrowser("user-page")
-			engine, journal, _, err := testsupport.NewRuntime(stateDir, client)
+			engine, journal, err := testsupport.NewRuntime(stateDir, client)
 			if err != nil {
 				t.Fatalf("NewRuntime: %v", err)
 			}
@@ -575,10 +490,6 @@ func TestAwaitThreadsOneDeadlineIntoDirectFallbackInitialization(t *testing.T) {
 	if err := store.SaveTemplate(context.Background(), template); err != nil {
 		t.Fatalf("SaveTemplate: %v", err)
 	}
-	gate, err := admission.New(admission.Config{StateDir: stateDir})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
 	client := &http.Client{Transport: roundTripFunc(
 		func(*http.Request) (*http.Response, error) {
 			now = now.Add(29900 * time.Millisecond)
@@ -591,7 +502,6 @@ func TestAwaitThreadsOneDeadlineIntoDirectFallbackInitialization(t *testing.T) {
 
 	result := AwaitConversation(context.Background(), ReadConfig{
 		Store:      store,
-		Admission:  gate,
 		HTTPClient: client,
 		Now:        func() time.Time { return now },
 		BrowserFallback: func(fallbackCtx context.Context) (*BrowserConfig, error) {
@@ -879,53 +789,5 @@ func TestExtractConversationTextAcceptsCurrentTerminalAssistant(t *testing.T) {
 	got := extractConversationText(payload)
 	if got.completionState != "terminal" || got.text != "Final answer." {
 		t.Fatalf("extracted = %#v", got)
-	}
-}
-
-func TestBrowserReadUsesReadAdmissionLane(t *testing.T) {
-	t.Parallel()
-
-	if got := browserAdmissionProvider(BrowserConfig{}); got != "chatgpt" {
-		t.Fatalf("default browser admission provider = %q", got)
-	}
-	if got := browserAdmissionProvider(
-		readBrowserConfig(BrowserConfig{}),
-	); got != chatGPTReadAdmissionProvider {
-		t.Fatalf("read browser admission provider = %q", got)
-	}
-}
-
-func TestSharedThrottleCooldownBlocksBothReadAndSendCallers(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	gate, err := admission.New(admission.Config{
-		StateDir: t.TempDir(),
-		Now:      func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
-	readLease, failure := acquireChatGPTThrottle(
-		context.Background(),
-		gate,
-	)
-	if failure != nil {
-		t.Fatalf("read throttle acquire: %+v", failure)
-	}
-	retryAt := now.Add(time.Hour)
-	if err := releaseChatGPTThrottle(readLease, &readFailure{
-		code:     "chatgpt_rate_limited",
-		errClass: "rate_limit",
-		retryAt:  retryAt,
-	}); err != nil {
-		t.Fatalf("read throttle release: %v", err)
-	}
-
-	_, sendFailure := acquireChatGPTThrottle(context.Background(), gate)
-	if sendFailure == nil ||
-		sendFailure.errClass != "rate_limit" ||
-		!sendFailure.retryAt.Equal(retryAt) {
-		t.Fatalf("send throttle failure = %+v", sendFailure)
 	}
 }

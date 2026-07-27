@@ -17,7 +17,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -26,7 +25,6 @@ const (
 	ConversationDetailSchemaVersion = "chatgpt-conversation-detail/v1"
 	ConversationDetailRoute         = "/backend-api/conversation/:conversation_id"
 	maxChatGPTResponseBytes         = 32 << 20
-	chatGPTReadAdmissionProvider    = "chatgpt-read"
 )
 
 var (
@@ -48,7 +46,6 @@ var (
 
 type ReadConfig struct {
 	Store           *Store
-	Admission       *admission.Gate
 	BrowserConfig   *BrowserConfig
 	BrowserFallback func(context.Context) (*BrowserConfig, error)
 	HTTPClient      *http.Client
@@ -191,45 +188,24 @@ func ListConversations(
 			nil,
 		)
 	}
-	lease, failure := acquireReadAdmission(
-		ctx,
-		config,
-		runID,
-		webagent.OperationConversationsList,
-	)
+	data, failure := fetchConversationList(ctx, config, template, limit, offset)
 	if failure != nil {
 		return readFailureResult(
 			runID,
 			config.BuildCommit,
 			webagent.OperationConversationsList,
 			*failure,
-			map[string]any{"schema_version": ConversationListSchemaVersion},
-			nil,
-		)
-	}
-	data, failure := fetchConversationList(ctx, config, template, limit, offset)
-	if failure != nil {
-		result := readFailureResult(
-			runID,
-			config.BuildCommit,
-			webagent.OperationConversationsList,
-			*failure,
 			data,
 			nil,
 		)
-		return releaseReadAdmission(result, lease, failure.retryAt)
 	}
-	return releaseReadAdmission(
-		readSuccessResult(
-			runID,
-			config.BuildCommit,
-			webagent.OperationConversationsList,
-			webagent.StateReady,
-			data,
-			nil,
-		),
-		lease,
-		time.Time{},
+	return readSuccessResult(
+		runID,
+		config.BuildCommit,
+		webagent.OperationConversationsList,
+		webagent.StateReady,
+		data,
+		nil,
 	)
 }
 
@@ -383,14 +359,6 @@ func readConversationUntil(
 			conversation,
 		)
 	}
-	lease, failure := acquireReadAdmission(ctx, config, runID, operation)
-	if failure != nil {
-		return readFailureResult(
-			runID, config.BuildCommit, operation, *failure,
-			map[string]any{"schema_version": ConversationDetailSchemaVersion},
-			conversation,
-		)
-	}
 	delays := config.AwaitDelays
 	if len(delays) == 0 {
 		delays = defaultAwaitDelays
@@ -459,21 +427,16 @@ func readConversationUntil(
 	}
 	data.Metadata["detail_read_attempts"] = attempts
 	if failure != nil {
-		result := readFailureResult(
+		return readFailureResult(
 			runID, config.BuildCommit, operation, *failure, data, conversation,
 		)
-		return releaseReadAdmission(result, lease, failure.retryAt)
 	}
 	state := webagent.StateTerminal
 	if data.CompletionState != "terminal" {
 		state = webagent.StateIncomplete
 	}
-	return releaseReadAdmission(
-		readSuccessResult(
-			runID, config.BuildCommit, operation, state, data, conversation,
-		),
-		lease,
-		time.Time{},
+	return readSuccessResult(
+		runID, config.BuildCommit, operation, state, data, conversation,
 	)
 }
 
@@ -1091,27 +1054,6 @@ func doChatGPTRequest(
 	config ReadConfig,
 	request *http.Request,
 ) (*http.Response, *readFailure) {
-	throttle, throttleFailure := acquireChatGPTThrottle(
-		request.Context(),
-		config.Admission,
-	)
-	if throttleFailure != nil {
-		return nil, throttleFailure
-	}
-	releaseThrottle := func(
-		response *http.Response,
-		failure *readFailure,
-	) (*http.Response, *readFailure) {
-		if err := releaseChatGPTThrottle(throttle, failure); err != nil {
-			if response != nil {
-				_ = response.Body.Close()
-			}
-			return nil, internalReadFailure(
-				"ChatGPT shared provider throttle outcome could not be persisted",
-			)
-		}
-		return response, failure
-	}
 	client := config.HTTPClient
 	if client == nil {
 		client = &http.Client{
@@ -1123,14 +1065,14 @@ func doChatGPTRequest(
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return releaseThrottle(nil, &readFailure{
+		return nil, &readFailure{
 			code:     "chatgpt_http_unavailable",
 			errClass: "connection",
 			message:  "ChatGPT candidate HTTP read is unavailable",
-		})
+		}
 	}
 	if response.StatusCode == http.StatusOK {
-		return releaseThrottle(response, nil)
+		return response, nil
 	}
 	_ = response.Body.Close()
 	failure := &readFailure{
@@ -1153,7 +1095,7 @@ func doChatGPTRequest(
 			nowForRead(config),
 		)
 	}
-	return releaseThrottle(nil, failure)
+	return nil, failure
 }
 
 func decodeBoundedJSON(body io.Reader, target any) error {
@@ -1205,46 +1147,6 @@ func loadFreshReadTemplate(
 	return template, nil
 }
 
-func acquireReadAdmission(
-	ctx context.Context,
-	config ReadConfig,
-	runID string,
-	operation webagent.Operation,
-) (*admission.Lease, *readFailure) {
-	if config.Admission == nil {
-		return nil, internalReadFailure(
-			"ChatGPT provider admission is unavailable",
-		)
-	}
-	lease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  chatGPTReadAdmissionProvider,
-		Operation: string(operation),
-		RunID:     runID,
-	})
-	if err == nil {
-		return lease, nil
-	}
-	var blocked *admission.BlockedError
-	if errors.As(err, &blocked) {
-		failure := &readFailure{
-			code:     "chatgpt_admission_blocked",
-			errClass: "admission",
-			message:  blocked.Error(),
-		}
-		if blocked.ResolutionNeeded {
-			failure.nextCommands = []string{
-				"cdp workflow agent admission status chatgpt-read --json",
-			}
-		} else {
-			failure.retryAt = blocked.RetryAt
-		}
-		return nil, failure
-	}
-	return nil, internalReadFailure(
-		"ChatGPT provider admission state is unavailable",
-	)
-}
-
 func browserReadFallbackEligible(result webagent.Result) bool {
 	if result.OK || result.Error == nil {
 		return false
@@ -1285,40 +1187,6 @@ func recordDirectReadFallback(
 		data.Metadata["direct_http_attempted"] = true
 		data.Metadata["direct_http_failure_code"] = direct.Error.Code
 		result.Data = data
-	}
-	return result
-}
-
-func releaseReadAdmission(
-	result webagent.Result,
-	lease *admission.Lease,
-	cooldown time.Time,
-) webagent.Result {
-	if lease == nil {
-		return result
-	}
-	outcome := admission.OutcomeFailed
-	switch {
-	case result.OK && result.State == webagent.StateTerminal:
-		outcome = admission.OutcomeTerminal
-	case result.OK && result.State == webagent.StateIncomplete:
-		outcome = admission.OutcomeIncomplete
-	case result.OK:
-		outcome = admission.OutcomeCompleted
-	case result.Error != nil && result.Error.Code == "chatgpt_rate_limited":
-		outcome = admission.OutcomeRateLimited
-	}
-	if err := lease.Release(admission.Release{
-		Outcome:       outcome,
-		CooldownUntil: cooldown,
-	}); err != nil {
-		return replaceFailure(
-			result,
-			"chatgpt_admission_release_failed",
-			"internal",
-			"ChatGPT provider admission outcome could not be persisted",
-			[]string{"cdp workflow agent chatgpt doctor --json"},
-		)
 	}
 	return result
 }

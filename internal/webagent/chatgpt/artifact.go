@@ -17,18 +17,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
 const (
-	ArtifactDownloadSchemaVersion    = "chatgpt-artifact-download/v1"
-	chatGPTArtifactAdmissionProvider = "chatgpt-artifact"
-	artifactMetadataRoute            = "/backend-api/conversation/:conversation_id/interpreter/download"
-	artifactContentRoute             = "/backend-api/estuary/content"
-	maxArtifactBytes                 = 32 << 20
+	ArtifactDownloadSchemaVersion = "chatgpt-artifact-download/v1"
+	artifactMetadataRoute         = "/backend-api/conversation/:conversation_id/interpreter/download"
+	artifactContentRoute          = "/backend-api/estuary/content"
+	maxArtifactBytes              = 32 << 20
 )
 
 var sandboxPathPatterns = []*regexp.Regexp{
@@ -175,7 +173,7 @@ func DownloadArtifact(
 
 	return runOwned(
 		ctx,
-		artifactBrowserConfig(config.BrowserConfig),
+		config.BrowserConfig,
 		runID,
 		webagent.OperationArtifactDownload,
 		"",
@@ -209,7 +207,6 @@ func DownloadArtifact(
 			data.Metadata["detail_read_attempts"] = 1
 			detailResponse, failure := browserFetch(
 				ctx,
-				config.Admission,
 				session,
 				template,
 				Origin+detailPath,
@@ -255,7 +252,6 @@ func DownloadArtifact(
 			data.Metadata["metadata_read_attempts"] = 1
 			metadataResponse, failure := browserFetch(
 				ctx,
-				config.Admission,
 				session,
 				template,
 				Origin+metadataPath,
@@ -298,7 +294,6 @@ func DownloadArtifact(
 			data.Metadata["content_read_attempts"] = 1
 			binary, failure := browserFetchBinary(
 				ctx,
-				config.Admission,
 				session,
 				template,
 				metadata.DownloadURL,
@@ -370,11 +365,6 @@ func DownloadArtifact(
 			return result
 		},
 	)
-}
-
-func artifactBrowserConfig(config BrowserConfig) BrowserConfig {
-	config.AdmissionProvider = chatGPTArtifactAdmissionProvider
-	return config
 }
 
 func locateArtifact(
@@ -600,18 +590,13 @@ func exactNonnegativeJSONInt(value any) (int, string, bool) {
 
 func browserFetchBinary(
 	ctx context.Context,
-	gate *admission.Gate,
 	session *cdp.PageSession,
 	template RequestTemplate,
 	endpoint string,
 	targetRoute string,
 	maxBytes int,
 ) (browserBinaryFetchResult, *readFailure) {
-	throttle, failure := acquireChatGPTThrottle(ctx, gate)
-	if failure != nil {
-		return browserBinaryFetchResult{}, failure
-	}
-	response, failure := browserFetchBinaryUnthrottled(
+	return browserFetchBinaryUnthrottled(
 		ctx,
 		session,
 		template,
@@ -619,12 +604,6 @@ func browserFetchBinary(
 		targetRoute,
 		maxBytes,
 	)
-	if err := releaseChatGPTThrottle(throttle, failure); err != nil {
-		return browserBinaryFetchResult{}, internalReadFailure(
-			"ChatGPT shared provider throttle outcome could not be persisted",
-		)
-	}
-	return response, failure
 }
 
 func browserFetchBinaryUnthrottled(

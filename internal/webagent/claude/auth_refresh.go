@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -20,7 +19,6 @@ const (
 	AuthRefreshSchemaVersion   = "claude-auth-refresh/v1"
 	defaultObservationTimeout  = 10 * time.Second
 	defaultObservationAttempts = 3
-	DefaultAdmissionSpacing    = time.Second
 )
 
 type EventClient interface {
@@ -32,7 +30,6 @@ type AuthRefreshConfig struct {
 	Client              EventClient
 	Engine              *browserflow.Engine
 	Journal             browserflow.Journal
-	Admission           *admission.Gate
 	Store               *Store
 	BuildCommit         string
 	ObservationTimeout  time.Duration
@@ -134,70 +131,9 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 	if config.Client == nil ||
 		config.Engine == nil ||
 		config.Journal == nil ||
-		config.Admission == nil ||
 		config.Store == nil {
 		return result
 	}
-
-	admissionLease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  string(webagent.ProviderClaude),
-		Operation: string(webagent.OperationAuthRefresh),
-		RunID:     runID,
-	})
-	if err != nil {
-		var blocked *admission.BlockedError
-		if errors.As(err, &blocked) {
-			retryAt := ""
-			nextCommands := []string{"cdp workflow agent claude doctor --json"}
-			if blocked.ResolutionNeeded {
-				nextCommands = []string{"cdp workflow agent admission status claude --json"}
-			} else {
-				retryAt = blocked.RetryAt.UTC().Format(time.RFC3339Nano)
-			}
-			return authRefreshFailure(
-				runID,
-				config.BuildCommit,
-				webagent.StagePlanned,
-				nil,
-				webagent.CleanupEvidence{Required: false, State: webagent.CleanupNotRequired},
-				"claude_admission_blocked",
-				"admission",
-				blocked.Error(),
-				retryAt,
-				baseData,
-				nextCommands,
-			)
-		}
-		return authRefreshFailure(
-			runID,
-			config.BuildCommit,
-			webagent.StagePlanned,
-			nil,
-			webagent.CleanupEvidence{Required: false, State: webagent.CleanupNotRequired},
-			"claude_admission_unavailable",
-			"internal",
-			"Claude provider admission state is unavailable",
-			"",
-			baseData,
-			[]string{"cdp workflow agent claude doctor --json"},
-		)
-	}
-	defer func() {
-		outcome := admission.OutcomeFailed
-		if result.OK {
-			outcome = admission.OutcomeCompleted
-		}
-		if err := admissionLease.Release(admission.Release{Outcome: outcome}); err != nil {
-			result = replaceAuthRefreshFailure(
-				result,
-				"claude_admission_release_failed",
-				"internal",
-				"Claude provider admission outcome could not be persisted",
-				"",
-				[]string{"cdp workflow agent claude doctor --json"},
-			)
-		}
-	}()
 
 	lease, err := config.Engine.Acquire(ctx, browserflow.AcquireRequest{
 		RunID:      runID,
@@ -236,10 +172,9 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 		Closed:    false,
 	}
 	pendingCleanup := webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupPending,
-		TargetID:        lease.TargetID(),
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupPending,
+		TargetID: lease.TargetID(),
 	}
 	defer func() {
 		cleanup, closeErr := lease.Close(context.Background())
@@ -247,10 +182,9 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{
-				Required:        true,
-				State:           webagent.CleanupFailed,
-				TargetID:        lease.TargetID(),
-				RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+				Required: true,
+				State:    webagent.CleanupFailed,
+				TargetID: lease.TargetID(),
 			}
 			result.Stage = webagent.StageCleanupPending
 			result = replaceAuthRefreshFailure(
@@ -365,7 +299,6 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 			baseData,
 			[]string{
 				"cdp workflow agent claude auth refresh --json",
-				fmt.Sprintf("cdp workflow agent recovery inspect %s --json", runID),
 			},
 		)
 	}
@@ -411,7 +344,6 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 			baseData,
 			[]string{
 				"cdp workflow agent claude auth refresh --json",
-				fmt.Sprintf("cdp workflow agent recovery inspect %s --json", runID),
 			},
 		)
 	}
@@ -774,10 +706,9 @@ func reconcileAcquireFailure(config AuthRefreshConfig, runID string) (*webagent.
 		}, webagent.StageClosed
 	}
 	return target, webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupFailed,
-		TargetID:        record.TargetID,
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupFailed,
+		TargetID: record.TargetID,
 	}, webagent.StageCleanupPending
 }
 
@@ -853,13 +784,6 @@ func replaceAuthRefreshFailure(
 	return result
 }
 
-func authRefreshNextCommands(runID string, cleanup webagent.CleanupEvidence) []string {
-	commands := []string{"cdp workflow agent claude doctor --json"}
-	if cleanup.State == webagent.CleanupPending || cleanup.State == webagent.CleanupFailed {
-		commands = append(commands,
-			fmt.Sprintf("cdp workflow agent recovery inspect %s --json", runID),
-			fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
-		)
-	}
-	return commands
+func authRefreshNextCommands(_ string, _ webagent.CleanupEvidence) []string {
+	return nil
 }

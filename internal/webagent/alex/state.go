@@ -39,7 +39,6 @@ const (
 	RelativeAskRecordRoot     = "webagent/alex/operations"
 	DefaultAuthTTL            = time.Hour
 	DefaultCatalogTTL         = 24 * time.Hour
-	DefaultAdmissionSpacing   = time.Second
 	MaxPromptCharacters       = 18_000
 )
 

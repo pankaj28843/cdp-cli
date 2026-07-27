@@ -51,8 +51,6 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp workflow web-research serp", want: []string{"--result-pages 3", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026"}},
 		{path: "cdp workflow web-research extract", want: []string{"--parallel 4", "--parallel 10"}},
 		{path: "cdp workflow feeds", want: []string{"--wait-load"}},
-		{path: "cdp workflow agent admission status", want: []string{"chatgpt"}},
-		{path: "cdp workflow agent admission resolve", want: []string{"--acknowledge-unknown", "recovery close"}},
 		{path: "cdp workflow visible-posts", want: []string{"visible-posts"}},
 		{path: "cdp workflow hacker-news", want: []string{"hacker-news"}},
 		{path: "cdp workflow hacker-news collect", want: []string{"news.ycombinator.com/item?id", "--limit 500"}},

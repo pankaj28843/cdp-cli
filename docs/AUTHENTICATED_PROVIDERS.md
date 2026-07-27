@@ -1,314 +1,104 @@
 # Authenticated Provider Workflows
 
-`cdp workflow agent` owns authenticated web-agent workflows behind
-`webagent-operation/v1`. The executable capability catalog is the source of
-truth:
+`cdp workflow agent` exposes authenticated provider operations through the
+signed-in headed Chrome session selected by `--browser-mode headed`.
 
 ```bash
+cdp --browser-mode headed pages --json
 cdp workflow agent providers --json
-cdp workflow agent claude capabilities --json
-cdp workflow agent gemini capabilities --json
-cdp workflow agent grok capabilities --json
+cdp workflow agent chatgpt capabilities --json
 cdp schema webagent-operation --json
-cdp describe --command 'workflow agent' --json
 ```
 
-An operation is callable only when its capability reports `supported=true`.
-Planned behavior remains visible but unavailable. Browser-free capability and
-doctor commands do not probe Chrome.
+If the headed `pages` command returns open tabs, that runtime is reachable.
+Provider asks use the existing signed-in session directly; they do not require
+any provider-wide preflight based on earlier invocations.
 
-## State Boundaries
+## Ask Lifecycle
 
-Three state classes are deliberately separate:
+Every headed ask follows the same small lifecycle:
 
-- `webagent/recovery/`: lifecycle phase, exact target/session identity, action
-  counts, acknowledgement identity, and cleanup state.
-- `webagent/admission/`: provider serialization, spacing, cooldown, mutating
-  classification, prior outcome, and exact run identity.
-- `webagent/<provider>/`: provider-specific owner-only auth, runtime capability,
-  or validated replay state.
+1. Open one fresh provider tab.
+2. Verify the live composer and any explicitly requested mode or model.
+3. Insert the exact prompt and optional attachment.
+4. Perform one raw Send.
+5. Observe the answer and conversation ID.
+6. Close only the tab created by this invocation.
 
-Recovery and admission state never contain prompts, answers, cookies, headers,
-tokens, request bodies, or raw provider responses. Provider state directories
-are `0700`; files and locks are `0600`, reject symlinks, use a same-directory
-synced temporary, atomic rename, directory sync, and cross-process locking.
-Admission waits through ordinary minimum spacing only within the command's
-existing context, then reacquires the lock and rechecks state. Provider
-cooldowns remain typed immediate stops and are never waited through or bypassed.
-If a process disappears while a mutating admission is active, or releases with
-an unknown mutation outcome, admission remains quarantined indefinitely;
-elapsed spacing never makes the mutation retryable. Orphaned read-only
-operations are safely marked abandoned after the process lock disappears.
-Only a provider with a proven stable replay path may retain the minimum private
-request template needed for that replay.
+Independent asks may run concurrently. The browser-input lease serializes only
+the focus-sensitive preparation and Send boundary; it is released before long
+answer observation. A vanished process or tab may lose that invocation's
+answer, but it does not poison or block the next fresh ask.
 
-Normal JSON output reports only safe readiness, counts, timestamps, stages,
-target lifecycle, cleanup proof, and executable next commands.
+The command never closes sibling tabs and never reuses a tab from a previous
+ask. It reports whether raw input was attempted, so callers can avoid
+duplicating a request after an ambiguous transport failure.
 
-Auth refresh uses one shared bounded readiness sequence: observe the initial
-navigation, observe one ordinary reload, then observe one cache-bypassing hard
-reload and keep observing through a final grace wait. Missing UI, cookie, or
-request evidence after that sequence reports `auth_evidence_not_observed`.
-The command divides one overall deadline across the three stages; a terminal
-CDP observation error remains a connection failure instead of being relabeled
-as auth absence. Absence is not proof that the human-authenticated browser
-session is logged out. A caller should retry only when the result also proves
-no provider mutation occurred and exact target cleanup completed.
+Ask Alex is the one direct-HTTP exception: it resolves its exact course and
+chapter context from browser-observed signed-in state, performs one POST, and
+returns that response.
 
-The browser-wide headed-input lease is separate from those provider state
-classes:
-
-```text
-<state-dir>/locks/headed-browser-input.lock
-```
-
-Any workflow that may activate a target or dispatch input acquires this
-owner-only lock before creating its target. A single-Send ask releases it
-immediately after the raw-input boundary so answer observation can overlap;
-exact target close releases it on every earlier failure. Provider admission
-still independently serializes rate and cooldown policy. A foreground command
-that meets a just-finished read-only maintenance action waits through the local
-minimum-spacing interval and rechecks rather than failing spuriously.
-
-## Claude
-
-Claude currently implements:
+## Examples
 
 ```bash
-cdp workflow agent claude doctor --json
-cdp workflow agent claude auth refresh --json
-printf '%s' 'Review this design.' | cdp workflow agent claude ask --stdin --json
-cdp workflow agent claude conversations list --limit 30 --json
-cdp workflow agent claude conversations detail <conversation-id> --json
-cdp workflow agent claude conversations await <conversation-id> --json
-cdp workflow agent claude conversations delete <conversation-id> --json
-cdp --timeout 3m workflow agent claude calibrate --json
-cdp workflow agent claude calibration status --json
-cdp --timeout 1m workflow agent claude calibration cleanup --json
+printf '%s' 'Review this design.' |
+  cdp workflow agent chatgpt ask \
+    --stdin \
+    --thinking highest \
+    --minimum-thinking extra-high \
+    --model highest \
+    --timeout 40m \
+    --json
+
+printf '%s' 'Review this design.' |
+  cdp workflow agent claude ask --stdin --json
+
+printf '%s' 'Review this design.' |
+  cdp workflow agent gemini ask --stdin --json
+
+printf '%s' 'Review this implementation.' |
+  cdp workflow agent grok ask --stdin --json
+
+printf '%s' 'Review this implementation.' |
+  cdp workflow agent perplexity ask --stdin --json
+
+printf '%s' 'Critique this itinerary.' |
+  cdp workflow agent tripadvisor ask --stdin --json
 ```
 
-`doctor` reads owner-only local state and never probes the browser.
+ChatGPT keeps the current thinking and model unless flags or owner-local config
+request a selection. `highest` chooses the highest visible option;
+`--minimum-thinking` fails before Send if the visible selection is below the
+requested floor. Attached files must keep the requested basename and remain
+visible at the final Send guard.
 
-`auth refresh` is intent-level and selects the headed runtime unless the caller
-explicitly requests an incompatible headless mode. It:
+## Conversation Reads
 
-1. acquires Claude admission;
-2. checks the headed tab/window budget;
-3. creates and attaches exactly one fresh target;
-4. enables Network on that exact session and navigates to Claude `/new`;
-5. observes the initial load, one ordinary reload, and one cache-bypassing hard
-   reload plus its final grace wait before reporting missing auth evidence;
-6. accepts only a successful HTTPS GET whose request and response agree on the
-   observed organization/list endpoint;
-7. reads current Claude cookies from the same session and requires
-   `sessionKey` or `sessionKeyLC`;
-8. persists the private validated replay template;
-9. records terminal lifecycle state and exact-closes only the owned target.
-
-No prompt is inserted and no raw input action is dispatched. Live acceptance
-must compare successful conversation-list fingerprints before and after and
-prove they are identical, then prove the headed page-set fingerprint is
-unchanged.
-
-The private template is:
-
-```text
-~/.cdp-cli/webagent/claude/request-template.json
-```
-
-Do not print, copy, commit, or attach it to bug reports.
-
-Each `ask` starts a fresh conversation at `/new`; follow-up turns are not part
-of this contract. The exact prompt is prepared and verified before
-`action_pending` is persisted and Enter is pressed once. A same-target
-`/chat/<id>` route acknowledges the new conversation. Stable detail is tried
-first; a 401/403 uses rendered detail on that already-owned target. An
-unacknowledged or ambiguous send is never resubmitted.
-
-List, detail, and await first use the observed stable HTTP shape. Claude may
-accept the browser session while rejecting direct HTTP context with 401/403.
-That one typed outcome lazily receives one fresh exact-owned rendered fallback;
-other HTTP failures do not. Await repeats only rendered/incomplete observation
-inside that target and never performs browser input. Rendered list fallback
-waits for the ordered id/title sequence to remain unchanged across bounded
-reads, or returns immediately when the requested limit is reached; it does not
-mistake Claude's first partially populated sidebar render for complete history.
-
-Delete navigates one fresh owned target to the exact conversation. Reversible
-header/menu preparation may retry. The exact `Delete` confirmation is the only
-journaled irreversible click, is dispatched once, and is successful only after
-the same target reaches `/new` without the conversation id. A transport-unknown
-click may refine to performed only with that persisted postcondition. Every
-path exact-closes the owned target.
-
-`calibrate` is an explicit disposable transaction, never part of doctor or auth
-refresh. It uses one owned target for a memory-only substantive prompt, one
-Send, rendered terminal capture, a journal transition to a second irreversible
-action slot, one exact Delete confirmation, the same-target postcondition, and
-exact close. Only prompt fingerprint and safe answer counts enter lifecycle
-output/state. `calibration status` is browser-free. Explicit `calibration
-cleanup` exact-closes only a persisted owned target and deletes only a persisted
-acknowledged disposable conversation; it never repeats an ambiguous Send or
-Delete.
-
-## Gemini
-
-Gemini currently implements:
+Where supported, `list`, `detail`, and `await` are read-only operations over an
+observed conversation ID:
 
 ```bash
-cdp workflow agent gemini capabilities --json
-cdp workflow agent gemini auth refresh --json
-cdp workflow agent gemini capabilities refresh --json
-cdp workflow agent gemini doctor --json
-printf '%s' 'Review this design.' | cdp workflow agent gemini ask --stdin --json
-cdp workflow agent gemini conversations list --limit 30 --json
-cdp workflow agent gemini conversations detail <conversation-id> --json
-cdp workflow agent gemini conversations await <conversation-id> --json
-cdp workflow agent gemini conversations delete <conversation-id> --json
-cdp --timeout 3m workflow agent gemini calibrate --json
-cdp workflow agent gemini calibration status --json
-cdp --timeout 1m workflow agent gemini calibration cleanup --json
+cdp workflow agent chatgpt conversations list --limit 30 --json
+cdp workflow agent chatgpt conversations detail <conversation-id> --json
+cdp workflow agent chatgpt conversations await <conversation-id> \
+  --wait 40m --timeout 40m30s --json
 ```
 
-The browser-free capability result combines the installed static operation
-contract with the last safe runtime observation. `doctor` reads only local auth
-and runtime evidence. `auth refresh` owns one fresh headed target, observes the
-signed-in surface and session-cookie names across the shared bounded readiness
-sequence, stores only booleans and a
-timestamp, submits no prompt, and exact-closes. `capabilities refresh` similarly
-observes the unique mode picker, mode labels, upload control, and current
-deep-research selection; it does not select a new mode or submit.
+Provider-specific `capabilities` output is the executable source of truth for
+which read, continue, delete, and auth operations are installed.
 
-Gemini uses rendered headed reads and writes. It does not code or replay the
-volatile `batchexecute` transport. Each `ask` requires fresh auth and runtime
-evidence, opens `/app` in one fresh owned target, verifies the cached rendered
-mode and exact prompt, persists `action_pending`, presses Enter once,
-acknowledges the minted same-target conversation route, and captures the
-terminal rendered answer. No ambiguous or performed Send is retried.
-The headed-input lease is released immediately after that one Enter; route and
-answer observation remain bound to the exact owned target.
+## Exact-Target Cleanup
 
-List opens the sidebar and Recents controls only when needed, then either
-reaches the requested limit or progressively advances the unique visible
-history scroller until the deduplicated conversation-id set is stable at its
-bottom. This prevents a partially hydrated first batch from being treated as a
-complete history. Detail and await require the exact conversation route and
-read only the rendered prompt/answer. Gemini's visible HTML inserts layout
-newlines and removes code indentation, so `innerText` cannot prove exact prompt
-identity. Instead, the workflow resolves exactly one visible `Copy prompt`
-control inside the last rendered query, temporarily intercepts
-`navigator.clipboard.writeText` inside that disposable target, invokes the
-control once, and restores the property. It fingerprints the captured prompt
-with outer trim only. The observed handler is intercepted before it can write
-the system clipboard, ambiguous controls fail closed, and interior or general
-whitespace collapsing is not accepted.
-
-Delete navigates one fresh target to the exact conversation, resolves one
-strict menu and confirmation control, journals the one irreversible click, and
-accepts only the same target reaching `/app` without the conversation id.
-Calibration uses one target for one Send, rendered capture, one exact Delete,
-the same postcondition, and exact close. Its persisted action slots ensure
-cleanup never repeats an ambiguous Send or Delete.
-
-## Grok
-
-Grok currently implements:
-
-```bash
-cdp workflow agent grok capabilities --json
-cdp workflow agent grok auth refresh --json
-cdp workflow agent grok capabilities refresh --json
-cdp workflow agent grok doctor --json
-printf '%s' 'Review this design.' | cdp workflow agent grok ask --stdin --json
-cdp workflow agent grok conversations list --limit 30 --json
-cdp workflow agent grok conversations detail <conversation-id> --json
-cdp workflow agent grok conversations await <conversation-id> --json
-cdp workflow agent grok conversations delete <conversation-id> --json
-cdp --timeout 3m workflow agent grok calibrate --json
-cdp workflow agent grok calibration status --json
-cdp --timeout 1m workflow agent grok calibration cleanup --json
-```
-
-`doctor` and the static capability surface are browser-free. Auth refresh owns
-one fresh headed target and accepts only the successful signed-in
-`GET /rest/app-chat/conversations` request observed on that exact session. It
-persists the minimum validated request template in owner-only state, submits no
-prompt, and exact-closes. Capability refresh separately observes the stable
-`/rest/modes` response and retains only safe mode ids, titles, availability,
-selection, and the provider-owned default.
-
-Ask requires fresh auth and runtime evidence. It acquires the shared
-headed-input lease before target creation, prepares the fresh composer, and
-proves the exact prompt and available default mode. Grok may rerender its editor
-during insertion, so reversible select/insert/observe preparation is bounded
-and repeatable; the journaled raw Send remains at most once. The same target
-must acknowledge `/c/<id>`. Unknown or performed dispatch is never resubmitted.
-
-The canonical answer comes from the browser-observed stable detail sequence:
-
-```text
-GET  /rest/app-chat/conversations/<id>/response-node
-POST /rest/app-chat/conversations/<id>/load-responses
-```
-
-The second request varies only the response ids returned by the first. Detail
-accepts only non-empty assistant text with `partial: false` and no stream
-errors. List/detail make one fresh exact-owned rendered fallback only after a
-typed 401/403 browser-context rejection. Await reads the acknowledged exact id
-without browser input. Stored prompt identity normalizes CRLF/CR to LF and
-whitespace-only lines to empty because the live provider adds spaces to blank
-editor lines. It does not trim, collapse, or otherwise alter any non-empty
-line, so code indentation and interior whitespace remain identity-significant.
-Rendered layout mismatch cannot override canonical stored identity; the narrow
-rendered fallback must independently prove its own exact normalized prompt.
-
-Delete navigates one fresh target to the exact conversation, resolves one
-strict visible More menu and role/name `Delete Chat` item, journals the one
-irreversible click, and accepts only the same target reaching `/` without the
-conversation id. Calibration owns one target for one Send, canonical stored
-answer capture, one exact `Delete Chat`, the same postcondition, and exact
-close. Separate durable action slots prevent cleanup from repeating either
-ambiguous action.
-
-## Recovery
-
-Every browser run has an opaque `evidence.run_id`. Normal completion reports
-`cleanup.state=closed`. If exact closure cannot be proven, run only the returned
-exact recovery command:
-
-```bash
-cdp workflow agent recovery inspect <run-id> --json
-cdp workflow agent recovery close <run-id> --json
-cdp workflow agent admission status <provider> --json
-```
-
-Recovery acts on the one recorded target. It never repeats provider input and
-never broadly cleans sibling or user tabs. Exact cleanup does not silently
-release a quarantined mutation. After inspecting the result and accepting that
-the prior action may already have occurred, a human may explicitly authorize
-future new work only when the browserflow record proves cleanup is settled:
-
-```bash
-cdp workflow agent admission resolve <provider> <run-id> \
-  --acknowledge-unknown --json
-```
-
-Resolution requires exact provider/operation/run identity and a closed target
-or proof that no target was created. For Ask Alex's direct HTTP replay, which
-has no browser target, the resolver instead requires its exact owner-only
-pending/performed/unknown action record. Missing, mismatched, or contradictory
-evidence fails closed.
+Every live invocation exact-closes the tab it created before returning. Normal
+completion reports `cleanup.state=closed`. If Chrome disappears or exact close
+cannot be proved, the result reports the exact target ID; it does not prescribe
+a follow-up command and it never blocks a later fresh ask.
 
 ## Capability Changes
 
-Before changing an operation from planned to implemented:
+Before an operation becomes supported:
 
-1. focused safety, privacy, architecture, and fault checks pass;
-2. the exact installed binary exposes matching help/schema;
-3. a real authenticated provider run proves usefulness and provider semantics;
-4. before/after page sets match;
-5. destructive operations prove an exact same-target postcondition;
-6. downstream compatibility wrappers and skills are updated together.
-
-Synthetic green tests are guardrails, not completion evidence. A live failure
-blocks support and becomes a repaired implementation plus a regression check.
+1. focused source tests and compile checks pass;
+2. the installed binary exposes matching help and schema;
+3. a real authenticated run proves the provider boundary;
+4. the invocation exact-closes its own tab without changing sibling tabs.

@@ -9,7 +9,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -128,7 +127,6 @@ type chatgptSendDispatcher struct {
 	intelligence string
 	model        string
 	attachment   *attachmentExpectation
-	throttle     *heldChatGPTThrottle
 }
 
 func (d chatgptSendDispatcher) Dispatch(
@@ -200,12 +198,6 @@ func (d chatgptSendDispatcher) Dispatch(
 		observation.SendX,
 		observation.SendY,
 	)
-	if releaseErr := d.throttle.Release(nil); releaseErr != nil {
-		return outcome, fmt.Errorf(
-			"release ChatGPT shared provider throttle: %w",
-			releaseErr,
-		)
-	}
 	return outcome, clickErr
 }
 
@@ -299,25 +291,6 @@ func Ask(
 			"ChatGPT owner-only state is unavailable", "", data,
 			[]string{"cdp workflow agent chatgpt doctor --json"},
 		)
-	}
-	reconciledRunID, err := reconcilePriorSubmittedMutation(
-		ctx,
-		config.BrowserConfig,
-		data.PromptFingerprint,
-	)
-	if err != nil {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"chatgpt_admission_reconcile_failed", "internal",
-			"ChatGPT could not reconcile durable evidence for the prior submitted request",
-			"", data,
-			[]string{"cdp workflow agent admission status chatgpt --json"},
-		)
-	}
-	if reconciledRunID != "" {
-		data.Metadata["reconciled_prior_run_id"] = reconciledRunID
 	}
 	now := nowForAsk(config)
 	template, auth, _ := config.Store.LoadTemplateStatus(
@@ -505,7 +478,6 @@ func Ask(
 				}
 			}
 			dispatcher := config.Send
-			var sendThrottle *heldChatGPTThrottle
 			verifyAttempts, composer, verifyErr := prepareVerifiedPrompt(
 				ctx,
 				session,
@@ -571,23 +543,6 @@ func Ask(
 				)
 			}
 			if dispatcher == nil {
-				var throttleFailure *readFailure
-				sendThrottle, throttleFailure = holdChatGPTThrottle(
-					ctx,
-					config.Admission,
-				)
-				if throttleFailure != nil {
-					_ = lease.MarkIncomplete(context.Background())
-					return askFailure(
-						runID, config, webagent.StageAttached,
-						target, pending, notPerformed, nil,
-						throttleFailure.code,
-						throttleFailure.errClass,
-						throttleFailure.message,
-						formatRetryAt(throttleFailure.retryAt),
-						data, cleanupCommands(runID, pending),
-					)
-				}
 				guardErr := prepareSelectionGuardAtSend(
 					ctx,
 					session,
@@ -624,9 +579,6 @@ func Ask(
 						guardedComposer,
 						data.Intelligence,
 					) {
-					if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
-						data.Metadata["throttle_release_failed"] = true
-					}
 					_ = lease.MarkIncomplete(context.Background())
 					return askFailure(
 						runID, config, webagent.StageAttached,
@@ -642,9 +594,6 @@ func Ask(
 				}
 			}
 			if err := lease.MarkPrepared(ctx); err != nil {
-				if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
-					data.Metadata["throttle_release_failed"] = true
-				}
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
@@ -659,19 +608,9 @@ func Ask(
 					intelligence: data.Intelligence,
 					model:        data.Model,
 					attachment:   expectedAttachment,
-					throttle:     sendThrottle,
 				}
 			}
 			outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
-			if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
-				data.Metadata["throttle_release_failed"] = true
-				if dispatchErr == nil {
-					dispatchErr = fmt.Errorf(
-						"release ChatGPT shared provider throttle: %w",
-						releaseErr,
-					)
-				}
-			}
 			record := lease.Record()
 			action := actionEvidence(record)
 			if dispatchErr != nil {
@@ -809,7 +748,6 @@ func Ask(
 				data.DetailReadAttempts = 1
 				identityDetail, detailFailure := fetchOneHydratedDetail(
 					ctx,
-					config.Admission,
 					session,
 					template,
 					observedConversationID,
@@ -948,7 +886,6 @@ func Ask(
 				url.PathEscape(conversationID)
 			response, detailFailure := browserFetch(
 				ctx,
-				config.Admission,
 				session,
 				template,
 				Origin+detailPath,
@@ -1617,7 +1554,6 @@ func renderedPromptMatches(
 
 func fetchOneHydratedDetail(
 	ctx context.Context,
-	gate *admission.Gate,
 	session *cdp.PageSession,
 	template RequestTemplate,
 	conversationID string,
@@ -1626,7 +1562,6 @@ func fetchOneHydratedDetail(
 		url.PathEscape(conversationID)
 	response, failure := browserFetch(
 		ctx,
-		gate,
 		session,
 		template,
 		Origin+detailPath,

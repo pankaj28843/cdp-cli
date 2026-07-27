@@ -3,14 +3,12 @@ package claude
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -30,7 +28,6 @@ type AskConfig struct {
 	Client          cdp.CommandClient
 	Engine          *browserflow.Engine
 	Journal         browserflow.Journal
-	Admission       *admission.Gate
 	Store           *Store
 	HTTPClient      *http.Client
 	BuildCommit     string
@@ -154,7 +151,6 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 	if config.Client == nil ||
 		config.Engine == nil ||
 		config.Journal == nil ||
-		config.Admission == nil ||
 		config.Store == nil {
 		return askFailure(
 			runID, config.BuildCommit, webagent.StagePlanned, nil,
@@ -175,65 +171,7 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 		baseData.Metadata["cached_read_template_state"] = failure.code
 	}
 
-	admissionLease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  string(webagent.ProviderClaude),
-		Operation: string(webagent.OperationAsk),
-		RunID:     runID,
-	})
-	if err != nil {
-		var blocked *admission.BlockedError
-		retryAt := ""
-		code := "claude_admission_unavailable"
-		errClass := "internal"
-		message := "Claude provider admission state is unavailable"
-		nextCommands := []string{"cdp workflow agent claude doctor --json"}
-		if errors.As(err, &blocked) {
-			code = "claude_admission_blocked"
-			errClass = "admission"
-			message = blocked.Error()
-			if blocked.ResolutionNeeded {
-				nextCommands = []string{"cdp workflow agent admission status claude --json"}
-			} else {
-				retryAt = blocked.RetryAt.UTC().Format(time.RFC3339Nano)
-			}
-		}
-		return askFailure(
-			runID, config.BuildCommit, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed,
-			code, errClass, message, retryAt,
-			baseData, nil,
-			nextCommands,
-		)
-	}
 	var releaseCooldown time.Time
-	defer func() {
-		outcome := admission.OutcomeFailed
-		if result.OK && result.State == webagent.StateTerminal {
-			outcome = admission.OutcomeTerminal
-		} else if result.OK && result.State == webagent.StateIncomplete {
-			outcome = admission.OutcomeIncomplete
-		} else if result.Action != nil &&
-			(result.Action.Dispatch == webagent.DispatchUnknown ||
-				(result.Action.Dispatch == webagent.DispatchPerformed && result.Conversation == nil)) {
-			outcome = admission.OutcomeUnknown
-		} else if result.Error != nil && result.Error.Code == "claude_rate_limited" {
-			outcome = admission.OutcomeRateLimited
-		}
-		if err := admissionLease.Release(admission.Release{
-			Outcome:       outcome,
-			CooldownUntil: releaseCooldown,
-		}); err != nil {
-			result = replaceAskFailure(
-				result,
-				"claude_admission_release_failed",
-				"internal",
-				"Claude provider admission outcome could not be persisted",
-				"",
-			)
-		}
-	}()
-
 	lease, err := config.Engine.Acquire(ctx, browserflow.AcquireRequest{
 		RunID:      runID,
 		Provider:   string(webagent.ProviderClaude),
@@ -266,10 +204,9 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 		Created:   true,
 	}
 	pendingCleanup := webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupPending,
-		TargetID:        lease.TargetID(),
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupPending,
+		TargetID: lease.TargetID(),
 	}
 	defer func() {
 		cleanup, closeErr := lease.Close(context.Background())
@@ -277,10 +214,9 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{
-				Required:        true,
-				State:           webagent.CleanupFailed,
-				TargetID:        lease.TargetID(),
-				RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+				Required: true,
+				State:    webagent.CleanupFailed,
+				TargetID: lease.TargetID(),
 			}
 			result.Stage = webagent.StageCleanupPending
 			result = replaceAskFailure(
@@ -511,7 +447,6 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			baseData, conversationRef(ack.ConversationID),
 			[]string{
 				fmt.Sprintf("cdp workflow agent claude conversations await %s --json", ack.ConversationID),
-				fmt.Sprintf("cdp workflow agent recovery inspect %s --json", runID),
 			},
 		)
 	}

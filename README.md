@@ -18,7 +18,7 @@ modes, cron-safe `daemon keepalive`, and managed headless maintenance commands
 are in place. Authenticated web-agent workflows now have a provider-neutral,
 capability-backed command and schema surface. Claude, Gemini, and Grok doctor,
 no-turn auth refresh, fresh-conversation ask, list/detail/await/delete, and
-calibration verticals are live-proven; all other provider operations remain
+exact-target cleanup verticals are live-proven; all other provider operations remain
 explicitly planned until their installed vertical is proven.
 
 ## Intended Shape
@@ -55,7 +55,7 @@ cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir t
 cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --out-dir tmp/research-all --json
 cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json
 cdp workflow agent providers --json
-cdp workflow agent admission status chatgpt --json
+cdp --browser-mode headed pages --json
 cdp workflow agent claude capabilities --json
 cdp workflow agent claude doctor --json
 cdp workflow agent claude auth refresh --json
@@ -140,42 +140,32 @@ the open-source transport defaults:
 }
 ```
 
-Before prompt or file mutation, every headed provider ask treats cached
-auth/session and capability state as advisory and proves its live composer on
-the same exact owned target through initial load, ordinary reload,
-cache-bypassing hard reload, and a final grace window. Gemini and Grok resolve
-their live visible mode from that recovered composer; Claude, Grok, and
-Perplexity use a fresh cached request template only as an optional stable-read
-optimization. Reload is forbidden after prompt/file preparation or a Send
-attempt.
+For headed providers, `cdp --browser-mode headed pages --json` returning open
+tabs proves that the selected headed runtime is reachable. Each ask then opens
+one fresh tab, verifies the live composer, applies any requested mode/model,
+submits the exact prompt with one raw Send, reads the answer, preserves the
+observed conversation ID, and closes only that tab. A failed process or missing
+tab does not block a later ask; the later invocation starts with another fresh
+tab.
 
-Immediately before ChatGPT persists `action_pending`, it acquires the shared
-transport lane for one bounded final guard. That guard re-proves the resolved
-thinking and model plus the exact prompt, route, and attachment; an explicit
-model keeps the thinking menu open so the dispatcher can passively re-observe
-the rendered model label after pending. Attached files must retain the exact
-requested basename; provider-renamed copies fail closed before Send. The
-dispatcher performs no reversible selection or reload and emits at most one
-raw Send. Long composer preparation and long answer observation do not hold
-the transport lane.
+Attached ChatGPT files must retain the exact requested basename before Send.
+The final Send guard rechecks the resolved thinking/model, exact prompt, route,
+and attachment. Long answer observation does not hold the short-lived
+headed-browser input lease, so independent asks can overlap after submission.
 
 ChatGPT conversation list/detail/await use captured-template direct HTTP first.
 Only an eligible auth/transport failure lazily initializes one headed fallback;
-429, usage, and admission failures never do. That fallback proves the live
+429 and usage failures never do. That fallback proves the live
 signed-in UI and session cookie, prefers a freshly observed or previously
 validated request shape when available, and lets the actual same-origin
 read-only response decide readiness. Await repeats its capped backoff until the
-requested deadline, while a shared short-lived `chatgpt-rate` lane serializes
-provider transport across reads, Send, and artifact endpoints without blocking
-read-only status during long answer observation. Artifact downloads use their
-own `chatgpt-artifact` admission lane while retaining the shared transport
-cooldown. Hydrated detail is incomplete whenever provider async state still
+requested deadline. Hydrated detail is incomplete whenever provider async state still
 reports streaming or an unrecognized present state, even if the current
 assistant node already says `finished_successfully` and `end_turn`.
 
 Claude, Gemini, and Grok advertise browser-free `doctor`; no-turn headed `auth
 refresh`; fresh-conversation headed `ask`; list/detail/await/delete
-conversation operations; and explicit one-target `calibrate`. Every browser
+conversation operations. Every browser
 operation owns and exact-closes one fresh target. An ambiguous or performed
 provider mutation is never resubmitted.
 All headed provider workflows share the owner-only
@@ -196,9 +186,6 @@ cdp workflow agent claude conversations list --limit 30 --json
 cdp workflow agent claude conversations detail <conversation-id> --json
 cdp workflow agent claude conversations await <conversation-id> --json
 cdp workflow agent claude conversations delete <conversation-id> --json
-cdp --timeout 3m workflow agent claude calibrate --json
-cdp workflow agent claude calibration status --json
-cdp --timeout 1m workflow agent claude calibration cleanup --json
 ```
 
 Gemini deliberately stays rendered-only: there is no coded `batchexecute`
@@ -222,18 +209,15 @@ cdp workflow agent gemini conversations list --limit 30 --json
 cdp workflow agent gemini conversations detail <conversation-id> --json
 cdp workflow agent gemini conversations await <conversation-id> --json
 cdp workflow agent gemini conversations delete <conversation-id> --json
-cdp --timeout 3m workflow agent gemini calibrate --json
-cdp workflow agent gemini calibration status --json
-cdp --timeout 1m workflow agent gemini calibration cleanup --json
 ```
 
 Grok auth observes the signed-in conversation-list request, while runtime
 capability refresh observes `/rest/modes` and selects only the available
 provider-owned default. Ask verifies the exact prompt and mode, clicks Send
-once, acknowledges the same-target `/c/<id>` route, and returns canonical
+once, observes the same-target `/c/<id>` route, and returns canonical
 stored detail from the response-node/load-responses sequence. A typed 401/403
-may use one exact-owned rendered fallback. Delete and calibration each resolve
-one strict `Delete Chat` menu item and require the same target to reach `/`
+may use one exact-owned rendered fallback. Delete resolves one strict
+`Delete Chat` menu item and requires the same target to reach `/`
 without the conversation id. Grok prompt identity normalizes only line endings
 and whitespace-only blank lines observed in provider storage; every character
 and indentation on non-empty lines remains identity-significant:
@@ -248,13 +232,10 @@ cdp workflow agent grok conversations list --limit 30 --json
 cdp workflow agent grok conversations detail <conversation-id> --json
 cdp workflow agent grok conversations await <conversation-id> --json
 cdp workflow agent grok conversations delete <conversation-id> --json
-cdp --timeout 3m workflow agent grok calibrate --json
-cdp workflow agent grok calibration status --json
-cdp --timeout 1m workflow agent grok calibration cleanup --json
 ```
 
-See `docs/AUTHENTICATED_PROVIDERS.md` for state, recovery, and capability-truth
-rules.
+See `docs/AUTHENTICATED_PROVIDERS.md` for the direct ask lifecycle and
+capability-truth rules.
 
 ### Exact-Date Google Queries
 
@@ -442,7 +423,7 @@ selected cdp state directory. Its JSON includes reclaimed PIDs and safety checks
 - Daemon-held browser access: browser commands route through the local daemon so the user can approve Chrome/default-profile access once and reuse that held session from short CLI invocations.
 - Browser resource budget: page creation is guarded by a default budget of 15 headed page tabs, 25 headless page tabs, and 5 windows. Use `cdp pages --json` or `cdp doctor --check browser-budget --json` before stressful workflows; override deliberately with `--max-tabs` or `browser.resource_budget.max_tabs`, and prefer the direct headless cleanup fix: `cdp --browser-mode headless page cleanup --created-by cdp --idle-for 30m --close --force --wait-gone --max-attempts 3 --close-concurrency 4 --max 25 --json`.
 - Formal browser invariants: daemon boundary, explicit profile access, lazy discovery, bounded page creation, unambiguous target selection, conservative cleanup, and JSON error envelopes are tracked in `docs/FORMAL_INVARIANTS.md`.
-- Authenticated provider state, capability truth, and exact recovery are documented in `docs/AUTHENTICATED_PROVIDERS.md`.
+- Authenticated provider state, capability truth, and exact-target cleanup are documented in `docs/AUTHENTICATED_PROVIDERS.md`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.
 - Evidence bundles by manifest: use `cdp workflow debug-bundle --out-dir tmp/debug-bundle --task-id <task> --json` to arm collectors and hard-reload an existing target with ordinary HTTP cache bypass by default, then write a public-safe bundle manifest, command log, stage log, and local-only browser artifacts by path. `--url` performs one collector-armed cache-bypassing navigation instead of a navigate-plus-reload pair. Use `--reload=false --ignore-cache=false` for passive/cache-faithful observation. This never clears cookies, browser cache, web storage, IndexedDB, CacheStorage, or service workers. Raw request, console, and snapshot payloads stay out of default JSON unless `--inline-payloads` is explicitly set.

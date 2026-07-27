@@ -145,7 +145,7 @@ func TestSchemaCatalogWebAgentContracts(t *testing.T) {
 	if !catalogSchemaFieldContains(operation, "action", "webagent_action", "tri-state", "retry") ||
 		!catalogSchemaFieldContains(operation, "error", "webagent_error", "code", "class", "retry") ||
 		!catalogSchemaFieldContains(operation, "data", "provider_specific", "never reduces", "counts") ||
-		!catalogSchemaFieldContains(operation, "cleanup", "webagent_cleanup", "exact target", "recovery") {
+		!catalogSchemaFieldContains(operation, "cleanup", "webagent_cleanup", "exact target", "identity") {
 		t.Fatalf("webagent-operation semantics are incomplete: %+v", operation)
 	}
 
@@ -172,8 +172,9 @@ func TestSchemaCatalogWebAgentContracts(t *testing.T) {
 		t.Fatalf("webagent-target semantics are incomplete: %+v", target)
 	}
 	cleanup := catalog["webagent-cleanup"]
-	if !catalogSchemaFieldContains(cleanup, "recovery_command", "string", "exact recorded target", "never a broad") {
-		t.Fatalf("webagent-cleanup semantics are incomplete: %+v", cleanup)
+	if !catalogSchemaFieldContains(cleanup, "target_id", "string", "Exact workflow-owned target") ||
+		!catalogSchemaFieldContains(cleanup, "target_closed", "boolean", "exact target") {
+		t.Fatalf("webagent-cleanup exact-target semantics are incomplete: %+v", cleanup)
 	}
 }
 

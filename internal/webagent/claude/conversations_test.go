@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -138,7 +137,7 @@ func TestDetailAndAwaitUseProviderTerminalSemanticsWithoutPromptLeak(t *testing.
 }
 
 func TestConversationReadsRateLimitAndInvalidResponseStayTyped(t *testing.T) {
-	t.Run("rate limit persists cooldown", func(t *testing.T) {
+	t.Run("rate limit does not gate the next read", func(t *testing.T) {
 		config := newReadTestConfig(t)
 		calls := 0
 		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -162,9 +161,9 @@ func TestConversationReadsRateLimitAndInvalidResponseStayTyped(t *testing.T) {
 		second := DetailConversation(context.Background(), config, "conversation-1")
 		if second.OK ||
 			second.Error == nil ||
-			second.Error.Code != "claude_admission_blocked" ||
-			calls != 1 {
-			t.Fatalf("blocked result = %+v calls=%d", second, calls)
+			second.Error.Code != "claude_rate_limited" ||
+			calls != 2 {
+			t.Fatalf("second rate-limit result = %+v calls=%d", second, calls)
 		}
 	})
 
@@ -298,17 +297,8 @@ func newReadTestConfigAt(t *testing.T, stateDir string) ReadConfig {
 	if err := store.Save(context.Background(), validAuthTemplate(readTestNow())); err != nil {
 		t.Fatalf("save auth template: %v", err)
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateDir,
-		MinimumSpacing: 0,
-		Now:            readTestNow,
-	})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
 	return ReadConfig{
 		Store:       store,
-		Admission:   gate,
 		BuildCommit: "test-commit",
 		Now:         readTestNow,
 	}

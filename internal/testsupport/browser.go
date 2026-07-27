@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 )
@@ -178,10 +177,10 @@ func (b *Browser) Snapshot() (
 func NewRuntime(
 	stateDir string,
 	client cdp.CommandClient,
-) (*browserflow.Engine, browserflow.Journal, *admission.Gate, error) {
+) (*browserflow.Engine, browserflow.Journal, error) {
 	journal, err := browserflow.NewFileJournal(stateDir)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	engine, err := browserflow.New(browserflow.Config{
 		Client:  client,
@@ -197,17 +196,9 @@ func NewRuntime(
 		Now:               FixedNow,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateDir,
-		MinimumSpacing: 0,
-		Now:            FixedNow,
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return engine, journal, gate, nil
+	return engine, journal, nil
 }
 
 func FixedNow() time.Time {

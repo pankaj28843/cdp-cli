@@ -50,7 +50,6 @@ const (
 	OperationArtifactDownload      Operation = "conversations.download_artifact"
 	OperationResearch              Operation = "research"
 	OperationResearchExport        Operation = "conversations.export_research"
-	OperationCalibrate             Operation = "calibrate"
 )
 
 type State string
@@ -134,12 +133,11 @@ type Evidence struct {
 }
 
 type CleanupEvidence struct {
-	Required        bool         `json:"required"`
-	State           CleanupState `json:"state"`
-	TargetID        string       `json:"target_id,omitempty"`
-	TargetClosed    bool         `json:"target_closed,omitempty"`
-	CloseProof      string       `json:"close_proof,omitempty"`
-	RecoveryCommand string       `json:"recovery_command,omitempty"`
+	Required     bool         `json:"required"`
+	State        CleanupState `json:"state"`
+	TargetID     string       `json:"target_id,omitempty"`
+	TargetClosed bool         `json:"target_closed,omitempty"`
+	CloseProof   string       `json:"close_proof,omitempty"`
 }
 
 type Result struct {

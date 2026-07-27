@@ -105,7 +105,7 @@ var operationSpecs = []operationSpec{
 		path:       "ask",
 		sideEffect: "conversation",
 		browser:    "headed",
-		summary:    "Submit one visible provider request and return its acknowledged result.",
+		summary:    "Submit one visible provider request and return its observed result.",
 	},
 	{
 		operation:  OperationCatalogStatus,
@@ -210,14 +210,6 @@ var operationSpecs = []operationSpec{
 		browser:    "headed",
 		summary:    "Export one exact completed Deep Research report only through a proven rendered target.",
 		providers:  []Provider{ProviderChatGPT},
-	},
-	{
-		operation:  OperationCalibrate,
-		path:       "calibrate",
-		sideEffect: "validation_mutation",
-		browser:    "headed",
-		summary:    "Own one target for submit, result capture, exact test-conversation deletion, and close.",
-		providers:  mutableConversationProviders,
 	},
 }
 
@@ -347,12 +339,6 @@ func providerOperationImplemented(
 		OperationChaptersList,
 		OperationContentFetch:
 		return provider == ProviderAlex
-	case OperationCalibrate:
-		return provider == ProviderChatGPT ||
-			provider == ProviderClaude ||
-			provider == ProviderGemini ||
-			provider == ProviderGrok ||
-			provider == ProviderPerplexity
 	default:
 		return false
 	}

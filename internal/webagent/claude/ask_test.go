@@ -297,7 +297,6 @@ func newAskTestConfig(t *testing.T, stateDir string, client *authFakeClient) Ask
 		Client:          client,
 		Engine:          authConfig.Engine,
 		Journal:         authConfig.Journal,
-		Admission:       authConfig.Admission,
 		Store:           authConfig.Store,
 		BuildCommit:     "test-commit",
 		Timeout:         20 * time.Millisecond,

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -22,7 +21,6 @@ type BrowserConfig struct {
 	Client      EventClient
 	Engine      *browserflow.Engine
 	Journal     browserflow.Journal
-	Admission   *admission.Gate
 	BuildCommit string
 }
 
@@ -46,7 +44,6 @@ func runOwned(
 	if config.Client == nil ||
 		config.Engine == nil ||
 		config.Journal == nil ||
-		config.Admission == nil ||
 		callback == nil {
 		return operationFailure(
 			runID, config.BuildCommit, operation, webagent.StagePlanned, readMode,
@@ -57,68 +54,6 @@ func runOwned(
 			data, []string{"cdp workflow agent grok doctor --json"},
 		)
 	}
-	admissionLease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  string(webagent.ProviderGrok),
-		Operation: string(operation),
-		RunID:     runID,
-	})
-	if err != nil {
-		code := "grok_admission_unavailable"
-		errClass := "internal"
-		message := "Grok provider admission state is unavailable"
-		retryAt := ""
-		nextCommands := []string{"cdp workflow agent grok doctor --json"}
-		var blocked *admission.BlockedError
-		if errors.As(err, &blocked) {
-			code = "grok_admission_blocked"
-			errClass = "admission"
-			message = blocked.Error()
-			if blocked.ResolutionNeeded {
-				nextCommands = []string{"cdp workflow agent admission status grok --json"}
-			} else {
-				retryAt = blocked.RetryAt.UTC().Format(time.RFC3339Nano)
-			}
-		}
-		return operationFailure(
-			runID, config.BuildCommit, operation, webagent.StagePlanned, readMode,
-			nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			nil, nil, code, errClass, message, retryAt, data,
-			nextCommands,
-		)
-	}
-	defer func() {
-		outcome := admission.OutcomeFailed
-		switch {
-		case result.OK && result.State == webagent.StateTerminal:
-			outcome = admission.OutcomeTerminal
-		case result.OK && result.State == webagent.StateIncomplete:
-			outcome = admission.OutcomeIncomplete
-		case result.OK:
-			outcome = admission.OutcomeCompleted
-		case result.Action != nil &&
-			(result.Action.Dispatch == webagent.DispatchUnknown ||
-				(result.Action.Dispatch == webagent.DispatchPerformed &&
-					result.State != webagent.StateTerminal)):
-			outcome = admission.OutcomeUnknown
-		}
-		var cooldown time.Time
-		if result.Error != nil && result.Error.RetryAt != "" {
-			cooldown, _ = time.Parse(time.RFC3339Nano, result.Error.RetryAt)
-		}
-		if err := admissionLease.Release(admission.Release{
-			Outcome:       outcome,
-			CooldownUntil: cooldown,
-		}); err != nil {
-			result = replaceFailure(
-				result,
-				"grok_admission_release_failed",
-				"internal",
-				"Grok provider admission outcome could not be persisted",
-				[]string{"cdp workflow agent grok doctor --json"},
-			)
-		}
-	}()
-
 	lease, err := config.Engine.Acquire(ctx, browserflow.AcquireRequest{
 		RunID:      runID,
 		Provider:   string(webagent.ProviderGrok),
@@ -156,10 +91,9 @@ func runOwned(
 		Created:   true,
 	}
 	pending := webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupPending,
-		TargetID:        lease.TargetID(),
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupPending,
+		TargetID: lease.TargetID(),
 	}
 	defer func() {
 		cleanup, closeErr := lease.Close(context.Background())
@@ -167,10 +101,9 @@ func runOwned(
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{
-				Required:        true,
-				State:           webagent.CleanupFailed,
-				TargetID:        lease.TargetID(),
-				RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+				Required: true,
+				State:    webagent.CleanupFailed,
+				TargetID: lease.TargetID(),
 			}
 			result.Stage = webagent.StageCleanupPending
 			result = replaceFailure(
@@ -308,21 +241,12 @@ func reconcileAcquireFailure(
 		}, webagent.StageClosed
 	}
 	return target, webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupFailed,
-		TargetID:        record.TargetID,
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupFailed,
+		TargetID: record.TargetID,
 	}, webagent.StageCleanupPending
 }
 
-func cleanupCommands(runID string, cleanup webagent.CleanupEvidence) []string {
-	commands := []string{"cdp workflow agent grok doctor --json"}
-	if cleanup.State == webagent.CleanupPending || cleanup.State == webagent.CleanupFailed {
-		commands = append(
-			commands,
-			fmt.Sprintf("cdp workflow agent recovery inspect %s --json", runID),
-			fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
-		)
-	}
-	return commands
+func cleanupCommands(_ string, _ webagent.CleanupEvidence) []string {
+	return nil
 }

@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -201,321 +200,6 @@ func (a *app) newWorkflowAgentChatGPTConversationsExportResearchCommand() *cobra
 			return a.renderWebAgentResult(
 				ctx,
 				"chatgpt research export: unsupported",
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentChatGPTCalibrationCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "calibration",
-		Short: "Inspect or safely reconcile the last ChatGPT calibration",
-		Long: "Read owner-only ChatGPT calibration state without probing Chrome, or explicitly reconcile only the exact recorded target " +
-			"and acknowledged disposable conversation without repeating an ambiguous action.",
-	}
-	cmd.AddCommand(
-		a.newWorkflowAgentChatGPTCalibrationStatusCommand(),
-	)
-	cmd.AddCommand(
-		a.newWorkflowAgentChatGPTCalibrationCleanupCommand(),
-	)
-	return cmd
-}
-
-func (a *app) newWorkflowAgentChatGPTCalibrationStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "status",
-		Short:   "Read the last ChatGPT calibration state without probing Chrome",
-		Example: "  cdp workflow agent chatgpt calibration status --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_state_unavailable",
-						"internal",
-						"ChatGPT owner-only calibration state is unavailable",
-					),
-				)
-			}
-			store, err := chatgpt.NewCalibrationStore(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_state_unavailable",
-						"internal",
-						"ChatGPT owner-only calibration state is unavailable",
-					),
-				)
-			}
-			journal, err := browserflow.NewFileJournal(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_recovery_unavailable",
-						"internal",
-						"ChatGPT exact-target recovery state is unavailable",
-					),
-				)
-			}
-			result := chatgpt.CalibrationStatus(
-				ctx,
-				store,
-				journal,
-				a.build.Commit,
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf(
-					"chatgpt calibration: %v",
-					result.State,
-				),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentChatGPTCalibrationCleanupCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "cleanup",
-		Short: "Reconcile only the exact resources from the last ChatGPT calibration",
-		Long: "Close only the exact persisted owned target, then delete only a persisted acknowledged disposable conversation. " +
-			"Never repeat an ambiguous Send or delete action.",
-		Example: "  cdp --timeout 1m workflow agent chatgpt calibration cleanup --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(
-				cmd,
-				time.Minute,
-			)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration cleanup: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_state_unavailable",
-						"internal",
-						"ChatGPT owner-only calibration state is unavailable",
-					),
-				)
-			}
-			calibrationStore, err := chatgpt.NewCalibrationStore(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration cleanup: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_state_unavailable",
-						"internal",
-						"ChatGPT owner-only calibration state is unavailable",
-					),
-				)
-			}
-			journal, err := browserflow.NewFileJournal(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration cleanup: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_recovery_unavailable",
-						"internal",
-						"ChatGPT exact-target recovery state is unavailable",
-					),
-				)
-			}
-			status := chatgpt.CalibrationStatus(
-				ctx,
-				calibrationStore,
-				journal,
-				a.build.Commit,
-			)
-			if !status.OK {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration cleanup: unavailable",
-					status,
-				)
-			}
-			if data, ok := status.Data.(chatgpt.CalibrationStatusData); ok &&
-				!data.RecoveryRequired {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration cleanup: not required",
-					status,
-				)
-			}
-			if !a.selectHeadedProviderRuntime() {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration cleanup: headed browser required",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_headed_browser_required",
-						"usage",
-						"ChatGPT calibration cleanup requires the headed browser runtime",
-					),
-				)
-			}
-			browserConfig, providerStore, unavailable :=
-				a.chatgptBrowserOperationConfig(
-					ctx,
-					webagent.OperationCalibrate,
-				)
-			if unavailable != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration cleanup: unavailable",
-					*unavailable,
-				)
-			}
-			result := chatgpt.CleanupCalibration(
-				ctx,
-				chatgpt.CalibrationCleanupConfig{
-					Store:       calibrationStore,
-					Journal:     browserConfig.Journal,
-					Engine:      browserConfig.Engine,
-					BuildCommit: a.build.Commit,
-					Delete: chatgpt.DeleteConfig{
-						BrowserConfig: browserConfig,
-						Store:         providerStore,
-						Timeout:       45 * time.Second,
-					},
-				},
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf(
-					"chatgpt calibration cleanup: %v",
-					result.State,
-				),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentChatGPTCalibrateCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "calibrate",
-		Short: "Run one disposable ChatGPT create/capture/delete transaction",
-		Long: "Use one fresh owned headed target for one memory-only calibration prompt, one visible Send, " +
-			"same-target rendered answer capture, exact same-target deletion, and exact close.",
-		Example: "  cdp --timeout 4m workflow agent chatgpt calibrate --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(
-				cmd,
-				4*time.Minute,
-			)
-			defer cancel()
-			if !a.selectHeadedProviderRuntime() {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration: headed browser required",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_headed_browser_required",
-						"usage",
-						"ChatGPT calibration requires the headed browser runtime",
-					),
-				)
-			}
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_state_unavailable",
-						"internal",
-						"ChatGPT owner-only calibration state is unavailable",
-					),
-				)
-			}
-			calibrationStore, err := chatgpt.NewCalibrationStore(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration: unavailable",
-					chatgpt.UnavailableOperation(
-						a.build.Commit,
-						webagent.OperationCalibrate,
-						"chatgpt_calibration_state_unavailable",
-						"internal",
-						"ChatGPT owner-only calibration state is unavailable",
-					),
-				)
-			}
-			browserConfig, providerStore, unavailable :=
-				a.chatgptBrowserOperationConfig(
-					ctx,
-					webagent.OperationCalibrate,
-				)
-			if unavailable != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"chatgpt calibration: unavailable",
-					*unavailable,
-				)
-			}
-			timeout := a.opts.timeout
-			if timeout <= 0 {
-				timeout = 4 * time.Minute
-			}
-			result := chatgpt.Calibrate(
-				ctx,
-				chatgpt.CalibrationConfig{
-					BrowserConfig: browserConfig,
-					AuthStore:     providerStore,
-					Store:         calibrationStore,
-					Timeout:       timeout,
-				},
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf(
-					"chatgpt calibration: %v",
-					result.State,
-				),
 				result,
 			)
 		},
@@ -847,8 +531,8 @@ func (a *app) newWorkflowAgentChatGPTConversationsDeleteCommand() *cobra.Command
 	return &cobra.Command{
 		Use:   "delete CONVERSATION_ID",
 		Short: "Visibly delete one exact ChatGPT conversation",
-		Long: "Own one fresh headed target, resolve one exact history row and confirmation dialog, persist action_pending, " +
-			"dispatch one raw-input Delete action, prove the same-target home redirect, and exact-close the target.",
+		Long: "Own one fresh headed target, resolve one exact history row and confirmation dialog, dispatch one raw-input Delete action, " +
+			"prove the same-target home redirect, and exact-close the target.",
 		Example: "  cdp workflow agent chatgpt conversations delete <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -1013,8 +697,8 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible ChatGPT request",
-		Long: "Start one fresh ChatGPT conversation in one fresh exact owned headed target, apply the configured or explicit thinking/model policy, verify its minimum and the exact prompt, " +
-			"persist action_pending, click Send once, acknowledge the same-target route, and read the terminal assistant message without reloading or resubmitting.",
+		Long: "Open one fresh headed tab, apply the configured or explicit thinking/model policy, submit the exact prompt with one Send, " +
+			"read the assistant response, preserve the observed conversation ID, and close only that tab.",
 		Example: "  cdp workflow agent chatgpt ask 'Review this design.' --json --timeout 40m\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent chatgpt ask --stdin --json --timeout 40m",
 		Args: cobra.MaximumNArgs(1),
@@ -1255,20 +939,8 @@ func (a *app) chatgptBrowserOperationConfig(
 	if err != nil {
 		result := chatgpt.UnavailableOperation(
 			a.build.Commit, operation,
-			"chatgpt_recovery_unavailable", "internal",
-			"ChatGPT exact-target recovery state is unavailable",
-		)
-		return chatgpt.BrowserConfig{}, nil, &result
-	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateStore.Dir,
-		MinimumSpacing: chatgpt.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := chatgpt.UnavailableOperation(
-			a.build.Commit, operation,
-			"chatgpt_admission_unavailable", "internal",
-			"ChatGPT provider admission state is unavailable",
+			"chatgpt_lifecycle_state_unavailable", "internal",
+			"ChatGPT exact-target lifecycle state is unavailable",
 		)
 		return chatgpt.BrowserConfig{}, nil, &result
 	}
@@ -1300,7 +972,6 @@ func (a *app) chatgptBrowserOperationConfig(
 		Client:      client,
 		Engine:      engine,
 		Journal:     journal,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 	}, store, nil
 }
@@ -1327,21 +998,8 @@ func (a *app) chatgptReadConfig(
 		)
 		return chatgpt.ReadConfig{}, &result
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateStore.Dir,
-		MinimumSpacing: chatgpt.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := chatgpt.UnavailableRead(
-			a.build.Commit, operation,
-			"chatgpt_admission_unavailable", "internal",
-			"ChatGPT read admission state is unavailable",
-		)
-		return chatgpt.ReadConfig{}, &result
-	}
 	return chatgpt.ReadConfig{
 		Store:       store,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 		BrowserFallback: func(
 			fallbackCtx context.Context,

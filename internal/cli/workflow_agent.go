@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/claude"
@@ -26,8 +25,6 @@ func (a *app) newWorkflowAgentCommand() *cobra.Command {
 			"  cdp schema webagent-operation --json",
 	}
 	cmd.AddCommand(a.newWorkflowAgentProvidersCommand())
-	cmd.AddCommand(a.newWorkflowAgentRecoveryCommand())
-	cmd.AddCommand(a.newWorkflowAgentAdmissionCommand())
 	for _, provider := range webagent.Providers() {
 		cmd.AddCommand(a.newWorkflowAgentProviderCommand(provider))
 	}
@@ -90,40 +87,30 @@ func (a *app) newWorkflowAgentProviderCommand(provider webagent.Provider) *cobra
 		cmd.AddCommand(a.newWorkflowAgentChatGPTAskCommand())
 		cmd.AddCommand(a.newWorkflowAgentChatGPTResearchCommand())
 		cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsCommand())
-		cmd.AddCommand(a.newWorkflowAgentChatGPTCalibrateCommand())
-		cmd.AddCommand(a.newWorkflowAgentChatGPTCalibrationCommand())
 	}
 	if provider == webagent.ProviderClaude {
 		cmd.AddCommand(a.newWorkflowAgentClaudeDoctorCommand())
 		cmd.AddCommand(a.newWorkflowAgentClaudeAuthCommand())
 		cmd.AddCommand(a.newWorkflowAgentClaudeAskCommand())
 		cmd.AddCommand(a.newWorkflowAgentClaudeConversationsCommand())
-		cmd.AddCommand(a.newWorkflowAgentClaudeCalibrateCommand())
-		cmd.AddCommand(a.newWorkflowAgentClaudeCalibrationCommand())
 	}
 	if provider == webagent.ProviderGemini {
 		cmd.AddCommand(a.newWorkflowAgentGeminiDoctorCommand())
 		cmd.AddCommand(a.newWorkflowAgentGeminiAuthCommand())
 		cmd.AddCommand(a.newWorkflowAgentGeminiAskCommand())
 		cmd.AddCommand(a.newWorkflowAgentGeminiConversationsCommand())
-		cmd.AddCommand(a.newWorkflowAgentGeminiCalibrateCommand())
-		cmd.AddCommand(a.newWorkflowAgentGeminiCalibrationCommand())
 	}
 	if provider == webagent.ProviderGrok {
 		cmd.AddCommand(a.newWorkflowAgentGrokDoctorCommand())
 		cmd.AddCommand(a.newWorkflowAgentGrokAuthCommand())
 		cmd.AddCommand(a.newWorkflowAgentGrokAskCommand())
 		cmd.AddCommand(a.newWorkflowAgentGrokConversationsCommand())
-		cmd.AddCommand(a.newWorkflowAgentGrokCalibrateCommand())
-		cmd.AddCommand(a.newWorkflowAgentGrokCalibrationCommand())
 	}
 	if provider == webagent.ProviderPerplexity {
 		cmd.AddCommand(a.newWorkflowAgentPerplexityDoctorCommand())
 		cmd.AddCommand(a.newWorkflowAgentPerplexityAuthCommand())
 		cmd.AddCommand(a.newWorkflowAgentPerplexityAskCommand())
 		cmd.AddCommand(a.newWorkflowAgentPerplexityConversationsCommand())
-		cmd.AddCommand(a.newWorkflowAgentPerplexityCalibrateCommand())
-		cmd.AddCommand(a.newWorkflowAgentPerplexityCalibrationCommand())
 	}
 	if provider == webagent.ProviderTripadvisor {
 		cmd.AddCommand(a.newWorkflowAgentTripadvisorDoctorCommand())
@@ -134,331 +121,13 @@ func (a *app) newWorkflowAgentProviderCommand(provider webagent.Provider) *cobra
 	return cmd
 }
 
-func (a *app) newWorkflowAgentClaudeCalibrationCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "calibration",
-		Short: "Inspect or safely reconcile the last Claude calibration",
-		Long: "Read owner-only calibration state without probing Chrome, or explicitly reconcile an exact owned target " +
-			"and an acknowledged disposable conversation without repeating an ambiguous action.",
-	}
-	cmd.AddCommand(a.newWorkflowAgentClaudeCalibrationStatusCommand())
-	cmd.AddCommand(a.newWorkflowAgentClaudeCalibrationCleanupCommand())
-	return cmd
-}
-
-func (a *app) newWorkflowAgentClaudeCalibrationStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "status",
-		Short:   "Read the last Claude calibration state without probing Chrome",
-		Example: "  cdp workflow agent claude calibration status --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
-			defer cancel()
-			store, err := a.stateStore()
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_calibration_state_unavailable",
-					"internal",
-					"Claude owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: state unavailable", result)
-			}
-			calibrationStore, err := claude.NewCalibrationStore(store.Dir)
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_calibration_state_unavailable",
-					"internal",
-					"Claude owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: state unavailable", result)
-			}
-			journal, err := browserflow.NewFileJournal(store.Dir)
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_calibration_recovery_unavailable",
-					"internal",
-					"Claude exact-target recovery state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: recovery unavailable", result)
-			}
-			result := claude.CalibrationStatus(
-				ctx,
-				calibrationStore,
-				journal,
-				a.build.Commit,
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("claude calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentClaudeCalibrationCleanupCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "cleanup",
-		Short: "Reconcile only the exact resources from the last Claude calibration",
-		Long: "Close only the exact persisted owned target, then delete only a persisted acknowledged disposable conversation. " +
-			"Never repeat an ambiguous Send or delete action.",
-		Example: "  cdp --timeout 1m workflow agent claude calibration cleanup --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, time.Minute)
-			defer cancel()
-			store, err := a.stateStore()
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_calibration_state_unavailable",
-					"internal",
-					"Claude owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: state unavailable", result)
-			}
-			calibrationStore, err := claude.NewCalibrationStore(store.Dir)
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_calibration_state_unavailable",
-					"internal",
-					"Claude owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: state unavailable", result)
-			}
-			journal, err := browserflow.NewFileJournal(store.Dir)
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_calibration_recovery_unavailable",
-					"internal",
-					"Claude exact-target recovery state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: recovery unavailable", result)
-			}
-			status := claude.CalibrationStatus(
-				ctx,
-				calibrationStore,
-				journal,
-				a.build.Commit,
-			)
-			if !status.OK {
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: state unavailable", status)
-			}
-			if data, ok := status.Data.(claude.CalibrationStatusData); ok &&
-				!data.RecoveryRequired {
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: not required", status)
-			}
-			if !a.selectHeadedProviderRuntime() {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_headed_browser_required",
-					"usage",
-					"Claude calibration cleanup requires the headed browser runtime",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: headed browser required", result)
-			}
-			gate, err := admission.New(admission.Config{
-				StateDir:       store.Dir,
-				MinimumSpacing: claude.DefaultAdmissionSpacing,
-			})
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_admission_unavailable",
-					"internal",
-					"Claude provider admission state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: admission unavailable", result)
-			}
-			client, closeClient, err := a.browserCDPClient(ctx)
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_browser_unavailable",
-					"connection",
-					"Claude headed browser runtime is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: browser unavailable", result)
-			}
-			defer closeClient(context.Background())
-			engine, err := browserflow.New(browserflow.Config{
-				Client:          client,
-				Journal:         journal,
-				Budget:          a.browserResourceBudgetOptions(),
-				AllowOverBudget: a.opts.allowOverBudget,
-				InputLockPath:   browserflow.HeadedInputLockPath(store.Dir),
-			})
-			if err != nil {
-				result := claude.UnavailableCalibrationStatus(
-					a.build.Commit,
-					"claude_browserflow_unavailable",
-					"internal",
-					"Claude exact-target browser transaction is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration cleanup: transaction unavailable", result)
-			}
-			cleanupTimeout := a.opts.timeout
-			if cleanupTimeout <= 0 {
-				cleanupTimeout = 45 * time.Second
-			}
-			result := claude.CleanupCalibration(ctx, claude.CalibrationCleanupConfig{
-				Store:       calibrationStore,
-				Journal:     journal,
-				Engine:      engine,
-				BuildCommit: a.build.Commit,
-				Delete: claude.DeleteConfig{
-					Client:      client,
-					Engine:      engine,
-					Journal:     journal,
-					Admission:   gate,
-					BuildCommit: a.build.Commit,
-					Timeout:     cleanupTimeout,
-				},
-			})
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("claude calibration cleanup: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentClaudeCalibrateCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "calibrate",
-		Short: "Run one disposable Claude create/capture/delete transaction",
-		Long: "Use one fresh owned headed target for one memory-only calibration prompt, one Send, " +
-			"rendered answer capture, exact same-target deletion, and exact close. Calibration is explicit and never part of auth refresh.",
-		Example: "  cdp --timeout 3m workflow agent claude calibrate --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, 4*time.Minute)
-			defer cancel()
-			if !a.selectHeadedProviderRuntime() {
-				result := claude.UnavailableCalibration(
-					a.build.Commit,
-					"claude_headed_browser_required",
-					"usage",
-					"Claude calibration requires the headed browser runtime",
-					[]string{"cdp workflow agent claude doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: headed browser required", result)
-			}
-			store, err := a.stateStore()
-			if err != nil {
-				result := claude.UnavailableCalibration(
-					a.build.Commit,
-					"claude_state_unavailable",
-					"internal",
-					"Claude owner-only state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: state unavailable", result)
-			}
-			journal, err := browserflow.NewFileJournal(store.Dir)
-			if err != nil {
-				result := claude.UnavailableCalibration(
-					a.build.Commit,
-					"claude_recovery_unavailable",
-					"internal",
-					"Claude exact-target recovery state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: recovery unavailable", result)
-			}
-			gate, err := admission.New(admission.Config{
-				StateDir:       store.Dir,
-				MinimumSpacing: claude.DefaultAdmissionSpacing,
-			})
-			if err != nil {
-				result := claude.UnavailableCalibration(
-					a.build.Commit,
-					"claude_admission_unavailable",
-					"internal",
-					"Claude provider admission state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: admission unavailable", result)
-			}
-			calibrationStore, err := claude.NewCalibrationStore(store.Dir)
-			if err != nil {
-				result := claude.UnavailableCalibration(
-					a.build.Commit,
-					"claude_calibration_state_unavailable",
-					"internal",
-					"Claude owner-only calibration state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: state unavailable", result)
-			}
-			client, closeClient, err := a.browserCDPClient(ctx)
-			if err != nil {
-				result := claude.UnavailableCalibration(
-					a.build.Commit,
-					"claude_browser_unavailable",
-					"connection",
-					"Claude headed browser runtime is unavailable",
-					[]string{
-						"cdp --browser-mode headed daemon status --json",
-						"cdp workflow agent claude doctor --json",
-					},
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: browser unavailable", result)
-			}
-			defer closeClient(context.Background())
-			engine, err := browserflow.New(browserflow.Config{
-				Client:          client,
-				Journal:         journal,
-				Budget:          a.browserResourceBudgetOptions(),
-				AllowOverBudget: a.opts.allowOverBudget,
-				InputLockPath:   browserflow.HeadedInputLockPath(store.Dir),
-			})
-			if err != nil {
-				result := claude.UnavailableCalibration(
-					a.build.Commit,
-					"claude_browserflow_unavailable",
-					"internal",
-					"Claude exact-target browser transaction is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude calibration: transaction unavailable", result)
-			}
-			calibrationTimeout := a.opts.timeout
-			if calibrationTimeout <= 0 {
-				calibrationTimeout = 3 * time.Minute
-			}
-			result := claude.Calibrate(ctx, claude.CalibrationConfig{
-				Client:      client,
-				Engine:      engine,
-				Journal:     journal,
-				Admission:   gate,
-				Store:       calibrationStore,
-				BuildCommit: a.build.Commit,
-				Timeout:     calibrationTimeout,
-			})
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("claude calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
 func (a *app) newWorkflowAgentClaudeAskCommand() *cobra.Command {
 	var stdin bool
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one visible Claude request",
-		Long: "Start one fresh Claude conversation in a fresh owned headed target, prepare one exact prompt, durably mark action_pending, " +
-			"press Enter once, acknowledge the same-target conversation route, and reconcile terminal detail without resubmitting.",
+		Long: "Open one fresh headed tab, submit the exact prompt with one Send, read the assistant response, " +
+			"preserve the observed conversation ID, and close only that tab.",
 		Example: "  cdp workflow agent claude ask 'Review this design.' --json\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent claude ask --stdin --json",
 		Args: cobra.MaximumNArgs(1),
@@ -526,26 +195,12 @@ func (a *app) newWorkflowAgentClaudeAskCommand() *cobra.Command {
 			if err != nil {
 				result := claude.UnavailableAsk(
 					a.build.Commit,
-					"claude_recovery_unavailable",
+					"claude_lifecycle_state_unavailable",
 					"internal",
-					"Claude exact-target recovery state is unavailable",
+					"Claude exact-target lifecycle state is unavailable",
 					[]string{"cdp doctor --json"},
 				)
-				return a.renderWebAgentResult(ctx, "claude ask: recovery unavailable", result)
-			}
-			gate, err := admission.New(admission.Config{
-				StateDir:       store.Dir,
-				MinimumSpacing: claude.DefaultAdmissionSpacing,
-			})
-			if err != nil {
-				result := claude.UnavailableAsk(
-					a.build.Commit,
-					"claude_admission_unavailable",
-					"internal",
-					"Claude provider admission state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude ask: admission unavailable", result)
+				return a.renderWebAgentResult(ctx, "claude ask: lifecycle state unavailable", result)
 			}
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
@@ -587,7 +242,6 @@ func (a *app) newWorkflowAgentClaudeAskCommand() *cobra.Command {
 				Client:      client,
 				Engine:      engine,
 				Journal:     journal,
-				Admission:   gate,
 				Store:       authStore,
 				BuildCommit: a.build.Commit,
 				Timeout:     askTimeout,
@@ -695,8 +349,8 @@ func (a *app) newWorkflowAgentClaudeConversationsDeleteCommand() *cobra.Command 
 	return &cobra.Command{
 		Use:   "delete CONVERSATION_ID",
 		Short: "Visibly delete one exact Claude conversation",
-		Long: "Own one fresh headed target, prepare the exact Claude confirmation dialog, persist action_pending, " +
-			"dispatch one raw-input confirmation, prove the same-target /new postcondition, and exact-close the target.",
+		Long: "Own one fresh headed target, prepare the exact Claude confirmation dialog, dispatch one raw-input confirmation, " +
+			"prove the same-target /new postcondition, and exact-close the target.",
 		Example: "  cdp workflow agent claude conversations delete <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -727,26 +381,12 @@ func (a *app) newWorkflowAgentClaudeConversationsDeleteCommand() *cobra.Command 
 			if err != nil {
 				result := claude.UnavailableDelete(
 					a.build.Commit,
-					"claude_recovery_unavailable",
+					"claude_lifecycle_state_unavailable",
 					"internal",
-					"Claude exact-target recovery state is unavailable",
+					"Claude exact-target lifecycle state is unavailable",
 					[]string{"cdp doctor --json"},
 				)
-				return a.renderWebAgentResult(ctx, "claude delete: recovery unavailable", result)
-			}
-			gate, err := admission.New(admission.Config{
-				StateDir:       store.Dir,
-				MinimumSpacing: claude.DefaultAdmissionSpacing,
-			})
-			if err != nil {
-				result := claude.UnavailableDelete(
-					a.build.Commit,
-					"claude_admission_unavailable",
-					"internal",
-					"Claude provider admission state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude delete: admission unavailable", result)
+				return a.renderWebAgentResult(ctx, "claude delete: lifecycle state unavailable", result)
 			}
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
@@ -788,7 +428,6 @@ func (a *app) newWorkflowAgentClaudeConversationsDeleteCommand() *cobra.Command 
 				Client:      client,
 				Engine:      engine,
 				Journal:     journal,
-				Admission:   gate,
 				BuildCommit: a.build.Commit,
 				Timeout:     deleteTimeout,
 			}, args[0])
@@ -824,23 +463,8 @@ func (a *app) claudeReadConfig(operation webagent.Operation) (claude.ReadConfig,
 		)
 		return claude.ReadConfig{}, &result
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       store.Dir,
-		MinimumSpacing: claude.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := claude.UnavailableRead(
-			a.build.Commit,
-			operation,
-			"claude_admission_unavailable",
-			"internal",
-			"Claude provider admission state is unavailable",
-		)
-		return claude.ReadConfig{}, &result
-	}
 	return claude.ReadConfig{
 		Store:       authStore,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 		NewRenderedFallback: func(
 			ctx context.Context,
@@ -968,26 +592,12 @@ func (a *app) newWorkflowAgentClaudeAuthRefreshCommand() *cobra.Command {
 			if err != nil {
 				result := claude.UnavailableAuthRefresh(
 					a.build.Commit,
-					"claude_recovery_unavailable",
+					"claude_lifecycle_state_unavailable",
 					"internal",
-					"Claude exact-target recovery state is unavailable",
+					"Claude exact-target lifecycle state is unavailable",
 					[]string{"cdp doctor --json"},
 				)
-				return a.renderWebAgentResult(ctx, "claude auth: recovery unavailable", result)
-			}
-			gate, err := admission.New(admission.Config{
-				StateDir:       store.Dir,
-				MinimumSpacing: claude.DefaultAdmissionSpacing,
-			})
-			if err != nil {
-				result := claude.UnavailableAuthRefresh(
-					a.build.Commit,
-					"claude_admission_unavailable",
-					"internal",
-					"Claude provider admission state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude auth: admission unavailable", result)
+				return a.renderWebAgentResult(ctx, "claude auth: lifecycle state unavailable", result)
 			}
 			client, closeClient, err := a.browserEventCDPClient(ctx)
 			if err != nil {
@@ -1025,7 +635,6 @@ func (a *app) newWorkflowAgentClaudeAuthRefreshCommand() *cobra.Command {
 				Client:      client,
 				Engine:      engine,
 				Journal:     journal,
-				Admission:   gate,
 				Store:       authStore,
 				BuildCommit: a.build.Commit,
 			})
@@ -1163,127 +772,5 @@ func webAgentResultExitCode(result webagent.Result) int {
 		return ExitInternal
 	default:
 		return ExitCheckFailed
-	}
-}
-
-func (a *app) newWorkflowAgentRecoveryCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "recovery",
-		Short: "Inspect or close one exact authenticated-provider recovery run",
-		Long: "Operate only on the exact target recorded in owner-only browserflow state. " +
-			"Recovery never repeats a provider action and never performs broad page cleanup.",
-		Example: "  cdp workflow agent recovery inspect <run-id> --json\n" +
-			"  cdp workflow agent recovery close <run-id> --json",
-	}
-	cmd.AddCommand(a.newWorkflowAgentRecoveryInspectCommand())
-	cmd.AddCommand(a.newWorkflowAgentRecoveryCloseCommand())
-	return cmd
-}
-
-func (a *app) newWorkflowAgentRecoveryInspectCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "inspect RUN_ID",
-		Short: "Inspect one owner-only browserflow recovery record",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
-			defer cancel()
-			store, err := a.stateStore()
-			if err != nil {
-				return err
-			}
-			journal, err := browserflow.NewFileJournal(store.Dir)
-			if err != nil {
-				return commandError("recovery_unavailable", "internal", err.Error(), ExitInternal, nil)
-			}
-			record, err := journal.Load(ctx, args[0])
-			if err != nil {
-				return commandError(
-					"recovery_not_found",
-					"usage",
-					fmt.Sprintf("load exact recovery run %q: %v", args[0], err),
-					ExitUsage,
-					[]string{"cdp workflow agent recovery inspect <run-id> --json"},
-				)
-			}
-			return a.render(ctx, fmt.Sprintf("%s\t%s", record.RunID, record.Phase), map[string]any{
-				"ok":             true,
-				"schema_version": browserflow.RecoverySchemaVersion,
-				"record":         record,
-			})
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentRecoveryCloseCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "close RUN_ID",
-		Short: "Reconcile and close only the target recorded for one run",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
-			defer cancel()
-			store, err := a.stateStore()
-			if err != nil {
-				return err
-			}
-			journal, err := browserflow.NewFileJournal(store.Dir)
-			if err != nil {
-				return commandError("recovery_unavailable", "internal", err.Error(), ExitInternal, nil)
-			}
-			client, closeClient, err := a.browserCDPClient(ctx)
-			if err != nil {
-				return err
-			}
-			defer closeClient(context.Background())
-			engine, err := browserflow.New(browserflow.Config{
-				Client:  client,
-				Journal: journal,
-			})
-			if err != nil {
-				return commandError("recovery_unavailable", "internal", err.Error(), ExitInternal, nil)
-			}
-			cleanup, recoverErr := engine.Recover(ctx, args[0])
-			nextCommands := []string{}
-			if recoveryRecord, loadErr := journal.Load(ctx, args[0]); loadErr == nil {
-				if gate, gateErr := admission.New(admission.Config{StateDir: store.Dir}); gateErr == nil {
-					if admissionRecord, found, statusErr := gate.Status(ctx, recoveryRecord.Provider); statusErr == nil &&
-						found &&
-						admissionRecord.RunID == recoveryRecord.RunID &&
-						admissionRecord.Operation == recoveryRecord.Operation &&
-						admissionRecord.RequiresResolution() {
-						nextCommands = append(nextCommands,
-							fmt.Sprintf(
-								"cdp workflow agent admission resolve %s %s --acknowledge-unknown --json",
-								recoveryRecord.Provider,
-								recoveryRecord.RunID,
-							),
-						)
-					}
-				}
-			}
-			payload := map[string]any{
-				"ok":             recoverErr == nil,
-				"schema_version": browserflow.RecoverySchemaVersion,
-				"run_id":         args[0],
-				"cleanup":        cleanup,
-				"next_commands":  nextCommands,
-			}
-			if recoverErr != nil {
-				payload["next_commands"] = []string{
-					fmt.Sprintf("cdp workflow agent recovery inspect %s --json", args[0]),
-					fmt.Sprintf("cdp workflow agent recovery close %s --json", args[0]),
-				}
-				return commandErrorWithData(
-					"exact_recovery_incomplete",
-					"cleanup",
-					fmt.Sprintf("exact recovery run %q did not settle: %v", args[0], recoverErr),
-					ExitCheckFailed,
-					payload["next_commands"].([]string),
-					payload,
-				)
-			}
-			return a.render(ctx, fmt.Sprintf("%s\t%s", args[0], cleanup.State), payload)
-		},
 	}
 }

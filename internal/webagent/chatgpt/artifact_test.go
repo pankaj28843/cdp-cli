@@ -42,19 +42,6 @@ func artifactDetail(text string, messageID string) map[string]any {
 	}
 }
 
-func TestArtifactBrowserConfigUsesIndependentAdmissionLane(t *testing.T) {
-	config := artifactBrowserConfig(BrowserConfig{
-		AdmissionProvider: "chatgpt",
-	})
-	if config.AdmissionProvider != chatGPTArtifactAdmissionProvider {
-		t.Fatalf(
-			"artifact admission provider = %q, want %q",
-			config.AdmissionProvider,
-			chatGPTArtifactAdmissionProvider,
-		)
-	}
-}
-
 func TestLocateArtifactRequiresOneFinishedExactNamedPath(t *testing.T) {
 	const (
 		fileName = "agent-cli-web-artifact.csv"

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -23,7 +22,7 @@ func (function roundTripFunc) RoundTrip(
 
 func TestAskPerformsOneExactReplayAfterPendingPersistence(t *testing.T) {
 	now := time.Date(2026, 7, 26, 7, 0, 0, 0, time.UTC)
-	store, gate := readyAskState(t, now)
+	store := readyAskState(t, now)
 	calls := 0
 	client := &http.Client{Transport: roundTripFunc(func(
 		request *http.Request,
@@ -61,7 +60,6 @@ func TestAskPerformsOneExactReplayAfterPendingPersistence(t *testing.T) {
 		context.Background(),
 		AskConfig{
 			Store:       store,
-			Admission:   gate,
 			HTTPClient:  client,
 			BuildCommit: "test",
 			Now:         func() time.Time { return now },
@@ -93,13 +91,12 @@ func TestAskPerformsOneExactReplayAfterPendingPersistence(t *testing.T) {
 
 func TestAskNeverRetriesAcknowledgedRateLimit(t *testing.T) {
 	now := time.Date(2026, 7, 26, 7, 0, 0, 0, time.UTC)
-	store, gate := readyAskState(t, now)
+	store := readyAskState(t, now)
 	calls := 0
 	result := Ask(
 		context.Background(),
 		AskConfig{
-			Store:     store,
-			Admission: gate,
+			Store: store,
 			HTTPClient: &http.Client{Transport: roundTripFunc(func(
 				*http.Request,
 			) (*http.Response, error) {
@@ -124,7 +121,7 @@ func TestAskNeverRetriesAcknowledgedRateLimit(t *testing.T) {
 	}
 	if result.OK ||
 		result.Error == nil ||
-		result.Error.Code != "alex_provider_cooldown" ||
+		result.Error.Code != "alex_rate_limited" ||
 		result.Error.RetrySafe ||
 		result.Error.RetryAt != now.Add(30*time.Second).Format(time.RFC3339Nano) ||
 		result.Action == nil ||
@@ -135,13 +132,12 @@ func TestAskNeverRetriesAcknowledgedRateLimit(t *testing.T) {
 
 func TestAskClassifiesTransportFailureAsUnknownWithoutRetry(t *testing.T) {
 	now := time.Date(2026, 7, 26, 7, 0, 0, 0, time.UTC)
-	store, gate := readyAskState(t, now)
+	store := readyAskState(t, now)
 	calls := 0
 	result := Ask(
 		context.Background(),
 		AskConfig{
-			Store:     store,
-			Admission: gate,
+			Store: store,
 			HTTPClient: &http.Client{Transport: roundTripFunc(func(
 				*http.Request,
 			) (*http.Response, error) {
@@ -185,44 +181,12 @@ func TestAskClassifiesTransportFailureAsUnknownWithoutRetry(t *testing.T) {
 	); err == nil {
 		t.Fatal("LoadAskRecord accepted a path-traversal run id")
 	}
-	blockedResult := Ask(
-		context.Background(),
-		AskConfig{
-			Store:       store,
-			Admission:   gate,
-			HTTPClient:  resultClientThatMustNotRun(t),
-			BuildCommit: "test",
-			Now:         func() time.Time { return now },
-		},
-		"a different prompt must remain quarantined",
-		"system-design-interview",
-		"design-a-rate-limiter",
-	)
-	if blockedResult.OK ||
-		blockedResult.Error == nil ||
-		blockedResult.Error.Code != "alex_admission_blocked" ||
-		blockedResult.Error.RetryAt != "" ||
-		!strings.Contains(blockedResult.Error.Message, "explicit recovery resolution is required") ||
-		len(blockedResult.NextCommands) != 1 ||
-		blockedResult.NextCommands[0] != "cdp workflow agent admission status alex --json" {
-		t.Fatalf("quarantined follow-up result = %+v", blockedResult)
-	}
-}
-
-func resultClientThatMustNotRun(t *testing.T) *http.Client {
-	t.Helper()
-	return &http.Client{Transport: roundTripFunc(func(
-		*http.Request,
-	) (*http.Response, error) {
-		t.Fatal("quarantined provider operation reached HTTP dispatch")
-		return nil, nil
-	})}
 }
 
 func readyAskState(
 	t *testing.T,
 	now time.Time,
-) (*Store, *admission.Gate) {
+) *Store {
 	t.Helper()
 	stateDir := t.TempDir()
 	store, err := NewStore(stateDir)
@@ -278,12 +242,5 @@ func readyAskState(
 	}); err != nil {
 		t.Fatalf("save catalog: %v", err)
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir: stateDir,
-		Now:      func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatalf("new admission gate: %v", err)
-	}
-	return store, gate
+	return store
 }

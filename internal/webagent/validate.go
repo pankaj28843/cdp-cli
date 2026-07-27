@@ -230,8 +230,8 @@ func (c CleanupEvidence) Validate() error {
 			return fmt.Errorf("cleanup not_required requires required=false")
 		}
 	case CleanupPending, CleanupFailed:
-		if !c.Required || c.TargetID == "" || c.RecoveryCommand == "" {
-			return fmt.Errorf("cleanup %s requires required=true, target_id, and recovery_command", c.State)
+		if !c.Required || c.TargetID == "" {
+			return fmt.Errorf("cleanup %s requires required=true and target_id", c.State)
 		}
 	case CleanupClosed:
 		if !c.Required || c.TargetID == "" || !c.TargetClosed {
@@ -241,9 +241,8 @@ func (c CleanupEvidence) Validate() error {
 		return fmt.Errorf("invalid cleanup state %q", c.State)
 	}
 	for name, value := range map[string]string{
-		"cleanup.target_id":        c.TargetID,
-		"cleanup.close_proof":      c.CloseProof,
-		"cleanup.recovery_command": c.RecoveryCommand,
+		"cleanup.target_id":   c.TargetID,
+		"cleanup.close_proof": c.CloseProof,
 	} {
 		if value != "" {
 			if err := validateSafeString(name, value, 4096); err != nil {
@@ -275,8 +274,7 @@ func validOperation(operation Operation) bool {
 		OperationConversationsContinue, OperationConversationsDetail,
 		OperationConversationsAwait,
 		OperationConversationsDelete, OperationArtifactDownload,
-		OperationResearch, OperationResearchExport,
-		OperationCalibrate:
+		OperationResearch, OperationResearchExport:
 		return true
 	default:
 		return false
@@ -287,7 +285,7 @@ func operationCanMutate(operation Operation) bool {
 	switch operation {
 	case OperationAsk, OperationConversationsContinue,
 		OperationConversationsDelete, OperationResearch,
-		OperationResearchExport, OperationCalibrate:
+		OperationResearchExport:
 		return true
 	default:
 		return false

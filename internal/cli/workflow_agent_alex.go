@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/alex"
@@ -477,9 +476,9 @@ func (a *app) newWorkflowAgentAlexAskCommand() *cobra.Command {
 	var includeRaw bool
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
-		Short: "Ask ByteByteGo through one proven direct replay",
-		Long: "Resolve one exact dynamic catalog context, require fresh browser-observed auth, durably persist action_pending, " +
-			"perform one POST to the stable Ask Alex endpoint, and never retry an ambiguous or acknowledged mutation.",
+		Short: "Ask ByteByteGo through one direct request",
+		Long: "Resolve one exact dynamic catalog context from the signed-in session, perform one POST to the Ask Alex endpoint, " +
+			"and return the response.",
 		Example: "  cdp workflow agent alex ask 'Explain this pattern.' --json\n" +
 			"  printf '%s' 'Review this design.' | cdp workflow agent alex ask --stdin --course system-design-interview --chapter-id design-a-rate-limiter --json",
 		Args: cobra.MaximumNArgs(1),
@@ -514,7 +513,7 @@ func (a *app) newWorkflowAgentAlexAskCommand() *cobra.Command {
 			} else if len(args) == 1 {
 				prompt = args[0]
 			}
-			store, gate, unavailable := a.alexReplayConfig(
+			store, unavailable := a.alexReplayConfig(
 				webagent.OperationAsk,
 			)
 			if unavailable != nil {
@@ -532,7 +531,6 @@ func (a *app) newWorkflowAgentAlexAskCommand() *cobra.Command {
 				ctx,
 				alex.AskConfig{
 					Store:       store,
-					Admission:   gate,
 					Timeout:     timeout,
 					IncludeRaw:  includeRaw,
 					BuildCommit: a.build.Commit,
@@ -581,7 +579,7 @@ func (a *app) alexStore() (*alex.Store, error) {
 
 func (a *app) alexReplayConfig(
 	operation webagent.Operation,
-) (*alex.Store, *admission.Gate, *webagent.Result) {
+) (*alex.Store, *webagent.Result) {
 	store, err := a.stateStore()
 	if err != nil {
 		result := alexUnavailableOperation(
@@ -591,7 +589,7 @@ func (a *app) alexReplayConfig(
 			"internal",
 			"Ask Alex owner-only state is unavailable",
 		)
-		return nil, nil, &result
+		return nil, &result
 	}
 	providerStore, err := alex.NewStore(store.Dir)
 	if err != nil {
@@ -602,23 +600,9 @@ func (a *app) alexReplayConfig(
 			"internal",
 			"Ask Alex owner-only state is unavailable",
 		)
-		return nil, nil, &result
+		return nil, &result
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       store.Dir,
-		MinimumSpacing: alex.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := alexUnavailableOperation(
-			a.build.Commit,
-			operation,
-			"alex_admission_unavailable",
-			"internal",
-			"Ask Alex provider admission state is unavailable",
-		)
-		return nil, nil, &result
-	}
-	return providerStore, gate, nil
+	return providerStore, nil
 }
 
 func (a *app) alexBrowserOperationConfig(
@@ -652,23 +636,9 @@ func (a *app) alexBrowserOperationConfig(
 		result := alexUnavailableOperation(
 			a.build.Commit,
 			operation,
-			"alex_recovery_unavailable",
+			"alex_lifecycle_state_unavailable",
 			"internal",
-			"Ask Alex exact-target recovery state is unavailable",
-		)
-		return alex.BrowserConfig{}, nil, &result
-	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       store.Dir,
-		MinimumSpacing: alex.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := alexUnavailableOperation(
-			a.build.Commit,
-			operation,
-			"alex_admission_unavailable",
-			"internal",
-			"Ask Alex provider admission state is unavailable",
+			"Ask Alex exact-target lifecycle state is unavailable",
 		)
 		return alex.BrowserConfig{}, nil, &result
 	}
@@ -704,7 +674,6 @@ func (a *app) alexBrowserOperationConfig(
 		Client:      client,
 		Engine:      engine,
 		Journal:     journal,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 	}, providerStore, nil
 }

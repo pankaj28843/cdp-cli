@@ -2,15 +2,11 @@ package gemini
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/pankaj28843/cdp-cli/internal/browserflow"
-	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
 func TestOwnerOnlyStateRoundTripAfterLiveContract(t *testing.T) {
@@ -181,98 +177,5 @@ func TestConversationListAtEndRequiresReadyBottom(t *testing.T) {
 				t.Fatalf("conversationListAtEnd() = %v, want %v", got, test.want)
 			}
 		})
-	}
-}
-
-func TestCalibrationFailureRemainsNonRetryableAfterSend(t *testing.T) {
-	data := CalibrationData{
-		SchemaVersion:     CalibrationSchemaVersion,
-		CompletionState:   "delete_not_performed",
-		PromptFingerprint: strings.Repeat("a", 64),
-		ReadMode:          "headed_browser",
-		SendAction: &webagent.ActionEvidence{
-			Dispatch:         webagent.DispatchPerformed,
-			AttemptCount:     1,
-			RawInputCount:    1,
-			RetrySafe:        false,
-			PendingPersisted: true,
-		},
-		DeleteAction: &webagent.ActionEvidence{
-			Dispatch:      webagent.DispatchNotPerformed,
-			AttemptCount:  1,
-			RawInputCount: 0,
-			RetrySafe:     true,
-		},
-		Metadata: map[string]any{},
-	}
-	result := calibrationFailure(
-		"wa-test",
-		CalibrationConfig{
-			BrowserConfig: BrowserConfig{BuildCommit: "test"},
-		},
-		webagent.StagePrepared,
-		nil,
-		webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-		data.DeleteAction,
-		conversationRef("1234567890abcdef"),
-		"gemini_calibration_delete_not_performed",
-		"provider",
-		"Gemini calibration delete was not performed; do not rerun calibration",
-		"",
-		data,
-		[]string{"cdp workflow agent gemini calibration cleanup --json"},
-	)
-	if result.Action != data.SendAction ||
-		result.Error == nil ||
-		result.Error.RetrySafe {
-		t.Fatalf("calibration failure = %+v", result)
-	}
-	if err := result.Validate(); err != nil {
-		t.Fatalf("result validation: %v", err)
-	}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("marshal result: %v", err)
-	}
-	if strings.Contains(string(raw), calibrationPrompt) {
-		t.Fatal("calibration prompt leaked into result")
-	}
-}
-
-func TestCalibrationStatusDerivesClosedDeletedState(t *testing.T) {
-	stateDir := t.TempDir()
-	store, err := NewCalibrationStore(stateDir)
-	if err != nil {
-		t.Fatalf("NewCalibrationStore: %v", err)
-	}
-	record := CalibrationStateRecord{
-		SchemaVersion:     CalibrationStateSchemaVersion,
-		RunID:             "wa-calibration-test",
-		State:             "deleted",
-		PromptFingerprint: strings.Repeat("b", 64),
-		TargetID:          "target-test",
-		ConversationID:    "1234567890abcdef",
-		SendDispatch:      browserflow.DispatchPerformed,
-		DeleteDispatch:    browserflow.DispatchPerformed,
-		Postcondition:     deletePostconditionProof,
-		TargetClosed:      true,
-		UpdatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	if err := store.Save(context.Background(), record); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	result := CalibrationStatus(
-		context.Background(),
-		store,
-		nil,
-		"test",
-	)
-	data, ok := result.Data.(CalibrationStatusData)
-	if !result.OK ||
-		!ok ||
-		data.RecoveryRequired ||
-		data.ConversationPresent ||
-		!data.TargetClosed {
-		t.Fatalf("CalibrationStatus = %+v", result)
 	}
 }

@@ -735,7 +735,7 @@ func TestLeaseArchivesCompletedActionBeforeSecondDispatch(t *testing.T) {
 	lease, err := engine.Acquire(context.Background(), AcquireRequest{
 		RunID:      "run-two-actions",
 		Provider:   "claude",
-		Operation:  "calibrate",
+		Operation:  "ask",
 		ActionName: "send",
 		InitialURL: "about:blank",
 	})

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -41,7 +39,6 @@ var (
 
 type ReadConfig struct {
 	Store               *Store
-	Admission           *admission.Gate
 	HTTPClient          *http.Client
 	BuildCommit         string
 	Now                 func() time.Time
@@ -153,22 +150,6 @@ func ListConversations(
 			nil,
 		)
 	}
-	lease, failure := acquireReadAdmission(
-		ctx,
-		config,
-		runID,
-		webagent.OperationConversationsList,
-	)
-	if failure != nil {
-		return readFailureResult(
-			runID,
-			config.BuildCommit,
-			webagent.OperationConversationsList,
-			*failure,
-			map[string]any{"schema_version": ConversationListSchemaVersion},
-			nil,
-		)
-	}
 	data, failure := fetchConversationList(ctx, config, template, limit)
 	if failure != nil &&
 		failure.code == "grok_browser_context_required" &&
@@ -180,7 +161,7 @@ func ListConversations(
 			if closeRendered != nil {
 				_ = closeRendered(context.Background())
 			}
-			return releaseReadAdmission(result, lease, time.Time{})
+			return result
 		}
 		failure = &readFailure{
 			code:       "grok_rendered_fallback_unavailable",
@@ -190,7 +171,7 @@ func ListConversations(
 		}
 	}
 	if failure != nil {
-		result := readFailureResult(
+		return readFailureResult(
 			runID,
 			config.BuildCommit,
 			webagent.OperationConversationsList,
@@ -198,19 +179,14 @@ func ListConversations(
 			map[string]any{"schema_version": ConversationListSchemaVersion},
 			nil,
 		)
-		return releaseReadAdmission(result, lease, failure.retryAt)
 	}
-	return releaseReadAdmission(
-		readSuccessResult(
-			runID,
-			config.BuildCommit,
-			webagent.OperationConversationsList,
-			webagent.StateReady,
-			data,
-			nil,
-		),
-		lease,
-		time.Time{},
+	return readSuccessResult(
+		runID,
+		config.BuildCommit,
+		webagent.OperationConversationsList,
+		webagent.StateReady,
+		data,
+		nil,
 	)
 }
 
@@ -266,14 +242,6 @@ func readConversation(
 	}
 	conversation := conversationRef(conversationID)
 	template, failure := loadFreshReadTemplate(ctx, config)
-	if failure != nil {
-		return readFailureResult(
-			runID, config.BuildCommit, operation, *failure,
-			map[string]any{"schema_version": ConversationDetailSchemaVersion},
-			conversation,
-		)
-	}
-	lease, failure := acquireReadAdmission(ctx, config, runID, operation)
 	if failure != nil {
 		return readFailureResult(
 			runID, config.BuildCommit, operation, *failure,
@@ -345,7 +313,7 @@ func readConversation(
 			if closeRendered != nil {
 				_ = closeRendered(context.Background())
 			}
-			return releaseReadAdmission(result, lease, time.Time{})
+			return result
 		}
 		failure = &readFailure{
 			code:       "grok_rendered_fallback_unavailable",
@@ -359,7 +327,7 @@ func readConversation(
 	}
 	data.Metadata["detail_read_attempts"] = attempt
 	if failure != nil {
-		result := readFailureResult(
+		return readFailureResult(
 			runID,
 			config.BuildCommit,
 			operation,
@@ -367,23 +335,18 @@ func readConversation(
 			data,
 			conversation,
 		)
-		return releaseReadAdmission(result, lease, failure.retryAt)
 	}
 	state := webagent.StateTerminal
 	if data.CompletionState != "terminal" {
 		state = webagent.StateIncomplete
 	}
-	return releaseReadAdmission(
-		readSuccessResult(
-			runID,
-			config.BuildCommit,
-			operation,
-			state,
-			data,
-			conversation,
-		),
-		lease,
-		time.Time{},
+	return readSuccessResult(
+		runID,
+		config.BuildCommit,
+		operation,
+		state,
+		data,
+		conversation,
 	)
 }
 
@@ -720,78 +683,6 @@ func loadFreshReadTemplate(
 		)
 	}
 	return template, nil
-}
-
-func acquireReadAdmission(
-	ctx context.Context,
-	config ReadConfig,
-	runID string,
-	operation webagent.Operation,
-) (*admission.Lease, *readFailure) {
-	if config.Admission == nil {
-		return nil, internalReadFailure(
-			"Grok provider admission is unavailable",
-		)
-	}
-	lease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  string(webagent.ProviderGrok),
-		Operation: string(operation),
-		RunID:     runID,
-	})
-	if err == nil {
-		return lease, nil
-	}
-	var blocked *admission.BlockedError
-	if errors.As(err, &blocked) {
-		failure := &readFailure{
-			code:     "grok_admission_blocked",
-			errClass: "admission",
-			message:  blocked.Error(),
-		}
-		if blocked.ResolutionNeeded {
-			failure.nextCommands = []string{"cdp workflow agent admission status grok --json"}
-		} else {
-			failure.retryAt = blocked.RetryAt
-		}
-		return nil, failure
-	}
-	return nil, internalReadFailure(
-		"Grok provider admission state is unavailable",
-	)
-}
-
-func releaseReadAdmission(
-	result webagent.Result,
-	lease *admission.Lease,
-	cooldown time.Time,
-) webagent.Result {
-	if lease == nil {
-		return result
-	}
-	outcome := admission.OutcomeFailed
-	switch {
-	case result.OK && result.State == webagent.StateTerminal:
-		outcome = admission.OutcomeTerminal
-	case result.OK && result.State == webagent.StateIncomplete:
-		outcome = admission.OutcomeIncomplete
-	case result.OK:
-		outcome = admission.OutcomeCompleted
-	case result.Error != nil && result.Error.Code == "grok_rate_limited":
-		outcome = admission.OutcomeRateLimited
-	}
-	if err := lease.Release(admission.Release{
-		Outcome:       outcome,
-		CooldownUntil: cooldown,
-	}); err != nil {
-		return replaceFailure(
-			result,
-			"grok_admission_release_failed",
-			"internal",
-			"Grok provider admission outcome could not be persisted",
-			[]string{"cdp workflow agent grok doctor --json"},
-		)
-	}
-	return result
 }
 
 func readSuccessResult(

@@ -142,9 +142,8 @@ func inspectFile(path, source string, imports []string) []fitnessIssue {
 	var issues []fitnessIssue
 	inCLI := strings.HasPrefix(path, "internal/cli/")
 	inBrowserflow := strings.HasPrefix(path, "internal/browserflow/")
-	inAdmission := strings.HasPrefix(path, "internal/admission/")
 	provider := providerPackage(path)
-	inPolicyPackage := inBrowserflow || inAdmission || strings.HasPrefix(path, "internal/webagent/")
+	inPolicyPackage := inBrowserflow || strings.HasPrefix(path, "internal/webagent/")
 
 	for _, importPath := range imports {
 		if importPath == "github.com/spf13/cobra" && !inCLI {
@@ -159,13 +158,6 @@ func inspectFile(path, source string, imports []string) []fitnessIssue {
 			issues = append(issues, fitnessIssue{
 				Rule: "browserflow-dependencies", Path: path,
 				Detail: fmt.Sprintf("browserflow must stay provider-neutral; forbidden import %q", importPath),
-			})
-		}
-		if inAdmission && strings.HasPrefix(importPath, modulePath+"internal/") &&
-			importPath != modulePath+"internal/artifacts" {
-			issues = append(issues, fitnessIssue{
-				Rule: "admission-dependencies", Path: path,
-				Detail: fmt.Sprintf("admission may depend only on artifacts; forbidden import %q", importPath),
 			})
 		}
 		if provider != "" {

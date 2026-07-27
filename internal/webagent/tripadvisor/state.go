@@ -20,7 +20,6 @@ const (
 	SessionStateSchemaVersion = "tripadvisor-session/v1"
 	RelativeSessionPath       = "webagent/tripadvisor/session.json"
 	DefaultAuthTTL            = time.Hour
-	DefaultAdmissionSpacing   = time.Second
 	MaxPromptCharacters       = 1_000
 )
 

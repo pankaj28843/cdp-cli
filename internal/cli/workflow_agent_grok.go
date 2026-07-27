@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/grok"
@@ -215,8 +214,8 @@ func (a *app) newWorkflowAgentGrokAskCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible Grok request",
-		Long: "Start one fresh Grok conversation in one fresh exact owned headed target, verify the cached default mode and exact prompt, " +
-			"persist action_pending, click Send once, acknowledge the same-target route, and return canonical stored detail without resubmitting.",
+		Long: "Open one fresh headed tab, verify the visible mode, submit the exact prompt with one Send, read the answer, " +
+			"preserve the observed conversation ID, and close only that tab.",
 		Example: "  printf '%s' 'Review this implementation.' | cdp workflow agent grok ask --stdin --json",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -381,7 +380,7 @@ func (a *app) newWorkflowAgentGrokConversationsAwaitCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "await CONVERSATION_ID",
 		Short: "Await one exact stored Grok conversation without resubmitting",
-		Long: "Read only the exact acknowledged conversation until its stored assistant response is terminal or the bounded deadline expires. " +
+		Long: "Read only the exact identified conversation until its stored assistant response is terminal or the bounded deadline expires. " +
 			"This command never submits a prompt.",
 		Example: "  cdp --timeout 3m workflow agent grok conversations await <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
@@ -421,8 +420,8 @@ func (a *app) newWorkflowAgentGrokConversationsDeleteCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete CONVERSATION_ID",
 		Short: "Visibly delete one exact Grok conversation",
-		Long: "Own one fresh headed target, open the exact conversation menu, persist action_pending, " +
-			"dispatch one raw-input Delete Chat action, prove the same-target home redirect, and exact-close the target.",
+		Long: "Own one fresh headed target, open the exact conversation menu, dispatch one raw-input Delete Chat action, " +
+			"prove the same-target home redirect, and exact-close the target.",
 		Example: "  cdp workflow agent grok conversations delete <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -471,288 +470,6 @@ func (a *app) newWorkflowAgentGrokConversationsDeleteCommand() *cobra.Command {
 	}
 }
 
-func (a *app) newWorkflowAgentGrokCalibrationCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "calibration",
-		Short: "Inspect or safely reconcile the last Grok calibration",
-		Long: "Read owner-only Grok calibration state without probing Chrome, or explicitly reconcile the exact recorded target " +
-			"and acknowledged disposable conversation without repeating an ambiguous action.",
-	}
-	cmd.AddCommand(a.newWorkflowAgentGrokCalibrationStatusCommand())
-	cmd.AddCommand(a.newWorkflowAgentGrokCalibrationCleanupCommand())
-	return cmd
-}
-
-func (a *app) newWorkflowAgentGrokCalibrationStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "status",
-		Short:   "Read the last Grok calibration state without probing Chrome",
-		Example: "  cdp workflow agent grok calibration status --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_state_unavailable",
-						"internal",
-						"Grok owner-only calibration state is unavailable",
-					),
-				)
-			}
-			store, err := grok.NewCalibrationStore(stateStore.Dir)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_state_unavailable",
-						"internal",
-						"Grok owner-only calibration state is unavailable",
-					),
-				)
-			}
-			journal, err := browserflow.NewFileJournal(stateStore.Dir)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_recovery_unavailable",
-						"internal",
-						"Grok exact-target recovery state is unavailable",
-					),
-				)
-			}
-			result := grok.CalibrationStatus(
-				ctx,
-				store,
-				journal,
-				a.build.Commit,
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("grok calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentGrokCalibrationCleanupCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "cleanup",
-		Short: "Reconcile only the exact resources from the last Grok calibration",
-		Long: "Close only the exact persisted owned target, then delete only a persisted acknowledged disposable conversation. " +
-			"Never repeat an ambiguous Send or delete action.",
-		Example: "  cdp --timeout 1m workflow agent grok calibration cleanup --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, time.Minute)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration cleanup: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_state_unavailable",
-						"internal",
-						"Grok owner-only calibration state is unavailable",
-					),
-				)
-			}
-			calibrationStore, err := grok.NewCalibrationStore(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration cleanup: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_state_unavailable",
-						"internal",
-						"Grok owner-only calibration state is unavailable",
-					),
-				)
-			}
-			journal, err := browserflow.NewFileJournal(stateStore.Dir)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration cleanup: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_recovery_unavailable",
-						"internal",
-						"Grok exact-target recovery state is unavailable",
-					),
-				)
-			}
-			status := grok.CalibrationStatus(
-				ctx,
-				calibrationStore,
-				journal,
-				a.build.Commit,
-			)
-			if !status.OK {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration cleanup: unavailable",
-					status,
-				)
-			}
-			if data, ok := status.Data.(grok.CalibrationStatusData); ok && !data.RecoveryRequired {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration cleanup: not required",
-					status,
-				)
-			}
-			if !a.selectHeadedProviderRuntime() {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration cleanup: headed browser required",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_headed_browser_required",
-						"usage",
-						"Grok calibration cleanup requires the headed browser runtime",
-					),
-				)
-			}
-			browserConfig, providerStore, unavailable :=
-				a.grokBrowserOperationConfig(
-					ctx,
-					webagent.OperationCalibrate,
-				)
-			if unavailable != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration cleanup: unavailable",
-					*unavailable,
-				)
-			}
-			result := grok.CleanupCalibration(
-				ctx,
-				grok.CalibrationCleanupConfig{
-					Store:       calibrationStore,
-					Journal:     browserConfig.Journal,
-					Engine:      browserConfig.Engine,
-					BuildCommit: a.build.Commit,
-					Delete: grok.DeleteConfig{
-						BrowserConfig: browserConfig,
-						Store:         providerStore,
-						Timeout:       45 * time.Second,
-					},
-				},
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf(
-					"grok calibration cleanup: %v",
-					result.State,
-				),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentGrokCalibrateCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "calibrate",
-		Short: "Run one disposable Grok create/capture/delete transaction",
-		Long: "Use one fresh owned headed target for one memory-only calibration prompt, one Send, " +
-			"canonical stored answer capture, exact same-target deletion, and exact close.",
-		Example: "  cdp --timeout 3m workflow agent grok calibrate --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, 4*time.Minute)
-			defer cancel()
-			if !a.selectHeadedProviderRuntime() {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration: headed browser required",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_headed_browser_required",
-						"usage",
-						"Grok calibration requires the headed browser runtime",
-					),
-				)
-			}
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_state_unavailable",
-						"internal",
-						"Grok owner-only calibration state is unavailable",
-					),
-				)
-			}
-			calibrationStore, err := grok.NewCalibrationStore(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration: unavailable",
-					grokCalibrationUnavailable(
-						a.build.Commit,
-						"grok_calibration_state_unavailable",
-						"internal",
-						"Grok owner-only calibration state is unavailable",
-					),
-				)
-			}
-			browserConfig, providerStore, unavailable :=
-				a.grokBrowserOperationConfig(
-					ctx,
-					webagent.OperationCalibrate,
-				)
-			if unavailable != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"grok calibration: unavailable",
-					*unavailable,
-				)
-			}
-			timeout := a.opts.timeout
-			if timeout <= 0 {
-				timeout = 3 * time.Minute
-			}
-			result := grok.Calibrate(
-				ctx,
-				grok.CalibrationConfig{
-					BrowserConfig: browserConfig,
-					AuthStore:     providerStore,
-					Store:         calibrationStore,
-					Timeout:       timeout,
-				},
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("grok calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
 func (a *app) grokBrowserOperationConfig(
 	ctx context.Context,
 	operation webagent.Operation,
@@ -779,20 +496,8 @@ func (a *app) grokBrowserOperationConfig(
 	if err != nil {
 		result := grokUnavailableOperation(
 			a.build.Commit, operation,
-			"grok_recovery_unavailable", "internal",
-			"Grok exact-target recovery state is unavailable",
-		)
-		return grok.BrowserConfig{}, nil, &result
-	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateStore.Dir,
-		MinimumSpacing: grok.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := grokUnavailableOperation(
-			a.build.Commit, operation,
-			"grok_admission_unavailable", "internal",
-			"Grok provider admission state is unavailable",
+			"grok_lifecycle_state_unavailable", "internal",
+			"Grok exact-target lifecycle state is unavailable",
 		)
 		return grok.BrowserConfig{}, nil, &result
 	}
@@ -824,7 +529,6 @@ func (a *app) grokBrowserOperationConfig(
 		Client:      client,
 		Engine:      engine,
 		Journal:     journal,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 	}, store, nil
 }
@@ -850,21 +554,8 @@ func (a *app) grokReadConfig(
 		)
 		return grok.ReadConfig{}, &result
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateStore.Dir,
-		MinimumSpacing: grok.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := grok.UnavailableRead(
-			a.build.Commit, operation,
-			"grok_admission_unavailable", "internal",
-			"Grok provider admission state is unavailable",
-		)
-		return grok.ReadConfig{}, &result
-	}
 	return grok.ReadConfig{
 		Store:       store,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 		NewRenderedFallback: func(
 			ctx context.Context,
@@ -904,27 +595,6 @@ func (a *app) grokReadConfig(
 			}, closeClient, nil
 		},
 	}, nil
-}
-
-func grokCalibrationUnavailable(
-	buildCommit string,
-	code string,
-	errClass string,
-	message string,
-) webagent.Result {
-	result := grokUnavailableOperation(
-		buildCommit,
-		webagent.OperationCalibrate,
-		code,
-		errClass,
-		message,
-	)
-	result.Data = grok.CalibrationStatusData{
-		SchemaVersion:    grok.CalibrationStateSchemaVersion,
-		State:            "unavailable",
-		RecoveryRequired: true,
-	}
-	return result
 }
 
 func grokUnavailableOperation(

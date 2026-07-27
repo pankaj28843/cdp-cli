@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -17,7 +16,6 @@ type BrowserConfig struct {
 	Client      cdp.CommandClient
 	Engine      *browserflow.Engine
 	Journal     browserflow.Journal
-	Admission   *admission.Gate
 	BuildCommit string
 }
 
@@ -41,7 +39,6 @@ func runOwned(
 	if config.Client == nil ||
 		config.Engine == nil ||
 		config.Journal == nil ||
-		config.Admission == nil ||
 		callback == nil {
 		return operationFailure(
 			runID, config.BuildCommit, operation, webagent.StagePlanned,
@@ -54,72 +51,6 @@ func runOwned(
 			[]string{"cdp workflow agent tripadvisor doctor --json"},
 		)
 	}
-	admissionLease, err := config.Admission.Acquire(
-		ctx,
-		admission.Request{
-			Provider:  string(webagent.ProviderTripadvisor),
-			Operation: string(operation),
-			RunID:     runID,
-		},
-	)
-	if err != nil {
-		code := "tripadvisor_admission_unavailable"
-		errClass := "internal"
-		message := "Tripadvisor provider admission state is unavailable"
-		retryAt := ""
-		nextCommands := []string{"cdp workflow agent tripadvisor doctor --json"}
-		var blocked *admission.BlockedError
-		if errors.As(err, &blocked) {
-			code = "tripadvisor_admission_blocked"
-			errClass = "admission"
-			message = blocked.Error()
-			if blocked.ResolutionNeeded {
-				nextCommands = []string{"cdp workflow agent admission status tripadvisor --json"}
-			} else {
-				retryAt = blocked.RetryAt.UTC().Format(time.RFC3339Nano)
-			}
-		}
-		return operationFailure(
-			runID, config.BuildCommit, operation, webagent.StagePlanned,
-			readMode, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			nil, nil, code, errClass, message, retryAt, data,
-			nextCommands,
-		)
-	}
-	defer func() {
-		outcome := admission.OutcomeFailed
-		switch {
-		case result.OK && result.State == webagent.StateTerminal:
-			outcome = admission.OutcomeTerminal
-		case result.OK && result.State == webagent.StateIncomplete:
-			outcome = admission.OutcomeIncomplete
-		case result.OK:
-			outcome = admission.OutcomeCompleted
-		case result.Action != nil &&
-			(result.Action.Dispatch == webagent.DispatchUnknown ||
-				(result.Action.Dispatch == webagent.DispatchPerformed &&
-					result.State != webagent.StateTerminal)):
-			outcome = admission.OutcomeUnknown
-		}
-		var cooldown time.Time
-		if result.Error != nil && result.Error.RetryAt != "" {
-			cooldown, _ = time.Parse(time.RFC3339Nano, result.Error.RetryAt)
-		}
-		if releaseErr := admissionLease.Release(admission.Release{
-			Outcome:       outcome,
-			CooldownUntil: cooldown,
-		}); releaseErr != nil {
-			result = replaceFailure(
-				result,
-				"tripadvisor_admission_release_failed",
-				"internal",
-				"Tripadvisor provider admission outcome could not be persisted",
-				[]string{"cdp workflow agent tripadvisor doctor --json"},
-			)
-		}
-	}()
-
 	lease, err := config.Engine.Acquire(ctx, browserflow.AcquireRequest{
 		RunID:      runID,
 		Provider:   string(webagent.ProviderTripadvisor),
@@ -161,10 +92,6 @@ func runOwned(
 		Required: true,
 		State:    webagent.CleanupPending,
 		TargetID: lease.TargetID(),
-		RecoveryCommand: fmt.Sprintf(
-			"cdp workflow agent recovery close %s --json",
-			runID,
-		),
 	}
 	defer func() {
 		cleanup, closeErr := lease.Close(context.Background())
@@ -177,10 +104,6 @@ func runOwned(
 				Required: true,
 				State:    webagent.CleanupFailed,
 				TargetID: lease.TargetID(),
-				RecoveryCommand: fmt.Sprintf(
-					"cdp workflow agent recovery close %s --json",
-					runID,
-				),
 			}
 			result.Stage = webagent.StageCleanupPending
 			result = replaceFailure(
@@ -342,33 +265,12 @@ func reconcileAcquireFailure(
 		Required: true,
 		State:    webagent.CleanupFailed,
 		TargetID: record.TargetID,
-		RecoveryCommand: fmt.Sprintf(
-			"cdp workflow agent recovery close %s --json",
-			runID,
-		),
 	}, webagent.StageCleanupPending
 }
 
 func cleanupCommands(
-	runID string,
-	cleanup webagent.CleanupEvidence,
+	_ string,
+	_ webagent.CleanupEvidence,
 ) []string {
-	commands := []string{
-		"cdp workflow agent tripadvisor doctor --json",
-	}
-	if cleanup.State == webagent.CleanupPending ||
-		cleanup.State == webagent.CleanupFailed {
-		commands = append(
-			commands,
-			fmt.Sprintf(
-				"cdp workflow agent recovery inspect %s --json",
-				runID,
-			),
-			fmt.Sprintf(
-				"cdp workflow agent recovery close %s --json",
-				runID,
-			),
-		)
-	}
-	return commands
+	return nil
 }

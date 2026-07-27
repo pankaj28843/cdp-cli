@@ -3,12 +3,10 @@ package claude
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -25,7 +23,6 @@ type DeleteConfig struct {
 	Client       cdp.CommandClient
 	Engine       *browserflow.Engine
 	Journal      browserflow.Journal
-	Admission    *admission.Gate
 	BuildCommit  string
 	Timeout      time.Duration
 	PollInterval time.Duration
@@ -142,8 +139,7 @@ func DeleteConversation(
 	conversation := conversationRef(conversationID)
 	if config.Client == nil ||
 		config.Engine == nil ||
-		config.Journal == nil ||
-		config.Admission == nil {
+		config.Journal == nil {
 		return deleteFailure(
 			runID,
 			config.BuildCommit,
@@ -167,69 +163,7 @@ func DeleteConversation(
 		config.PollInterval = defaultDeletePollInterval
 	}
 
-	admissionLease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  string(webagent.ProviderClaude),
-		Operation: string(webagent.OperationConversationsDelete),
-		RunID:     runID,
-	})
-	if err != nil {
-		code := "claude_admission_unavailable"
-		errClass := "internal"
-		message := "Claude provider admission state is unavailable"
-		retryAt := ""
-		nextCommands := []string{}
-		var blocked *admission.BlockedError
-		if errors.As(err, &blocked) {
-			code = "claude_admission_blocked"
-			errClass = "admission"
-			message = blocked.Error()
-			if blocked.ResolutionNeeded {
-				nextCommands = []string{"cdp workflow agent admission status claude --json"}
-			} else {
-				retryAt = blocked.RetryAt.UTC().Format(time.RFC3339Nano)
-			}
-		}
-		return deleteFailure(
-			runID,
-			config.BuildCommit,
-			webagent.StagePlanned,
-			nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed,
-			code,
-			errClass,
-			message,
-			retryAt,
-			data,
-			conversation,
-			nextCommands,
-		)
-	}
 	var releaseCooldown time.Time
-	defer func() {
-		outcome := admission.OutcomeFailed
-		if result.OK && result.State == webagent.StateTerminal {
-			outcome = admission.OutcomeTerminal
-		} else if result.Action != nil &&
-			(result.Action.Dispatch == webagent.DispatchUnknown ||
-				(result.Action.Dispatch == webagent.DispatchPerformed &&
-					data.Postcondition == "")) {
-			outcome = admission.OutcomeUnknown
-		}
-		if err := admissionLease.Release(admission.Release{
-			Outcome:       outcome,
-			CooldownUntil: releaseCooldown,
-		}); err != nil {
-			result = replaceDeleteFailure(
-				result,
-				"claude_admission_release_failed",
-				"internal",
-				"Claude provider admission outcome could not be persisted",
-				"",
-			)
-		}
-	}()
-
 	lease, err := config.Engine.Acquire(ctx, browserflow.AcquireRequest{
 		RunID:      runID,
 		Provider:   string(webagent.ProviderClaude),
@@ -271,10 +205,9 @@ func DeleteConversation(
 		Created:   true,
 	}
 	pendingCleanup := webagent.CleanupEvidence{
-		Required:        true,
-		State:           webagent.CleanupPending,
-		TargetID:        lease.TargetID(),
-		RecoveryCommand: fmt.Sprintf("cdp workflow agent recovery close %s --json", runID),
+		Required: true,
+		State:    webagent.CleanupPending,
+		TargetID: lease.TargetID(),
 	}
 	defer func() {
 		cleanup, closeErr := lease.Close(context.Background())
@@ -287,10 +220,6 @@ func DeleteConversation(
 				Required: true,
 				State:    webagent.CleanupFailed,
 				TargetID: lease.TargetID(),
-				RecoveryCommand: fmt.Sprintf(
-					"cdp workflow agent recovery close %s --json",
-					runID,
-				),
 			}
 			result.Stage = webagent.StageCleanupPending
 			result = replaceDeleteFailure(

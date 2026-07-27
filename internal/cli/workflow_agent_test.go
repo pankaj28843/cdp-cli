@@ -8,11 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
-	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
-	"github.com/pankaj28843/cdp-cli/internal/webagent/alex"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/claude"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/gemini"
 )
@@ -56,196 +53,6 @@ func TestWorkflowAgentProvidersJSONNeedsNoBrowser(t *testing.T) {
 	}
 }
 
-func TestWorkflowAgentAdmissionResolutionRequiresExactSettledRecoveryEvidence(t *testing.T) {
-	stateDir := t.TempDir()
-	runID := "run-admission-unknown"
-	gate, err := admission.New(admission.Config{StateDir: stateDir})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
-	lease, err := gate.Acquire(context.Background(), admission.Request{
-		Provider: "chatgpt", Operation: "ask", RunID: runID,
-	})
-	if err != nil {
-		t.Fatalf("admission Acquire: %v", err)
-	}
-	if err := lease.Release(admission.Release{Outcome: admission.OutcomeUnknown}); err != nil {
-		t.Fatalf("release unknown admission: %v", err)
-	}
-	var statusOut, statusErr bytes.Buffer
-	code := cli.Execute(
-		context.Background(),
-		[]string{"--state-dir", stateDir, "workflow", "agent", "admission", "status", "chatgpt", "--json"},
-		&statusOut,
-		&statusErr,
-		cli.BuildInfo{},
-	)
-	if code != cli.ExitOK {
-		t.Fatalf("admission status exit=%d stdout=%s stderr=%s", code, statusOut.String(), statusErr.String())
-	}
-	var status struct {
-		OK                 bool `json:"ok"`
-		ResolutionRequired bool `json:"resolution_required"`
-	}
-	if err := json.Unmarshal(statusOut.Bytes(), &status); err != nil {
-		t.Fatalf("decode admission status: %v", err)
-	}
-	if !status.OK || !status.ResolutionRequired {
-		t.Fatalf("admission status = %+v, want quarantined unknown run", status)
-	}
-
-	var missingOut, missingErr bytes.Buffer
-	code = cli.Execute(
-		context.Background(),
-		[]string{"--state-dir", stateDir, "workflow", "agent", "admission", "resolve", "chatgpt", runID, "--json"},
-		&missingOut,
-		&missingErr,
-		cli.BuildInfo{},
-	)
-	if code != cli.ExitUsage || !strings.Contains(missingOut.String(), "admission_acknowledgement_required") {
-		t.Fatalf("unacknowledged resolution exit=%d stdout=%s stderr=%s", code, missingOut.String(), missingErr.String())
-	}
-
-	var noEvidenceOut, noEvidenceErr bytes.Buffer
-	code = cli.Execute(
-		context.Background(),
-		[]string{"--state-dir", stateDir, "workflow", "agent", "admission", "resolve", "chatgpt", runID, "--acknowledge-unknown", "--json"},
-		&noEvidenceOut,
-		&noEvidenceErr,
-		cli.BuildInfo{},
-	)
-	if code != cli.ExitCheckFailed || !strings.Contains(noEvidenceOut.String(), "admission_recovery_evidence_missing") {
-		t.Fatalf("evidence-free resolution exit=%d stdout=%s stderr=%s", code, noEvidenceOut.String(), noEvidenceErr.String())
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	journal, err := browserflow.NewFileJournal(stateDir)
-	if err != nil {
-		t.Fatalf("browserflow.NewFileJournal: %v", err)
-	}
-	if err := journal.Create(context.Background(), browserflow.Record{
-		SchemaVersion:      browserflow.RecoverySchemaVersion,
-		RunID:              runID,
-		Provider:           "chatgpt",
-		Operation:          "ask",
-		Phase:              browserflow.PhaseClosed,
-		ActionName:         "send",
-		Dispatch:           browserflow.DispatchUnknown,
-		ActionAttemptCount: 1,
-		RawInputCount:      1,
-		PendingPersisted:   true,
-		TargetID:           "owned-target",
-		Cleanup:            browserflow.CleanupClosed,
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	}); err != nil {
-		t.Fatalf("create settled recovery record: %v", err)
-	}
-
-	var resolveOut, resolveErr bytes.Buffer
-	code = cli.Execute(
-		context.Background(),
-		[]string{"--state-dir", stateDir, "workflow", "agent", "admission", "resolve", "chatgpt", runID, "--acknowledge-unknown", "--json"},
-		&resolveOut,
-		&resolveErr,
-		cli.BuildInfo{},
-	)
-	if code != cli.ExitOK {
-		t.Fatalf("admission resolve exit=%d stdout=%s stderr=%s", code, resolveOut.String(), resolveErr.String())
-	}
-	var resolved struct {
-		OK                 bool              `json:"ok"`
-		Outcome            admission.Outcome `json:"outcome"`
-		ResolutionRequired bool              `json:"resolution_required"`
-	}
-	if err := json.Unmarshal(resolveOut.Bytes(), &resolved); err != nil {
-		t.Fatalf("decode admission resolution: %v", err)
-	}
-	if !resolved.OK || resolved.Outcome != admission.OutcomeAcknowledged || resolved.ResolutionRequired {
-		t.Fatalf("admission resolution = %+v, want exact acknowledged release", resolved)
-	}
-}
-
-func TestWorkflowAgentAdmissionResolutionAcceptsExactAlexDirectActionEvidence(t *testing.T) {
-	stateDir := t.TempDir()
-	runID := "run-alex-unknown"
-	gate, err := admission.New(admission.Config{StateDir: stateDir})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
-	lease, err := gate.Acquire(context.Background(), admission.Request{
-		Provider: "alex", Operation: "ask", RunID: runID,
-	})
-	if err != nil {
-		t.Fatalf("admission Acquire: %v", err)
-	}
-	if err := lease.Release(admission.Release{Outcome: admission.OutcomeUnknown}); err != nil {
-		t.Fatalf("release unknown admission: %v", err)
-	}
-	alexStore, err := alex.NewStore(stateDir)
-	if err != nil {
-		t.Fatalf("alex.NewStore: %v", err)
-	}
-	if err := alexStore.SaveAskRecord(context.Background(), alex.AskRecord{
-		SchemaVersion:     alex.AskRecordSchemaVersion,
-		RunID:             runID,
-		PromptFingerprint: strings.Repeat("a", 64),
-		CourseID:          "system-design-interview",
-		ChapterID:         "design-a-rate-limiter",
-		State:             "unknown",
-		AttemptCount:      1,
-		RawInputCount:     1,
-		PendingPersisted:  true,
-		UpdatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-	}); err != nil {
-		t.Fatalf("save Ask Alex action evidence: %v", err)
-	}
-
-	var statusOut, statusErr bytes.Buffer
-	code := cli.Execute(
-		context.Background(),
-		[]string{"--state-dir", stateDir, "workflow", "agent", "admission", "status", "alex", "--json"},
-		&statusOut,
-		&statusErr,
-		cli.BuildInfo{},
-	)
-	if code != cli.ExitOK {
-		t.Fatalf("Ask Alex admission status exit=%d stdout=%s stderr=%s", code, statusOut.String(), statusErr.String())
-	}
-	if strings.Contains(statusOut.String(), "recovery inspect") ||
-		strings.Contains(statusOut.String(), "recovery close") ||
-		!strings.Contains(statusOut.String(), "admission resolve alex") {
-		t.Fatalf("Ask Alex direct-action recovery commands = %s", statusOut.String())
-	}
-
-	var out, errOut bytes.Buffer
-	code = cli.Execute(
-		context.Background(),
-		[]string{"--state-dir", stateDir, "workflow", "agent", "admission", "resolve", "alex", runID, "--acknowledge-unknown", "--json"},
-		&out,
-		&errOut,
-		cli.BuildInfo{},
-	)
-	if code != cli.ExitOK {
-		t.Fatalf("Ask Alex admission resolve exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
-	}
-	var resolved struct {
-		OK           bool   `json:"ok"`
-		Outcome      string `json:"outcome"`
-		EvidenceKind string `json:"evidence_kind"`
-		Cleanup      string `json:"cleanup"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &resolved); err != nil {
-		t.Fatalf("decode Ask Alex admission resolution: %v", err)
-	}
-	if !resolved.OK ||
-		resolved.Outcome != string(admission.OutcomeAcknowledged) ||
-		resolved.EvidenceKind != "direct_http_action_record" ||
-		resolved.Cleanup != string(browserflow.CleanupNotRequired) {
-		t.Fatalf("Ask Alex admission resolution = %+v", resolved)
-	}
-}
-
 func TestWorkflowAgentProviderCapabilitiesAreExplicit(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"workflow", "agent", "claude", "capabilities", "--json"}, &out, &errOut, cli.BuildInfo{})
@@ -282,7 +89,6 @@ func TestWorkflowAgentProviderCapabilitiesAreExplicit(t *testing.T) {
 		webagent.OperationConversationsDetail: true,
 		webagent.OperationConversationsAwait:  true,
 		webagent.OperationConversationsDelete: true,
-		webagent.OperationCalibrate:           true,
 	}
 	for _, capability := range capabilities.Operations {
 		if capability.Status == webagent.CapabilityUnsupported {
@@ -350,72 +156,6 @@ func TestWorkflowAgentClaudeDoctorNeedsNoBrowser(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "private-test-session") || strings.Contains(out.String(), "org-test") {
 		t.Fatalf("Claude doctor leaked private auth material: %s", out.String())
-	}
-}
-
-func TestWorkflowAgentClaudeCalibrationStatusNeedsNoBrowser(t *testing.T) {
-	stateDir := t.TempDir()
-	store, err := claude.NewCalibrationStore(stateDir)
-	if err != nil {
-		t.Fatalf("claude.NewCalibrationStore: %v", err)
-	}
-	if err := store.Save(context.Background(), claude.CalibrationStateRecord{
-		SchemaVersion:     claude.CalibrationStateSchemaVersion,
-		RunID:             "wa-calibration-cli-test",
-		State:             "deleted",
-		PromptFingerprint: strings.Repeat("a", 64),
-		TargetID:          "target-test",
-		ConversationID:    "conversation-test",
-		SendDispatch:      browserflow.DispatchPerformed,
-		DeleteDispatch:    browserflow.DispatchPerformed,
-		Postcondition:     "redirected_to_new_without_conversation_id",
-		TargetClosed:      true,
-		UpdatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-	}); err != nil {
-		t.Fatalf("save Claude calibration state: %v", err)
-	}
-
-	var out, errOut bytes.Buffer
-	code := cli.Execute(
-		context.Background(),
-		[]string{
-			"--state-dir", stateDir,
-			"workflow", "agent", "claude", "calibration", "status",
-			"--json",
-		},
-		&out,
-		&errOut,
-		cli.BuildInfo{Commit: "test-commit"},
-	)
-	if code != cli.ExitOK {
-		t.Fatalf(
-			"Claude calibration status exit=%d stdout=%s stderr=%s",
-			code,
-			out.String(),
-			errOut.String(),
-		)
-	}
-	var result webagent.Result
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
-		t.Fatalf("decode Claude calibration status: %v", err)
-	}
-	if !result.OK ||
-		result.Operation != webagent.OperationCalibrate ||
-		result.Evidence.BrowserMode != "none" ||
-		result.Evidence.ReadMode != "owner_only_local_state" ||
-		result.Cleanup.State != webagent.CleanupNotRequired {
-		t.Fatalf("Claude calibration status = %+v", result)
-	}
-	encodedData, err := json.Marshal(result.Data)
-	if err != nil {
-		t.Fatalf("marshal Claude calibration status data: %v", err)
-	}
-	var data claude.CalibrationStatusData
-	if err := json.Unmarshal(encodedData, &data); err != nil {
-		t.Fatalf("decode Claude calibration status data: %v", err)
-	}
-	if data.ConversationPresent || data.RecoveryRequired || !data.TargetClosed {
-		t.Fatalf("Claude calibration status data = %+v", data)
 	}
 }
 
@@ -514,66 +254,6 @@ func TestWorkflowAgentGeminiCapabilitiesAndDoctorNeedNoBrowser(t *testing.T) {
 	}
 }
 
-func TestWorkflowAgentGeminiCalibrationStatusNeedsNoBrowser(t *testing.T) {
-	stateDir := t.TempDir()
-	store, err := gemini.NewCalibrationStore(stateDir)
-	if err != nil {
-		t.Fatalf("gemini.NewCalibrationStore: %v", err)
-	}
-	if err := store.Save(context.Background(), gemini.CalibrationStateRecord{
-		SchemaVersion:     gemini.CalibrationStateSchemaVersion,
-		RunID:             "wa-gemini-calibration-cli-test",
-		State:             "deleted",
-		PromptFingerprint: strings.Repeat("c", 64),
-		TargetID:          "target-test",
-		ConversationID:    "1234567890abcdef",
-		SendDispatch:      browserflow.DispatchPerformed,
-		DeleteDispatch:    browserflow.DispatchPerformed,
-		Postcondition:     "redirected_to_app_without_conversation_id",
-		TargetClosed:      true,
-		UpdatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-	}); err != nil {
-		t.Fatalf("save Gemini calibration state: %v", err)
-	}
-
-	var out, errOut bytes.Buffer
-	code := cli.Execute(
-		context.Background(),
-		[]string{
-			"--state-dir", stateDir,
-			"workflow", "agent", "gemini", "calibration", "status",
-			"--json",
-		},
-		&out,
-		&errOut,
-		cli.BuildInfo{Commit: "test-commit"},
-	)
-	if code != cli.ExitOK {
-		t.Fatalf(
-			"Gemini calibration status exit=%d stdout=%s stderr=%s",
-			code,
-			out.String(),
-			errOut.String(),
-		)
-	}
-	var result webagent.Result
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
-		t.Fatalf("decode Gemini calibration status: %v", err)
-	}
-	var data gemini.CalibrationStatusData
-	encoded, _ := json.Marshal(result.Data)
-	if err := json.Unmarshal(encoded, &data); err != nil {
-		t.Fatalf("decode Gemini calibration status data: %v", err)
-	}
-	if !result.OK ||
-		result.Evidence.BrowserMode != "none" ||
-		data.RecoveryRequired ||
-		data.ConversationPresent ||
-		!data.TargetClosed {
-		t.Fatalf("Gemini calibration status = %+v data=%+v", result, data)
-	}
-}
-
 func TestWorkflowAgentGeminiAuthRefreshRejectsHeadlessBeforeBrowserAccess(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(
@@ -624,7 +304,6 @@ func TestDescribeWorkflowAgentIncludesSchemaExamples(t *testing.T) {
 		"workflow agent gemini capabilities",
 		"workflow agent gemini capabilities refresh",
 		"workflow agent gemini ask",
-		"workflow agent recovery",
 		"schema webagent-operation",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -654,53 +333,5 @@ func TestWebAgentSchemaCommands(t *testing.T) {
 		if !strings.Contains(out.String(), `"name": "`+name+`"`) {
 			t.Fatalf("schema %s output does not contain its name:\n%s", name, out.String())
 		}
-	}
-}
-
-func TestWorkflowAgentRecoveryInspectReadsExactSafeRecord(t *testing.T) {
-	stateDir := t.TempDir()
-	journal, err := browserflow.NewFileJournal(stateDir)
-	if err != nil {
-		t.Fatalf("NewFileJournal: %v", err)
-	}
-	now := time.Date(2026, 7, 25, 18, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
-	record := browserflow.Record{
-		SchemaVersion: browserflow.RecoverySchemaVersion,
-		RunID:         "run-inspect",
-		Provider:      "claude",
-		Operation:     "auth.refresh",
-		Phase:         browserflow.PhasePlanned,
-		Cleanup:       browserflow.CleanupNotRequired,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if err := journal.Create(context.Background(), record); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	var out, errOut bytes.Buffer
-	code := cli.Execute(
-		context.Background(),
-		[]string{"--state-dir", stateDir, "workflow", "agent", "recovery", "inspect", "run-inspect", "--json"},
-		&out,
-		&errOut,
-		cli.BuildInfo{},
-	)
-	if code != cli.ExitOK {
-		t.Fatalf("recovery inspect exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
-	}
-	var got struct {
-		OK            bool               `json:"ok"`
-		SchemaVersion string             `json:"schema_version"`
-		Record        browserflow.Record `json:"record"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("decode recovery inspect: %v", err)
-	}
-	if !got.OK ||
-		got.SchemaVersion != browserflow.RecoverySchemaVersion ||
-		got.Record.RunID != "run-inspect" ||
-		got.Record.Phase != browserflow.PhasePlanned {
-		t.Fatalf("recovery inspect = %+v", got)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -173,10 +172,6 @@ func newDeleteTestConfig(
 	if err != nil {
 		t.Fatalf("NewFileJournal: %v", err)
 	}
-	gate, err := admission.New(admission.Config{StateDir: stateDir})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
 	engine, err := browserflow.New(browserflow.Config{
 		Client:  client,
 		Journal: journal,
@@ -191,7 +186,6 @@ func newDeleteTestConfig(
 		Client:       client,
 		Engine:       engine,
 		Journal:      journal,
-		Admission:    gate,
 		BuildCommit:  "test-commit",
 		Timeout:      time.Second,
 		PollInterval: time.Millisecond,

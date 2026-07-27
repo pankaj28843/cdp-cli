@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/perplexity"
@@ -215,8 +214,8 @@ func (a *app) newWorkflowAgentPerplexityAskCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible Perplexity request",
-		Long: "Start one fresh Perplexity conversation in one fresh exact owned headed target, verify Search mode and the exact prompt, " +
-			"persist action_pending, press Enter once, acknowledge the same-target route, and return a terminal rendered or proven stored answer without resubmitting.",
+		Long: "Open one fresh headed tab, verify Search mode, submit the exact prompt with one Send, read the answer, " +
+			"preserve the observed conversation ID, and close only that tab.",
 		Example: "  printf '%s' 'Review this implementation.' | cdp workflow agent perplexity ask --stdin --json",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -381,7 +380,7 @@ func (a *app) newWorkflowAgentPerplexityConversationsAwaitCommand() *cobra.Comma
 	return &cobra.Command{
 		Use:   "await CONVERSATION_ID",
 		Short: "Await one exact stored Perplexity conversation without resubmitting",
-		Long: "Read only the exact acknowledged conversation until its stored assistant response is terminal or the bounded deadline expires. " +
+		Long: "Read only the exact identified conversation until its stored assistant response is terminal or the bounded deadline expires. " +
 			"This command never submits a prompt.",
 		Example: "  cdp --timeout 3m workflow agent perplexity conversations await <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
@@ -421,8 +420,8 @@ func (a *app) newWorkflowAgentPerplexityConversationsDeleteCommand() *cobra.Comm
 	return &cobra.Command{
 		Use:   "delete CONVERSATION_ID",
 		Short: "Visibly delete one exact Perplexity conversation",
-		Long: "Own one fresh headed target, open the exact conversation menu, persist action_pending, " +
-			"dispatch one raw-input Delete confirmation, prove the same-target home redirect, and exact-close the target.",
+		Long: "Own one fresh headed target, open the exact conversation menu, dispatch one raw-input Delete confirmation, " +
+			"prove the same-target home redirect, and exact-close the target.",
 		Example: "  cdp workflow agent perplexity conversations delete <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -471,288 +470,6 @@ func (a *app) newWorkflowAgentPerplexityConversationsDeleteCommand() *cobra.Comm
 	}
 }
 
-func (a *app) newWorkflowAgentPerplexityCalibrationCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "calibration",
-		Short: "Inspect or safely reconcile the last Perplexity calibration",
-		Long: "Read owner-only Perplexity calibration state without probing Chrome, or explicitly reconcile the exact recorded target " +
-			"and acknowledged disposable conversation without repeating an ambiguous action.",
-	}
-	cmd.AddCommand(a.newWorkflowAgentPerplexityCalibrationStatusCommand())
-	cmd.AddCommand(a.newWorkflowAgentPerplexityCalibrationCleanupCommand())
-	return cmd
-}
-
-func (a *app) newWorkflowAgentPerplexityCalibrationStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "status",
-		Short:   "Read the last Perplexity calibration state without probing Chrome",
-		Example: "  cdp workflow agent perplexity calibration status --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_state_unavailable",
-						"internal",
-						"Perplexity owner-only calibration state is unavailable",
-					),
-				)
-			}
-			store, err := perplexity.NewCalibrationStore(stateStore.Dir)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_state_unavailable",
-						"internal",
-						"Perplexity owner-only calibration state is unavailable",
-					),
-				)
-			}
-			journal, err := browserflow.NewFileJournal(stateStore.Dir)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_recovery_unavailable",
-						"internal",
-						"Perplexity exact-target recovery state is unavailable",
-					),
-				)
-			}
-			result := perplexity.CalibrationStatus(
-				ctx,
-				store,
-				journal,
-				a.build.Commit,
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("perplexity calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentPerplexityCalibrationCleanupCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "cleanup",
-		Short: "Reconcile only the exact resources from the last Perplexity calibration",
-		Long: "Close only the exact persisted owned target, then delete only a persisted acknowledged disposable conversation. " +
-			"Never repeat an ambiguous Send or delete action.",
-		Example: "  cdp --timeout 1m workflow agent perplexity calibration cleanup --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, time.Minute)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration cleanup: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_state_unavailable",
-						"internal",
-						"Perplexity owner-only calibration state is unavailable",
-					),
-				)
-			}
-			calibrationStore, err := perplexity.NewCalibrationStore(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration cleanup: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_state_unavailable",
-						"internal",
-						"Perplexity owner-only calibration state is unavailable",
-					),
-				)
-			}
-			journal, err := browserflow.NewFileJournal(stateStore.Dir)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration cleanup: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_recovery_unavailable",
-						"internal",
-						"Perplexity exact-target recovery state is unavailable",
-					),
-				)
-			}
-			status := perplexity.CalibrationStatus(
-				ctx,
-				calibrationStore,
-				journal,
-				a.build.Commit,
-			)
-			if !status.OK {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration cleanup: unavailable",
-					status,
-				)
-			}
-			if data, ok := status.Data.(perplexity.CalibrationStatusData); ok && !data.RecoveryRequired {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration cleanup: not required",
-					status,
-				)
-			}
-			if !a.selectHeadedProviderRuntime() {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration cleanup: headed browser required",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_headed_browser_required",
-						"usage",
-						"Perplexity calibration cleanup requires the headed browser runtime",
-					),
-				)
-			}
-			browserConfig, providerStore, unavailable :=
-				a.perplexityBrowserOperationConfig(
-					ctx,
-					webagent.OperationCalibrate,
-				)
-			if unavailable != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration cleanup: unavailable",
-					*unavailable,
-				)
-			}
-			result := perplexity.CleanupCalibration(
-				ctx,
-				perplexity.CalibrationCleanupConfig{
-					Store:       calibrationStore,
-					Journal:     browserConfig.Journal,
-					Engine:      browserConfig.Engine,
-					BuildCommit: a.build.Commit,
-					Delete: perplexity.DeleteConfig{
-						BrowserConfig: browserConfig,
-						Store:         providerStore,
-						Timeout:       45 * time.Second,
-					},
-				},
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf(
-					"perplexity calibration cleanup: %v",
-					result.State,
-				),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentPerplexityCalibrateCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "calibrate",
-		Short: "Run one disposable Perplexity create/capture/delete transaction",
-		Long: "Use one fresh owned headed target for one memory-only calibration prompt, one Send, " +
-			"terminal answer capture with exact prompt identity, exact same-target deletion, and exact close.",
-		Example: "  cdp --timeout 3m workflow agent perplexity calibrate --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, 4*time.Minute)
-			defer cancel()
-			if !a.selectHeadedProviderRuntime() {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration: headed browser required",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_headed_browser_required",
-						"usage",
-						"Perplexity calibration requires the headed browser runtime",
-					),
-				)
-			}
-			stateStore, err := a.stateStore()
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_state_unavailable",
-						"internal",
-						"Perplexity owner-only calibration state is unavailable",
-					),
-				)
-			}
-			calibrationStore, err := perplexity.NewCalibrationStore(
-				stateStore.Dir,
-			)
-			if err != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration: unavailable",
-					perplexityCalibrationUnavailable(
-						a.build.Commit,
-						"perplexity_calibration_state_unavailable",
-						"internal",
-						"Perplexity owner-only calibration state is unavailable",
-					),
-				)
-			}
-			browserConfig, providerStore, unavailable :=
-				a.perplexityBrowserOperationConfig(
-					ctx,
-					webagent.OperationCalibrate,
-				)
-			if unavailable != nil {
-				return a.renderWebAgentResult(
-					ctx,
-					"perplexity calibration: unavailable",
-					*unavailable,
-				)
-			}
-			timeout := a.opts.timeout
-			if timeout <= 0 {
-				timeout = 3 * time.Minute
-			}
-			result := perplexity.Calibrate(
-				ctx,
-				perplexity.CalibrationConfig{
-					BrowserConfig: browserConfig,
-					AuthStore:     providerStore,
-					Store:         calibrationStore,
-					Timeout:       timeout,
-				},
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("perplexity calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
 func (a *app) perplexityBrowserOperationConfig(
 	ctx context.Context,
 	operation webagent.Operation,
@@ -779,20 +496,8 @@ func (a *app) perplexityBrowserOperationConfig(
 	if err != nil {
 		result := perplexityUnavailableOperation(
 			a.build.Commit, operation,
-			"perplexity_recovery_unavailable", "internal",
-			"Perplexity exact-target recovery state is unavailable",
-		)
-		return perplexity.BrowserConfig{}, nil, &result
-	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateStore.Dir,
-		MinimumSpacing: perplexity.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := perplexityUnavailableOperation(
-			a.build.Commit, operation,
-			"perplexity_admission_unavailable", "internal",
-			"Perplexity provider admission state is unavailable",
+			"perplexity_lifecycle_state_unavailable", "internal",
+			"Perplexity exact-target lifecycle state is unavailable",
 		)
 		return perplexity.BrowserConfig{}, nil, &result
 	}
@@ -824,7 +529,6 @@ func (a *app) perplexityBrowserOperationConfig(
 		Client:      client,
 		Engine:      engine,
 		Journal:     journal,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 	}, store, nil
 }
@@ -850,21 +554,8 @@ func (a *app) perplexityReadConfig(
 		)
 		return perplexity.ReadConfig{}, &result
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateStore.Dir,
-		MinimumSpacing: perplexity.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := perplexity.UnavailableRead(
-			a.build.Commit, operation,
-			"perplexity_admission_unavailable", "internal",
-			"Perplexity provider admission state is unavailable",
-		)
-		return perplexity.ReadConfig{}, &result
-	}
 	return perplexity.ReadConfig{
 		Store:       store,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 		NewRenderedFallback: func(
 			ctx context.Context,
@@ -904,27 +595,6 @@ func (a *app) perplexityReadConfig(
 			}, closeClient, nil
 		},
 	}, nil
-}
-
-func perplexityCalibrationUnavailable(
-	buildCommit string,
-	code string,
-	errClass string,
-	message string,
-) webagent.Result {
-	result := perplexityUnavailableOperation(
-		buildCommit,
-		webagent.OperationCalibrate,
-		code,
-		errClass,
-		message,
-	)
-	result.Data = perplexity.CalibrationStatusData{
-		SchemaVersion:    perplexity.CalibrationStateSchemaVersion,
-		State:            "unavailable",
-		RecoveryRequired: true,
-	}
-	return result
 }
 
 func perplexityUnavailableOperation(

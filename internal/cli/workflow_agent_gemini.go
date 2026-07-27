@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/gemini"
@@ -195,8 +194,8 @@ func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible Gemini request",
-		Long: "Start one fresh Gemini conversation in one fresh exact owned headed target, verify the cached rendered mode and exact prompt, " +
-			"persist action_pending, press Enter once, acknowledge the same-target route, and read the terminal rendered answer without resubmitting.",
+		Long: "Open one fresh headed tab, verify the visible mode, submit the exact prompt with one Send, read the rendered answer, " +
+			"preserve the observed conversation ID, and close only that tab.",
 		Example: "  cdp workflow agent gemini ask 'Review this design.' --json\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent gemini ask --stdin --json",
 		Args: cobra.MaximumNArgs(1),
@@ -417,8 +416,8 @@ func (a *app) newWorkflowAgentGeminiConversationsDeleteCommand() *cobra.Command 
 	return &cobra.Command{
 		Use:   "delete CONVERSATION_ID",
 		Short: "Visibly delete one exact Gemini conversation",
-		Long: "Own one fresh headed target, prepare the exact Gemini confirmation dialog, persist action_pending, " +
-			"dispatch one raw-input confirmation, prove the same-target /app postcondition, and exact-close the target.",
+		Long: "Own one fresh headed target, prepare the exact Gemini confirmation dialog, dispatch one raw-input confirmation, " +
+			"prove the same-target /app postcondition, and exact-close the target.",
 		Example: "  cdp workflow agent gemini conversations delete <conversation-id> --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -459,231 +458,6 @@ func (a *app) newWorkflowAgentGeminiConversationsDeleteCommand() *cobra.Command 
 	}
 }
 
-func (a *app) newWorkflowAgentGeminiCalibrationCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "calibration",
-		Short: "Inspect or safely reconcile the last Gemini calibration",
-		Long: "Read owner-only Gemini calibration state without probing Chrome, or explicitly reconcile the exact recorded target " +
-			"and acknowledged disposable conversation without repeating an ambiguous action.",
-	}
-	cmd.AddCommand(a.newWorkflowAgentGeminiCalibrationStatusCommand())
-	cmd.AddCommand(a.newWorkflowAgentGeminiCalibrationCleanupCommand())
-	return cmd
-}
-
-func (a *app) newWorkflowAgentGeminiCalibrationStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "status",
-		Short:   "Read the last Gemini calibration state without probing Chrome",
-		Example: "  cdp workflow agent gemini calibration status --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_state_unavailable",
-					"internal",
-					"Gemini owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration: unavailable", result)
-			}
-			calibrationStore, err := gemini.NewCalibrationStore(stateStore.Dir)
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_state_unavailable",
-					"internal",
-					"Gemini owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration: unavailable", result)
-			}
-			journal, err := browserflow.NewFileJournal(stateStore.Dir)
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_recovery_unavailable",
-					"internal",
-					"Gemini exact-target recovery state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration: unavailable", result)
-			}
-			result := gemini.CalibrationStatus(
-				ctx,
-				calibrationStore,
-				journal,
-				a.build.Commit,
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("gemini calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentGeminiCalibrationCleanupCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "cleanup",
-		Short: "Reconcile only the exact resources from the last Gemini calibration",
-		Long: "Close only the exact persisted owned target, then delete only a persisted acknowledged disposable conversation. " +
-			"Never repeat an ambiguous Send or delete action.",
-		Example: "  cdp --timeout 1m workflow agent gemini calibration cleanup --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, time.Minute)
-			defer cancel()
-			stateStore, err := a.stateStore()
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_state_unavailable",
-					"internal",
-					"Gemini owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration cleanup: unavailable", result)
-			}
-			calibrationStore, err := gemini.NewCalibrationStore(stateStore.Dir)
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_state_unavailable",
-					"internal",
-					"Gemini owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration cleanup: unavailable", result)
-			}
-			journal, err := browserflow.NewFileJournal(stateStore.Dir)
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_recovery_unavailable",
-					"internal",
-					"Gemini exact-target recovery state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration cleanup: unavailable", result)
-			}
-			status := gemini.CalibrationStatus(
-				ctx,
-				calibrationStore,
-				journal,
-				a.build.Commit,
-			)
-			if !status.OK {
-				return a.renderWebAgentResult(ctx, "gemini calibration cleanup: unavailable", status)
-			}
-			if data, ok := status.Data.(gemini.CalibrationStatusData); ok &&
-				!data.RecoveryRequired {
-				return a.renderWebAgentResult(ctx, "gemini calibration cleanup: not required", status)
-			}
-			if !a.selectHeadedProviderRuntime() {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_headed_browser_required",
-					"usage",
-					"Gemini calibration cleanup requires the headed browser runtime",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration cleanup: headed browser required", result)
-			}
-			browserConfig, providerStore, unavailable := a.geminiBrowserOperationConfig(
-				ctx,
-				webagent.OperationCalibrate,
-			)
-			if unavailable != nil {
-				return a.renderWebAgentResult(ctx, "gemini calibration cleanup: unavailable", *unavailable)
-			}
-			result := gemini.CleanupCalibration(
-				ctx,
-				gemini.CalibrationCleanupConfig{
-					Store:       calibrationStore,
-					Journal:     browserConfig.Journal,
-					Engine:      browserConfig.Engine,
-					BuildCommit: a.build.Commit,
-					Delete: gemini.DeleteConfig{
-						BrowserConfig: browserConfig,
-						Store:         providerStore,
-						Timeout:       45 * time.Second,
-					},
-				},
-			)
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("gemini calibration cleanup: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
-func (a *app) newWorkflowAgentGeminiCalibrateCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "calibrate",
-		Short: "Run one disposable Gemini create/capture/delete transaction",
-		Long: "Use one fresh owned headed target for one memory-only calibration prompt, one Send, " +
-			"rendered answer capture, exact same-target deletion, and exact close.",
-		Example: "  cdp --timeout 3m workflow agent gemini calibrate --json",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, 4*time.Minute)
-			defer cancel()
-			if !a.selectHeadedProviderRuntime() {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_headed_browser_required",
-					"usage",
-					"Gemini calibration requires the headed browser runtime",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration: headed browser required", result)
-			}
-			stateStore, err := a.stateStore()
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_state_unavailable",
-					"internal",
-					"Gemini owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration: unavailable", result)
-			}
-			calibrationStore, err := gemini.NewCalibrationStore(stateStore.Dir)
-			if err != nil {
-				result := geminiCalibrationUnavailable(
-					a.build.Commit,
-					"gemini_calibration_state_unavailable",
-					"internal",
-					"Gemini owner-only calibration state is unavailable",
-				)
-				return a.renderWebAgentResult(ctx, "gemini calibration: unavailable", result)
-			}
-			browserConfig, providerStore, unavailable := a.geminiBrowserOperationConfig(
-				ctx,
-				webagent.OperationCalibrate,
-			)
-			if unavailable != nil {
-				return a.renderWebAgentResult(ctx, "gemini calibration: unavailable", *unavailable)
-			}
-			timeout := a.opts.timeout
-			if timeout <= 0 {
-				timeout = 3 * time.Minute
-			}
-			result := gemini.Calibrate(ctx, gemini.CalibrationConfig{
-				BrowserConfig: browserConfig,
-				AuthStore:     providerStore,
-				Store:         calibrationStore,
-				Timeout:       timeout,
-			})
-			return a.renderWebAgentResult(
-				ctx,
-				fmt.Sprintf("gemini calibration: %v", result.State),
-				result,
-			)
-		},
-	}
-}
-
 func (a *app) geminiBrowserOperationConfig(
 	ctx context.Context,
 	operation webagent.Operation,
@@ -715,23 +489,9 @@ func (a *app) geminiBrowserOperationConfig(
 		result := geminiUnavailableOperation(
 			a.build.Commit,
 			operation,
-			"gemini_recovery_unavailable",
+			"gemini_lifecycle_state_unavailable",
 			"internal",
-			"Gemini exact-target recovery state is unavailable",
-		)
-		return gemini.BrowserConfig{}, nil, &result
-	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       store.Dir,
-		MinimumSpacing: gemini.DefaultAdmissionSpacing,
-	})
-	if err != nil {
-		result := geminiUnavailableOperation(
-			a.build.Commit,
-			operation,
-			"gemini_admission_unavailable",
-			"internal",
-			"Gemini provider admission state is unavailable",
+			"Gemini exact-target lifecycle state is unavailable",
 		)
 		return gemini.BrowserConfig{}, nil, &result
 	}
@@ -767,30 +527,8 @@ func (a *app) geminiBrowserOperationConfig(
 		Client:      client,
 		Engine:      engine,
 		Journal:     journal,
-		Admission:   gate,
 		BuildCommit: a.build.Commit,
 	}, providerStore, nil
-}
-
-func geminiCalibrationUnavailable(
-	buildCommit string,
-	code string,
-	errClass string,
-	message string,
-) webagent.Result {
-	result := geminiUnavailableOperation(
-		buildCommit,
-		webagent.OperationCalibrate,
-		code,
-		errClass,
-		message,
-	)
-	result.Data = gemini.CalibrationStatusData{
-		SchemaVersion:    gemini.CalibrationStateSchemaVersion,
-		State:            "unavailable",
-		RecoveryRequired: true,
-	}
-	return result
 }
 
 func geminiUnavailableOperation(

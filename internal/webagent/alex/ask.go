@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -29,7 +27,6 @@ const (
 
 type AskConfig struct {
 	Store       *Store
-	Admission   *admission.Gate
 	HTTPClient  *http.Client
 	Timeout     time.Duration
 	IncludeRaw  bool
@@ -92,7 +89,7 @@ func Ask(
 			[]string{"Split the request into self-contained prompts below the limit."},
 		)
 	}
-	if config.Store == nil || config.Admission == nil {
+	if config.Store == nil {
 		return askFailure(
 			runID, config, webagent.StagePlanned, notPerformed,
 			"alex_state_unavailable", "internal",
@@ -203,54 +200,7 @@ func Ask(
 	}
 	request.Header.Set("Cookie", cookieHeader)
 
-	admissionLease, err := config.Admission.Acquire(
-		ctx,
-		admission.Request{
-			Provider:  string(webagent.ProviderAlex),
-			Operation: string(webagent.OperationAsk),
-			RunID:     runID,
-		},
-	)
-	if err != nil {
-		code := "alex_admission_unavailable"
-		errClass := "internal"
-		message := "Ask Alex provider admission state is unavailable"
-		retryAt := ""
-		nextCommands := []string{"cdp workflow agent alex doctor --json"}
-		var blocked *admission.BlockedError
-		if errors.As(err, &blocked) {
-			code = "alex_admission_blocked"
-			errClass = "admission"
-			message = blocked.Error()
-			if blocked.ResolutionNeeded {
-				nextCommands = []string{"cdp workflow agent admission status alex --json"}
-			} else {
-				retryAt = blocked.RetryAt.UTC().Format(time.RFC3339Nano)
-			}
-		}
-		return askFailure(
-			runID, config, webagent.StagePlanned, notPerformed,
-			code, errClass, message, retryAt, data,
-			nextCommands,
-		)
-	}
-	var releaseOutcome = admission.OutcomeFailed
 	var cooldownUntil time.Time
-	defer func() {
-		releaseErr := admissionLease.Release(admission.Release{
-			Outcome:       releaseOutcome,
-			CooldownUntil: cooldownUntil,
-		})
-		if releaseErr != nil {
-			result = replaceFailure(
-				result,
-				"alex_admission_release_failed",
-				"internal",
-				"Ask Alex provider admission outcome could not be persisted",
-				[]string{"cdp workflow agent alex doctor --json"},
-			)
-		}
-	}()
 
 	pendingRecord := AskRecord{
 		SchemaVersion:     AskRecordSchemaVersion,
@@ -303,7 +253,6 @@ func Ask(
 		pendingRecord.RawInputCount = 1
 		pendingRecord.UpdatedAt = nowFor(config.Now).Format(time.RFC3339Nano)
 		_ = config.Store.SaveAskRecord(context.Background(), pendingRecord)
-		releaseOutcome = admission.OutcomeUnknown
 		data.CompletionState = "dispatch_unknown"
 		return askFailure(
 			runID, config, webagent.StageActionDispatched, action,
@@ -322,7 +271,6 @@ func Ask(
 		context.Background(),
 		pendingRecord,
 	); err != nil {
-		releaseOutcome = admission.OutcomeUnknown
 		data.StatusCode = response.StatusCode
 		data.CompletionState = "performed_state_unavailable"
 		return askFailure(
@@ -341,7 +289,6 @@ func Ask(
 	data.StatusCode = response.StatusCode
 	data.Metadata["content_type"] = response.Header.Get("Content-Type")
 	if err != nil {
-		releaseOutcome = admission.OutcomeUnknown
 		data.CompletionState = "response_read_failed"
 		return askFailure(
 			runID, config, webagent.StageAcknowledged, action,
@@ -352,7 +299,6 @@ func Ask(
 		)
 	}
 	if len(rawBody) > maxAskResponseBytes {
-		releaseOutcome = admission.OutcomeIncomplete
 		data.CompletionState = "response_too_large"
 		return askFailure(
 			runID, config, webagent.StageAcknowledged, action,
@@ -377,19 +323,17 @@ func Ask(
 				defaultRateLimitWindow,
 			)
 		}
-		releaseOutcome = admission.OutcomeRateLimited
 		data.CompletionState = "rate_limited"
 		return askFailure(
 			runID, config, webagent.StageAcknowledged, action,
-			"alex_provider_cooldown", "provider",
-			"ByteByteGo returned HTTP 429 after one replay; the provider cooldown was persisted and the request was not retried",
+			"alex_rate_limited", "provider",
+			"ByteByteGo returned HTTP 429 after one request; this invocation was not retried",
 			cooldownUntil.Format(time.RFC3339Nano),
 			data,
-			[]string{"Wait until error.retry_at before another Ask Alex request."},
+			nil,
 		)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		releaseOutcome = admission.OutcomeFailed
 		data.CompletionState = "http_failure"
 		return askFailure(
 			runID, config, webagent.StageAcknowledged, action,
@@ -403,7 +347,6 @@ func Ask(
 		)
 	}
 	if strings.TrimSpace(data.Text) == "" {
-		releaseOutcome = admission.OutcomeIncomplete
 		data.CompletionState = "empty_response"
 		return askFailure(
 			runID, config, webagent.StageAcknowledged, action,
@@ -413,7 +356,6 @@ func Ask(
 			[]string{"cdp workflow agent alex doctor --json"},
 		)
 	}
-	releaseOutcome = admission.OutcomeTerminal
 	data.CompletionState = "terminal"
 	return operationSuccess(
 		runID,

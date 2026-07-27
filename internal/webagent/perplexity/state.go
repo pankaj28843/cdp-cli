@@ -28,7 +28,6 @@ const (
 	RelativeCapabilitiesPath         = "webagent/perplexity/capabilities.json"
 	DefaultAuthTTL                   = time.Hour
 	DefaultCapabilitiesTTL           = 14 * 24 * time.Hour
-	DefaultAdmissionSpacing          = time.Second
 )
 
 type RequestTemplate struct {

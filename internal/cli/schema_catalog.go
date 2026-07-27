@@ -44,11 +44,11 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "stage", Type: "string", Required: true, Description: "Last proven workflow stage, preserving whether provider I/O and irreversible action dispatch occurred."},
 				{Name: "error", Type: "webagent_error", Required: false, Description: "Typed failure code, class, safe message, retry safety, and optional retry time; remediation remains in next_commands."},
 				{Name: "action", Type: "webagent_action", Required: false, Description: "Irreversible-action evidence with tri-state dispatch, attempts, durable-pending proof, and retry safety."},
-				{Name: "conversation", Type: "webagent_conversation", Required: false, Description: "Exact provider conversation identity acknowledged by the same owned target."},
+				{Name: "conversation", Type: "webagent_conversation", Required: false, Description: "Exact provider conversation identity observed on the same owned target."},
 				{Name: "data", Type: "provider_specific", Required: true, Description: "Provider- or operation-specific result data which the shared envelope never reduces to counts."},
 				{Name: "evidence", Type: "webagent_evidence", Required: true, Description: "Run/build/read-mode and optional exact target/session lifecycle evidence."},
-				{Name: "cleanup", Type: "webagent_cleanup", Required: true, Description: "Cleanup state for the exact target and a safe recovery command when cleanup remains pending."},
-				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe capability, schema, recovery, or continuation commands valid for this exact state."},
+				{Name: "cleanup", Type: "webagent_cleanup", Required: true, Description: "Cleanup state and exact target identity."},
+				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe capability, schema, or continuation commands valid for this exact state."},
 			},
 		},
 		"webagent-capabilities": {
@@ -92,7 +92,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "attempt_count", Type: "number", Required: true, Description: "Bounded dispatcher calls; a proven not_performed outcome may permit another call."},
 				{Name: "raw_input_count", Type: "number", Required: true, Description: "Raw irreversible input attempts; this value must never exceed one per run."},
 				{Name: "retry_safe", Type: "boolean", Required: true, Description: "True only when dispatch is proven not_performed or no irreversible action is required."},
-				{Name: "pending_persisted", Type: "boolean", Required: true, Description: "True when owner-only action_pending state was durably persisted before raw input."},
+				{Name: "pending_persisted", Type: "boolean", Required: true, Description: "True when owner-only action intent was durably persisted before raw input."},
 			},
 		},
 		"webagent-error": {
@@ -108,7 +108,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"webagent-conversation": {
 			Name:        "webagent-conversation",
-			Description: "Exact provider conversation identity acknowledged by the owned target.",
+			Description: "Exact provider conversation identity observed on the owned target.",
 			Fields: []schemaField{
 				{Name: "id", Type: "string", Required: false, Description: "Provider conversation ID when observed."},
 				{Name: "url", Type: "string", Required: false, Description: "Provider conversation URL when observed."},
@@ -138,14 +138,13 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"webagent-cleanup": {
 			Name:        "webagent-cleanup",
-			Description: "Exact-target cleanup result and bounded recovery command.",
+			Description: "Exact-target cleanup result.",
 			Fields: []schemaField{
 				{Name: "required", Type: "boolean", Required: true, Description: "True when this operation created an owned target that must close."},
 				{Name: "state", Type: "string", Required: true, Description: "not_required, pending, closed, or failed."},
 				{Name: "target_id", Type: "string", Required: false, Description: "Exact workflow-owned target eligible for cleanup."},
 				{Name: "target_closed", Type: "boolean", Required: false, Description: "True only after the exact target is no longer listed."},
 				{Name: "close_proof", Type: "string", Required: false, Description: "Sanitized close or target-destroyed evidence."},
-				{Name: "recovery_command", Type: "string", Required: false, Description: "Safe command scoped to the exact recorded target; never a broad sibling-tab cleanup."},
 			},
 		},
 		"describe": {

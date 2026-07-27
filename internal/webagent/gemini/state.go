@@ -25,7 +25,6 @@ const (
 	RelativeCapabilitiesPath         = "webagent/gemini/capabilities.json"
 	DefaultAuthTTL                   = time.Hour
 	DefaultCapabilitiesTTL           = 24 * time.Hour
-	DefaultAdmissionSpacing          = time.Second
 )
 
 type AuthState struct {

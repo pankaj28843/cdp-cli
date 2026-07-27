@@ -726,25 +726,15 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow agent": {
 			"cdp workflow agent providers --json",
-			"cdp workflow agent admission status chatgpt --json",
 			"cdp workflow agent claude capabilities --json",
 			"cdp workflow agent claude doctor --json",
 			"cdp workflow agent claude auth refresh --json",
 			"printf '%s' 'Review this design.' | cdp workflow agent claude ask --stdin --json",
 			"cdp workflow agent claude conversations list --limit 30 --json",
-			"cdp --timeout 3m workflow agent claude calibrate --json",
-			"cdp workflow agent claude calibration status --json",
 			"cdp workflow agent gemini capabilities --json",
 			"cdp workflow agent gemini capabilities refresh --json",
 			"printf '%s' 'Review this design.' | cdp workflow agent gemini ask --stdin --json",
 			"cdp schema webagent-operation --json",
-		},
-		"cdp workflow agent admission status": {
-			"cdp workflow agent admission status chatgpt --json",
-		},
-		"cdp workflow agent admission resolve": {
-			"cdp workflow agent recovery close <run-id> --json",
-			"cdp workflow agent admission resolve chatgpt <run-id> --acknowledge-unknown --json",
 		},
 		"cdp workflow agent providers": {
 			"cdp workflow agent providers --json",
@@ -860,19 +850,6 @@ func commandExamples(path string) []string {
 	examples["cdp workflow agent claude conversations delete"] = []string{
 		"cdp workflow agent claude conversations delete <conversation-id> --json",
 	}
-	examples["cdp workflow agent claude calibrate"] = []string{
-		"cdp --timeout 3m workflow agent claude calibrate --json",
-	}
-	examples["cdp workflow agent claude calibration"] = []string{
-		"cdp workflow agent claude calibration status --json",
-		"cdp --timeout 1m workflow agent claude calibration cleanup --json",
-	}
-	examples["cdp workflow agent claude calibration status"] = []string{
-		"cdp workflow agent claude calibration status --json",
-	}
-	examples["cdp workflow agent claude calibration cleanup"] = []string{
-		"cdp --timeout 1m workflow agent claude calibration cleanup --json",
-	}
 	examples["cdp workflow agent gemini doctor"] = []string{
 		"cdp workflow agent gemini doctor --json",
 		"cdp workflow agent gemini auth refresh --json",
@@ -906,19 +883,6 @@ func commandExamples(path string) []string {
 	}
 	examples["cdp workflow agent gemini conversations delete"] = []string{
 		"cdp workflow agent gemini conversations delete <conversation-id> --json",
-	}
-	examples["cdp workflow agent gemini calibrate"] = []string{
-		"cdp --timeout 3m workflow agent gemini calibrate --json",
-	}
-	examples["cdp workflow agent gemini calibration"] = []string{
-		"cdp workflow agent gemini calibration status --json",
-		"cdp --timeout 1m workflow agent gemini calibration cleanup --json",
-	}
-	examples["cdp workflow agent gemini calibration status"] = []string{
-		"cdp workflow agent gemini calibration status --json",
-	}
-	examples["cdp workflow agent gemini calibration cleanup"] = []string{
-		"cdp --timeout 1m workflow agent gemini calibration cleanup --json",
 	}
 
 	return examples[path]

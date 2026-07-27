@@ -89,7 +89,7 @@ and PRPs first, then update this ledger with the public-safe plan identifier.
 - Frame-scoped execution must use explicit frame selection; ambiguous frame
   matches must fail before user code is evaluated.
 - Authenticated provider workflows must use daemon-backed exact-target leases,
-  the canonical browser-wide headed-input lease, owner-only recovery/admission
+  the canonical browser-wide headed-input lease and exact-target lifecycle
   state, and tri-state at-most-once dispatch. Provider capability metadata
   remains browser-free and an operation stays unsupported until installed and
   live acceptance proves it.

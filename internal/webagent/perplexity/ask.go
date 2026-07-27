@@ -853,3 +853,10 @@ func nowForAsk(config AskConfig) time.Time {
 	}
 	return time.Now().UTC()
 }
+
+func minDuration(left time.Duration, right time.Duration) time.Duration {
+	if left < right {
+		return left
+	}
+	return right
+}

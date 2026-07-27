@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -365,7 +364,6 @@ func browserReadFetch(
 ) (browserFetchResult, *readFailure) {
 	return browserFetch(
 		ctx,
-		config.Admission,
 		session,
 		template,
 		endpoint,
@@ -374,7 +372,6 @@ func browserReadFetch(
 }
 
 func readBrowserConfig(config BrowserConfig) BrowserConfig {
-	config.AdmissionProvider = chatGPTReadAdmissionProvider
 	return config
 }
 
@@ -527,29 +524,18 @@ func browserReadTemplate(
 
 func browserFetch(
 	ctx context.Context,
-	gate *admission.Gate,
 	session *cdp.PageSession,
 	template RequestTemplate,
 	endpoint string,
 	targetRoute string,
 ) (browserFetchResult, *readFailure) {
-	throttle, failure := acquireChatGPTThrottle(ctx, gate)
-	if failure != nil {
-		return browserFetchResult{}, failure
-	}
-	response, failure := browserFetchUnthrottled(
+	return browserFetchUnthrottled(
 		ctx,
 		session,
 		template,
 		endpoint,
 		targetRoute,
 	)
-	if err := releaseChatGPTThrottle(throttle, failure); err != nil {
-		return browserFetchResult{}, internalReadFailure(
-			"ChatGPT shared provider throttle outcome could not be persisted",
-		)
-	}
-	return response, failure
 }
 
 func browserFetchUnthrottled(

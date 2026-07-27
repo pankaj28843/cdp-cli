@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -94,7 +93,6 @@ func TestRefreshAuthObservesPrivateStateAndClosesOnlyExactTarget(t *testing.T) {
 	}
 	for _, path := range []string{
 		filepath.Join(stateDir, "webagent", "recovery", result.Evidence.RunID+".json"),
-		filepath.Join(stateDir, "webagent", "admission", "claude.json"),
 	} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -189,7 +187,7 @@ func TestRefreshAuthMissingEvidenceAndBudgetFailureRemainTypedAndClean(t *testin
 	})
 }
 
-func TestRefreshAuthCleanupFailureReturnsExactRecoveryCommand(t *testing.T) {
+func TestRefreshAuthCleanupFailureReturnsExactTargetEvidence(t *testing.T) {
 	stateDir := t.TempDir()
 	client := newAuthFakeClient("user-page")
 	client.fail["Target.closeTarget"] = errors.New("PRIVATE-CLOSE-CANARY")
@@ -203,7 +201,7 @@ func TestRefreshAuthCleanupFailureReturnsExactRecoveryCommand(t *testing.T) {
 		result.Error.Code != "claude_exact_target_cleanup_failed" ||
 		result.Cleanup.State != webagent.CleanupFailed ||
 		result.Cleanup.TargetID != "owned-1" ||
-		!strings.Contains(result.Cleanup.RecoveryCommand, result.Evidence.RunID) ||
+		len(result.NextCommands) != 0 ||
 		result.Evidence.Target == nil ||
 		result.Evidence.Target.Closed {
 		t.Fatalf("cleanup-failure result = %+v", result)
@@ -301,16 +299,6 @@ func newAuthRefreshTestConfig(
 	if err != nil {
 		t.Fatalf("browserflow.New: %v", err)
 	}
-	gate, err := admission.New(admission.Config{
-		StateDir:       stateDir,
-		MinimumSpacing: 0,
-		Now: func() time.Time {
-			return time.Date(2026, 7, 25, 18, 0, 0, 0, time.UTC)
-		},
-	})
-	if err != nil {
-		t.Fatalf("admission.New: %v", err)
-	}
 	store, err := NewStore(stateDir)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
@@ -319,7 +307,6 @@ func newAuthRefreshTestConfig(
 		Client:              client,
 		Engine:              engine,
 		Journal:             journal,
-		Admission:           gate,
 		Store:               store,
 		BuildCommit:         "test-commit",
 		ObservationTimeout:  20 * time.Millisecond,
