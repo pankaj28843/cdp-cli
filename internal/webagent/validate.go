@@ -224,6 +224,14 @@ func (e Evidence) Validate() error {
 }
 
 func (c CleanupEvidence) Validate() error {
+	if c.CloseAttemptCount < 0 || c.CloseAttemptCount > 2 {
+		return fmt.Errorf("cleanup close_attempt_count must be between 0 and 2")
+	}
+	switch c.FailurePhase {
+	case "", "deadline", "close", "poll", "close_and_poll", "unsettled":
+	default:
+		return fmt.Errorf("invalid cleanup failure_phase %q", c.FailurePhase)
+	}
 	switch c.State {
 	case CleanupNotRequired:
 		if c.Required {
@@ -241,8 +249,9 @@ func (c CleanupEvidence) Validate() error {
 		return fmt.Errorf("invalid cleanup state %q", c.State)
 	}
 	for name, value := range map[string]string{
-		"cleanup.target_id":   c.TargetID,
-		"cleanup.close_proof": c.CloseProof,
+		"cleanup.target_id":     c.TargetID,
+		"cleanup.failure_phase": c.FailurePhase,
+		"cleanup.close_proof":   c.CloseProof,
 	} {
 		if value != "" {
 			if err := validateSafeString(name, value, 4096); err != nil {

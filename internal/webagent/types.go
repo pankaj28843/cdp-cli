@@ -133,11 +133,15 @@ type Evidence struct {
 }
 
 type CleanupEvidence struct {
-	Required     bool         `json:"required"`
-	State        CleanupState `json:"state"`
-	TargetID     string       `json:"target_id,omitempty"`
-	TargetClosed bool         `json:"target_closed,omitempty"`
-	CloseProof   string       `json:"close_proof,omitempty"`
+	Required           bool         `json:"required"`
+	State              CleanupState `json:"state"`
+	TargetID           string       `json:"target_id,omitempty"`
+	TargetClosed       bool         `json:"target_closed,omitempty"`
+	CloseAttemptCount  int          `json:"close_attempt_count,omitempty"`
+	CloseSent          bool         `json:"close_sent,omitempty"`
+	TargetPollObserved bool         `json:"target_poll_observed,omitempty"`
+	FailurePhase       string       `json:"failure_phase,omitempty"`
+	CloseProof         string       `json:"close_proof,omitempty"`
 }
 
 type Result struct {

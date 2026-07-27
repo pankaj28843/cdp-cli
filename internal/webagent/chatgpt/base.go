@@ -101,9 +101,13 @@ func runOwned(
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{
-				Required: true,
-				State:    webagent.CleanupFailed,
-				TargetID: lease.TargetID(),
+				Required:           true,
+				State:              webagent.CleanupFailed,
+				TargetID:           lease.TargetID(),
+				CloseAttemptCount:  cleanup.CloseAttemptCount,
+				CloseSent:          cleanup.CloseSent,
+				TargetPollObserved: cleanup.TargetPollObserved,
+				FailurePhase:       cleanup.FailurePhase,
 			}
 			result.Stage = webagent.StageCleanupPending
 			result = replaceFailure(
@@ -118,11 +122,14 @@ func runOwned(
 		target.Closed = true
 		result.Evidence.Target = target
 		result.Cleanup = webagent.CleanupEvidence{
-			Required:     true,
-			State:        webagent.CleanupClosed,
-			TargetID:     lease.TargetID(),
-			TargetClosed: true,
-			CloseProof:   "exact_target_absent_after_close",
+			Required:           true,
+			State:              webagent.CleanupClosed,
+			TargetID:           lease.TargetID(),
+			TargetClosed:       true,
+			CloseAttemptCount:  cleanup.CloseAttemptCount,
+			CloseSent:          cleanup.CloseSent,
+			TargetPollObserved: cleanup.TargetPollObserved,
+			CloseProof:         "exact_target_absent_after_close",
 		}
 		result.Stage = webagent.StageClosed
 	}()
@@ -300,13 +307,17 @@ func replaceFailure(
 	message string,
 	nextCommands []string,
 ) webagent.Result {
+	retrySafe := true
+	if result.Action != nil {
+		retrySafe = result.Action.RetrySafe
+	}
 	result.OK = false
 	result.State = webagent.StateFailed
 	result.Error = &webagent.OperationError{
 		Code:      code,
 		ErrClass:  errClass,
 		Message:   message,
-		RetrySafe: true,
+		RetrySafe: retrySafe,
 	}
 	result.NextCommands = make([]string, 0, len(nextCommands))
 	result.NextCommands = append(result.NextCommands, nextCommands...)
@@ -369,9 +380,11 @@ func reconcileAcquireFailure(
 	runID string,
 ) (*webagent.TargetEvidence, webagent.CleanupEvidence, webagent.Stage) {
 	recoveryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 	cleanup, recoverErr := config.Engine.Recover(recoveryCtx, runID)
-	record, loadErr := config.Journal.Load(recoveryCtx, runID)
+	cancel()
+	loadCtx, cancelLoad := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLoad()
+	record, loadErr := config.Journal.Load(loadCtx, runID)
 	if loadErr != nil || record.TargetID == "" {
 		return nil, webagent.CleanupEvidence{
 			State: webagent.CleanupNotRequired,
@@ -386,17 +399,24 @@ func reconcileAcquireFailure(
 	}
 	if target.Closed {
 		return target, webagent.CleanupEvidence{
-			Required:     true,
-			State:        webagent.CleanupClosed,
-			TargetID:     record.TargetID,
-			TargetClosed: true,
-			CloseProof:   "exact_target_absent_after_recovery",
+			Required:           true,
+			State:              webagent.CleanupClosed,
+			TargetID:           record.TargetID,
+			TargetClosed:       true,
+			CloseAttemptCount:  cleanup.CloseAttemptCount,
+			CloseSent:          cleanup.CloseSent,
+			TargetPollObserved: cleanup.TargetPollObserved,
+			CloseProof:         "exact_target_absent_after_recovery",
 		}, webagent.StageClosed
 	}
 	return target, webagent.CleanupEvidence{
-		Required: true,
-		State:    webagent.CleanupFailed,
-		TargetID: record.TargetID,
+		Required:           true,
+		State:              webagent.CleanupFailed,
+		TargetID:           record.TargetID,
+		CloseAttemptCount:  cleanup.CloseAttemptCount,
+		CloseSent:          cleanup.CloseSent,
+		TargetPollObserved: cleanup.TargetPollObserved,
+		FailurePhase:       cleanup.FailurePhase,
 	}, webagent.StageCleanupPending
 }
 

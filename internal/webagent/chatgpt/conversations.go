@@ -822,7 +822,7 @@ func classifyConversationActivity(
 	switch normalized {
 	case "3", "IS_STREAMING", "STREAMING", "RUNNING", "IN_PROGRESS":
 		return conversationActivityActive, status
-	case "COMPLETE", "COMPLETED", "FINISHED", "FINISHED_SUCCESSFULLY",
+	case "4", "COMPLETE", "COMPLETED", "FINISHED", "FINISHED_SUCCESSFULLY",
 		"IDLE", "NOT_STREAMING":
 		return conversationActivityInactive, status
 	default:

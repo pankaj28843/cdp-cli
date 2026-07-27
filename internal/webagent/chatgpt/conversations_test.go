@@ -663,6 +663,12 @@ func TestConversationActivityClassifiesProviderEvidence(t *testing.T) {
 			wantStream: "COMPLETE",
 		},
 		{
+			name:      "observed numeric complete",
+			payload:   map[string]any{"async_status": float64(4)},
+			want:      conversationActivityInactive,
+			wantAsync: "4",
+		},
+		{
 			name:      "unknown scalar fails closed",
 			payload:   map[string]any{"async_status": "QUEUED_V2"},
 			want:      conversationActivityUnknown,
@@ -788,6 +794,87 @@ func TestExtractConversationTextAcceptsCurrentTerminalAssistant(t *testing.T) {
 
 	got := extractConversationText(payload)
 	if got.completionState != "terminal" || got.text != "Final answer." {
+		t.Fatalf("extracted = %#v", got)
+	}
+}
+
+func TestExtractConversationTextAcceptsObservedNumericComplete(t *testing.T) {
+	t.Parallel()
+
+	payload := map[string]any{
+		"async_status": float64(4),
+		"current_node": "answer",
+		"mapping": map[string]any{
+			"answer": map[string]any{
+				"parent": "prompt",
+				"message": map[string]any{
+					"author":    map[string]any{"role": "assistant"},
+					"status":    "finished_successfully",
+					"end_turn":  true,
+					"recipient": "all",
+					"content": map[string]any{
+						"content_type": "text",
+						"parts":        []any{"Final observed answer."},
+					},
+				},
+			},
+			"prompt": map[string]any{
+				"parent": "",
+				"message": map[string]any{
+					"author": map[string]any{"role": "user"},
+					"content": map[string]any{
+						"content_type": "text",
+						"parts":        []any{"Question"},
+					},
+				},
+			},
+		},
+	}
+
+	got := extractConversationText(payload)
+	if got.completionState != "terminal" ||
+		got.text != "Final observed answer." ||
+		got.metadata["provider_async_status"] != "4" {
+		t.Fatalf("extracted = %#v", got)
+	}
+}
+
+func TestExtractConversationTextKeepsNumericCompleteWithoutEndTurnIncomplete(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	payload := map[string]any{
+		"async_status": float64(4),
+		"current_node": "answer",
+		"mapping": map[string]any{
+			"answer": map[string]any{
+				"parent": "prompt",
+				"message": map[string]any{
+					"author": map[string]any{"role": "assistant"},
+					"status": "finished_successfully",
+					"content": map[string]any{
+						"content_type": "text",
+						"parts":        []any{"Answer without terminal proof."},
+					},
+				},
+			},
+			"prompt": map[string]any{
+				"parent": "",
+				"message": map[string]any{
+					"author": map[string]any{"role": "user"},
+					"content": map[string]any{
+						"content_type": "text",
+						"parts":        []any{"Question"},
+					},
+				},
+			},
+		},
+	}
+
+	got := extractConversationText(payload)
+	if got.completionState != "incomplete" ||
+		got.text != "Answer without terminal proof." {
 		t.Fatalf("extracted = %#v", got)
 	}
 }

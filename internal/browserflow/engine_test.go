@@ -111,7 +111,11 @@ func TestEngineAcquireDispatchCloseExactTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Close: %v; cleanup=%+v", err, cleanup)
 	}
-	if cleanup.State != CleanupClosed || !cleanup.CloseSent || !cleanup.TargetGone {
+	if cleanup.State != CleanupClosed ||
+		cleanup.CloseAttemptCount != 1 ||
+		!cleanup.CloseSent ||
+		!cleanup.TargetPollObserved ||
+		!cleanup.TargetGone {
 		t.Fatalf("cleanup = %+v", cleanup)
 	}
 
@@ -883,7 +887,14 @@ func TestCloseFailureLeavesExactRecoveryRecordThenRecoverySettles(t *testing.T) 
 	}
 	client.fail["Target.closeTarget"] = errors.New("synthetic close failure")
 	cleanup, err := lease.Close(context.Background())
-	if err == nil || cleanup.State != CleanupFailed || cleanup.TargetGone {
+	if err == nil ||
+		cleanup.State != CleanupFailed ||
+		cleanup.CloseAttemptCount != 2 ||
+		!cleanup.TargetPollObserved ||
+		cleanup.FailurePhase != "close_and_poll" ||
+		cleanup.CloseError == "" ||
+		cleanup.PollError == "" ||
+		cleanup.TargetGone {
 		t.Fatalf("Close cleanup=%+v err=%v", cleanup, err)
 	}
 	record, loadErr := journal.Load(context.Background(), "run-close-failure")
@@ -911,6 +922,52 @@ func TestCloseFailureLeavesExactRecoveryRecordThenRecoverySettles(t *testing.T) 
 	record, loadErr = journal.Load(context.Background(), "run-close-failure")
 	if loadErr != nil || record.Phase != PhaseClosed || record.Cleanup != CleanupClosed {
 		t.Fatalf("settled recovery record=%+v err=%v", record, loadErr)
+	}
+}
+
+func TestCloseRetriesOnlyTheOwnedTargetAfterTransientFailure(t *testing.T) {
+	client := newFakeBrowserClient("user-page")
+	engine, _ := newTestEngine(t, client, Config{
+		CloseTimeout:      100 * time.Millisecond,
+		ClosePollInterval: time.Millisecond,
+	})
+	lease, err := engine.Acquire(context.Background(), AcquireRequest{
+		RunID:      "run-close-transient",
+		Provider:   "chatgpt",
+		Operation:  "conversations.detail",
+		InitialURL: "https://chatgpt.test/",
+	})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := lease.MarkPrepared(context.Background()); err != nil {
+		t.Fatalf("MarkPrepared: %v", err)
+	}
+	if err := lease.MarkIncomplete(context.Background()); err != nil {
+		t.Fatalf("MarkIncomplete: %v", err)
+	}
+	client.failOnce["Target.closeTarget"] = errors.New(
+		"synthetic transient close failure",
+	)
+
+	cleanup, err := lease.Close(context.Background())
+	if err != nil ||
+		cleanup.State != CleanupClosed ||
+		cleanup.CloseAttemptCount != 2 ||
+		!cleanup.CloseSent ||
+		!cleanup.TargetPollObserved ||
+		!cleanup.TargetGone {
+		t.Fatalf("Close cleanup=%+v err=%v", cleanup, err)
+	}
+	if client.hasTarget("owned-1") || !client.hasTarget("user-page") {
+		t.Fatalf(
+			"targets after retry: owned=%v user=%v",
+			client.hasTarget("owned-1"),
+			client.hasTarget("user-page"),
+		)
+	}
+	if got := client.callCount("Target.closeTarget"); got != 2 {
+		t.Fatalf("Target.closeTarget calls = %d, want 2", got)
 	}
 }
 
@@ -984,7 +1041,11 @@ func TestTargetCrashAndCanceledCallerStillSettleExactCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cleanup, err := lease.Close(ctx)
-	if err != nil || cleanup.State != CleanupClosed || !cleanup.TargetGone {
+	if err != nil ||
+		cleanup.State != CleanupClosed ||
+		cleanup.CloseAttemptCount != 1 ||
+		!cleanup.TargetPollObserved ||
+		!cleanup.TargetGone {
 		t.Fatalf("Close cleanup=%+v err=%v", cleanup, err)
 	}
 	if !client.hasTarget("user-page") {
@@ -1178,19 +1239,21 @@ func newEngineWithJournal(t *testing.T, client *fakeBrowserClient, journal Journ
 }
 
 type fakeBrowserClient struct {
-	mu      sync.Mutex
-	targets map[string]cdp.TargetInfo
-	trace   []string
-	counts  map[string]int
-	fail    map[string]error
-	nextID  int
+	mu       sync.Mutex
+	targets  map[string]cdp.TargetInfo
+	trace    []string
+	counts   map[string]int
+	fail     map[string]error
+	failOnce map[string]error
+	nextID   int
 }
 
 func newFakeBrowserClient(targetIDs ...string) *fakeBrowserClient {
 	client := &fakeBrowserClient{
-		targets: map[string]cdp.TargetInfo{},
-		counts:  map[string]int{},
-		fail:    map[string]error{},
+		targets:  map[string]cdp.TargetInfo{},
+		counts:   map[string]int{},
+		fail:     map[string]error{},
+		failOnce: map[string]error{},
 	}
 	for _, targetID := range targetIDs {
 		client.targets[targetID] = cdp.TargetInfo{
@@ -1206,6 +1269,11 @@ func (c *fakeBrowserClient) Call(ctx context.Context, method string, params any,
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.counts[method]++
+	if err := c.failOnce[method]; err != nil {
+		delete(c.failOnce, method)
+		c.trace = append(c.trace, method)
+		return err
+	}
 	if err := c.fail[method]; err != nil {
 		c.trace = append(c.trace, method)
 		return err

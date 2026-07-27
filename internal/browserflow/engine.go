@@ -85,13 +85,16 @@ type DispatchOutcome struct {
 }
 
 type CleanupResult struct {
-	State       CleanupState `json:"state"`
-	TargetID    string       `json:"target_id"`
-	DetachError string       `json:"detach_error,omitempty"`
-	CloseSent   bool         `json:"close_sent"`
-	TargetGone  bool         `json:"target_gone"`
-	CloseError  string       `json:"close_error,omitempty"`
-	PollError   string       `json:"poll_error,omitempty"`
+	State              CleanupState `json:"state"`
+	TargetID           string       `json:"target_id"`
+	DetachError        string       `json:"detach_error,omitempty"`
+	CloseAttemptCount  int          `json:"close_attempt_count"`
+	CloseSent          bool         `json:"close_sent"`
+	TargetPollObserved bool         `json:"target_poll_observed"`
+	TargetGone         bool         `json:"target_gone"`
+	FailurePhase       string       `json:"failure_phase,omitempty"`
+	CloseError         string       `json:"close_error,omitempty"`
+	PollError          string       `json:"poll_error,omitempty"`
 }
 
 func (r CleanupResult) Error() error {
@@ -673,38 +676,96 @@ func (e *Engine) closeExactTarget(session *cdp.PageSession, targetID string) Cle
 		State:    CleanupFailed,
 		TargetID: targetID,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), e.closeTimeout)
-	defer cancel()
+	deadline := time.Now().Add(e.closeTimeout)
 
 	if session != nil {
-		if err := session.Close(ctx); err != nil {
+		detachBudget := time.Until(deadline) / 4
+		if detachBudget <= 0 {
+			detachBudget = time.Nanosecond
+		}
+		detachCtx, cancelDetach := context.WithTimeout(
+			context.Background(),
+			detachBudget,
+		)
+		if err := session.Close(detachCtx); err != nil {
 			result.DetachError = err.Error()
 		}
+		cancelDetach()
 	}
-	if err := cdp.CloseTargetWithClient(ctx, e.client, targetID); err != nil {
-		result.CloseError = err.Error()
-	} else {
-		result.CloseSent = true
-	}
-	gone, err := waitTargetGone(ctx, e.client, targetID, e.closePollInterval)
-	result.TargetGone = gone
-	if err != nil {
-		result.PollError = err.Error()
-	}
-	if gone {
-		result.State = CleanupClosed
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			result.FailurePhase = "deadline"
+			break
+		}
+		attemptBudget := remaining / time.Duration(3-attempt)
+		if attemptBudget <= 0 {
+			attemptBudget = remaining
+		}
+		result.CloseAttemptCount = attempt
 		result.CloseError = ""
 		result.PollError = ""
+		result.FailurePhase = ""
+		attemptCtx, cancelAttempt := context.WithTimeout(
+			context.Background(),
+			attemptBudget,
+		)
+		if err := cdp.CloseTargetWithClient(
+			attemptCtx,
+			e.client,
+			targetID,
+		); err != nil {
+			result.CloseError = err.Error()
+		} else {
+			result.CloseSent = true
+		}
+		gone, observed, err := waitTargetGone(
+			attemptCtx,
+			e.client,
+			targetID,
+			e.closePollInterval,
+		)
+		cancelAttempt()
+		result.TargetPollObserved = result.TargetPollObserved || observed
+		result.TargetGone = gone
+		if err != nil {
+			result.PollError = err.Error()
+		}
+		if gone {
+			result.State = CleanupClosed
+			result.FailurePhase = ""
+			result.CloseError = ""
+			result.PollError = ""
+			return result
+		}
+		switch {
+		case result.CloseError != "" && result.PollError != "":
+			result.FailurePhase = "close_and_poll"
+		case result.CloseError != "":
+			result.FailurePhase = "close"
+		case result.PollError != "":
+			result.FailurePhase = "poll"
+		default:
+			result.FailurePhase = "unsettled"
+		}
 	}
 	return result
 }
 
-func waitTargetGone(ctx context.Context, client cdp.CommandClient, targetID string, poll time.Duration) (bool, error) {
+func waitTargetGone(
+	ctx context.Context,
+	client cdp.CommandClient,
+	targetID string,
+	poll time.Duration,
+) (bool, bool, error) {
+	observed := false
 	for {
 		targets, err := cdp.ListTargetsWithClient(ctx, client)
 		if err != nil {
-			return false, err
+			return false, observed, err
 		}
+		observed = true
 		found := false
 		for _, target := range targets {
 			if target.TargetID == targetID {
@@ -713,11 +774,11 @@ func waitTargetGone(ctx context.Context, client cdp.CommandClient, targetID stri
 			}
 		}
 		if !found {
-			return true, nil
+			return true, observed, nil
 		}
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return false, observed, ctx.Err()
 		case <-time.After(poll):
 		}
 	}
