@@ -133,13 +133,13 @@ func TestSendDispatcherFailsClosedWhenProviderRenamesAttachment(t *testing.T) {
 	}
 }
 
-func TestSendDispatcherObservesCoordinatesImmediatelyBeforeRawSend(t *testing.T) {
+func TestSendDispatcherAllowsClearedInputBeforeRawSend(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluations: []json.RawMessage{
 			exactSelectionGuard("Pro", ""),
 			json.RawMessage(`{
 				"ok":true,
-				"input_match":true,
+				"input_match":false,
 				"rendered_attachment_added":true,
 				"rendered_name_match":true,
 				"rendered_name":"review.zip",

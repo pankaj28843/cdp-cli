@@ -543,7 +543,7 @@ func Ask(
 				)
 			}
 			if dispatcher == nil {
-				guardErr := prepareSelectionGuardAtSend(
+				if err := prepareSelectionGuardAtSend(
 					ctx,
 					session,
 					data.Intelligence,
@@ -553,44 +553,15 @@ func Ask(
 						finalSelectionGuardTimeout,
 					),
 					config.PollInterval,
-				)
-				var guardedAttachment attachmentObservation
-				if guardErr == nil {
-					guardErr = observeExpectedAttachment(
-						ctx,
-						session,
-						expectedAttachment,
-						&guardedAttachment,
-					)
-				}
-				var guardedComposer composerObservation
-				if guardErr == nil {
-					guardErr = observeComposer(
-						ctx,
-						session,
-						prompt,
-						data.Intelligence,
-						&guardedComposer,
-					)
-				}
-				if guardErr != nil ||
-					!guardedAttachment.OK ||
-					!composerReadyForSend(
-						guardedComposer,
-						data.Intelligence,
-					) {
+				); err != nil {
 					_ = lease.MarkIncomplete(context.Background())
 					return askFailure(
 						runID, config, webagent.StageAttached,
 						target, pending, notPerformed, nil,
 						"chatgpt_final_send_guard_failed", "provider",
-						"ChatGPT final thinking, model, attachment, or composer guard changed before Send",
+						"ChatGPT final thinking or model guard changed before Send",
 						"", data, cleanupCommands(runID, pending),
 					)
-				}
-				if data.Attachment != nil {
-					data.Attachment.SendReadyAfterUpload =
-						guardedComposer.SendReady
 				}
 			}
 			if err := lease.MarkPrepared(ctx); err != nil {

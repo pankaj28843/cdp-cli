@@ -496,7 +496,7 @@ func observeAttachment(
 	  const renderedAttachmentAdded =
 	    candidates.length === preflightAttachmentCount + 1;
 	  return {
-	    ok: !duplicateRejected && activeComposer && inputMatch &&
+	    ok: !duplicateRejected && activeComposer &&
 	      renderedAttachmentAdded && renderedNameMatch && !processing,
 	    input_match: inputMatch,
 	    rendered_attachment_added: renderedAttachmentAdded,
