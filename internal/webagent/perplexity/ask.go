@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -161,28 +162,10 @@ func Ask(
 	}
 	now := nowForAsk(config)
 	auth := config.Store.AuthStatus(ctx, now, DefaultAuthTTL)
-	if !auth.Ready {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"perplexity_auth_"+auth.State, "auth",
-			"Perplexity auth evidence is not ready before Send", "", data,
-			[]string{"cdp workflow agent perplexity auth refresh --json"},
-		)
-	}
+	data.Metadata["cached_auth_state"] = auth.State
 	template, err := config.Store.LoadTemplate(ctx)
-	if err != nil {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"perplexity_auth_state_unreadable", "internal",
-			"Perplexity owner-only request template could not be loaded before Send",
-			"", data,
-			[]string{"cdp workflow agent perplexity auth refresh --json"},
-		)
-	}
+	templateAvailable := auth.Ready && err == nil
+	data.Metadata["cached_read_template_available"] = templateAvailable
 
 	return runOwned(
 		ctx,
@@ -209,13 +192,15 @@ func Ask(
 				)
 			}
 			var composer composerObservation
-			composerAttempts, err := pollUntil(
+			readiness, readinessErr := authreadiness.WaitForEvidence(
 				ctx,
+				session,
+				authreadiness.MinimumAttempts,
 				config.ComposerTimeout,
 				config.PollInterval,
-				func() (bool, error) {
+				func(observationCtx context.Context) (bool, error) {
 					if err := observeComposer(
-						ctx,
+						observationCtx,
 						session,
 						"",
 						&composer,
@@ -231,14 +216,25 @@ func Ask(
 						composer.ConversationID == "", nil
 				},
 			)
-			data.Metadata["composer_attempts"] = composerAttempts
-			if err != nil {
+			data.Metadata["composer_readiness_attempt"] = readiness.Attempt
+			data.Metadata["composer_readiness_stage"] = readiness.Stage
+			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
-					"perplexity_composer_not_ready", "provider",
-					"Perplexity fresh Search composer did not become ready before Send",
+					"perplexity_composer_readiness_failed", "connection",
+					"Perplexity composer readiness could not complete its bounded load, reload, hard-reload, and final grace sequence",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				return askFailure(
+					runID, config, webagent.StageAttached, target, pending,
+					notPerformed, nil,
+					"perplexity_composer_evidence_not_observed", "provider",
+					"Perplexity fresh Search composer was not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
@@ -421,18 +417,29 @@ func Ask(
 				}
 			}
 
-			stored, storedFailure := fetchConversationDetail(
-				ctx,
-				ReadConfig{
-					Store:       config.Store,
-					HTTPClient:  config.HTTPClient,
-					BuildCommit: config.BuildCommit,
-					Now:         config.Now,
-				},
-				template,
-				conversationID,
-			)
-			data.Metadata["stored_detail_attempts"] = 1
+			stored := ConversationDetailData{}
+			var storedFailure *readFailure
+			if templateAvailable {
+				stored, storedFailure = fetchConversationDetail(
+					ctx,
+					ReadConfig{
+						Store:       config.Store,
+						HTTPClient:  config.HTTPClient,
+						BuildCommit: config.BuildCommit,
+						Now:         config.Now,
+					},
+					template,
+					conversationID,
+				)
+				data.Metadata["stored_detail_attempts"] = 1
+			} else {
+				storedFailure = &readFailure{
+					code:     "perplexity_browser_context_required",
+					errClass: "auth",
+					message:  "Perplexity cached request template was unavailable",
+				}
+				data.Metadata["stored_detail_attempts"] = 0
+			}
 			if storedFailure == nil &&
 				stored.CompletionState == "terminal" &&
 				strings.TrimSpace(stored.Text) != "" {

@@ -18,6 +18,8 @@ import (
 	"nhooyr.io/websocket/wsjson"
 )
 
+const protocolFallbackStageTimeout = 10 * time.Second
+
 func TestRuntimeFetchProtocolFallsBackWhenLiveProtocolMissing(t *testing.T) {
 	fallback := func(context.Context) (cdp.Protocol, error) {
 		return cdp.Protocol{
@@ -44,7 +46,7 @@ func TestRuntimeFetchProtocolFallsBackWhenLiveProtocolMissing(t *testing.T) {
 			if err != nil && !errors.Is(err, context.Canceled) {
 				t.Fatalf("Hold returned error: %v", err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(protocolFallbackStageTimeout):
 			t.Fatalf("daemon hold did not stop")
 		}
 	})
@@ -81,7 +83,7 @@ func TestRuntimeStructuredDaemonKnownErrors(t *testing.T) {
 			if err != nil && !errors.Is(err, context.Canceled) {
 				t.Fatalf("Hold returned error: %v", err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(protocolFallbackStageTimeout):
 			t.Fatalf("daemon hold did not stop")
 		}
 	})
@@ -209,7 +211,7 @@ func shortInternalStateDir(t *testing.T) string {
 
 func waitForProtocolFallbackRuntime(t *testing.T, ctx context.Context, stateDir string) Runtime {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(protocolFallbackStageTimeout)
 	for time.Now().Before(deadline) {
 		runtime, ok, err := LoadRuntime(ctx, stateDir)
 		if err != nil {

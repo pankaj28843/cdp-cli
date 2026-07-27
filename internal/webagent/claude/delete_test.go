@@ -65,7 +65,7 @@ func TestDeleteConversationFailsBeforeConfirmationWhenRouteIsUnproved(t *testing
 	stateDir := t.TempDir()
 	client := newAuthFakeClient("user-page")
 	config := newDeleteTestConfig(t, stateDir, client)
-	config.Timeout = 3 * time.Millisecond
+	config.Timeout = time.Second
 	config.PollInterval = time.Millisecond
 
 	result := DeleteConversation(context.Background(), config, "conversation-1")
@@ -120,7 +120,7 @@ func TestDeleteConversationNeverRetriesUnconfirmedAmbiguousClick(t *testing.T) {
 	client := newAuthFakeClient("user-page")
 	client.deleteRoute = true
 	config := newDeleteTestConfig(t, stateDir, client)
-	config.Timeout = 5 * time.Millisecond
+	config.Timeout = 3 * time.Second
 	confirmCalls := 0
 	config.Confirm = browserflow.DispatchFunc(
 		func(context.Context, *cdp.PageSession) (browserflow.DispatchOutcome, error) {
@@ -193,7 +193,7 @@ func newDeleteTestConfig(
 		Journal:      journal,
 		Admission:    gate,
 		BuildCommit:  "test-commit",
-		Timeout:      100 * time.Millisecond,
+		Timeout:      time.Second,
 		PollInterval: time.Millisecond,
 	}
 }

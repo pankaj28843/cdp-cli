@@ -345,3 +345,33 @@ func TestSubObservationContextExpiresBeforeParentStage(t *testing.T) {
 		)
 	}
 }
+
+func TestReadinessPollDelayUsesCappedLinearBackoffAndRemainingBudget(
+	t *testing.T,
+) {
+	interval := 10 * time.Millisecond
+	for _, test := range []struct {
+		name      string
+		poll      int
+		remaining time.Duration
+		want      time.Duration
+	}{
+		{name: "first", poll: 1, remaining: time.Second, want: 10 * time.Millisecond},
+		{name: "second", poll: 2, remaining: time.Second, want: 20 * time.Millisecond},
+		{name: "third", poll: 3, remaining: time.Second, want: 30 * time.Millisecond},
+		{name: "fourth", poll: 4, remaining: time.Second, want: 40 * time.Millisecond},
+		{name: "later capped", poll: 9, remaining: time.Second, want: 40 * time.Millisecond},
+		{name: "remaining clamps", poll: 4, remaining: 15 * time.Millisecond, want: 15 * time.Millisecond},
+		{name: "exhausted", poll: 1, remaining: 0, want: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := readinessPollDelay(
+				interval,
+				test.poll,
+				test.remaining,
+			); got != test.want {
+				t.Fatalf("readinessPollDelay() = %s, want %s", got, test.want)
+			}
+		})
+	}
+}

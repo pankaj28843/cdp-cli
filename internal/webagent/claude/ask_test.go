@@ -98,18 +98,94 @@ func TestAskSubmitsOnceAcknowledgesReadsAndClosesExactTarget(t *testing.T) {
 	}
 }
 
+func TestAskUsesLiveComposerAndRenderedDetailWhenTemplateCacheIsUnavailable(
+	t *testing.T,
+) {
+	const prompt = "Review without trusting cached auth age"
+	for _, test := range []struct {
+		name    string
+		missing bool
+		expired bool
+	}{
+		{name: "missing", missing: true},
+		{name: "expired", expired: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			client := newAuthFakeClient("user-page")
+			client.ackConversationID = "conversation-rendered"
+			client.renderedDetailText = "Rendered terminal answer."
+			client.renderedDetailPrompt = prompt
+			config := newAskTestConfig(t, stateDir, client)
+			if test.missing {
+				if err := os.Remove(config.Store.Path()); err != nil {
+					t.Fatalf("remove cached template: %v", err)
+				}
+			}
+			if test.expired {
+				config.Now = func() time.Time {
+					return readTestNow().Add(2 * DefaultAuthTTL)
+				}
+			}
+
+			result := Ask(context.Background(), config, prompt)
+			data, _ := result.Data.(AskData)
+			if !result.OK ||
+				result.State != webagent.StateTerminal ||
+				data.ReadMode != "headed_browser" ||
+				data.Text != "Rendered terminal answer." ||
+				client.callCount("Input.dispatchKeyEvent") != 2 {
+				t.Fatalf(
+					"result=%+v data=%+v calls=%+v",
+					result,
+					data,
+					client.countSnapshot(),
+				)
+			}
+		})
+	}
+}
+
+func TestAskRecoversLiveComposerAfterHardReloadBeforePromptMutation(t *testing.T) {
+	const prompt = "Review after recovered composer readiness"
+	stateDir := t.TempDir()
+	client := newAuthFakeClient("user-page")
+	client.composerReady = false
+	client.composerReadyAfterReload = 2
+	client.ackConversationID = "conversation-recovered"
+	config := newAskTestConfig(t, stateDir, client)
+	config.ComposerTimeout = time.Second
+	config.HTTPClient = terminalDetailClient(prompt)
+
+	result := Ask(context.Background(), config, prompt)
+	if !result.OK ||
+		result.Action == nil ||
+		result.Action.RawInputCount != 1 ||
+		client.callCount("Input.insertText") != 1 ||
+		len(client.reloadIgnoreCache) != 2 ||
+		client.reloadIgnoreCache[0] ||
+		!client.reloadIgnoreCache[1] {
+		t.Fatalf(
+			"result=%+v reloads=%v calls=%+v",
+			result,
+			client.reloadIgnoreCache,
+			client.countSnapshot(),
+		)
+	}
+}
+
 func TestAskPreSendFailureAndPromptBudgetNeverDispatch(t *testing.T) {
 	t.Run("composer unavailable", func(t *testing.T) {
 		stateDir := t.TempDir()
 		client := newAuthFakeClient("user-page")
 		client.composerReady = false
 		config := newAskTestConfig(t, stateDir, client)
-		config.ComposerTimeout = 2 * time.Millisecond
+		config.ComposerTimeout = time.Second
 
 		result := Ask(context.Background(), config, "Review")
 		if result.OK ||
 			result.Error == nil ||
-			result.Error.Code != "claude_composer_not_ready" ||
+			result.Error.Code != "claude_composer_evidence_not_observed" ||
 			result.Action == nil ||
 			result.Action.Dispatch != webagent.DispatchNotPerformed ||
 			!result.Action.RetrySafe ||
@@ -147,7 +223,7 @@ func TestAskUnknownDispatchNeverResendsAndAcknowledgementCanResolveIt(t *testing
 		stateDir := t.TempDir()
 		client := newAuthFakeClient("user-page")
 		config := newAskTestConfig(t, stateDir, client)
-		config.Timeout = 3 * time.Millisecond
+		config.Timeout = 3 * time.Second
 		config.Send = browserflow.DispatchFunc(func(context.Context, *cdp.PageSession) (browserflow.DispatchOutcome, error) {
 			return browserflow.DispatchOutcome{
 				Dispatch:          browserflow.DispatchUnknown,
@@ -225,7 +301,7 @@ func newAskTestConfig(t *testing.T, stateDir string, client *authFakeClient) Ask
 		Store:           authConfig.Store,
 		BuildCommit:     "test-commit",
 		Timeout:         20 * time.Millisecond,
-		ComposerTimeout: 20 * time.Millisecond,
+		ComposerTimeout: time.Second,
 		PollInterval:    time.Millisecond,
 		DetailDelays:    []time.Duration{0},
 		Now:             readTestNow,

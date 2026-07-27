@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
@@ -14,7 +15,7 @@ const CapabilityRefreshSchemaVersion = "chatgpt-capabilities-refresh/v1"
 var (
 	allowedProductModes = []string{"Chat", "Work"}
 	allowedIntelligence = []string{
-		"Instant", "Instant 5.5", "Medium", "High", "Extra High", "Pro", "GPT-5.6 Sol",
+		"Instant", "Instant 5.5", "Medium", "High", "Extra High", "Pro",
 	}
 	allowedTools = []string{
 		"Add photos & files", "Create image", "Web search", "Deep research",
@@ -38,6 +39,9 @@ type CapabilityRefreshData struct {
 	SelectedProduct      string   `json:"selected_product,omitempty"`
 	IntelligenceOptions  []string `json:"intelligence_options"`
 	SelectedIntelligence string   `json:"selected_intelligence,omitempty"`
+	ModelOptions         []string `json:"model_options"`
+	SelectedModel        string   `json:"selected_model,omitempty"`
+	ModelOptionsObserved bool     `json:"model_options_observed"`
 	FileUploadObserved   bool     `json:"file_upload_observed"`
 	Tools                []string `json:"tools"`
 	CapturedAt           string   `json:"captured_at,omitempty"`
@@ -51,6 +55,9 @@ type capabilityProbe struct {
 	SelectedProduct      string   `json:"selected_product"`
 	IntelligenceOptions  []string `json:"intelligence_options"`
 	SelectedIntelligence string   `json:"selected_intelligence"`
+	ModelOptions         []string `json:"model_options"`
+	SelectedModel        string   `json:"selected_model"`
+	ModelOptionsObserved bool     `json:"model_options_observed"`
 	FileUploadObserved   bool     `json:"file_upload_observed"`
 	Tools                []string `json:"tools"`
 }
@@ -66,6 +73,7 @@ func RefreshCapabilities(
 		StatePath:           RelativeCapabilitiesPath,
 		ProductModes:        []string{},
 		IntelligenceOptions: []string{},
+		ModelOptions:        []string{},
 		Tools:               []string{},
 	}
 	if config.Store == nil {
@@ -102,26 +110,38 @@ func RefreshCapabilities(
 					data,
 				)
 			}
-			if _, err := pollUntil(
+			readiness, err := authreadiness.WaitForEvidence(
 				ctx,
+				session,
+				authreadiness.MinimumAttempts,
 				config.Timeout,
 				250*time.Millisecond,
-				func() (bool, error) {
+				func(observationCtx context.Context) (bool, error) {
 					var observed bool
 					err := evaluateInto(
-						ctx,
+						observationCtx,
 						session,
 						`Boolean(document.querySelector('#prompt-textarea') || document.querySelector('[contenteditable="true"][role="textbox"]'))`,
 						&observed,
 					)
 					return observed, err
 				},
-			); err != nil {
+			)
+			if err != nil || readiness.ObservationFailed() {
+				_ = lease.MarkIncomplete(context.Background())
+				return capabilityFailure(
+					runID, config, webagent.StageAttached, target, pending,
+					"chatgpt_capabilities_observation_failed", "connection",
+					"ChatGPT composer observation could not complete its bounded load, reload, hard-reload, and final-grace sequence",
+					data,
+				)
+			}
+			if !readiness.Observed {
 				_ = lease.MarkIncomplete(context.Background())
 				return capabilityFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					"chatgpt_composer_not_observed", "auth",
-					"Signed-in ChatGPT composer was not observed on the exact headed target",
+					"ChatGPT composer was not observed after bounded load, reload, hard reload, and final grace; the browser session may still be active",
 					data,
 				)
 			}
@@ -130,6 +150,22 @@ func RefreshCapabilities(
 					runID, config, webagent.StageAttached, target, pending,
 					"chatgpt_capabilities_prepare_state_failed", "internal",
 					"ChatGPT runtime observation preparation could not be persisted",
+					data,
+				)
+			}
+			selection, selectionErr := inspectChatGPTSelectionOptions(
+				ctx,
+				session,
+				config.Timeout,
+				250*time.Millisecond,
+			)
+			if selectionErr != nil {
+				data.Message = selectionErr.Error()
+				_ = lease.MarkIncomplete(context.Background())
+				return capabilityFailure(
+					runID, config, webagent.StagePrepared, target, pending,
+					"chatgpt_capability_options_not_ready", "provider",
+					"ChatGPT thinking and model options did not become observable after exact-target raw input",
 					data,
 				)
 			}
@@ -143,21 +179,26 @@ func RefreshCapabilities(
 					data,
 				)
 			}
+			probe.IntelligenceOptions = optionLabels(
+				logicalThinkingOptions(selection.ThinkingOptions),
+				false,
+			)
+			probe.SelectedIntelligence = selection.SelectedThinking
+			probe.ModelOptions = optionLabels(
+				selection.ModelOptions,
+				true,
+			)
+			probe.SelectedModel = selection.SelectedModel
 			probe = sanitizeCapabilityProbe(probe)
+			probe.ModelOptionsObserved =
+				len(probe.ModelOptions) > 0 &&
+					strings.TrimSpace(probe.SelectedModel) != ""
 			now := time.Now
 			if config.Now != nil {
 				now = config.Now
 			}
 			capturedAt := now().UTC().Format(time.RFC3339Nano)
-			state := "unknown"
-			message := "ChatGPT composer was observed, but paid Chat and Medium were not both proven."
-			if probe.OK &&
-				probe.ComposerObserved &&
-				containsString(probe.ProductModes, "Chat") &&
-				containsString(probe.IntelligenceOptions, "Medium") {
-				state = "ready"
-				message = "Paid Chat product and Medium intelligence were observed in the headed composer."
-			}
+			state, message := capabilityStateAndMessage(probe)
 			runtime := RuntimeCapabilities{
 				SchemaVersion:        RuntimeCapabilitiesSchemaVersion,
 				State:                state,
@@ -167,6 +208,9 @@ func RefreshCapabilities(
 				SelectedProduct:      probe.SelectedProduct,
 				IntelligenceOptions:  probe.IntelligenceOptions,
 				SelectedIntelligence: probe.SelectedIntelligence,
+				ModelOptions:         probe.ModelOptions,
+				SelectedModel:        probe.SelectedModel,
+				ModelOptionsObserved: probe.ModelOptionsObserved,
 				FileUploadObserved:   probe.FileUploadObserved,
 				Tools:                probe.Tools,
 				Source:               "headed-cdp-sanitized-composer-probe",
@@ -195,6 +239,9 @@ func RefreshCapabilities(
 			data.SelectedProduct = runtime.SelectedProduct
 			data.IntelligenceOptions = append([]string{}, runtime.IntelligenceOptions...)
 			data.SelectedIntelligence = runtime.SelectedIntelligence
+			data.ModelOptions = append([]string{}, runtime.ModelOptions...)
+			data.SelectedModel = runtime.SelectedModel
+			data.ModelOptionsObserved = runtime.ModelOptionsObserved
 			data.FileUploadObserved = runtime.FileUploadObserved
 			data.Tools = append([]string{}, runtime.Tools...)
 			data.CapturedAt = runtime.CapturedAt
@@ -212,20 +259,62 @@ func RefreshCapabilities(
 	)
 }
 
+func capabilityStateAndMessage(probe capabilityProbe) (string, string) {
+	state := "unknown"
+	message := "ChatGPT composer was observed, but its Chat and thinking controls were not both proven."
+	if !probe.OK ||
+		!probe.ComposerObserved ||
+		!containsString(probe.ProductModes, "Chat") ||
+		len(probe.IntelligenceOptions) == 0 ||
+		strings.TrimSpace(probe.SelectedIntelligence) == "" ||
+		!containsString(
+			probe.IntelligenceOptions,
+			probe.SelectedIntelligence,
+		) {
+		return state, message
+	}
+	state = "ready"
+	message = "Chat product and logically ordered thinking modes were observed in the headed composer; the model catalog was not observed."
+	if probe.ModelOptionsObserved {
+		message = "Chat product, logically ordered thinking modes, and visible model options were observed in the headed composer."
+	}
+	return state, message
+}
+
 func sanitizeCapabilityProbe(probe capabilityProbe) capabilityProbe {
 	probe.ProductModes = orderedIntersection(probe.ProductModes, allowedProductModes)
-	probe.IntelligenceOptions = orderedIntersection(
+	probe.IntelligenceOptions = sanitizeDynamicLabels(
 		probe.IntelligenceOptions,
-		allowedIntelligence,
+		16,
 	)
+	probe.ModelOptions = sanitizeDynamicLabels(probe.ModelOptions, 32)
 	probe.Tools = orderedIntersection(probe.Tools, allowedTools)
 	if !containsString(allowedProductModes, probe.SelectedProduct) {
 		probe.SelectedProduct = ""
 	}
-	if !containsString(allowedIntelligence, probe.SelectedIntelligence) {
+	if !containsString(probe.IntelligenceOptions, probe.SelectedIntelligence) {
 		probe.SelectedIntelligence = ""
 	}
+	if !containsString(probe.ModelOptions, probe.SelectedModel) {
+		probe.SelectedModel = ""
+	}
 	return probe
+}
+
+func sanitizeDynamicLabels(values []string, maximum int) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || containsString(out, value) ||
+			validatePublicLabel(value) != nil {
+			continue
+		}
+		out = append(out, value)
+		if len(out) >= maximum {
+			break
+		}
+	}
+	return out
 }
 
 func orderedIntersection(values, allowed []string) []string {
@@ -288,18 +377,6 @@ const capabilityProbeExpression = `(async () => {
   const exactKnown = (values, known) => known.filter((candidate) =>
     values.some((value) => value.toLowerCase() === candidate.toLowerCase())
   );
-  const escape = () => {
-    const target = document.activeElement || document.body;
-    if (target) {
-      target.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Escape',
-        code: 'Escape',
-        bubbles: true,
-        cancelable: true
-      }));
-    }
-  };
-
   const prompt = document.querySelector('#prompt-textarea') ||
     document.querySelector('[contenteditable="true"][role="textbox"]');
   const form = prompt && prompt.closest('form');
@@ -311,6 +388,8 @@ const capabilityProbeExpression = `(async () => {
       selected_product: '',
       intelligence_options: [],
       selected_intelligence: '',
+      model_options: [],
+      selected_model: '',
       file_upload_observed: false,
       tools: []
     };
@@ -325,59 +404,30 @@ const capabilityProbeExpression = `(async () => {
   );
 
   const intelligenceKnown = [
-    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro', 'GPT-5.6 Sol'
+    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
   ];
   const pageButtons = Array.from(document.querySelectorAll('button,[role="button"]')).filter(visible);
   const intelligencePickers = pageButtons.filter((button) => {
     if (button.getAttribute('aria-haspopup') !== 'menu') return false;
-    return intelligenceKnown.some((candidate) =>
-      candidate.toLowerCase() === textOf(button).toLowerCase()
-    );
+    return button.classList.contains('__composer-pill') ||
+      intelligenceKnown.some((candidate) =>
+        candidate.toLowerCase() === textOf(button).toLowerCase()
+      );
   });
   const intelligencePicker = intelligencePickers.length === 1 ? intelligencePickers[0] : null;
   const selectedIntelligence = intelligencePicker ? textOf(intelligencePicker) : '';
-  let intelligenceOptions = selectedIntelligence ? [selectedIntelligence] : [];
-  if (intelligencePicker) {
-    const wasExpanded = intelligencePicker.getAttribute('aria-expanded') === 'true';
-    if (!wasExpanded) {
-      intelligencePicker.click();
-      await sleep(500);
-    }
-    const optionText = Array.from(document.querySelectorAll(
-      '[role="menuitemradio"],[role="menuitem"],[role="option"]'
-    )).filter(visible).map(textOf);
-    intelligenceOptions = exactKnown(optionText.concat(intelligenceOptions), intelligenceKnown);
-    if (!wasExpanded) {
-      escape();
-      await sleep(100);
-    }
-  }
+  const intelligenceOptions = selectedIntelligence ? [selectedIntelligence] : [];
+  const modelOptions = [];
+  const selectedModel = '';
 
   const toolsKnown = [
     'Add photos & files', 'Create image', 'Web search', 'Deep research',
     'GitHub', 'Visualize', 'OpenAI Platform', 'Atlassian Rovo'
   ];
-  const plusCandidates = [
-    document.querySelector('#composer-plus-btn'),
-    document.querySelector('[data-testid="composer-plus-btn"]')
-  ].filter((candidate) => visible(candidate));
-  const plus = plusCandidates.length === 1 ? plusCandidates[0] : null;
-  let tools = [];
-  if (plus) {
-    const wasExpanded = plus.getAttribute('aria-expanded') === 'true';
-    if (!wasExpanded) {
-      plus.click();
-      await sleep(500);
-    }
-    const menuText = Array.from(document.querySelectorAll(
+  const menuText = Array.from(document.querySelectorAll(
       '[role="menuitemradio"],[role="menuitem"],[role="option"]'
-    )).filter(visible).map(textOf);
-    tools = exactKnown(menuText, toolsKnown);
-    if (!wasExpanded) {
-      escape();
-      await sleep(100);
-    }
-  }
+  )).filter(visible).map(textOf);
+  const tools = exactKnown(menuText, toolsKnown);
 
   return {
     ok: intelligencePickers.length === 1,
@@ -386,6 +436,8 @@ const capabilityProbeExpression = `(async () => {
     selected_product: selectedProductButton ? textOf(selectedProductButton) : '',
     intelligence_options: intelligenceOptions,
     selected_intelligence: selectedIntelligence,
+    model_options: modelOptions,
+    selected_model: selectedModel,
     file_upload_observed: Boolean(document.querySelector('input[type="file"]')) ||
       tools.some((tool) => tool === 'Add photos & files'),
     tools

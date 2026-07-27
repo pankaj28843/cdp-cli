@@ -156,6 +156,44 @@ func TestSelectorBoundEnterPreservesTriStateBoundary(t *testing.T) {
 	})
 }
 
+func TestEscapePreservesTriStateBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		failAt        int
+		wantDispatch  Dispatch
+		wantCallCount int
+	}{
+		{
+			name:          "keyDown failure is unknown",
+			failAt:        1,
+			wantDispatch:  DispatchUnknown,
+			wantCallCount: 1,
+		},
+		{
+			name:          "keyUp failure remains performed",
+			failAt:        2,
+			wantDispatch:  DispatchPerformed,
+			wantCallCount: 2,
+		},
+		{
+			name:          "success",
+			wantDispatch:  DispatchPerformed,
+			wantCallCount: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session, input := newInputSession(t)
+			input.failAt = test.failAt
+			outcome, _ := PressEscape(context.Background(), session)
+			if outcome.Dispatch != test.wantDispatch ||
+				!outcome.RawInputAttempted ||
+				len(input.calls) != test.wantCallCount {
+				t.Fatalf("outcome=%+v calls=%+v", outcome, input.calls)
+			}
+		})
+	}
+}
+
 func TestClickPointPreservesTriStateMouseBoundary(t *testing.T) {
 	tests := []struct {
 		name          string

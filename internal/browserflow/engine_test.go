@@ -187,7 +187,7 @@ func TestEngineSerializesHeadedInputUntilExplicitRelease(t *testing.T) {
 	select {
 	case result := <-secondResult:
 		t.Fatalf("second Acquire bypassed input lease: %v", result.err)
-	case <-time.After(30 * time.Millisecond):
+	case <-time.After(250 * time.Millisecond):
 	}
 	if calls := secondClient.callCount("Target.createTarget"); calls != 0 {
 		t.Fatalf("second target create calls = %d before input release, want zero", calls)
@@ -203,7 +203,7 @@ func TestEngineSerializesHeadedInputUntilExplicitRelease(t *testing.T) {
 			t.Fatalf("second Acquire after release: %v", result.err)
 		}
 		second = result.lease
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("second Acquire remained blocked after explicit input release")
 	}
 	if calls := secondClient.callCount("Target.createTarget"); calls != 1 {

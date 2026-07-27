@@ -3,18 +3,24 @@ package chatgpt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
-const browserReadMode = "observed_stable_http_via_headed_browser_context"
+const (
+	browserReadMode               = "observed_stable_http_via_headed_browser_context"
+	browserReadPersistenceTimeout = 5 * time.Second
+)
 
 type browserFetchResult struct {
 	OK         bool   `json:"ok"`
@@ -32,17 +38,6 @@ func listConversationsViaBrowser(
 	offset int,
 ) webagent.Result {
 	runID := webagent.NewRunID()
-	template, failure := loadFreshReadTemplate(ctx, config)
-	if failure != nil {
-		return readFailureResult(
-			runID,
-			config.BuildCommit,
-			webagent.OperationConversationsList,
-			*failure,
-			map[string]any{"schema_version": ConversationListSchemaVersion},
-			nil,
-		)
-	}
 	data := ConversationListData{
 		SchemaVersion: ConversationListSchemaVersion,
 		Conversations: []ConversationSummary{},
@@ -63,9 +58,10 @@ func listConversationsViaBrowser(
 	query.Set("is_archived", "false")
 	query.Set("is_starred", "false")
 	endpoint := Origin + ConversationListPath + "?" + query.Encode()
+	browserConfig := readBrowserConfig(*config.BrowserConfig)
 	return runOwned(
 		ctx,
-		*config.BrowserConfig,
+		browserConfig,
 		runID,
 		webagent.OperationConversationsList,
 		"",
@@ -77,14 +73,21 @@ func listConversationsViaBrowser(
 			target *webagent.TargetEvidence,
 			pending webagent.CleanupEvidence,
 		) webagent.Result {
-			if failure := prepareBrowserRead(ctx, *config.BrowserConfig, lease); failure != nil {
+			template, failure := prepareBrowserRead(
+				ctx,
+				*config.BrowserConfig,
+				config.Store,
+				lease,
+			)
+			if failure != nil {
 				return browserReadFailureResult(
 					runID, config.BuildCommit, webagent.OperationConversationsList,
 					webagent.StageAttached, target, pending, *failure, data, nil,
 				)
 			}
-			response, failure := browserFetch(
+			response, failure := browserReadFetch(
 				ctx,
+				config,
 				lease.Session(),
 				template,
 				endpoint,
@@ -124,7 +127,7 @@ func listConversationsViaBrowser(
 				)
 			}
 			data.ReadMode = browserReadMode
-			if err := lease.MarkTerminal(ctx); err != nil {
+			if err := persistBrowserReadState(lease, true); err != nil {
 				return browserReadFailureResult(
 					runID, config.BuildCommit, webagent.OperationConversationsList,
 					webagent.StageObserveTerminal, target, pending,
@@ -149,7 +152,7 @@ func conversationViaBrowser(
 	config ReadConfig,
 	conversationID string,
 	await bool,
-	timeout time.Duration,
+	deadline time.Time,
 ) webagent.Result {
 	operation := webagent.OperationConversationsDetail
 	if await {
@@ -157,17 +160,6 @@ func conversationViaBrowser(
 	}
 	runID := webagent.NewRunID()
 	conversation := conversationRef(conversationID)
-	template, failure := loadFreshReadTemplate(ctx, config)
-	if failure != nil {
-		return readFailureResult(
-			runID,
-			config.BuildCommit,
-			operation,
-			*failure,
-			map[string]any{"schema_version": ConversationDetailSchemaVersion},
-			conversation,
-		)
-	}
 	data := ConversationDetailData{
 		SchemaVersion:   ConversationDetailSchemaVersion,
 		ConversationID:  conversationID,
@@ -180,12 +172,13 @@ func conversationViaBrowser(
 	}
 	path := "/backend-api/conversation/" + url.PathEscape(conversationID)
 	endpoint := Origin + path
-	if timeout <= 0 {
-		timeout = 3 * time.Minute
+	if await && deadline.IsZero() {
+		deadline = nowForRead(config).Add(3 * time.Minute)
 	}
+	browserConfig := readBrowserConfig(*config.BrowserConfig)
 	return runOwned(
 		ctx,
-		*config.BrowserConfig,
+		browserConfig,
 		runID,
 		operation,
 		"",
@@ -197,7 +190,13 @@ func conversationViaBrowser(
 			target *webagent.TargetEvidence,
 			pending webagent.CleanupEvidence,
 		) webagent.Result {
-			if failure := prepareBrowserRead(ctx, *config.BrowserConfig, lease); failure != nil {
+			template, failure := prepareBrowserRead(
+				ctx,
+				*config.BrowserConfig,
+				config.Store,
+				lease,
+			)
+			if failure != nil {
 				return browserReadFailureResult(
 					runID, config.BuildCommit, operation,
 					webagent.StageAttached, target, pending, *failure, data, conversation,
@@ -207,12 +206,22 @@ func conversationViaBrowser(
 			if len(delays) == 0 {
 				delays = defaultAwaitDelays
 			}
-			deadline := nowForRead(config).Add(timeout)
 			attempts := 0
 			for {
+				fetchCtx, cancelFetch, fetchAllowed :=
+					boundedAwaitFetchContext(
+						ctx,
+						config,
+						await,
+						deadline,
+					)
+				if !fetchAllowed {
+					break
+				}
 				attempts++
-				response, fetchFailure := browserFetch(
-					ctx,
+				response, fetchFailure := browserReadFetch(
+					fetchCtx,
+					config,
 					lease.Session(),
 					template,
 					endpoint,
@@ -221,8 +230,19 @@ func conversationViaBrowser(
 				if fetchFailure != nil {
 					failure = fetchFailure
 					data.StatusCode = fetchFailure.statusCode
+					fetchDeadlineHit := errors.Is(
+						fetchCtx.Err(),
+						context.DeadlineExceeded,
+					)
+					cancelFetch()
+					if await &&
+						fetchDeadlineHit &&
+						awaitDeadlineElapsed(fetchCtx) {
+						failure = nil
+					}
 					break
 				}
+				cancelFetch()
 				var payload map[string]any
 				if err := decodeBoundedJSON(
 					strings.NewReader(response.Body),
@@ -244,26 +264,29 @@ func conversationViaBrowser(
 				)
 				if failure != nil ||
 					data.CompletionState != "incomplete" ||
-					!await ||
-					attempts > len(delays) {
+					!await {
 					break
 				}
-				delay := delays[attempts-1]
-				if deadline.Sub(nowForRead(config)) <= delay {
+				remaining := deadline.Sub(nowForRead(config))
+				delay, ok := nextAwaitDelay(delays, attempts, remaining)
+				if !ok {
 					break
 				}
-				timer := time.NewTimer(delay)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					failure = &readFailure{
-						code:     "chatgpt_await_canceled",
-						errClass: "timeout",
-						message:  "ChatGPT conversation await was canceled before terminal detail",
+				if err := waitReadDelay(ctx, config, delay); err != nil {
+					if awaitDeadlineElapsed(ctx) {
+						failure = nil
+					} else {
+						failure = &readFailure{
+							code:     "chatgpt_await_canceled",
+							errClass: "timeout",
+							message:  "ChatGPT conversation await was canceled before terminal detail",
+						}
 					}
-				case <-timer.C:
 				}
 				if failure != nil {
+					break
+				}
+				if !nowForRead(config).Before(deadline) {
 					break
 				}
 			}
@@ -280,7 +303,7 @@ func conversationViaBrowser(
 			state := webagent.StateTerminal
 			if data.CompletionState != "terminal" {
 				state = webagent.StateIncomplete
-				if err := lease.MarkIncomplete(ctx); err != nil {
+				if err := persistBrowserReadState(lease, false); err != nil {
 					return browserReadFailureResult(
 						runID, config.BuildCommit, operation,
 						webagent.StageObserveTerminal, target, pending,
@@ -291,7 +314,7 @@ func conversationViaBrowser(
 						conversation,
 					)
 				}
-			} else if err := lease.MarkTerminal(ctx); err != nil {
+			} else if err := persistBrowserReadState(lease, true); err != nil {
 				return browserReadFailureResult(
 					runID, config.BuildCommit, operation,
 					webagent.StageObserveTerminal, target, pending,
@@ -314,47 +337,222 @@ func conversationViaBrowser(
 	)
 }
 
+func persistBrowserReadState(
+	lease *browserflow.Lease,
+	terminal bool,
+) error {
+	if lease == nil {
+		return fmt.Errorf("ChatGPT browser read lease is unavailable")
+	}
+	persistCtx, cancel := context.WithTimeout(
+		context.Background(),
+		browserReadPersistenceTimeout,
+	)
+	defer cancel()
+	if terminal {
+		return lease.MarkTerminal(persistCtx)
+	}
+	return lease.MarkIncomplete(persistCtx)
+}
+
+func browserReadFetch(
+	ctx context.Context,
+	config ReadConfig,
+	session *cdp.PageSession,
+	template RequestTemplate,
+	endpoint string,
+	targetRoute string,
+) (browserFetchResult, *readFailure) {
+	return browserFetch(
+		ctx,
+		config.Admission,
+		session,
+		template,
+		endpoint,
+		targetRoute,
+	)
+}
+
+func readBrowserConfig(config BrowserConfig) BrowserConfig {
+	config.AdmissionProvider = chatGPTReadAdmissionProvider
+	return config
+}
+
 func prepareBrowserRead(
 	ctx context.Context,
 	config BrowserConfig,
+	store *Store,
 	lease *browserflow.Lease,
-) *readFailure {
-	if err := preparePage(ctx, config.Client, lease.Session(), HomeURL); err != nil {
-		return &readFailure{
+) (RequestTemplate, *readFailure) {
+	if store == nil {
+		return RequestTemplate{}, internalReadFailure(
+			"ChatGPT owner-only auth state is unavailable",
+		)
+	}
+	session := lease.Session()
+	userAgent, err := prepareAuthObservation(
+		ctx,
+		config.Client,
+		session,
+	)
+	if err != nil {
+		return RequestTemplate{}, &readFailure{
 			code:     "chatgpt_browser_read_prepare_failed",
 			errClass: "connection",
 			message:  "ChatGPT stable browser-context read could not prepare the exact target",
 		}
 	}
-	signedIn, err := signedInUIObservedWithReadiness(ctx, lease.Session())
+	signedIn, err := signedInUIObservedWithReadiness(ctx, session)
 	if err != nil {
-		return &readFailure{
+		return RequestTemplate{}, &readFailure{
 			code:     "chatgpt_browser_read_readiness_failed",
 			errClass: "connection",
 			message:  "ChatGPT stable browser-context read could not complete its bounded reload sequence",
 		}
 	}
 	if !signedIn {
-		return &readFailure{
+		return RequestTemplate{}, &readFailure{
 			code:     "chatgpt_auth_evidence_not_observed",
 			errClass: "auth",
 			message:  "ChatGPT auth UI evidence was not observed after initial load, reload, and cache-bypassing hard reload; the browser session may still be active",
 		}
 	}
+	cookies, err := readCookies(ctx, session)
+	if err != nil {
+		return RequestTemplate{}, &readFailure{
+			code:     "chatgpt_browser_read_cookie_observation_failed",
+			errClass: "connection",
+			message:  "ChatGPT browser-context cookies could not be observed",
+		}
+	}
+	if !hasSessionCookie(cookies) {
+		return RequestTemplate{}, &readFailure{
+			code:     "chatgpt_auth_evidence_not_observed",
+			errClass: "auth",
+			message:  "ChatGPT signed-in session-cookie evidence was not observed; the browser session may still be active",
+		}
+	}
+	existing := loadExistingTemplate(ctx, store)
+	observation, found, err := observeReadRequest(
+		ctx,
+		config.Client,
+		session,
+		defaultObservationAttempts,
+		defaultObservationTimeout,
+	)
+	if err != nil {
+		return RequestTemplate{}, &readFailure{
+			code:     "chatgpt_browser_read_request_observation_failed",
+			errClass: "connection",
+			message:  "ChatGPT fresh conversation-read request observation failed on the exact headed target",
+		}
+	}
+	now := time.Now().UTC()
+	template, persist := browserReadTemplate(
+		existing,
+		observation,
+		found,
+		cookies,
+		userAgent,
+		now,
+	)
+	if persist {
+		err = store.SaveTemplate(ctx, template)
+	}
+	if err != nil {
+		return RequestTemplate{}, internalReadFailure(
+			"ChatGPT refreshed browser-context read evidence could not be persisted",
+		)
+	}
 	if err := lease.MarkPrepared(ctx); err != nil {
-		return internalReadFailure(
+		return RequestTemplate{}, internalReadFailure(
 			"ChatGPT stable browser-context read preparation could not be persisted",
 		)
 	}
 	if err := lease.ReleaseInput(); err != nil {
-		return internalReadFailure(
+		return RequestTemplate{}, internalReadFailure(
 			"ChatGPT stable browser-context read could not release the headed input lease",
 		)
 	}
-	return nil
+	return template, nil
+}
+
+func browserReadTemplate(
+	existing *RequestTemplate,
+	observation readObservation,
+	found bool,
+	cookies map[string]string,
+	userAgent string,
+	capturedAt time.Time,
+) (RequestTemplate, bool) {
+	if found {
+		if observation.Headers == nil {
+			observation.Headers = map[string]string{}
+		}
+		observation.Headers["user-agent"] = userAgent
+		return RequestTemplate{
+			SchemaVersion:    AuthTemplateSchemaVersion,
+			Method:           http.MethodGet,
+			URL:              observation.URL,
+			Headers:          observation.Headers,
+			Cookies:          cookies,
+			CookieHeader:     observation.CookieHeader,
+			BrowserUserAgent: userAgent,
+			CapturedAt:       capturedAt.Format(time.RFC3339Nano),
+			Source:           "headed-cdp-observed-read-request",
+		}, true
+	}
+	if existing != nil {
+		template := *existing
+		template.Headers = maps.Clone(existing.Headers)
+		if template.Headers == nil {
+			template.Headers = map[string]string{}
+		}
+		template.Headers["user-agent"] = userAgent
+		template.Cookies = maps.Clone(cookies)
+		template.BrowserUserAgent = userAgent
+		return template, false
+	}
+	return RequestTemplate{
+		SchemaVersion:    AuthTemplateSchemaVersion,
+		Method:           http.MethodGet,
+		URL:              Origin + ConversationListPath,
+		Headers:          map[string]string{"user-agent": userAgent},
+		Cookies:          maps.Clone(cookies),
+		BrowserUserAgent: userAgent,
+		CapturedAt:       capturedAt.Format(time.RFC3339Nano),
+		Source:           "headed-browser-session-only",
+	}, false
 }
 
 func browserFetch(
+	ctx context.Context,
+	gate *admission.Gate,
+	session *cdp.PageSession,
+	template RequestTemplate,
+	endpoint string,
+	targetRoute string,
+) (browserFetchResult, *readFailure) {
+	throttle, failure := acquireChatGPTThrottle(ctx, gate)
+	if failure != nil {
+		return browserFetchResult{}, failure
+	}
+	response, failure := browserFetchUnthrottled(
+		ctx,
+		session,
+		template,
+		endpoint,
+		targetRoute,
+	)
+	if err := releaseChatGPTThrottle(throttle, failure); err != nil {
+		return browserFetchResult{}, internalReadFailure(
+			"ChatGPT shared provider throttle outcome could not be persisted",
+		)
+	}
+	return response, failure
+}
+
+func browserFetchUnthrottled(
 	ctx context.Context,
 	session *cdp.PageSession,
 	template RequestTemplate,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 	"github.com/spf13/cobra"
@@ -32,6 +33,7 @@ func (a *app) chatgptCapabilitiesData(
 				StatePath:           chatgpt.RelativeCapabilitiesPath,
 				ProductModes:        []string{},
 				IntelligenceOptions: []string{},
+				ModelOptions:        []string{},
 				Tools:               []string{},
 				Reason:              "owner-only state directory is unavailable",
 			},
@@ -47,6 +49,7 @@ func (a *app) chatgptCapabilitiesData(
 				StatePath:           chatgpt.RelativeCapabilitiesPath,
 				ProductModes:        []string{},
 				IntelligenceOptions: []string{},
+				ModelOptions:        []string{},
 				Tools:               []string{},
 				Reason:              "owner-only runtime capability state is unavailable",
 			},
@@ -66,7 +69,7 @@ func (a *app) newWorkflowAgentChatGPTDoctorCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Report ChatGPT readiness from owner-only local evidence",
-		Long: "Read owner-only ChatGPT auth and paid-composer capability evidence without opening or probing Chrome. " +
+		Long: "Read owner-only ChatGPT auth and composer capability evidence without opening or probing Chrome. " +
 			"Browser submission remains an explicit headed-runtime operation.",
 		Example: "  cdp workflow agent chatgpt doctor --json",
 		Args:    cobra.NoArgs,
@@ -133,7 +136,7 @@ func (a *app) newWorkflowAgentChatGPTResearchCommand() *cobra.Command {
 		Use:   "research [PROMPT]",
 		Short: "Report the live ChatGPT Deep Research boundary",
 		Long: "Deep Research submission is intentionally unavailable until the headed paid UI exposes one exact runtime product control. " +
-			"The current browser-observed surface proves ordinary Chat/Medium and file upload, but not Deep Research.",
+			"The current browser-observed surface proves ordinary Chat selection and file upload, but not Deep Research.",
 		Example: "  printf '%s' 'Research this topic.' | cdp workflow agent chatgpt research --stdin --browser-export --json",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -614,13 +617,18 @@ func (a *app) newWorkflowAgentChatGPTConversationsDownloadArtifactCommand() *cob
 
 func (a *app) newWorkflowAgentChatGPTConversationsContinueCommand() *cobra.Command {
 	var stdin bool
+	var thinking string
+	var reasoning string
+	var intelligence string
+	var minimumThinking string
+	var model string
 	cmd := &cobra.Command{
 		Use:   "continue CONVERSATION_ID [PROMPT]",
 		Short: "Visibly continue one exact stored ChatGPT conversation",
 		Long: "Open one fresh exact headed target on the requested conversation, prove its terminal rendered baseline, " +
-			"verify Chat product, Medium intelligence, the exact continuation prompt, and stable route, then click Send once and read the new rendered assistant turn.",
-		Example: "  cdp workflow agent chatgpt conversations continue CONVERSATION_ID 'Add missing risks.' --json\n" +
-			"  printf '%s' 'Add validation cases.' | cdp workflow agent chatgpt conversations continue CONVERSATION_ID --stdin --json",
+			"apply the configured or explicit thinking/model policy, verify its minimum, the exact continuation prompt, and stable route, then click Send once and read the new rendered assistant turn.",
+		Example: "  cdp workflow agent chatgpt conversations continue CONVERSATION_ID 'Add missing risks.' --json --timeout 40m\n" +
+			"  printf '%s' 'Add validation cases.' | cdp workflow agent chatgpt conversations continue CONVERSATION_ID --stdin --json --timeout 40m",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 4*time.Minute)
@@ -633,6 +641,17 @@ func (a *app) newWorkflowAgentChatGPTConversationsContinueCommand() *cobra.Comma
 					ExitUsage,
 					nil,
 				)
+			}
+			selection, selectionErr := a.resolveChatGPTSelection(
+				cmd,
+				thinking,
+				reasoning,
+				intelligence,
+				minimumThinking,
+				model,
+			)
+			if selectionErr != nil {
+				return selectionErr
 			}
 			prompt := ""
 			if stdin {
@@ -691,6 +710,7 @@ func (a *app) newWorkflowAgentChatGPTConversationsContinueCommand() *cobra.Comma
 					BrowserConfig: browserConfig,
 					Store:         store,
 					Timeout:       timeout,
+					Selection:     selection,
 				},
 				args[0],
 				prompt,
@@ -711,6 +731,14 @@ func (a *app) newWorkflowAgentChatGPTConversationsContinueCommand() *cobra.Comma
 		"stdin",
 		false,
 		"read the exact continuation prompt from stdin",
+	)
+	addChatGPTSelectionFlags(
+		cmd,
+		&thinking,
+		&reasoning,
+		&intelligence,
+		&minimumThinking,
+		&model,
 	)
 	return cmd
 }
@@ -785,9 +813,9 @@ func (a *app) newWorkflowAgentChatGPTConversationsAwaitCommand() *cobra.Command 
 	cmd := &cobra.Command{
 		Use:   "await CONVERSATION_ID",
 		Short: "Wait for one exact ChatGPT conversation to become terminal",
-		Long: "Poll only the exact hydrated conversation detail through stable HTTP. " +
-			"This never resubmits or reloads a browser target.",
-		Example: "  cdp workflow agent chatgpt conversations await CONVERSATION_ID --wait 3m --json",
+		Long: "Poll the exact hydrated conversation detail through direct stable HTTP first. " +
+			"An eligible auth/transport failure may lazily self-heal one headed read target; this never resubmits the conversation.",
+		Example: "  cdp workflow agent chatgpt conversations await CONVERSATION_ID --wait 40m --timeout 40m30s --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, wait+30*time.Second)
@@ -925,8 +953,8 @@ func (a *app) newWorkflowAgentChatGPTAuthRefreshCommand() *cobra.Command {
 func (a *app) newWorkflowAgentChatGPTCapabilitiesRefreshCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh",
-		Short: "Observe paid ChatGPT composer capabilities in headed Chrome",
-		Long: "Open one fresh owned ChatGPT target, sanitize the visible Chat product, Medium intelligence, upload, and tool labels, " +
+		Short: "Observe ChatGPT composer capabilities in headed Chrome",
+		Long: "Open one fresh owned ChatGPT target, sanitize the visible Chat product, logically ascending thinking options, model options, upload, and tool labels, " +
 			"persist only those labels, and exact-close the target without submitting a prompt.",
 		Example: "  cdp workflow agent chatgpt capabilities refresh --json",
 		Args:    cobra.NoArgs,
@@ -977,13 +1005,18 @@ func (a *app) newWorkflowAgentChatGPTCapabilitiesRefreshCommand() *cobra.Command
 func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 	var stdin bool
 	var filePath string
+	var thinking string
+	var reasoning string
+	var intelligence string
+	var minimumThinking string
+	var model string
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
-		Short: "Submit one exact visible paid ChatGPT request",
-		Long: "Start one fresh ChatGPT conversation in one fresh exact owned headed target, verify Chat product, Medium intelligence, and the exact prompt, " +
+		Short: "Submit one exact visible ChatGPT request",
+		Long: "Start one fresh ChatGPT conversation in one fresh exact owned headed target, apply the configured or explicit thinking/model policy, verify its minimum and the exact prompt, " +
 			"persist action_pending, click Send once, acknowledge the same-target route, and read the terminal assistant message without reloading or resubmitting.",
-		Example: "  cdp workflow agent chatgpt ask 'Review this design.' --json\n" +
-			"  printf '%s' 'Review this diff.' | cdp workflow agent chatgpt ask --stdin --json",
+		Example: "  cdp workflow agent chatgpt ask 'Review this design.' --json --timeout 40m\n" +
+			"  printf '%s' 'Review this diff.' | cdp workflow agent chatgpt ask --stdin --json --timeout 40m",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 4*time.Minute)
@@ -996,6 +1029,17 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 					ExitUsage,
 					[]string{"cdp workflow agent chatgpt ask --stdin --json"},
 				)
+			}
+			selection, selectionErr := a.resolveChatGPTSelection(
+				cmd,
+				thinking,
+				reasoning,
+				intelligence,
+				minimumThinking,
+				model,
+			)
+			if selectionErr != nil {
+				return selectionErr
 			}
 			prompt := ""
 			if stdin {
@@ -1052,6 +1096,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 				Store:         store,
 				FilePath:      filePath,
 				Timeout:       timeout,
+				Selection:     selection,
 			}, prompt)
 			human := fmt.Sprintf("chatgpt ask: %v", result.State)
 			if data, ok := result.Data.(chatgpt.AskData); ok && data.Text != "" {
@@ -1067,7 +1112,121 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 		"",
 		"attach one readable local file to the visible request",
 	)
+	addChatGPTSelectionFlags(
+		cmd,
+		&thinking,
+		&reasoning,
+		&intelligence,
+		&minimumThinking,
+		&model,
+	)
 	return cmd
+}
+
+func addChatGPTSelectionFlags(
+	cmd *cobra.Command,
+	thinking *string,
+	reasoning *string,
+	intelligence *string,
+	minimumThinking *string,
+	model *string,
+) {
+	cmd.Flags().StringVar(
+		thinking,
+		"thinking",
+		"",
+		"thinking selection: current; Instant 5.5, Medium, High, Extra High, Pro; or the highest policy",
+	)
+	cmd.Flags().StringVar(
+		reasoning,
+		"reasoning",
+		"",
+		"alias for --thinking",
+	)
+	cmd.Flags().StringVar(
+		intelligence,
+		"intelligence",
+		"",
+		"compatibility alias for --thinking",
+	)
+	cmd.Flags().StringVar(
+		minimumThinking,
+		"minimum-thinking",
+		"",
+		"fail before Send below this minimum: Instant 5.5, Medium, High, Extra High, or Pro",
+	)
+	cmd.Flags().StringVar(
+		model,
+		"model",
+		"",
+		"model selection: current, an exact visible model label, or the highest policy",
+	)
+}
+
+func (a *app) resolveChatGPTSelection(
+	cmd *cobra.Command,
+	thinking string,
+	reasoning string,
+	intelligence string,
+	minimumThinking string,
+	model string,
+) (chatgpt.SelectionPolicy, error) {
+	cfg, err := config.Load(a.opts.config)
+	if err != nil {
+		return chatgpt.SelectionPolicy{}, commandError(
+			"invalid_config",
+			"usage",
+			err.Error(),
+			ExitUsage,
+			nil,
+		)
+	}
+	policy := chatgpt.SelectionPolicy{
+		Thinking:        cfg.Agents.ChatGPT.Thinking,
+		MinimumThinking: cfg.Agents.ChatGPT.MinimumThinking,
+		Model:           cfg.Agents.ChatGPT.Model,
+	}
+	thinkingFlags := []struct {
+		name  string
+		value string
+	}{
+		{"thinking", thinking},
+		{"reasoning", reasoning},
+		{"intelligence", intelligence},
+	}
+	selectedThinkingFlags := 0
+	for _, candidate := range thinkingFlags {
+		if cmd.Flags().Changed(candidate.name) {
+			selectedThinkingFlags++
+			policy.Thinking = candidate.value
+		}
+	}
+	if selectedThinkingFlags > 1 {
+		return chatgpt.SelectionPolicy{}, commandError(
+			"chatgpt_thinking_flag_conflict",
+			"usage",
+			"Use only one of --thinking, --reasoning, or --intelligence",
+			ExitUsage,
+			[]string{"cdp workflow agent chatgpt ask --thinking highest --json"},
+		)
+	}
+	if cmd.Flags().Changed("minimum-thinking") {
+		policy.MinimumThinking = minimumThinking
+	}
+	if cmd.Flags().Changed("model") {
+		policy.Model = model
+	}
+	normalized, err := chatgpt.NormalizeSelectionPolicy(policy)
+	if err != nil {
+		return chatgpt.SelectionPolicy{}, commandError(
+			"chatgpt_selection_invalid",
+			"usage",
+			err.Error(),
+			ExitUsage,
+			[]string{"cdp workflow agent chatgpt ask --help"},
+		)
+	}
+	return normalized, nil
 }
 
 func (a *app) chatgptBrowserOperationConfig(
@@ -1150,25 +1309,65 @@ func (a *app) chatgptReadConfig(
 	ctx context.Context,
 	operation webagent.Operation,
 ) (chatgpt.ReadConfig, *webagent.Result) {
-	if !a.selectHeadedProviderRuntime() {
+	stateStore, err := a.stateStore()
+	if err != nil {
 		result := chatgpt.UnavailableRead(
 			a.build.Commit, operation,
-			"chatgpt_headed_browser_required", "usage",
-			"ChatGPT stable reads require the headed browser network context",
+			"chatgpt_state_unavailable", "internal",
+			"ChatGPT owner-only read state is unavailable",
 		)
 		return chatgpt.ReadConfig{}, &result
 	}
-	browserConfig, store, unavailable := a.chatgptBrowserOperationConfig(
-		ctx,
-		operation,
-	)
-	if unavailable != nil {
-		return chatgpt.ReadConfig{}, unavailable
+	store, err := chatgpt.NewStore(stateStore.Dir)
+	if err != nil {
+		result := chatgpt.UnavailableRead(
+			a.build.Commit, operation,
+			"chatgpt_state_unavailable", "internal",
+			"ChatGPT owner-only read state is unavailable",
+		)
+		return chatgpt.ReadConfig{}, &result
+	}
+	gate, err := admission.New(admission.Config{
+		StateDir:       stateStore.Dir,
+		MinimumSpacing: chatgpt.DefaultAdmissionSpacing,
+	})
+	if err != nil {
+		result := chatgpt.UnavailableRead(
+			a.build.Commit, operation,
+			"chatgpt_admission_unavailable", "internal",
+			"ChatGPT read admission state is unavailable",
+		)
+		return chatgpt.ReadConfig{}, &result
 	}
 	return chatgpt.ReadConfig{
-		Store:         store,
-		Admission:     browserConfig.Admission,
-		BrowserConfig: &browserConfig,
-		BuildCommit:   a.build.Commit,
+		Store:       store,
+		Admission:   gate,
+		BuildCommit: a.build.Commit,
+		BrowserFallback: func(
+			fallbackCtx context.Context,
+		) (*chatgpt.BrowserConfig, error) {
+			if !a.selectHeadedProviderRuntime() {
+				return nil, fmt.Errorf(
+					"ChatGPT headed browser runtime is unavailable",
+				)
+			}
+			browserConfig, _, unavailable :=
+				a.chatgptBrowserOperationConfig(
+					fallbackCtx,
+					operation,
+				)
+			if unavailable != nil {
+				if unavailable.Error != nil {
+					return nil, fmt.Errorf(
+						"%s",
+						unavailable.Error.Message,
+					)
+				}
+				return nil, fmt.Errorf(
+					"ChatGPT headed browser fallback is unavailable",
+				)
+			}
+			return &browserConfig, nil
+		},
 	}, nil
 }

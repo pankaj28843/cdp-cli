@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/pankaj28843/cdp-cli/internal/admission"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
@@ -32,8 +33,11 @@ func (a *app) newWorkflowAgentAdmissionStatusCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
-			provider, ok := webagent.ParseProvider(args[0])
-			if !ok {
+			providerName := strings.TrimSpace(args[0])
+			provider, realProvider := webagent.ParseProvider(providerName)
+			virtualReadLane := providerName == "chatgpt-read" ||
+				providerName == "chatgpt-rate"
+			if !realProvider && !virtualReadLane {
 				return commandError("invalid_provider", "usage", fmt.Sprintf("unknown provider %q", args[0]), ExitUsage, []string{"cdp workflow agent providers --json"})
 			}
 			store, err := a.stateStore()
@@ -44,21 +48,31 @@ func (a *app) newWorkflowAgentAdmissionStatusCommand() *cobra.Command {
 			if err != nil {
 				return commandError("admission_unavailable", "internal", err.Error(), ExitInternal, nil)
 			}
-			record, found, err := gate.Status(ctx, string(provider))
+			record, found, err := gate.Status(ctx, providerName)
 			if err != nil {
 				return commandError("admission_status_failed", "internal", err.Error(), ExitInternal, nil)
 			}
 			state := "not_found"
 			resolutionRequired := false
-			nextCommands := []string{fmt.Sprintf("cdp workflow agent %s doctor --json", provider)}
+			doctorProvider := providerName
+			if virtualReadLane {
+				doctorProvider = string(webagent.ProviderChatGPT)
+			}
+			nextCommands := []string{
+				fmt.Sprintf(
+					"cdp workflow agent %s doctor --json",
+					doctorProvider,
+				),
+			}
 			if found {
 				state = string(record.Phase)
 				resolutionRequired = record.RequiresResolution()
 				if resolutionRequired {
 					nextCommands = []string{
-						fmt.Sprintf("cdp workflow agent admission resolve %s %s --acknowledge-unknown --json", provider, record.RunID),
+						fmt.Sprintf("cdp workflow agent admission resolve %s %s --acknowledge-unknown --json", providerName, record.RunID),
 					}
-					if !(provider == webagent.ProviderAlex &&
+					if !(realProvider &&
+						provider == webagent.ProviderAlex &&
 						record.Operation == string(webagent.OperationAsk)) {
 						nextCommands = append([]string{
 							fmt.Sprintf("cdp workflow agent recovery inspect %s --json", record.RunID),
@@ -67,9 +81,9 @@ func (a *app) newWorkflowAgentAdmissionStatusCommand() *cobra.Command {
 					}
 				}
 			}
-			return a.render(ctx, fmt.Sprintf("%s\t%s", provider, state), map[string]any{
+			return a.render(ctx, fmt.Sprintf("%s\t%s", providerName, state), map[string]any{
 				"ok":                  true,
-				"provider":            provider,
+				"provider":            providerName,
 				"state":               state,
 				"found":               found,
 				"resolution_required": resolutionRequired,

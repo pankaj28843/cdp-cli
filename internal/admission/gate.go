@@ -182,6 +182,98 @@ func (g *Gate) Status(ctx context.Context, provider string) (Record, bool, error
 	return record, found, nil
 }
 
+// ExtendCooldown atomically preserves the later of an existing provider
+// cooldown and newly observed rate-limit evidence. It does not acquire an
+// operation lease and therefore cannot shorten or replace an active lane.
+func (g *Gate) ExtendCooldown(
+	ctx context.Context,
+	request Request,
+	until time.Time,
+) error {
+	if err := validateIdentity("provider", request.Provider); err != nil {
+		return err
+	}
+	if err := validateIdentity("operation", request.Operation); err != nil {
+		return err
+	}
+	if err := validateIdentity("run_id", request.RunID); err != nil {
+		return err
+	}
+	until = until.UTC()
+	if until.IsZero() {
+		return fmt.Errorf("cooldown deadline is required")
+	}
+	path := filepath.Join(g.dir, request.Provider+".json")
+	lock, err := artifacts.AcquireOwnerOnlyFileLock(ctx, path+".lock")
+	if err != nil {
+		return fmt.Errorf(
+			"acquire provider %s cooldown update: %w",
+			request.Provider,
+			err,
+		)
+	}
+	releaseWith := func(updateErr error) error {
+		return errors.Join(updateErr, lock.Release())
+	}
+	record, found, err := readRecord(path)
+	if err != nil {
+		return releaseWith(err)
+	}
+	now := g.now().UTC()
+	if !found {
+		record = Record{
+			SchemaVersion: SchemaVersion,
+			Provider:      request.Provider,
+			Operation:     request.Operation,
+			RunID:         request.RunID,
+			Mutating:      operationMayMutate(request.Operation),
+			Phase:         PhaseReleased,
+			Outcome:       OutcomeRateLimited,
+			StartedAt:     timestamp(now),
+			ReleasedAt:    timestamp(now),
+			NextAllowedAt: timestamp(until),
+			CooldownUntil: timestamp(until),
+		}
+		return releaseWith(writeRecord(path, record))
+	}
+	if record.Provider != request.Provider {
+		return releaseWith(fmt.Errorf(
+			"admission provider mismatch: file has %q, request has %q",
+			record.Provider,
+			request.Provider,
+		))
+	}
+	existingCooldown := time.Time{}
+	if record.CooldownUntil != "" {
+		existingCooldown, err = parseTimestamp(
+			"cooldown_until",
+			record.CooldownUntil,
+		)
+		if err != nil {
+			return releaseWith(err)
+		}
+	}
+	if existingCooldown.After(until) {
+		until = existingCooldown
+	}
+	nextAllowed, err := parseTimestamp(
+		"next_allowed_at",
+		record.NextAllowedAt,
+	)
+	if err != nil {
+		return releaseWith(err)
+	}
+	if nextAllowed.After(until) {
+		until = nextAllowed
+	}
+	record.CooldownUntil = timestamp(until)
+	record.NextAllowedAt = timestamp(until)
+	if record.Phase == PhaseReleased {
+		record.Outcome = OutcomeRateLimited
+	}
+	return releaseWith(writeRecord(path, record))
+}
+
 // Resolve acknowledges one exact orphaned or unknown mutating run after the
 // caller has independently reconciled its durable action/cleanup evidence.
 // It cannot resolve a different run or an ordinary completed record.
@@ -551,6 +643,7 @@ func operationMayMutate(operation string) bool {
 	switch strings.TrimSpace(operation) {
 	case "capabilities",
 		"doctor",
+		"transport",
 		"auth.refresh",
 		"catalog.status",
 		"catalog.refresh",

@@ -109,6 +109,70 @@ UI, cookie, or request evidence is still absent, the typed result reports
 `auth_evidence_not_observed` and states that the browser session may remain
 active.
 
+ChatGPT `ask` and `conversations continue` keep the provider's current
+thinking/model selections unless explicit flags or owner-only config say
+otherwise. Thinking controls are reported in logical ascending order:
+`Instant 5.5`, `Medium`, `High`, `Extra High`, `Pro`. `highest` is a selection
+policy, not another thinking level; `--minimum-thinking` makes downgrade
+failure explicit before Send. Models remain a separate control:
+
+```bash
+printf '%s' 'Review this design.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --thinking highest --minimum-thinking extra-high \
+    --model highest --json --timeout 40m
+cdp workflow agent chatgpt conversations await <conversation-id> \
+  --wait 40m --timeout 40m30s --json
+```
+
+Entitlement-specific defaults belong in the owner-only cdp config, never in
+the open-source transport defaults:
+
+```json
+{
+  "agents": {
+    "chatgpt": {
+      "thinking": "highest",
+      "minimum_thinking": "extra-high",
+      "model": "highest"
+    }
+  }
+}
+```
+
+Before prompt or file mutation, every headed provider ask treats cached
+auth/session and capability state as advisory and proves its live composer on
+the same exact owned target through initial load, ordinary reload,
+cache-bypassing hard reload, and a final grace window. Gemini and Grok resolve
+their live visible mode from that recovered composer; Claude, Grok, and
+Perplexity use a fresh cached request template only as an optional stable-read
+optimization. Reload is forbidden after prompt/file preparation or a Send
+attempt.
+
+Immediately before ChatGPT persists `action_pending`, it acquires the shared
+transport lane for one bounded final guard. That guard re-proves the resolved
+thinking and model plus the exact prompt, route, and attachment; an explicit
+model keeps the thinking menu open so the dispatcher can passively re-observe
+the rendered model label after pending. Attached files must retain the exact
+requested basename; provider-renamed copies fail closed before Send. The
+dispatcher performs no reversible selection or reload and emits at most one
+raw Send. Long composer preparation and long answer observation do not hold
+the transport lane.
+
+ChatGPT conversation list/detail/await use captured-template direct HTTP first.
+Only an eligible auth/transport failure lazily initializes one headed fallback;
+429, usage, and admission failures never do. That fallback proves the live
+signed-in UI and session cookie, prefers a freshly observed or previously
+validated request shape when available, and lets the actual same-origin
+read-only response decide readiness. Await repeats its capped backoff until the
+requested deadline, while a shared short-lived `chatgpt-rate` lane serializes
+provider transport across reads, Send, and artifact endpoints without blocking
+read-only status during long answer observation. Artifact downloads use their
+own `chatgpt-artifact` admission lane while retaining the shared transport
+cooldown. Hydrated detail is incomplete whenever provider async state still
+reports streaming or an unrecognized present state, even if the current
+assistant node already says `finished_successfully` and `end_turn`.
+
 Claude, Gemini, and Grok advertise browser-free `doctor`; no-turn headed `auth
 refresh`; fresh-conversation headed `ask`; list/detail/await/delete
 conversation operations; and explicit one-target `calibrate`. Every browser

@@ -184,19 +184,7 @@ func Ask(
 		DefaultAuthTTL,
 	)
 	data.SessionMode = status.SessionMode
-	if !status.Ready {
-		return askFailure(
-			runID, config, webagent.StagePlanned,
-			nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"tripadvisor_session_"+status.State, "auth",
-			"Tripadvisor rendered session evidence is not ready before Send",
-			"", data,
-			[]string{
-				"cdp workflow agent tripadvisor auth refresh --json",
-			},
-		)
-	}
+	data.Metadata["cached_session_state"] = status.State
 
 	return runOwned(
 		ctx,
@@ -227,28 +215,45 @@ func Ask(
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
-			sessionObservation, sessionAttempts, panelOpened, newChatOpened, err :=
-				ensureSession(
-					ctx,
-					session,
-					config.ComposerTimeout,
-					config.PollInterval,
-					true,
-				)
+			sessionObservation, sessionAttempts, panelOpened, newChatOpened,
+				readiness, readinessErr := ensureSessionWithRecovery(
+				ctx,
+				session,
+				config.ComposerTimeout,
+				config.PollInterval,
+				true,
+			)
 			data.Metadata["session_attempts"] = sessionAttempts
 			data.Metadata["panel_opened"] = panelOpened
 			data.Metadata["new_chat_opened"] = newChatOpened
+			data.Metadata["composer_readiness_attempt"] = readiness.Attempt
+			data.Metadata["composer_readiness_stage"] = readiness.Stage
 			data.Metadata["rendered_sign_in_visible"] =
 				sessionObservation.SignInVisible
-			if err != nil {
+			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
 					runID, config, webagent.StageAttached,
 					target, pending, notPerformed, nil,
-					"tripadvisor_fresh_composer_unavailable", "provider",
-					"Tripadvisor fresh blank composer did not become ready before Send",
+					"tripadvisor_composer_readiness_failed", "connection",
+					"Tripadvisor composer readiness could not complete its bounded load, reload, hard-reload, and final grace sequence",
 					"", data, cleanupCommands(runID, pending),
 				)
+			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				return askFailure(
+					runID, config, webagent.StageAttached,
+					target, pending, notPerformed, nil,
+					"tripadvisor_composer_evidence_not_observed", "provider",
+					"Tripadvisor fresh blank composer was not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
+			if sessionObservation.SignInVisible {
+				data.SessionMode = "anonymous"
+			} else {
+				data.SessionMode = "signed_in"
 			}
 			verifyAttempts, composer, err := prepareVerifiedPrompt(
 				ctx,

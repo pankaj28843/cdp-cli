@@ -72,7 +72,7 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{
   "profile": "work",
   "timeout": "3s",
-    "browser": {
+  "browser": {
     "mode": "headless",
     "resource_budget": {
       "max_tabs": 33,
@@ -83,6 +83,13 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
     "headless": {
       "profile_seed_strategy": "managed",
       "profile_refresh_after": "24h"
+    }
+  },
+  "agents": {
+    "chatgpt": {
+      "thinking": "highest",
+      "minimum_thinking": "extra-high",
+      "model": "highest"
     }
   }
 }`), 0o600); err != nil {
@@ -122,6 +129,18 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	}
 	if got := cfg.Browser.ResourceBudget.MaxLoadPerCPU; got != 1.5 {
 		t.Fatalf("ResourceBudget.MaxLoadPerCPU = %v, want 1.5", got)
+	}
+	if got := cfg.Agents.ChatGPT.Thinking; got != "highest" {
+		t.Fatalf("ChatGPT.Thinking = %q, want highest", got)
+	}
+	if got := cfg.Agents.ChatGPT.MinimumThinking; got != "extra-high" {
+		t.Fatalf(
+			"ChatGPT.MinimumThinking = %q, want extra-high",
+			got,
+		)
+	}
+	if got := cfg.Agents.ChatGPT.Model; got != "highest" {
+		t.Fatalf("ChatGPT.Model = %q, want highest", got)
 	}
 }
 
@@ -197,6 +216,13 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 			Retention:       240 * time.Hour,
 			MaxLogSizeBytes: 32 << 20,
 		},
+		Agents: config.AgentConfig{
+			ChatGPT: config.ChatGPTConfig{
+				Thinking:        "highest",
+				MinimumThinking: "extra-high",
+				Model:           "highest",
+			},
+		},
 	}
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -241,6 +267,11 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 	}
 	if loaded.Artifacts.Retention != 240*time.Hour || loaded.Artifacts.MaxLogSizeBytes != 32<<20 {
 		t.Fatalf("loaded artifact config = %+v", loaded.Artifacts)
+	}
+	if loaded.Agents.ChatGPT.Thinking != "highest" ||
+		loaded.Agents.ChatGPT.MinimumThinking != "extra-high" ||
+		loaded.Agents.ChatGPT.Model != "highest" {
+		t.Fatalf("loaded ChatGPT config = %+v", loaded.Agents.ChatGPT)
 	}
 }
 

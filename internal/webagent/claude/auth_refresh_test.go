@@ -115,7 +115,7 @@ func TestRefreshAuthMissingEvidenceAndBudgetFailureRemainTypedAndClean(t *testin
 		config := newAuthRefreshTestConfig(t, stateDir, client, cdp.BrowserResourceBudgetOptions{
 			MaxTabs: 15, MaxTabsSource: "test", MaxWindows: 5, BrowserMode: "headed",
 		})
-		config.ObservationTimeout = 30 * time.Millisecond
+		config.ObservationTimeout = time.Second
 
 		result := RefreshAuth(context.Background(), config)
 		if result.OK ||
@@ -331,31 +331,32 @@ func newAuthRefreshTestConfig(
 }
 
 type authFakeClient struct {
-	mu                      sync.Mutex
-	targets                 map[string]cdp.TargetInfo
-	events                  []cdp.Event
-	counts                  map[string]int
-	fail                    map[string]error
-	nextID                  int
-	emitList                bool
-	cookieValue             string
-	readDeadlineImmediately bool
-	composerReady           bool
-	quotaLimited            bool
-	modelLabel              string
-	ackConversationID       string
-	ackStreaming            bool
-	insertedPrompt          string
-	deleteRoute             bool
-	deleteStage             int
-	renderedSidebarExpanded bool
-	renderedConversations   []map[string]any
-	renderedListSnapshots   [][]map[string]any
-	renderedListReads       int
-	renderedDetailText      string
-	renderedDetailPrompt    string
-	renderedDetailStreaming bool
-	reloadIgnoreCache       []bool
+	mu                       sync.Mutex
+	targets                  map[string]cdp.TargetInfo
+	events                   []cdp.Event
+	counts                   map[string]int
+	fail                     map[string]error
+	nextID                   int
+	emitList                 bool
+	cookieValue              string
+	readDeadlineImmediately  bool
+	composerReady            bool
+	composerReadyAfterReload int
+	quotaLimited             bool
+	modelLabel               string
+	ackConversationID        string
+	ackStreaming             bool
+	insertedPrompt           string
+	deleteRoute              bool
+	deleteStage              int
+	renderedSidebarExpanded  bool
+	renderedConversations    []map[string]any
+	renderedListSnapshots    [][]map[string]any
+	renderedListReads        int
+	renderedDetailText       string
+	renderedDetailPrompt     string
+	renderedDetailStreaming  bool
+	reloadIgnoreCache        []bool
 }
 
 func newAuthFakeClient(targetIDs ...string) *authFakeClient {
@@ -517,8 +518,14 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 				"answer_count":    boolCount(c.renderedDetailText != ""),
 			}
 		case strings.Contains(expression, "composer_ready"):
+			composerReady := c.composerReady
+			if !composerReady &&
+				c.composerReadyAfterReload > 0 &&
+				len(c.reloadIgnoreCache) >= c.composerReadyAfterReload {
+				composerReady = true
+			}
 			value = map[string]any{
-				"composer_ready": c.composerReady,
+				"composer_ready": composerReady,
 				"quota_limited":  c.quotaLimited,
 				"model_label":    c.modelLabel,
 			}

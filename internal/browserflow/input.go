@@ -45,6 +45,41 @@ func PressEnter(ctx context.Context, session *cdp.PageSession) (DispatchOutcome,
 	return DispatchOutcome{Dispatch: DispatchPerformed, RawInputAttempted: true}, nil
 }
 
+// PressEscape dismisses one reversible browser control such as a menu. It uses
+// the same tri-state transport classification as other raw input helpers so
+// callers can observe the resulting page state after an ambiguous key event.
+func PressEscape(
+	ctx context.Context,
+	session *cdp.PageSession,
+) (DispatchOutcome, error) {
+	if session == nil {
+		return DispatchOutcome{Dispatch: DispatchNotPerformed},
+			fmt.Errorf("page session is required")
+	}
+	keyDown := json.RawMessage(
+		`{"type":"rawKeyDown","key":"Escape","code":"Escape","windowsVirtualKeyCode":27,"nativeVirtualKeyCode":27}`,
+	)
+	if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", keyDown); err != nil {
+		return DispatchOutcome{
+			Dispatch:          DispatchUnknown,
+			RawInputAttempted: true,
+		}, fmt.Errorf("Escape keyDown outcome is ambiguous")
+	}
+	keyUp := json.RawMessage(
+		`{"type":"keyUp","key":"Escape","code":"Escape","windowsVirtualKeyCode":27,"nativeVirtualKeyCode":27}`,
+	)
+	if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", keyUp); err != nil {
+		return DispatchOutcome{
+			Dispatch:          DispatchPerformed,
+			RawInputAttempted: true,
+		}, fmt.Errorf("Escape keyUp confirmation failed after keyDown")
+	}
+	return DispatchOutcome{
+		Dispatch:          DispatchPerformed,
+		RawInputAttempted: true,
+	}, nil
+}
+
 // PressEnterOnSelector focuses one provider-validated DOM control and dispatches
 // one logical browser-level Enter action. The focus evaluation is reversible,
 // so any failure before rawKeyDown is explicitly not performed. Any rawKeyDown

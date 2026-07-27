@@ -148,7 +148,7 @@ func ListConversations(
 					data,
 				)
 			}
-			_, attempts, panelOpened, _, err := ensureSession(
+			_, attempts, _, panelOpened, _, err := ensureSession(
 				ctx,
 				session,
 				config.Timeout,

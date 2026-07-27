@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -110,43 +111,18 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 	}
 	now := nowForAsk(config)
 	auth := config.Store.AuthStatus(ctx, now, DefaultAuthTTL)
-	if !auth.Ready {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"gemini_auth_"+auth.State, "auth",
-			"Gemini auth evidence is not ready before Send", "", data,
-			[]string{"cdp workflow agent gemini auth refresh --json"},
-		)
-	}
+	data.Metadata["cached_auth_state"] = auth.State
 	runtimeStatus := config.Store.RuntimeStatus(
 		ctx,
 		now,
 		DefaultCapabilitiesTTL,
 	)
-	if !runtimeStatus.Ready {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"gemini_runtime_capabilities_"+runtimeStatus.State, "capability",
-			"Gemini runtime capability evidence is not ready before Send", "", data,
-			[]string{"cdp workflow agent gemini capabilities refresh --json"},
-		)
-	}
+	data.Metadata["cached_capability_state"] = runtimeStatus.State
 	expectedMode := strings.TrimSpace(runtimeStatus.CurrentMode)
-	if expectedMode == "" {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"gemini_runtime_mode_missing", "capability",
-			"Gemini cached runtime mode is missing before Send", "", data,
-			[]string{"cdp workflow agent gemini capabilities refresh --json"},
-		)
+	cachedModeAvailable := runtimeStatus.Ready && expectedMode != ""
+	if cachedModeAvailable {
+		data.Metadata["cached_mode"] = expectedMode
 	}
-	data.CurrentMode = expectedMode
 
 	return runOwned(
 		ctx,
@@ -172,12 +148,19 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 				)
 			}
 			var composer composerObservation
-			composerAttempts, err := pollUntil(
+			readiness, readinessErr := authreadiness.WaitForEvidence(
 				ctx,
+				session,
+				authreadiness.MinimumAttempts,
 				config.ComposerTimeout,
 				config.PollInterval,
-				func() (bool, error) {
-					if err := observeComposer(ctx, session, "", &composer); err != nil {
+				func(observationCtx context.Context) (bool, error) {
+					if err := observeComposer(
+						observationCtx,
+						session,
+						"",
+						&composer,
+					); err != nil {
 						return false, err
 					}
 					return composer.RouteReady &&
@@ -185,20 +168,38 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 						composer.EditorCount == 1 &&
 						composer.PickerCount == 1 &&
 						composer.AnswerCount == 0 &&
-						composer.CurrentMode == expectedMode, nil
+						strings.TrimSpace(composer.CurrentMode) != "", nil
 				},
 			)
-			data.Metadata["composer_attempts"] = composerAttempts
-			if err != nil {
+			data.Metadata["composer_readiness_attempt"] = readiness.Attempt
+			data.Metadata["composer_readiness_stage"] = readiness.Stage
+			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
-					"gemini_composer_not_ready", "provider",
-					"Gemini fresh composer and cached runtime mode did not become ready before Send",
+					"gemini_composer_readiness_failed", "connection",
+					"Gemini composer readiness could not complete its bounded load, reload, hard-reload, and final grace sequence",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				return askFailure(
+					runID, config, webagent.StageAttached, target, pending,
+					notPerformed, nil,
+					"gemini_composer_evidence_not_observed", "provider",
+					"Gemini fresh composer and live mode were not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
+			liveMode := strings.TrimSpace(composer.CurrentMode)
+			if cachedModeAvailable &&
+				!strings.EqualFold(expectedMode, liveMode) {
+				data.Metadata["cached_mode_changed"] = true
+			}
+			expectedMode = liveMode
+			data.CurrentMode = liveMode
 			if err := prepareExactPrompt(ctx, session, prompt); err != nil {
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(

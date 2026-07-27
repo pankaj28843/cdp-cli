@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pankaj28843/cdp-cli/internal/admission"
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -168,18 +169,10 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 		Store: config.Store,
 		Now:   config.Now,
 	})
+	templateAvailable := failure == nil
+	baseData.Metadata["cached_read_template_available"] = templateAvailable
 	if failure != nil {
-		return askFailure(
-			runID, config.BuildCommit, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed,
-			failure.code, failure.errClass, failure.message, "",
-			baseData, nil,
-			[]string{
-				"cdp workflow agent claude auth refresh --json",
-				"cdp workflow agent claude doctor --json",
-			},
-		)
+		baseData.Metadata["cached_read_template_state"] = failure.code
 	}
 
 	admissionLease, err := config.Admission.Acquire(ctx, admission.Request{
@@ -322,15 +315,46 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			authRefreshNextCommands(runID, pendingCleanup),
 		)
 	}
-	composer, err := waitForComposer(ctx, session, config.ComposerTimeout, config.PollInterval)
-	if err != nil {
+	var composer composerObservation
+	readiness, readinessErr := authreadiness.WaitForEvidence(
+		ctx,
+		session,
+		authreadiness.MinimumAttempts,
+		config.ComposerTimeout,
+		config.PollInterval,
+		func(observationCtx context.Context) (bool, error) {
+			current, observationErr := evaluateComposer(
+				observationCtx,
+				session,
+			)
+			if observationErr != nil {
+				return false, observationErr
+			}
+			composer = current
+			return composer.Ready || composer.QuotaLimited, nil
+		},
+	)
+	baseData.Metadata["composer_readiness_attempt"] = readiness.Attempt
+	baseData.Metadata["composer_readiness_stage"] = readiness.Stage
+	if readinessErr != nil || readiness.ObservationFailed() {
 		_ = lease.MarkIncomplete(context.Background())
 		return askFailure(
 			runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup,
 			notPerformed,
-			"claude_composer_not_ready", "provider",
-			"Claude composer did not become ready before Send", "",
-			baseData, nil,
+			"claude_composer_readiness_failed", "connection",
+			"Claude composer readiness could not complete its bounded load, reload, hard-reload, and final grace sequence",
+			"", baseData, nil,
+			authRefreshNextCommands(runID, pendingCleanup),
+		)
+	}
+	if !readiness.Observed {
+		_ = lease.MarkIncomplete(context.Background())
+		return askFailure(
+			runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup,
+			notPerformed,
+			"claude_composer_evidence_not_observed", "provider",
+			"Claude composer was not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
+			"", baseData, nil,
 			authRefreshNextCommands(runID, pendingCleanup),
 		)
 	}
@@ -430,13 +454,24 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 	releaseCooldown = time.Time{}
 	action = actionEvidence(lease.Record())
 
-	detail, detailAttempts, detailFailure := reconcileAskDetail(
-		ctx,
-		config,
-		template,
-		ack.ConversationID,
-		ackDeadline,
-	)
+	detail := ConversationDetailData{}
+	detailAttempts := 0
+	var detailFailure *readFailure
+	if templateAvailable {
+		detail, detailAttempts, detailFailure = reconcileAskDetail(
+			ctx,
+			config,
+			template,
+			ack.ConversationID,
+			ackDeadline,
+		)
+	} else {
+		detailFailure = &readFailure{
+			code:     "claude_browser_context_required",
+			errClass: "auth",
+			message:  "Claude cached request template was unavailable",
+		}
+	}
 	if detailFailure != nil &&
 		detailFailure.code == "claude_browser_context_required" {
 		observation, renderedAttempts, observed := readRenderedDetail(

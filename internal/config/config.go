@@ -38,6 +38,7 @@ type Config struct {
 	Timeout   time.Duration  `json:"timeout,omitempty"`
 	Browser   BrowserConfig  `json:"browser,omitempty"`
 	Artifacts ArtifactConfig `json:"artifacts,omitempty"`
+	Agents    AgentConfig    `json:"agents,omitempty"`
 
 	browserModeSet bool
 }
@@ -66,6 +67,18 @@ type HeadlessConfig struct {
 type ArtifactConfig struct {
 	Retention       time.Duration `json:"retention,omitempty"`
 	MaxLogSizeBytes int64         `json:"max_log_size_bytes,omitempty"`
+}
+
+type AgentConfig struct {
+	ChatGPT ChatGPTConfig `json:"chatgpt,omitempty"`
+}
+
+// ChatGPTConfig contains owner-specific selection preferences. Empty values
+// preserve the provider's current selection and make no entitlement assumption.
+type ChatGPTConfig struct {
+	Thinking        string `json:"thinking,omitempty"`
+	MinimumThinking string `json:"minimum_thinking,omitempty"`
+	Model           string `json:"model,omitempty"`
 }
 
 type BrowserModeResolution struct {
@@ -195,6 +208,17 @@ type fileConfig struct {
 	Timeout   string              `json:"timeout,omitempty"`
 	Browser   *fileBrowserConfig  `json:"browser,omitempty"`
 	Artifacts *fileArtifactConfig `json:"artifacts,omitempty"`
+	Agents    *fileAgentConfig    `json:"agents,omitempty"`
+}
+
+type fileAgentConfig struct {
+	ChatGPT *fileChatGPTConfig `json:"chatgpt,omitempty"`
+}
+
+type fileChatGPTConfig struct {
+	Thinking        string `json:"thinking,omitempty"`
+	MinimumThinking string `json:"minimum_thinking,omitempty"`
+	Model           string `json:"model,omitempty"`
 }
 
 type fileArtifactConfig struct {
@@ -299,6 +323,13 @@ func decode(data []byte) (Config, error) {
 			cfg.Artifacts.MaxLogSizeBytes = size
 		}
 	}
+	if raw.Agents != nil && raw.Agents.ChatGPT != nil {
+		cfg.Agents.ChatGPT = ChatGPTConfig{
+			Thinking:        strings.TrimSpace(raw.Agents.ChatGPT.Thinking),
+			MinimumThinking: strings.TrimSpace(raw.Agents.ChatGPT.MinimumThinking),
+			Model:           strings.TrimSpace(raw.Agents.ChatGPT.Model),
+		}
+	}
 	return cfg, nil
 }
 
@@ -363,6 +394,21 @@ func encode(cfg Config) ([]byte, error) {
 		}
 		if cfg.Artifacts.MaxLogSizeBytes > 0 {
 			raw.Artifacts.MaxLogSize = artifacts.FormatByteSize(cfg.Artifacts.MaxLogSizeBytes)
+		}
+	}
+	if cfg.Agents.ChatGPT.Thinking != "" ||
+		cfg.Agents.ChatGPT.MinimumThinking != "" ||
+		cfg.Agents.ChatGPT.Model != "" {
+		raw.Agents = &fileAgentConfig{
+			ChatGPT: &fileChatGPTConfig{
+				Thinking: strings.TrimSpace(
+					cfg.Agents.ChatGPT.Thinking,
+				),
+				MinimumThinking: strings.TrimSpace(
+					cfg.Agents.ChatGPT.MinimumThinking,
+				),
+				Model: strings.TrimSpace(cfg.Agents.ChatGPT.Model),
+			},
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -173,57 +174,21 @@ func Ask(
 	}
 	now := nowForAsk(config)
 	auth := config.Store.AuthStatus(ctx, now, DefaultAuthTTL)
-	if !auth.Ready {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"grok_auth_"+auth.State, "auth",
-			"Grok auth evidence is not ready before Send", "", data,
-			[]string{"cdp workflow agent grok auth refresh --json"},
-		)
-	}
+	data.Metadata["cached_auth_state"] = auth.State
 	runtime := config.Store.RuntimeStatus(
 		ctx,
 		now,
 		DefaultCapabilitiesTTL,
 	)
-	if !runtime.Ready {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"grok_runtime_capabilities_"+runtime.State, "capability",
-			"Grok runtime capability evidence is not ready before Send", "", data,
-			[]string{"cdp workflow agent grok capabilities refresh --json"},
-		)
+	data.Metadata["cached_capability_state"] = runtime.State
+	selected, cachedModeAvailable := selectedRuntimeMode(runtime)
+	if cachedModeAvailable {
+		data.ModeID = selected.ID
+		data.Metadata["cached_mode_title"] = selected.Title
 	}
-	selected, ok := selectedRuntimeMode(runtime)
-	if !ok {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"grok_default_mode_unavailable", "capability",
-			"Grok cached default mode is missing, unavailable, or not selected",
-			"", data,
-			[]string{"cdp workflow agent grok capabilities refresh --json"},
-		)
-	}
-	data.ModeID = selected.ID
-	data.ModeTitle = selected.Title
 	template, err := config.Store.LoadTemplate(ctx)
-	if err != nil {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"grok_auth_state_unreadable", "internal",
-			"Grok owner-only request template could not be loaded before Send",
-			"", data,
-			[]string{"cdp workflow agent grok auth refresh --json"},
-		)
-	}
+	templateAvailable := auth.Ready && err == nil
+	data.Metadata["cached_read_template_available"] = templateAvailable
 
 	return runOwned(
 		ctx,
@@ -250,13 +215,15 @@ func Ask(
 				)
 			}
 			var composer composerObservation
-			composerAttempts, err := pollUntil(
+			readiness, readinessErr := authreadiness.WaitForEvidence(
 				ctx,
+				session,
+				authreadiness.MinimumAttempts,
 				config.ComposerTimeout,
 				config.PollInterval,
-				func() (bool, error) {
+				func(observationCtx context.Context) (bool, error) {
 					if err := observeComposer(
-						ctx,
+						observationCtx,
 						session,
 						"",
 						&composer,
@@ -267,27 +234,45 @@ func Ask(
 						composer.EditorReady &&
 						composer.EditorCount == 1 &&
 						composer.ModeCount == 1 &&
-						composer.ModeTitle == selected.Title &&
+						strings.TrimSpace(composer.ModeTitle) != "" &&
 						composer.AssistantCount == 0 &&
 						composer.ConversationID == "", nil
 				},
 			)
-			data.Metadata["composer_attempts"] = composerAttempts
-			if err != nil {
+			data.Metadata["composer_readiness_attempt"] = readiness.Attempt
+			data.Metadata["composer_readiness_stage"] = readiness.Stage
+			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
-					"grok_composer_not_ready", "provider",
-					"Grok fresh composer and cached default mode did not become ready before Send",
+					"grok_composer_readiness_failed", "connection",
+					"Grok composer readiness could not complete its bounded load, reload, hard-reload, and final grace sequence",
 					"", data, cleanupCommands(runID, pending),
 				)
+			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				return askFailure(
+					runID, config, webagent.StageAttached, target, pending,
+					notPerformed, nil,
+					"grok_composer_evidence_not_observed", "provider",
+					"Grok fresh composer and live mode were not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
+			expectedMode := strings.TrimSpace(composer.ModeTitle)
+			data.ModeTitle = expectedMode
+			if cachedModeAvailable &&
+				!strings.EqualFold(selected.Title, expectedMode) {
+				data.Metadata["cached_mode_changed"] = true
+				data.ModeID = ""
 			}
 			verifyAttempts, composer, verifyErr := prepareVerifiedPrompt(
 				ctx,
 				session,
 				prompt,
-				selected.Title,
+				expectedMode,
 				config.ComposerTimeout,
 				config.PollInterval,
 			)
@@ -298,7 +283,7 @@ func Ask(
 				data.Metadata["observed_prompt_matches"] = composer.PromptMatches
 				data.Metadata["observed_mode_count"] = composer.ModeCount
 				data.Metadata["observed_mode_matches"] =
-					composer.ModeTitle == selected.Title
+					composer.ModeTitle == expectedMode
 				data.Metadata["observed_submit_count"] = composer.SubmitCount
 				data.Metadata["observed_submit_ready"] = composer.SubmitReady
 				data.Metadata["observed_assistant_count"] =
@@ -327,7 +312,7 @@ func Ask(
 			if dispatcher == nil {
 				dispatcher = grokSendDispatcher{
 					prompt:    prompt,
-					modeTitle: selected.Title,
+					modeTitle: expectedMode,
 				}
 			}
 			outcome, _ := lease.Dispatch(ctx, dispatcher)
@@ -454,18 +439,29 @@ func Ask(
 				}
 			}
 
-			stored, storedFailure := fetchConversationDetail(
-				ctx,
-				ReadConfig{
-					Store:       config.Store,
-					HTTPClient:  config.HTTPClient,
-					BuildCommit: config.BuildCommit,
-					Now:         config.Now,
-				},
-				template,
-				conversationID,
-			)
-			data.Metadata["stored_detail_attempts"] = 1
+			stored := ConversationDetailData{}
+			var storedFailure *readFailure
+			if templateAvailable {
+				stored, storedFailure = fetchConversationDetail(
+					ctx,
+					ReadConfig{
+						Store:       config.Store,
+						HTTPClient:  config.HTTPClient,
+						BuildCommit: config.BuildCommit,
+						Now:         config.Now,
+					},
+					template,
+					conversationID,
+				)
+				data.Metadata["stored_detail_attempts"] = 1
+			} else {
+				storedFailure = &readFailure{
+					code:     "grok_browser_context_required",
+					errClass: "auth",
+					message:  "Grok cached request template was unavailable",
+				}
+				data.Metadata["stored_detail_attempts"] = 0
+			}
 			if storedFailure == nil &&
 				stored.CompletionState == "terminal" &&
 				strings.TrimSpace(stored.Text) != "" {

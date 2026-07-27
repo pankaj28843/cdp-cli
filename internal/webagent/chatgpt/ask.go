@@ -9,18 +9,21 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pankaj28843/cdp-cli/internal/admission"
+	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
 const (
-	AskSchemaVersion         = "chatgpt-ask/v1"
-	MaxPromptCharacters      = 18_000
-	defaultAskTimeout        = 4 * time.Minute
-	defaultComposerTimeout   = 45 * time.Second
-	defaultAmbiguousCooldown = 5 * time.Minute
-	renderedWaitFraction     = 0.85
+	AskSchemaVersion           = "chatgpt-ask/v1"
+	MaxPromptCharacters        = 18_000
+	defaultAskTimeout          = 4 * time.Minute
+	defaultComposerTimeout     = 45 * time.Second
+	defaultAmbiguousCooldown   = 5 * time.Minute
+	finalSelectionGuardTimeout = 5 * time.Second
+	renderedWaitFraction       = 0.85
 )
 
 type AskConfig struct {
@@ -32,6 +35,7 @@ type AskConfig struct {
 	PollInterval    time.Duration
 	Now             func() time.Time
 	Send            browserflow.Dispatcher
+	Selection       SelectionPolicy
 	operation       webagent.Operation
 	runID           string
 	holdInput       bool
@@ -54,6 +58,10 @@ type AskData struct {
 	ConversationMode   string          `json:"conversation_mode"`
 	ProductMode        string          `json:"product_mode"`
 	Intelligence       string          `json:"intelligence"`
+	ThinkingPolicy     string          `json:"thinking_policy"`
+	MinimumThinking    string          `json:"minimum_thinking,omitempty"`
+	ModelPolicy        string          `json:"model_policy"`
+	Model              string          `json:"model,omitempty"`
 	Text               string          `json:"text"`
 	CompletionState    string          `json:"completion_state"`
 	ReadMode           string          `json:"read_mode"`
@@ -92,12 +100,16 @@ type composerObservation struct {
 }
 
 type selectionObservation struct {
-	OK                 bool   `json:"ok"`
-	ProductMode        string `json:"product_mode"`
-	ProductAction      string `json:"product_action"`
-	Intelligence       string `json:"intelligence"`
-	IntelligenceAction string `json:"intelligence_action"`
-	Reason             string `json:"reason"`
+	OK                  bool     `json:"ok"`
+	ProductMode         string   `json:"product_mode"`
+	ProductAction       string   `json:"product_action"`
+	Intelligence        string   `json:"intelligence"`
+	IntelligenceAction  string   `json:"intelligence_action"`
+	IntelligenceOptions []string `json:"intelligence_options"`
+	Model               string   `json:"model"`
+	ModelAction         string   `json:"model_action"`
+	ModelOptions        []string `json:"model_options"`
+	Reason              string   `json:"reason"`
 }
 
 type renderedObservation struct {
@@ -112,15 +124,55 @@ type renderedObservation struct {
 }
 
 type chatgptSendDispatcher struct {
-	prompt string
+	prompt       string
+	intelligence string
+	model        string
+	attachment   *attachmentExpectation
+	throttle     *heldChatGPTThrottle
 }
 
 func (d chatgptSendDispatcher) Dispatch(
 	ctx context.Context,
 	session *cdp.PageSession,
 ) (browserflow.DispatchOutcome, error) {
+	// Selection preflight, including the resolved model, finishes immediately
+	// before MarkPrepared. Once action_pending is durable this dispatcher must
+	// perform no reversible raw clicks: it passively observes the selection
+	// guard and composer, then emits at most the single irreversible Send input.
+	if err := observeSelectionGuardAtSend(
+		ctx,
+		session,
+		d.intelligence,
+		d.model,
+	); err != nil {
+		return browserflow.DispatchOutcome{
+			Dispatch: browserflow.DispatchNotPerformed,
+		}, err
+	}
+	var attachment attachmentObservation
+	if err := observeExpectedAttachment(
+		ctx,
+		session,
+		d.attachment,
+		&attachment,
+	); err != nil || !attachment.OK {
+		return browserflow.DispatchOutcome{
+				Dispatch: browserflow.DispatchNotPerformed,
+			}, fmt.Errorf(
+				"exact ChatGPT attachment was not retained and ready at Send",
+			)
+	}
+	// Keep the coordinate-bearing composer observation last. No browser
+	// operation may occur between this passive observation and the one raw
+	// Send click, otherwise attachment-driven layout could stale the point.
 	var observation composerObservation
-	if err := observeComposer(ctx, session, d.prompt, &observation); err != nil ||
+	if err := observeComposer(
+		ctx,
+		session,
+		d.prompt,
+		d.intelligence,
+		&observation,
+	); err != nil ||
 		!observation.RouteReady ||
 		!observation.EditorReady ||
 		observation.EditorCount != 1 ||
@@ -129,7 +181,10 @@ func (d chatgptSendDispatcher) Dispatch(
 		observation.WorkCount != 1 ||
 		!observation.ChatSelected ||
 		observation.IntelligenceCount != 1 ||
-		!strings.EqualFold(observation.SelectedIntelligence, "Medium") ||
+		!strings.EqualFold(
+			observation.SelectedIntelligence,
+			d.intelligence,
+		) ||
 		observation.SendCount != 1 ||
 		!observation.SendReady ||
 		observation.AssistantCount != 0 ||
@@ -139,12 +194,19 @@ func (d chatgptSendDispatcher) Dispatch(
 			Dispatch: browserflow.DispatchNotPerformed,
 		}, fmt.Errorf("exact ChatGPT Send control was not actionable")
 	}
-	return browserflow.ClickPoint(
+	outcome, clickErr := browserflow.ClickPoint(
 		ctx,
 		session,
 		observation.SendX,
 		observation.SendY,
 	)
+	if releaseErr := d.throttle.Release(nil); releaseErr != nil {
+		return outcome, fmt.Errorf(
+			"release ChatGPT shared provider throttle: %w",
+			releaseErr,
+		)
+	}
+	return outcome, clickErr
 }
 
 func Ask(
@@ -157,17 +219,31 @@ func Ask(
 	if runID == "" {
 		runID = webagent.NewRunID()
 	}
+	selectionPolicy, selectionErr := NormalizeSelectionPolicy(config.Selection)
 	data := AskData{
 		SchemaVersion:    AskSchemaVersion,
 		ConversationMode: "fresh_only",
 		ProductMode:      "Chat",
-		Intelligence:     "Medium",
+		ThinkingPolicy:   selectionPolicy.Thinking,
+		MinimumThinking:  selectionPolicy.MinimumThinking,
+		ModelPolicy:      selectionPolicy.Model,
 		CompletionState:  "not_submitted",
 		ReadMode:         "not_started",
 		PromptCharacters: utf8.RuneCountInString(prompt),
 		Metadata:         map[string]any{},
 	}
 	notPerformed := notPerformedAction()
+	if selectionErr != nil {
+		return askFailure(
+			runID, config, webagent.StagePlanned, nil,
+			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+			notPerformed, nil,
+			"chatgpt_selection_invalid", "usage",
+			selectionErr.Error(), "", data,
+			[]string{"cdp workflow agent chatgpt ask --help"},
+		)
+	}
+	config.Selection = selectionPolicy
 	if strings.TrimSpace(prompt) == "" {
 		return askFailure(
 			runID, config, webagent.StagePlanned, nil,
@@ -224,52 +300,38 @@ func Ask(
 			[]string{"cdp workflow agent chatgpt doctor --json"},
 		)
 	}
+	reconciledRunID, err := reconcilePriorSubmittedMutation(
+		ctx,
+		config.BrowserConfig,
+		data.PromptFingerprint,
+	)
+	if err != nil {
+		return askFailure(
+			runID, config, webagent.StagePlanned, nil,
+			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+			notPerformed, nil,
+			"chatgpt_admission_reconcile_failed", "internal",
+			"ChatGPT could not reconcile durable evidence for the prior submitted request",
+			"", data,
+			[]string{"cdp workflow agent admission status chatgpt --json"},
+		)
+	}
+	if reconciledRunID != "" {
+		data.Metadata["reconciled_prior_run_id"] = reconciledRunID
+	}
 	now := nowForAsk(config)
-	template, auth, templateErr := config.Store.LoadTemplateStatus(
+	template, auth, _ := config.Store.LoadTemplateStatus(
 		ctx,
 		now,
 		DefaultAuthTTL,
 	)
-	if templateErr != nil && auth.State == "invalid" {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"chatgpt_auth_invalid", "auth",
-			"ChatGPT owner-only auth evidence is invalid before Send",
-			"", data,
-			[]string{"cdp workflow agent chatgpt auth refresh --json"},
-		)
-	}
-	if !auth.Ready {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"chatgpt_auth_"+auth.State, "auth",
-			"ChatGPT auth evidence is not ready before Send", "", data,
-			[]string{"cdp workflow agent chatgpt auth refresh --json"},
-		)
-	}
+	data.Metadata["cached_auth_state"] = auth.State
 	runtime := config.Store.RuntimeStatus(
 		ctx,
 		now,
 		DefaultCapabilitiesTTL,
 	)
-	if !runtime.Ready ||
-		!containsString(runtime.ProductModes, "Chat") ||
-		!containsString(runtime.IntelligenceOptions, "Medium") ||
-		(upload != nil && !runtime.FileUploadObserved) {
-		return askFailure(
-			runID, config, webagent.StagePlanned, nil,
-			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-			notPerformed, nil,
-			"chatgpt_paid_medium_unproven", "capability",
-			"Paid Chat product, Medium intelligence, or requested file upload is not proven before Send",
-			"", data,
-			[]string{"cdp workflow agent chatgpt capabilities refresh --json"},
-		)
-	}
+	data.Metadata["cached_capability_state"] = runtime.State
 	return runOwned(
 		ctx,
 		config.BrowserConfig,
@@ -295,12 +357,20 @@ func Ask(
 				)
 			}
 			var composer composerObservation
-			composerAttempts, err := pollUntil(
+			readiness, err := authreadiness.WaitForEvidence(
 				ctx,
+				session,
+				authreadiness.MinimumAttempts,
 				config.ComposerTimeout,
 				config.PollInterval,
-				func() (bool, error) {
-					if err := observeComposer(ctx, session, "", &composer); err != nil {
+				func(observationCtx context.Context) (bool, error) {
+					if err := observeComposer(
+						observationCtx,
+						session,
+						"",
+						"",
+						&composer,
+					); err != nil {
 						return false, err
 					}
 					return composer.RouteReady &&
@@ -314,8 +384,32 @@ func Ask(
 						composer.ConversationID == "", nil
 				},
 			)
-			data.Metadata["composer_attempts"] = composerAttempts
-			if err != nil {
+			data.Metadata["composer_readiness_attempt"] = readiness.Attempt
+			data.Metadata["composer_readiness_stage"] = readiness.Stage
+			data.Metadata["composer_observations"] =
+				readiness.SuccessfulObservations
+			if err != nil || readiness.ObservationFailed() {
+				data.Metadata["observed_route_ready"] = composer.RouteReady
+				data.Metadata["observed_editor_count"] = composer.EditorCount
+				data.Metadata["observed_chat_count"] = composer.ChatCount
+				data.Metadata["observed_work_count"] = composer.WorkCount
+				data.Metadata["observed_intelligence_count"] =
+					composer.IntelligenceCount
+				data.Metadata["observed_send_count"] = composer.SendCount
+				data.Metadata["observed_assistant_count"] =
+					composer.AssistantCount
+				data.Metadata["observed_user_message_count"] =
+					composer.UserMessageCount
+				_ = lease.MarkIncomplete(context.Background())
+				return askFailure(
+					runID, config, webagent.StageAttached, target, pending,
+					notPerformed, nil,
+					"chatgpt_composer_observation_failed", "connection",
+					"ChatGPT fresh-composer observation could not complete its bounded load, reload, hard-reload, and final-grace sequence",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
+			if !readiness.Observed {
 				data.Metadata["observed_route_ready"] = composer.RouteReady
 				data.Metadata["observed_editor_count"] = composer.EditorCount
 				data.Metadata["observed_chat_count"] = composer.ChatCount
@@ -332,32 +426,47 @@ func Ask(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
 					"chatgpt_composer_not_ready", "provider",
-					"ChatGPT fresh paid composer did not become ready before Send",
+					"ChatGPT fresh composer was not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
 			var selection selectionObservation
-			if err := evaluateInto(
+			selection, err = selectChatGPT(
 				ctx,
 				session,
-				selectPaidChatMediumExpression,
-				&selection,
-			); err != nil || !selection.OK {
-				data.Metadata["selection_failure"] = selection.Reason
+				config.Selection,
+				false,
+				config.ComposerTimeout,
+				config.PollInterval,
+			)
+			if err != nil || !selection.OK {
+				if err != nil {
+					data.Metadata["selection_failure"] = err.Error()
+				} else {
+					data.Metadata["selection_failure"] = selection.Reason
+				}
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
-					"chatgpt_paid_medium_selection_failed", "capability",
-					"ChatGPT could not verify paid Chat product and Medium before Send",
+					"chatgpt_selection_failed", "capability",
+					"ChatGPT could not verify the requested Chat product, thinking, model, and minimum before Send",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
 			data.Metadata["product_selection_action"] = selection.ProductAction
 			data.Metadata["intelligence_selection_action"] =
 				selection.IntelligenceAction
+			data.Metadata["available_thinking"] =
+				append([]string{}, selection.IntelligenceOptions...)
+			data.Metadata["model_selection_action"] = selection.ModelAction
+			data.Metadata["available_models"] =
+				append([]string{}, selection.ModelOptions...)
+			data.Intelligence = selection.Intelligence
+			data.Model = selection.Model
+			var expectedAttachment *attachmentExpectation
 			if upload != nil {
-				attachment, attachFailure := attachLocalFileOnce(
+				attachment, expectation, attachFailure := attachLocalFileOnce(
 					ctx,
 					session,
 					*upload,
@@ -365,6 +474,7 @@ func Ask(
 					config.PollInterval,
 				)
 				data.Attachment = &attachment
+				expectedAttachment = expectation
 				if attachFailure != nil {
 					_ = lease.MarkIncomplete(context.Background())
 					if !attachFailure.RetrySafe {
@@ -394,15 +504,21 @@ func Ask(
 					)
 				}
 			}
+			dispatcher := config.Send
+			var sendThrottle *heldChatGPTThrottle
 			verifyAttempts, composer, verifyErr := prepareVerifiedPrompt(
 				ctx,
 				session,
 				prompt,
+				data.Intelligence,
+				data.Model,
+				expectedAttachment,
 				config.ComposerTimeout,
 				config.PollInterval,
 			)
 			data.Metadata["prompt_verify_attempts"] = verifyAttempts
 			if verifyErr != nil {
+				data.Metadata["prompt_verify_failure"] = verifyErr.Error()
 				data.Metadata["observed_route_ready"] = composer.RouteReady
 				data.Metadata["observed_editor_count"] = composer.EditorCount
 				data.Metadata["observed_prompt_matches"] = composer.PromptMatches
@@ -435,7 +551,7 @@ func Ask(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
 					"chatgpt_prompt_verify_failed", "provider",
-					"ChatGPT exact prompt, fresh route, Chat product, or Medium changed before Send",
+					"ChatGPT exact prompt, fresh route, Chat product, or selected thinking changed before Send",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
@@ -454,7 +570,81 @@ func Ask(
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
+			if dispatcher == nil {
+				var throttleFailure *readFailure
+				sendThrottle, throttleFailure = holdChatGPTThrottle(
+					ctx,
+					config.Admission,
+				)
+				if throttleFailure != nil {
+					_ = lease.MarkIncomplete(context.Background())
+					return askFailure(
+						runID, config, webagent.StageAttached,
+						target, pending, notPerformed, nil,
+						throttleFailure.code,
+						throttleFailure.errClass,
+						throttleFailure.message,
+						formatRetryAt(throttleFailure.retryAt),
+						data, cleanupCommands(runID, pending),
+					)
+				}
+				guardErr := prepareSelectionGuardAtSend(
+					ctx,
+					session,
+					data.Intelligence,
+					data.Model,
+					minDuration(
+						config.ComposerTimeout,
+						finalSelectionGuardTimeout,
+					),
+					config.PollInterval,
+				)
+				var guardedAttachment attachmentObservation
+				if guardErr == nil {
+					guardErr = observeExpectedAttachment(
+						ctx,
+						session,
+						expectedAttachment,
+						&guardedAttachment,
+					)
+				}
+				var guardedComposer composerObservation
+				if guardErr == nil {
+					guardErr = observeComposer(
+						ctx,
+						session,
+						prompt,
+						data.Intelligence,
+						&guardedComposer,
+					)
+				}
+				if guardErr != nil ||
+					!guardedAttachment.OK ||
+					!composerReadyForSend(
+						guardedComposer,
+						data.Intelligence,
+					) {
+					if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
+						data.Metadata["throttle_release_failed"] = true
+					}
+					_ = lease.MarkIncomplete(context.Background())
+					return askFailure(
+						runID, config, webagent.StageAttached,
+						target, pending, notPerformed, nil,
+						"chatgpt_final_send_guard_failed", "provider",
+						"ChatGPT final thinking, model, attachment, or composer guard changed before Send",
+						"", data, cleanupCommands(runID, pending),
+					)
+				}
+				if data.Attachment != nil {
+					data.Attachment.SendReadyAfterUpload =
+						guardedComposer.SendReady
+				}
+			}
 			if err := lease.MarkPrepared(ctx); err != nil {
+				if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
+					data.Metadata["throttle_release_failed"] = true
+				}
 				return askFailure(
 					runID, config, webagent.StageAttached, target, pending,
 					notPerformed, nil,
@@ -463,11 +653,25 @@ func Ask(
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
-			dispatcher := config.Send
 			if dispatcher == nil {
-				dispatcher = chatgptSendDispatcher{prompt: prompt}
+				dispatcher = chatgptSendDispatcher{
+					prompt:       prompt,
+					intelligence: data.Intelligence,
+					model:        data.Model,
+					attachment:   expectedAttachment,
+					throttle:     sendThrottle,
+				}
 			}
 			outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
+			if releaseErr := sendThrottle.Release(nil); releaseErr != nil {
+				data.Metadata["throttle_release_failed"] = true
+				if dispatchErr == nil {
+					dispatchErr = fmt.Errorf(
+						"release ChatGPT shared provider throttle: %w",
+						releaseErr,
+					)
+				}
+			}
 			record := lease.Record()
 			action := actionEvidence(record)
 			if dispatchErr != nil {
@@ -594,7 +798,6 @@ func Ask(
 			data.Metadata["acknowledgement_user_message_count"] =
 				rendered.UserMessageCount
 			detailFallbackUsed := false
-			var identityDetail ConversationDetailData
 			if routeObserved &&
 				routeUserObserved &&
 				routeStable &&
@@ -606,6 +809,7 @@ func Ask(
 				data.DetailReadAttempts = 1
 				identityDetail, detailFailure := fetchOneHydratedDetail(
 					ctx,
+					config.Admission,
 					session,
 					template,
 					observedConversationID,
@@ -664,36 +868,6 @@ func Ask(
 				)
 			}
 			action = actionEvidence(lease.Record())
-			if detailFallbackUsed &&
-				identityDetail.CompletionState == "terminal" &&
-				strings.TrimSpace(identityDetail.Text) != "" {
-				data.Text = strings.TrimSpace(identityDetail.Text)
-				data.CompletionState = "terminal"
-				data.ReadMode = browserReadMode
-				data.Metadata["answer_source"] =
-					"single_same_target_hydrated_detail_fallback"
-				if err := lease.MarkTerminal(ctx); err != nil {
-					return askFailure(
-						runID, config, webagent.StageAcknowledged,
-						target, pending, action, conversation,
-						"chatgpt_terminal_state_failed", "internal",
-						"ChatGPT hydrated-detail terminal state could not be persisted",
-						"", data, cleanupCommands(runID, pending),
-					)
-				}
-				return finishAsk(
-					ctx, lease,
-					runID, config, webagent.StateTerminal,
-					target, pending, action, conversation, data,
-					[]string{
-						fmt.Sprintf(
-							"cdp workflow agent chatgpt conversations detail %s --json",
-							conversationID,
-						),
-					},
-				)
-			}
-
 			renderedDeadline := webagent.FractionalDeadline(
 				time.Now(),
 				deadline,
@@ -722,7 +896,7 @@ func Ask(
 				rendered.ConversationID == conversationID &&
 				rendered.UserMessageCount == 1 &&
 				!rendered.Streaming &&
-				(rendered.TerminalControl || renderedStable >= 4) &&
+				rendered.TerminalControl &&
 				len(strings.TrimSpace(rendered.Text)) >= minimumUsefulAnswerChars(prompt) &&
 				terminalAnswerTextValid(rendered.Text, map[string]any{})
 			if renderedTerminal {
@@ -764,10 +938,7 @@ func Ask(
 					runID, config, webagent.StateIncomplete,
 					target, pending, action, conversation, data,
 					[]string{
-						fmt.Sprintf(
-							"cdp workflow agent chatgpt conversations await %s --json",
-							conversationID,
-						),
+						conversationAwaitCommand(conversationID),
 					},
 				)
 			}
@@ -777,6 +948,7 @@ func Ask(
 				url.PathEscape(conversationID)
 			response, detailFailure := browserFetch(
 				ctx,
+				config.Admission,
 				session,
 				template,
 				Origin+detailPath,
@@ -892,10 +1064,7 @@ func Ask(
 				runID, config, webagent.StateIncomplete,
 				target, pending, action, conversation, data,
 				[]string{
-					fmt.Sprintf(
-						"cdp workflow agent chatgpt conversations await %s --json",
-						conversationID,
-					),
+					conversationAwaitCommand(conversationID),
 				},
 			)
 		},
@@ -906,14 +1075,20 @@ func observeComposer(
 	ctx context.Context,
 	session *cdp.PageSession,
 	prompt string,
+	expectedThinking string,
 	observation *composerObservation,
 ) error {
 	promptJSON, err := json.Marshal(prompt)
 	if err != nil {
 		return fmt.Errorf("encode ChatGPT prompt verification")
 	}
+	thinkingJSON, err := json.Marshal(expectedThinking)
+	if err != nil {
+		return fmt.Errorf("encode ChatGPT thinking verification")
+	}
 	expression := fmt.Sprintf(`(() => {
 	  const expected = %s;
+	  const expectedThinking = %s;
 	  const normalize = value => String(value || '').replace(/\r\n/g, '\n');
 	  const label = element => String(
 	    element && (
@@ -972,15 +1147,19 @@ func observeComposer(
 	  )).filter(visible);
 	  const chats = radios.filter(button => label(button) === 'Chat');
 	  const works = radios.filter(button => label(button) === 'Work');
-	  const known = [
+	  const knownThinking = [
 	    'Instant', 'Instant 5.5', 'Medium', 'High',
-	    'Extra High', 'Pro', 'GPT-5.6 Sol'
+	    'Extra High', 'Pro'
 	  ];
 	  const intelligence = Array.from(document.querySelectorAll(
 	    'button[aria-haspopup="menu"]'
 	  )).filter(button =>
-	    visible(button) && known.some(item =>
-	      item.toLowerCase() === label(button).toLowerCase()
+	    visible(button) && (
+	      expectedThinking ?
+	        label(button).toLowerCase() === expectedThinking.toLowerCase() :
+	        knownThinking.some(item =>
+	          item.toLowerCase() === label(button).toLowerCase()
+	        ) || button.classList.contains('__composer-pill')
 	    )
 	  );
 	  const sends = Array.from(document.querySelectorAll(
@@ -991,14 +1170,25 @@ func observeComposer(
 	  const send = sends.length === 1 ? sends[0] : null;
 	  const sendAction = actionable(send);
 	  const route = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
-	  const assistants = Array.from(document.querySelectorAll(
-	    'section[data-turn="assistant"] [data-message-author-role="assistant"],' +
+	  const assistantTurns = Array.from(document.querySelectorAll(
+	    'section[data-turn="assistant"],[data-turn="assistant"]'
+	  ));
+	  const assistantMessages = Array.from(document.querySelectorAll(
 	    '[data-message-author-role="assistant"]'
-	  )).filter((element, index, values) => values.indexOf(element) === index);
-	  const users = Array.from(document.querySelectorAll(
-	    'section[data-turn="user"] [data-message-author-role="user"],' +
+	  )).filter((element, index, values) =>
+	    values.indexOf(element) === index
+	  );
+	  const assistants = assistantTurns.length ?
+	    assistantTurns : assistantMessages;
+	  const userTurns = Array.from(document.querySelectorAll(
+	    'section[data-turn="user"],[data-turn="user"]'
+	  ));
+	  const userMessages = Array.from(document.querySelectorAll(
 	    '[data-message-author-role="user"]'
-	  )).filter((element, index, values) => values.indexOf(element) === index);
+	  )).filter((element, index, values) =>
+	    values.indexOf(element) === index
+	  );
+	  const users = userTurns.length ? userTurns : userMessages;
 	  const specialized = Array.from(document.querySelectorAll(
 	    'iframe[src*="deep-research"],iframe[src*="connector_openai_deep_research"],' +
 	    '[data-testid*="deep-research"][aria-pressed="true"],' +
@@ -1039,7 +1229,7 @@ func observeComposer(
 	    conversation_id: route ? route[1] : '',
 	    specialized_surface_count: specialized.length
 	  };
-	})()`, promptJSON)
+	})()`, promptJSON, thinkingJSON)
 	return evaluateInto(ctx, session, expression, observation)
 }
 
@@ -1048,6 +1238,14 @@ func prepareExactPrompt(
 	session *cdp.PageSession,
 	prompt string,
 ) error {
+	if err := activateSelectionControl(
+		ctx,
+		session,
+		"editor",
+		"",
+	); err != nil {
+		return fmt.Errorf("activate exact ChatGPT composer before text input: %w", err)
+	}
 	var selected struct {
 		OK bool `json:"ok"`
 	}
@@ -1077,27 +1275,55 @@ func prepareVerifiedPrompt(
 	ctx context.Context,
 	session *cdp.PageSession,
 	prompt string,
+	intelligence string,
+	model string,
+	attachment *attachmentExpectation,
 	timeout time.Duration,
 	poll time.Duration,
 ) (int, composerObservation, error) {
 	deadline := time.Now().Add(timeout)
 	var observation composerObservation
+	var attachmentState attachmentObservation
 	var lastErr error
 	attempts := 0
-	for attempt := 1; attempt <= 8; attempt++ {
+	// File processing and paid-mode composer rerenders are nondeterministic.
+	// Keep retrying reversible preparation until the caller's bounded composer
+	// deadline instead of closing the exact target after a fixed small count.
+	for attempt := 1; ; attempt++ {
 		attempts = attempt
 		if err := prepareExactPrompt(ctx, session, prompt); err != nil {
 			lastErr = err
+		} else if err := verifySelectionAtSend(
+			ctx,
+			session,
+			intelligence,
+			model,
+			time.Until(deadline),
+			poll,
+		); err != nil {
+			lastErr = err
+		} else if err := observeExpectedAttachment(
+			ctx,
+			session,
+			attachment,
+			&attachmentState,
+		); err != nil {
+			lastErr = err
+		} else if !attachmentState.OK {
+			lastErr = fmt.Errorf(
+				"exact ChatGPT attachment changed before Send",
+			)
 		} else if err := observeComposer(
 			ctx,
 			session,
 			prompt,
+			intelligence,
 			&observation,
 		); err != nil {
 			lastErr = err
-		} else if composerReadyForSend(observation) {
+		} else if composerReadyForSend(observation, intelligence) {
 			return attempt, observation, nil
-		} else if composerPreparedExceptSend(observation) {
+		} else if composerPreparedExceptSend(observation, intelligence) {
 			waitAttempts, waitErr := pollUntil(
 				ctx,
 				time.Until(deadline),
@@ -1107,19 +1333,63 @@ func prepareVerifiedPrompt(
 						ctx,
 						session,
 						prompt,
+						intelligence,
 						&observation,
 					); err != nil {
 						return false, err
 					}
-					return composerReadyForSend(observation), nil
+					if err := observeExpectedAttachment(
+						ctx,
+						session,
+						attachment,
+						&attachmentState,
+					); err != nil {
+						return false, err
+					}
+					return composerReadyForSend(
+						observation,
+						intelligence,
+					) && attachmentState.OK, nil
 				},
 			)
 			attempts += waitAttempts
 			if waitErr == nil {
-				return attempts, observation, nil
+				if err := verifySelectionAtSend(
+					ctx,
+					session,
+					intelligence,
+					model,
+					time.Until(deadline),
+					poll,
+				); err != nil {
+					lastErr = err
+				} else if err := observeComposer(
+					ctx,
+					session,
+					prompt,
+					intelligence,
+					&observation,
+				); err != nil {
+					lastErr = fmt.Errorf(
+						"ChatGPT composer changed after final selection verification",
+					)
+				} else if err := observeExpectedAttachment(
+					ctx,
+					session,
+					attachment,
+					&attachmentState,
+				); err != nil ||
+					!attachmentState.OK ||
+					!composerReadyForSend(observation, intelligence) {
+					lastErr = fmt.Errorf(
+						"ChatGPT composer or attachment changed after final selection verification",
+					)
+				} else {
+					return attempts, observation, nil
+				}
+			} else {
+				lastErr = waitErr
 			}
-			lastErr = waitErr
-			break
 		} else {
 			lastErr = fmt.Errorf(
 				"exact ChatGPT prompt and paid composer are not ready",
@@ -1143,7 +1413,10 @@ func prepareVerifiedPrompt(
 	return attempts, observation, lastErr
 }
 
-func composerPreparedExceptSend(observation composerObservation) bool {
+func composerPreparedExceptSend(
+	observation composerObservation,
+	intelligence string,
+) bool {
 	return observation.RouteReady &&
 		observation.PromptMatches &&
 		observation.ChatCount == 1 &&
@@ -1152,7 +1425,7 @@ func composerPreparedExceptSend(observation composerObservation) bool {
 		observation.IntelligenceCount == 1 &&
 		strings.EqualFold(
 			observation.SelectedIntelligence,
-			"Medium",
+			intelligence,
 		) &&
 		observation.SendCount == 1 &&
 		observation.AssistantCount == 0 &&
@@ -1160,8 +1433,11 @@ func composerPreparedExceptSend(observation composerObservation) bool {
 		observation.ConversationID == ""
 }
 
-func composerReadyForSend(observation composerObservation) bool {
-	return composerPreparedExceptSend(observation) &&
+func composerReadyForSend(
+	observation composerObservation,
+	intelligence string,
+) bool {
+	return composerPreparedExceptSend(observation, intelligence) &&
 		observation.SendReady
 }
 
@@ -1177,16 +1453,37 @@ func observeRendered(
 	    (element.offsetWidth || element.offsetHeight || element.getClientRects().length)
 	  );
 	  const unique = nodes => Array.from(new Set(nodes));
-	  const assistants = unique(Array.from(document.querySelectorAll(
-	    'section[data-turn="assistant"] [data-message-author-role="assistant"],' +
+	  const assistantTurns = unique(Array.from(document.querySelectorAll(
+	    'section[data-turn="assistant"],[data-turn="assistant"]'
+	  )));
+	  const assistantMessages = unique(Array.from(document.querySelectorAll(
 	    '[data-message-author-role="assistant"]'
 	  )));
-	  const users = unique(Array.from(document.querySelectorAll(
-	    'section[data-turn="user"] [data-message-author-role="user"],' +
+	  const assistants = assistantTurns.length ?
+	    assistantTurns : assistantMessages;
+	  const userTurns = unique(Array.from(document.querySelectorAll(
+	    'section[data-turn="user"],[data-turn="user"]'
+	  )));
+	  const userMessages = unique(Array.from(document.querySelectorAll(
 	    '[data-message-author-role="user"]'
 	  )));
-	  const assistant = assistants.length ? assistants[assistants.length - 1] : null;
-	  const user = users.length ? users[users.length - 1] : null;
+	  const users = userTurns.length ? userTurns : userMessages;
+	  const assistantTurn = assistants.length ?
+	    assistants[assistants.length - 1] : null;
+	  const userTurn = users.length ? users[users.length - 1] : null;
+	  const assistant = assistantTurn && (
+	    assistantTurn.matches('[data-message-author-role="assistant"]') ?
+	      assistantTurn :
+	      assistantTurn.querySelector(
+	        '[data-message-author-role="assistant"],.markdown'
+	      ) || assistantTurn
+	  );
+	  const user = userTurn && (
+	    userTurn.matches('[data-message-author-role="user"]') ?
+	      userTurn :
+	      userTurn.querySelector('[data-message-author-role="user"]') ||
+	        userTurn
+	  );
 	  const promptNode = user && (
 	    user.querySelector('.whitespace-pre-wrap') || user
 	  );
@@ -1227,7 +1524,7 @@ func observeRendered(
 	    promptNode && promptNode.textContent,
 	    canonical(promptNode),
 	  ].map(trimTrailingNewlines).filter(Boolean));
-	  const turn = assistant && assistant.closest(
+	  const turn = assistantTurn || assistant && assistant.closest(
 	    'section[data-turn="assistant"],[data-turn="assistant"]'
 	  );
 	  const streamingState = turn ? Array.from(turn.querySelectorAll(
@@ -1286,7 +1583,7 @@ func waitRenderedAnswer(
 					lastText = text
 					stable = 1
 				}
-				if observation.TerminalControl || stable >= 4 {
+				if observation.TerminalControl {
 					return observation, stable, attempts
 				}
 			} else {
@@ -1320,6 +1617,7 @@ func renderedPromptMatches(
 
 func fetchOneHydratedDetail(
 	ctx context.Context,
+	gate *admission.Gate,
 	session *cdp.PageSession,
 	template RequestTemplate,
 	conversationID string,
@@ -1328,6 +1626,7 @@ func fetchOneHydratedDetail(
 		url.PathEscape(conversationID)
 	response, failure := browserFetch(
 		ctx,
+		gate,
 		session,
 		template,
 		Origin+detailPath,
@@ -1539,85 +1838,3 @@ func formatRetryAt(value time.Time) string {
 	}
 	return value.UTC().Format(time.RFC3339Nano)
 }
-
-const selectPaidChatMediumExpression = `(async () => {
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const visible = element => {
-    if (!(element instanceof HTMLElement)) return false;
-    const style = getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    return style.display !== 'none' && style.visibility !== 'hidden' &&
-      Number(style.opacity || '1') !== 0 && rect.width > 0 && rect.height > 0;
-  };
-  const label = element => String(
-    element && (
-      element.innerText ||
-      element.textContent ||
-      element.getAttribute('aria-label') ||
-      ''
-    ) || ''
-  ).replace(/\s+/g, ' ').trim();
-  const radios = Array.from(document.querySelectorAll(
-    'button[role="radio"]'
-  )).filter(visible);
-  const chats = radios.filter(button => label(button) === 'Chat');
-  const works = radios.filter(button => label(button) === 'Work');
-  if (chats.length !== 1 || works.length !== 1) {
-    return {ok: false, reason: 'ambiguous_product_controls'};
-  }
-  let productAction = 'already_selected';
-  if (chats[0].getAttribute('aria-checked') !== 'true') {
-    chats[0].click();
-    productAction = 'selected';
-    await sleep(400);
-  }
-  if (chats[0].getAttribute('aria-checked') !== 'true' ||
-      works[0].getAttribute('aria-checked') !== 'false') {
-    return {ok: false, reason: 'chat_product_not_selected'};
-  }
-
-  const known = [
-    'Instant', 'Instant 5.5', 'Medium', 'High',
-    'Extra High', 'Pro', 'GPT-5.6 Sol'
-  ];
-  const pickers = () => Array.from(document.querySelectorAll(
-    'button[aria-haspopup="menu"]'
-  )).filter(button =>
-    visible(button) && known.some(item =>
-      item.toLowerCase() === label(button).toLowerCase()
-    )
-  );
-  let current = pickers();
-  if (current.length !== 1) {
-    return {ok: false, reason: 'ambiguous_intelligence_picker'};
-  }
-  let intelligenceAction = 'already_selected';
-  if (label(current[0]).toLowerCase() !== 'medium') {
-    current[0].click();
-    await sleep(400);
-    const options = Array.from(document.querySelectorAll(
-      '[role="menuitemradio"],[role="menuitem"],[role="option"]'
-    )).filter(option =>
-      visible(option) && label(option).toLowerCase() === 'medium'
-    );
-    if (options.length !== 1) {
-      return {ok: false, reason: 'medium_option_unavailable'};
-    }
-    options[0].click();
-    intelligenceAction = 'selected';
-    await sleep(400);
-    current = pickers();
-  }
-  if (current.length !== 1 ||
-      label(current[0]).toLowerCase() !== 'medium') {
-    return {ok: false, reason: 'medium_not_selected'};
-  }
-  return {
-    ok: true,
-    product_mode: 'Chat',
-    product_action: productAction,
-    intelligence: 'Medium',
-    intelligence_action: intelligenceAction,
-    reason: ''
-  };
-})()`

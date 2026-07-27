@@ -2,6 +2,7 @@ package tripadvisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,10 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
+)
+
+var errRenderedSessionNotReady = errors.New(
+	"Tripadvisor rendered session evidence was not observed",
 )
 
 const (
@@ -119,41 +124,17 @@ func RefreshAuth(
 					data,
 				)
 			}
-			const readinessAttempts = 3
-			stageWait := config.Timeout / readinessAttempts
-			if stageWait <= 0 {
-				stageWait = config.Timeout
-			}
-			var observation sessionObservation
-			var readinessErr error
-			for attempt := 1; attempt <= readinessAttempts; attempt++ {
-				if _, err := authreadiness.PrepareAttempt(
-					ctx,
-					session,
-					attempt,
-					readinessAttempts,
-				); err != nil {
-					readinessErr = err
-					break
-				}
-				stageObservation, attempts, panelOpened, newChatOpened, err :=
-					ensureSession(
-						ctx,
-						session,
-						stageWait,
-						config.PollInterval,
-						false,
-					)
-				observation = stageObservation
-				data.Attempts += attempts
-				data.PanelOpened = data.PanelOpened || panelOpened
-				data.NewChatOpened = data.NewChatOpened || newChatOpened
-				if err == nil {
-					readinessErr = nil
-					break
-				}
-				readinessErr = err
-			}
+			observation, attempts, panelOpened, newChatOpened, readiness,
+				readinessErr := ensureSessionWithRecovery(
+				ctx,
+				session,
+				config.Timeout,
+				config.PollInterval,
+				false,
+			)
+			data.Attempts = attempts
+			data.PanelOpened = panelOpened
+			data.NewChatOpened = newChatOpened
 			data.PanelReady = observation.PanelReady
 			data.ComposerReady = observation.ComposerReady
 			data.HistoryReady = observation.HistoryReady
@@ -162,7 +143,7 @@ func RefreshAuth(
 			} else {
 				data.SessionMode = "signed_in"
 			}
-			if readinessErr != nil {
+			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
 				data.AuthState = "rendered_session_unavailable"
 				return authFailure(
@@ -170,6 +151,18 @@ func RefreshAuth(
 					target, pending,
 					"tripadvisor_rendered_session_unavailable", "auth",
 					"Tripadvisor AI panel, composer, and history controls did not become ready after initial load, reload, cache-bypassing hard reload, and final grace wait; authenticated or anonymous session state may still be active",
+					data,
+				)
+			}
+			if !readiness.Observed {
+				_ = lease.MarkIncomplete(context.Background())
+				data.AuthState = "evidence_not_observed"
+				return authFailure(
+					runID, config, webagent.StageAttached,
+					target, pending,
+					"tripadvisor_rendered_session_evidence_not_observed",
+					"provider",
+					"Tripadvisor AI panel, composer, and history controls were not observed after initial load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
 					data,
 				)
 			}
@@ -316,6 +309,7 @@ func ensureSession(
 ) (
 	sessionObservation,
 	int,
+	int,
 	bool,
 	bool,
 	error,
@@ -331,22 +325,35 @@ func ensureSession(
 	panelOpened := false
 	newChatOpened := false
 	attempts := 0
+	successfulObservationCount := 0
+	var lastObservationErr error
 	for {
 		attempts++
 		err := observeSession(ctx, session, &observation)
+		if err == nil {
+			successfulObservationCount++
+			lastObservationErr = nil
+		} else {
+			lastObservationErr = err
+		}
 		if err == nil &&
 			observation.OriginReady &&
 			observation.PanelReady &&
 			observation.ComposerReady &&
 			observation.HistoryReady {
 			if !requireBlank {
-				return observation, attempts, panelOpened, newChatOpened, nil
+				return observation, attempts, successfulObservationCount,
+					panelOpened, newChatOpened, nil
 			}
 			var route routeObservation
 			routeErr := observeRoute(ctx, session, &route)
+			if routeErr != nil {
+				lastObservationErr = routeErr
+			}
 			if routeErr == nil && route.Blank && route.AnswerCount == 0 &&
 				route.PromptCount == 0 {
-				return observation, attempts, panelOpened, newChatOpened, nil
+				return observation, attempts, successfulObservationCount,
+					panelOpened, newChatOpened, nil
 			}
 			if !newChatOpened &&
 				observation.NewChatCount == 1 &&
@@ -357,6 +364,8 @@ func ensureSession(
 					"new_chat",
 				); clickErr == nil {
 					newChatOpened = true
+				} else {
+					lastObservationErr = clickErr
 				}
 			}
 		} else if err == nil &&
@@ -369,6 +378,8 @@ func ensureSession(
 				"panel",
 			); clickErr == nil {
 				panelOpened = true
+			} else {
+				lastObservationErr = clickErr
 			}
 		} else if err == nil &&
 			observation.PanelReady &&
@@ -382,25 +393,127 @@ func ensureSession(
 				"new_chat",
 			); clickErr == nil {
 				newChatOpened = true
+			} else {
+				lastObservationErr = clickErr
 			}
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return observation, attempts, panelOpened, newChatOpened,
-				fmt.Errorf("rendered session deadline exhausted")
+			if lastObservationErr != nil {
+				return observation, attempts, successfulObservationCount,
+					panelOpened, newChatOpened, lastObservationErr
+			}
+			if successfulObservationCount > 0 {
+				return observation, attempts, successfulObservationCount,
+					panelOpened, newChatOpened, errRenderedSessionNotReady
+			}
+			return observation, attempts, successfulObservationCount,
+				panelOpened, newChatOpened, authreadiness.ErrObservationIncomplete
 		}
-		delay := poll
-		if delay > remaining {
-			delay = remaining
-		}
+		delay := sessionPollDelay(poll, attempts, remaining)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return observation, attempts, panelOpened, newChatOpened, ctx.Err()
+			return observation, attempts, successfulObservationCount,
+				panelOpened, newChatOpened, ctx.Err()
 		case <-timer.C:
 		}
 	}
+}
+
+func sessionPollDelay(
+	poll time.Duration,
+	attempt int,
+	remaining time.Duration,
+) time.Duration {
+	if remaining <= 0 {
+		return 0
+	}
+	if attempt < 1 {
+		attempt = 1
+	} else if attempt > 4 {
+		attempt = 4
+	}
+	delay := poll * time.Duration(attempt)
+	if delay <= 0 || delay > remaining {
+		return remaining
+	}
+	return delay
+}
+
+func ensureSessionWithRecovery(
+	ctx context.Context,
+	session *cdp.PageSession,
+	timeout time.Duration,
+	poll time.Duration,
+	requireBlank bool,
+) (
+	sessionObservation,
+	int,
+	bool,
+	bool,
+	authreadiness.Result,
+	error,
+) {
+	const attempts = authreadiness.MinimumAttempts
+	if timeout <= 0 {
+		timeout = defaultObservationTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	var observation sessionObservation
+	totalObservations := 0
+	panelOpened := false
+	newChatOpened := false
+	result := authreadiness.Result{}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return observation, totalObservations, panelOpened, newChatOpened,
+				result, fmt.Errorf("Tripadvisor session recovery budget exhausted")
+		}
+		attemptsLeft := attempts - attempt + 1
+		stageWait := remaining / time.Duration(attemptsLeft)
+		stage, err := authreadiness.PrepareAttempt(
+			ctx,
+			session,
+			attempt,
+			attempts,
+		)
+		result.Attempt = attempt
+		result.Stage = stage
+		result.StageObservations = 0
+		result.LastObservationError = nil
+		if err != nil {
+			return observation, totalObservations, panelOpened, newChatOpened,
+				result, err
+		}
+		current, observed, successful, openedPanel, openedNewChat, ensureErr :=
+			ensureSession(
+				ctx,
+				session,
+				stageWait,
+				poll,
+				requireBlank,
+			)
+		observation = current
+		totalObservations += observed
+		panelOpened = panelOpened || openedPanel
+		newChatOpened = newChatOpened || openedNewChat
+		result.SuccessfulObservations += successful
+		result.StageObservations = successful
+		if ensureErr == nil {
+			result.Observed = true
+			return observation, totalObservations, panelOpened, newChatOpened,
+				result, nil
+		}
+		if errors.Is(ensureErr, errRenderedSessionNotReady) {
+			continue
+		}
+		result.LastObservationError = ensureErr
+	}
+	return observation, totalObservations, panelOpened, newChatOpened,
+		result, nil
 }
 
 func observeSession(

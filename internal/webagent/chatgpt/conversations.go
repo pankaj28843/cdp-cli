@@ -26,11 +26,15 @@ const (
 	ConversationDetailSchemaVersion = "chatgpt-conversation-detail/v1"
 	ConversationDetailRoute         = "/backend-api/conversation/:conversation_id"
 	maxChatGPTResponseBytes         = 32 << 20
+	chatGPTReadAdmissionProvider    = "chatgpt-read"
 )
 
 var (
-	conversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
-	defaultAwaitDelays    = []time.Duration{
+	conversationIDPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+	errAwaitDeadlineElapsed = errors.New(
+		"ChatGPT conversation await deadline elapsed",
+	)
+	defaultAwaitDelays = []time.Duration{
 		time.Second,
 		2 * time.Second,
 		3 * time.Second,
@@ -43,13 +47,15 @@ var (
 )
 
 type ReadConfig struct {
-	Store         *Store
-	Admission     *admission.Gate
-	BrowserConfig *BrowserConfig
-	HTTPClient    *http.Client
-	BuildCommit   string
-	Now           func() time.Time
-	AwaitDelays   []time.Duration
+	Store           *Store
+	Admission       *admission.Gate
+	BrowserConfig   *BrowserConfig
+	BrowserFallback func(context.Context) (*BrowserConfig, error)
+	HTTPClient      *http.Client
+	BuildCommit     string
+	Now             func() time.Time
+	Wait            func(context.Context, time.Duration) error
+	AwaitDelays     []time.Duration
 }
 
 type ConversationSummary struct {
@@ -135,8 +141,44 @@ func ListConversations(
 			nil,
 		)
 	}
-	if config.BrowserConfig != nil {
-		return listConversationsViaBrowser(ctx, config, limit, offset)
+	if config.BrowserConfig != nil || config.BrowserFallback != nil {
+		directConfig := config
+		directConfig.BrowserConfig = nil
+		directConfig.BrowserFallback = nil
+		direct := ListConversations(
+			ctx,
+			directConfig,
+			limit,
+			offset,
+		)
+		if direct.OK || !browserReadFallbackEligible(direct) {
+			return direct
+		}
+		browserConfig, failure := resolveBrowserFallback(ctx, config)
+		if failure != nil {
+			return recordDirectReadFallback(
+				readFailureResult(
+					webagent.NewRunID(),
+					config.BuildCommit,
+					webagent.OperationConversationsList,
+					*failure,
+					ConversationListData{
+						SchemaVersion: ConversationListSchemaVersion,
+						Conversations: []ConversationSummary{},
+						ReadMode:      "not_started",
+						Metadata:      map[string]any{},
+					},
+					nil,
+				),
+				direct,
+			)
+		}
+		config.BrowserConfig = browserConfig
+		config.BrowserFallback = nil
+		return recordDirectReadFallback(
+			listConversationsViaBrowser(ctx, config, limit, offset),
+			direct,
+		)
 	}
 	template, failure := loadFreshReadTemplate(ctx, config)
 	if failure != nil {
@@ -218,6 +260,36 @@ func readConversation(
 	await bool,
 	timeout time.Duration,
 ) webagent.Result {
+	deadline := time.Time{}
+	if await {
+		if timeout <= 0 {
+			timeout = 3 * time.Minute
+		}
+		deadline = nowForRead(config).Add(timeout)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(
+			ctx,
+			timeout,
+			errAwaitDeadlineElapsed,
+		)
+		defer cancel()
+	}
+	return readConversationUntil(
+		ctx,
+		config,
+		conversationID,
+		await,
+		deadline,
+	)
+}
+
+func readConversationUntil(
+	ctx context.Context,
+	config ReadConfig,
+	conversationID string,
+	await bool,
+	deadline time.Time,
+) webagent.Result {
 	operation := webagent.OperationConversationsDetail
 	if await {
 		operation = webagent.OperationConversationsAwait
@@ -241,14 +313,66 @@ func readConversation(
 			nil,
 		)
 	}
-	if config.BrowserConfig != nil {
-		return conversationViaBrowser(
+	if config.BrowserConfig != nil || config.BrowserFallback != nil {
+		directConfig := config
+		directConfig.BrowserConfig = nil
+		directConfig.BrowserFallback = nil
+		direct := readConversationUntil(
 			ctx,
+			directConfig,
+			conversationID,
+			await,
+			deadline,
+		)
+		if direct.OK || !browserReadFallbackEligible(direct) {
+			return direct
+		}
+		fallbackCtx := ctx
+		cancelFallback := func() {}
+		if await {
+			remaining := deadline.Sub(nowForRead(config))
+			if remaining <= 0 {
+				return direct
+			}
+			fallbackCtx, cancelFallback = context.WithTimeoutCause(
+				ctx,
+				remaining,
+				errAwaitDeadlineElapsed,
+			)
+		}
+		defer cancelFallback()
+		browserConfig, fallbackFailure := resolveBrowserFallback(
+			fallbackCtx,
+			config,
+		)
+		if fallbackFailure != nil {
+			return recordDirectReadFallback(
+				readFailureResult(
+					webagent.NewRunID(),
+					config.BuildCommit,
+					operation,
+					*fallbackFailure,
+					ConversationDetailData{
+						SchemaVersion:   ConversationDetailSchemaVersion,
+						ConversationID:  conversationID,
+						CompletionState: "incomplete",
+						ReadMode:        "not_started",
+						Metadata:        map[string]any{},
+					},
+					conversationRef(conversationID),
+				),
+				direct,
+			)
+		}
+		config.BrowserConfig = browserConfig
+		config.BrowserFallback = nil
+		return recordDirectReadFallback(conversationViaBrowser(
+			fallbackCtx,
 			config,
 			conversationID,
 			await,
-			timeout,
-		)
+			deadline,
+		), direct)
 	}
 	conversation := conversationRef(conversationID)
 	template, failure := loadFreshReadTemplate(ctx, config)
@@ -267,10 +391,6 @@ func readConversation(
 			conversation,
 		)
 	}
-	deadline := time.Time{}
-	if await {
-		deadline = nowForRead(config).Add(timeout)
-	}
 	delays := config.AwaitDelays
 	if len(delays) == 0 {
 		delays = defaultAwaitDelays
@@ -278,34 +398,59 @@ func readConversation(
 	attempts := 0
 	var data ConversationDetailData
 	for {
+		fetchCtx, cancelFetch, fetchAllowed := boundedAwaitFetchContext(
+			ctx,
+			config,
+			await,
+			deadline,
+		)
+		if !fetchAllowed {
+			break
+		}
 		attempts++
-		data, failure = fetchConversationDetail(ctx, config, template, conversationID)
+		data, failure = fetchConversationDetail(
+			fetchCtx,
+			config,
+			template,
+			conversationID,
+		)
+		fetchDeadlineHit := errors.Is(
+			fetchCtx.Err(),
+			context.DeadlineExceeded,
+		)
+		cancelFetch()
+		if failure != nil &&
+			await &&
+			fetchDeadlineHit &&
+			awaitDeadlineElapsed(fetchCtx) {
+			failure = nil
+			break
+		}
 		if failure != nil ||
 			data.CompletionState != "incomplete" ||
-			!await ||
-			attempts > len(delays) {
+			!await {
 			break
 		}
-		delay := delays[attempts-1]
-		remaining := time.Until(deadline)
-		if config.Now != nil {
-			remaining = deadline.Sub(config.Now())
-		}
-		if remaining <= delay {
+		remaining := deadline.Sub(nowForRead(config))
+		delay, ok := nextAwaitDelay(delays, attempts, remaining)
+		if !ok {
 			break
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			failure = &readFailure{
-				code:     "chatgpt_await_canceled",
-				errClass: "timeout",
-				message:  "ChatGPT conversation await was canceled before terminal detail",
+		if err := waitReadDelay(ctx, config, delay); err != nil {
+			if awaitDeadlineElapsed(ctx) {
+				failure = nil
+			} else {
+				failure = &readFailure{
+					code:     "chatgpt_await_canceled",
+					errClass: "timeout",
+					message:  "ChatGPT conversation await was canceled before terminal detail",
+				}
 			}
-		case <-timer.C:
 		}
 		if failure != nil {
+			break
+		}
+		if !nowForRead(config).Before(deadline) {
 			break
 		}
 	}
@@ -330,6 +475,96 @@ func readConversation(
 		lease,
 		time.Time{},
 	)
+}
+
+func resolveBrowserFallback(
+	ctx context.Context,
+	config ReadConfig,
+) (*BrowserConfig, *readFailure) {
+	if config.BrowserConfig != nil {
+		return config.BrowserConfig, nil
+	}
+	if config.BrowserFallback == nil {
+		return nil, &readFailure{
+			code:     "chatgpt_browser_fallback_unavailable",
+			errClass: "connection",
+			message:  "ChatGPT headed read fallback is unavailable",
+		}
+	}
+	browserConfig, err := config.BrowserFallback(ctx)
+	if err != nil || browserConfig == nil {
+		return nil, &readFailure{
+			code:     "chatgpt_browser_fallback_unavailable",
+			errClass: "connection",
+			message:  "ChatGPT headed read fallback could not be initialized after the direct path failed",
+		}
+	}
+	return browserConfig, nil
+}
+
+func nextAwaitDelay(
+	delays []time.Duration,
+	attempt int,
+	remaining time.Duration,
+) (time.Duration, bool) {
+	if len(delays) == 0 || attempt < 1 || remaining <= 0 {
+		return 0, false
+	}
+	index := attempt - 1
+	if index >= len(delays) {
+		index = len(delays) - 1
+	}
+	delay := delays[index]
+	if delay <= 0 {
+		return 0, false
+	}
+	if delay > remaining {
+		delay = remaining
+	}
+	return delay, delay > 0
+}
+
+func waitReadDelay(
+	ctx context.Context,
+	config ReadConfig,
+	delay time.Duration,
+) error {
+	if config.Wait != nil {
+		return config.Wait(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func boundedAwaitFetchContext(
+	ctx context.Context,
+	config ReadConfig,
+	await bool,
+	deadline time.Time,
+) (context.Context, context.CancelFunc, bool) {
+	if !await {
+		return ctx, func() {}, true
+	}
+	remaining := deadline.Sub(nowForRead(config))
+	if remaining <= 0 {
+		return ctx, func() {}, false
+	}
+	fetchCtx, cancel := context.WithTimeoutCause(
+		ctx,
+		remaining,
+		errAwaitDeadlineElapsed,
+	)
+	return fetchCtx, cancel, true
+}
+
+func awaitDeadlineElapsed(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errAwaitDeadlineElapsed)
 }
 
 func fetchConversationList(
@@ -505,10 +740,30 @@ type extractedConversation struct {
 	metadata        map[string]any
 }
 
+type conversationActivityState string
+
+const (
+	conversationActivityAbsent   conversationActivityState = "absent"
+	conversationActivityInactive conversationActivityState = "inactive"
+	conversationActivityActive   conversationActivityState = "active"
+	conversationActivityUnknown  conversationActivityState = "unknown"
+)
+
 func extractConversationText(payload map[string]any) extractedConversation {
 	result := extractedConversation{
 		completionState: "incomplete",
 		metadata:        map[string]any{},
+	}
+	activity, asyncStatus, streamStatus := conversationActivity(payload)
+	result.metadata["provider_activity_state"] = activity
+	if asyncStatus != "" {
+		result.metadata["provider_async_status"] = asyncStatus
+	}
+	if streamStatus != "" {
+		result.metadata["provider_stream_status"] = streamStatus
+	}
+	if activity == conversationActivityActive {
+		result.metadata["provider_async_active"] = true
 	}
 	mapping, ok := payload["mapping"].(map[string]any)
 	if !ok {
@@ -536,7 +791,7 @@ func extractConversationText(payload map[string]any) extractedConversation {
 	if strings.TrimSpace(prompt) != "" {
 		result.metadata["prompt_fingerprint"] = fingerprintPrompt(prompt)
 	}
-	for _, node := range nodes {
+	for index, node := range nodes {
 		message, _ := node["message"].(map[string]any)
 		if messageRole(message) != "assistant" {
 			continue
@@ -546,13 +801,99 @@ func extractConversationText(payload map[string]any) extractedConversation {
 			continue
 		}
 		result.text = text
-		if message["status"] == "finished_successfully" && message["end_turn"] == true {
+		result.metadata["assistant_is_current_node"] = index == 0
+		if index == 0 &&
+			(activity == conversationActivityAbsent ||
+				activity == conversationActivityInactive) &&
+			message["status"] == "finished_successfully" &&
+			message["end_turn"] == true {
 			result.completionState = "terminal"
 		}
 		copyResultMetadata(result.metadata, message)
 		return result
 	}
 	return result
+}
+
+func conversationActivity(
+	payload map[string]any,
+) (conversationActivityState, string, string) {
+	asyncState, asyncStatus := classifyConversationActivity(
+		payload["async_status"],
+		hasMapKey(payload, "async_status"),
+	)
+	streamState, streamStatus := classifyConversationActivity(
+		payload["stream_status"],
+		hasMapKey(payload, "stream_status"),
+	)
+	if asyncState == conversationActivityActive ||
+		streamState == conversationActivityActive {
+		return conversationActivityActive, asyncStatus, streamStatus
+	}
+	if asyncState == conversationActivityUnknown ||
+		streamState == conversationActivityUnknown {
+		return conversationActivityUnknown, asyncStatus, streamStatus
+	}
+	if asyncState == conversationActivityInactive ||
+		streamState == conversationActivityInactive {
+		return conversationActivityInactive, asyncStatus, streamStatus
+	}
+	return conversationActivityAbsent, asyncStatus, streamStatus
+}
+
+func classifyConversationActivity(
+	raw any,
+	exists bool,
+) (conversationActivityState, string) {
+	if !exists || raw == nil {
+		return conversationActivityAbsent, ""
+	}
+	status, scalar := boundedActivityScalar(raw)
+	if !scalar {
+		return conversationActivityUnknown, "non_scalar"
+	}
+	normalized := strings.ToUpper(strings.NewReplacer(
+		"-", "_",
+		" ", "_",
+	).Replace(status))
+	switch normalized {
+	case "3", "IS_STREAMING", "STREAMING", "RUNNING", "IN_PROGRESS":
+		return conversationActivityActive, status
+	case "COMPLETE", "COMPLETED", "FINISHED", "FINISHED_SUCCESSFULLY",
+		"IDLE", "NOT_STREAMING":
+		return conversationActivityInactive, status
+	default:
+		return conversationActivityUnknown, status
+	}
+}
+
+func boundedActivityScalar(raw any) (string, bool) {
+	var status string
+	switch value := raw.(type) {
+	case string:
+		status = strings.TrimSpace(value)
+	case json.Number:
+		status = strings.TrimSpace(value.String())
+	case float64:
+		status = strconv.FormatFloat(value, 'f', -1, 64)
+	case float32:
+		status = strconv.FormatFloat(float64(value), 'f', -1, 32)
+	case int:
+		status = strconv.Itoa(value)
+	case int64:
+		status = strconv.FormatInt(value, 10)
+	default:
+		return "", false
+	}
+	if status == "" || len(status) > 64 {
+		return "", false
+	}
+	return status, true
+}
+
+func hasMapKey(values map[string]any, key string) bool {
+	_, exists := values[key]
+	return exists
 }
 
 func messageRole(message map[string]any) string {
@@ -750,6 +1091,27 @@ func doChatGPTRequest(
 	config ReadConfig,
 	request *http.Request,
 ) (*http.Response, *readFailure) {
+	throttle, throttleFailure := acquireChatGPTThrottle(
+		request.Context(),
+		config.Admission,
+	)
+	if throttleFailure != nil {
+		return nil, throttleFailure
+	}
+	releaseThrottle := func(
+		response *http.Response,
+		failure *readFailure,
+	) (*http.Response, *readFailure) {
+		if err := releaseChatGPTThrottle(throttle, failure); err != nil {
+			if response != nil {
+				_ = response.Body.Close()
+			}
+			return nil, internalReadFailure(
+				"ChatGPT shared provider throttle outcome could not be persisted",
+			)
+		}
+		return response, failure
+	}
 	client := config.HTTPClient
 	if client == nil {
 		client = &http.Client{
@@ -761,14 +1123,14 @@ func doChatGPTRequest(
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, &readFailure{
+		return releaseThrottle(nil, &readFailure{
 			code:     "chatgpt_http_unavailable",
 			errClass: "connection",
 			message:  "ChatGPT candidate HTTP read is unavailable",
-		}
+		})
 	}
 	if response.StatusCode == http.StatusOK {
-		return response, nil
+		return releaseThrottle(response, nil)
 	}
 	_ = response.Body.Close()
 	failure := &readFailure{
@@ -791,7 +1153,7 @@ func doChatGPTRequest(
 			nowForRead(config),
 		)
 	}
-	return nil, failure
+	return releaseThrottle(nil, failure)
 }
 
 func decodeBoundedJSON(body io.Reader, target any) error {
@@ -855,7 +1217,7 @@ func acquireReadAdmission(
 		)
 	}
 	lease, err := config.Admission.Acquire(ctx, admission.Request{
-		Provider:  string(webagent.ProviderChatGPT),
+		Provider:  chatGPTReadAdmissionProvider,
 		Operation: string(operation),
 		RunID:     runID,
 	})
@@ -870,7 +1232,9 @@ func acquireReadAdmission(
 			message:  blocked.Error(),
 		}
 		if blocked.ResolutionNeeded {
-			failure.nextCommands = []string{"cdp workflow agent admission status chatgpt --json"}
+			failure.nextCommands = []string{
+				"cdp workflow agent admission status chatgpt-read --json",
+			}
 		} else {
 			failure.retryAt = blocked.RetryAt
 		}
@@ -879,6 +1243,50 @@ func acquireReadAdmission(
 	return nil, internalReadFailure(
 		"ChatGPT provider admission state is unavailable",
 	)
+}
+
+func browserReadFallbackEligible(result webagent.Result) bool {
+	if result.OK || result.Error == nil {
+		return false
+	}
+	if result.Error.Code == "chatgpt_rate_limited" ||
+		result.Error.ErrClass == "usage" ||
+		result.Error.ErrClass == "rate_limit" {
+		return false
+	}
+	switch result.Error.Code {
+	case "chatgpt_browser_context_required",
+		"chatgpt_http_unavailable",
+		"chatgpt_http_failed":
+		return true
+	}
+	return strings.HasPrefix(result.Error.Code, "chatgpt_auth_")
+}
+
+func recordDirectReadFallback(
+	result webagent.Result,
+	direct webagent.Result,
+) webagent.Result {
+	if direct.Error == nil {
+		return result
+	}
+	switch data := result.Data.(type) {
+	case ConversationListData:
+		if data.Metadata == nil {
+			data.Metadata = map[string]any{}
+		}
+		data.Metadata["direct_http_attempted"] = true
+		data.Metadata["direct_http_failure_code"] = direct.Error.Code
+		result.Data = data
+	case ConversationDetailData:
+		if data.Metadata == nil {
+			data.Metadata = map[string]any{}
+		}
+		data.Metadata["direct_http_attempted"] = true
+		data.Metadata["direct_http_failure_code"] = direct.Error.Code
+		result.Data = data
+	}
+	return result
 }
 
 func releaseReadAdmission(

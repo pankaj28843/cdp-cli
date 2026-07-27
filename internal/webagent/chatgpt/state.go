@@ -63,6 +63,9 @@ type RuntimeCapabilities struct {
 	SelectedProduct      string   `json:"selected_product,omitempty"`
 	IntelligenceOptions  []string `json:"intelligence_options"`
 	SelectedIntelligence string   `json:"selected_intelligence,omitempty"`
+	ModelOptions         []string `json:"model_options"`
+	SelectedModel        string   `json:"selected_model,omitempty"`
+	ModelOptionsObserved bool     `json:"model_options_observed"`
 	FileUploadObserved   bool     `json:"file_upload_observed"`
 	Tools                []string `json:"tools"`
 	Source               string   `json:"source"`
@@ -82,6 +85,9 @@ type RuntimeStatus struct {
 	SelectedProduct      string   `json:"selected_product,omitempty"`
 	IntelligenceOptions  []string `json:"intelligence_options"`
 	SelectedIntelligence string   `json:"selected_intelligence,omitempty"`
+	ModelOptions         []string `json:"model_options"`
+	SelectedModel        string   `json:"selected_model,omitempty"`
+	ModelOptionsObserved bool     `json:"model_options_observed"`
 	FileUploadObserved   bool     `json:"file_upload_observed"`
 	Tools                []string `json:"tools"`
 	Reason               string   `json:"reason,omitempty"`
@@ -179,10 +185,68 @@ func (s *Store) LoadRuntime(ctx context.Context) (RuntimeCapabilities, error) {
 	if err := loadOwnerJSON(ctx, s.capabilitiesPath, &runtime); err != nil {
 		return RuntimeCapabilities{}, err
 	}
+	runtime = normalizeRuntimeCapabilities(runtime)
 	if err := runtime.Validate(); err != nil {
 		return RuntimeCapabilities{}, fmt.Errorf("validate ChatGPT runtime capabilities: %w", err)
 	}
 	return runtime, nil
+}
+
+func normalizeRuntimeCapabilities(runtime RuntimeCapabilities) RuntimeCapabilities {
+	runtime.IntelligenceOptions = removeLegacyMixedIntelligenceLabels(
+		runtime.IntelligenceOptions,
+	)
+	if legacyMixedIntelligenceLabel(runtime.SelectedIntelligence) ||
+		(strings.TrimSpace(runtime.SelectedIntelligence) != "" &&
+			!containsString(
+				runtime.IntelligenceOptions,
+				runtime.SelectedIntelligence,
+			)) {
+		runtime.SelectedIntelligence = ""
+	}
+	if runtime.State == "ready" &&
+		strings.TrimSpace(runtime.SelectedIntelligence) == "" {
+		runtime.State = "unknown"
+	}
+	if !runtime.ModelOptionsObserved &&
+		len(runtime.ModelOptions) > 0 &&
+		strings.TrimSpace(runtime.SelectedModel) != "" &&
+		containsString(runtime.ModelOptions, runtime.SelectedModel) {
+		// Compatibility with capability state written before the independent
+		// observation bit existed. A selected member of the persisted visible
+		// catalog is the old format's positive observation evidence.
+		runtime.ModelOptionsObserved = true
+	}
+	_, runtime.Message = capabilityStateAndMessage(capabilityProbe{
+		OK:                   runtime.State == "ready",
+		ComposerObserved:     runtime.ComposerObserved,
+		ProductModes:         runtime.ProductModes,
+		IntelligenceOptions:  runtime.IntelligenceOptions,
+		SelectedIntelligence: runtime.SelectedIntelligence,
+		ModelOptions:         runtime.ModelOptions,
+		SelectedModel:        runtime.SelectedModel,
+		ModelOptionsObserved: runtime.ModelOptionsObserved,
+	})
+	return runtime
+}
+
+func removeLegacyMixedIntelligenceLabels(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		if legacyMixedIntelligenceLabel(value) ||
+			containsString(normalized, value) {
+			continue
+		}
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
+func legacyMixedIntelligenceLabel(value string) bool {
+	// The previous v1 writer admitted this model label into the thinking list.
+	// Keep the compatibility rule narrow; do not classify future dynamic
+	// thinking labels as models by heuristic.
+	return strings.EqualFold(strings.TrimSpace(value), "GPT-5.6 Sol")
 }
 
 func (s *Store) RuntimeStatus(ctx context.Context, now time.Time, ttl time.Duration) RuntimeStatus {
@@ -192,6 +256,7 @@ func (s *Store) RuntimeStatus(ctx context.Context, now time.Time, ttl time.Durat
 		StatePath:           RelativeCapabilitiesPath,
 		ProductModes:        []string{},
 		IntelligenceOptions: []string{},
+		ModelOptions:        []string{},
 		Tools:               []string{},
 		Reason:              "runtime capability evidence is not present",
 	}
@@ -220,6 +285,9 @@ func (s *Store) RuntimeStatus(ctx context.Context, now time.Time, ttl time.Durat
 	status.SelectedProduct = runtime.SelectedProduct
 	status.IntelligenceOptions = append([]string{}, runtime.IntelligenceOptions...)
 	status.SelectedIntelligence = runtime.SelectedIntelligence
+	status.ModelOptions = append([]string{}, runtime.ModelOptions...)
+	status.SelectedModel = runtime.SelectedModel
+	status.ModelOptionsObserved = runtime.ModelOptionsObserved
 	status.FileUploadObserved = runtime.FileUploadObserved
 	status.Tools = append([]string{}, runtime.Tools...)
 	status.Message = runtime.Message
@@ -227,7 +295,7 @@ func (s *Store) RuntimeStatus(ctx context.Context, now time.Time, ttl time.Durat
 		status.State = runtime.State
 		if runtime.State != "ready" {
 			status.Ready = false
-			status.Reason = "paid Chat and Medium capability evidence was not proven"
+			status.Reason = "Chat composer capability evidence was not proven"
 		}
 	}
 	return status
@@ -310,22 +378,42 @@ func (r RuntimeCapabilities) Validate() error {
 	if _, err := time.Parse(time.RFC3339Nano, r.CapturedAt); err != nil {
 		return fmt.Errorf("captured_at must be RFC3339")
 	}
-	if len(r.ProductModes) > 8 || len(r.IntelligenceOptions) > 16 || len(r.Tools) > 32 {
+	if len(r.ProductModes) > 8 ||
+		len(r.IntelligenceOptions) > 16 ||
+		len(r.ModelOptions) > 32 ||
+		len(r.Tools) > 32 {
 		return fmt.Errorf("runtime capability evidence exceeds bounds")
 	}
-	for _, values := range [][]string{r.ProductModes, r.IntelligenceOptions, r.Tools} {
+	for _, values := range [][]string{
+		r.ProductModes,
+		r.IntelligenceOptions,
+		r.ModelOptions,
+		r.Tools,
+	} {
 		for _, value := range values {
 			if err := validatePublicLabel(value); err != nil {
 				return err
 			}
 		}
 	}
-	for _, value := range []string{r.SelectedProduct, r.SelectedIntelligence} {
+	for _, value := range []string{
+		r.SelectedProduct,
+		r.SelectedIntelligence,
+		r.SelectedModel,
+	} {
 		if value != "" {
 			if err := validatePublicLabel(value); err != nil {
 				return err
 			}
 		}
+	}
+	if r.ModelOptionsObserved &&
+		(len(r.ModelOptions) == 0 ||
+			strings.TrimSpace(r.SelectedModel) == "" ||
+			!containsString(r.ModelOptions, r.SelectedModel)) {
+		return fmt.Errorf(
+			"observed model capability requires a selected visible model option",
+		)
 	}
 	if r.Source != "headed-cdp-sanitized-composer-probe" {
 		return fmt.Errorf("source is not an accepted ChatGPT capability observation")

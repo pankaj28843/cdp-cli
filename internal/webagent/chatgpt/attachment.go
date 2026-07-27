@@ -40,15 +40,26 @@ type AttachmentData struct {
 	InputMatch              bool   `json:"input_match"`
 	RenderedAttachmentAdded bool   `json:"rendered_attachment_added"`
 	RenderedNameMatch       bool   `json:"rendered_name_match"`
+	RenderedName            string `json:"rendered_name,omitempty"`
+	DuplicateRejected       bool   `json:"duplicate_rejected"`
+	ProcessingComplete      bool   `json:"processing_complete"`
 	SendReadyAfterUpload    bool   `json:"send_ready_after_upload"`
 }
 
 type attachmentObservation struct {
-	OK                      bool `json:"ok"`
-	InputMatch              bool `json:"input_match"`
-	RenderedAttachmentAdded bool `json:"rendered_attachment_added"`
-	RenderedNameMatch       bool `json:"rendered_name_match"`
-	RenderedAttachmentCount int  `json:"rendered_attachment_count"`
+	OK                      bool   `json:"ok"`
+	InputMatch              bool   `json:"input_match"`
+	RenderedAttachmentAdded bool   `json:"rendered_attachment_added"`
+	RenderedNameMatch       bool   `json:"rendered_name_match"`
+	RenderedName            string `json:"rendered_name"`
+	RenderedAttachmentCount int    `json:"rendered_attachment_count"`
+	DuplicateRejected       bool   `json:"duplicate_rejected"`
+	Processing              bool   `json:"processing"`
+}
+
+type attachmentExpectation struct {
+	Name                     string
+	PreflightAttachmentCount int
 }
 
 type attachmentPreflight struct {
@@ -116,7 +127,7 @@ func attachLocalFileOnce(
 	upload localUpload,
 	timeout time.Duration,
 	poll time.Duration,
-) (AttachmentData, *attachmentFailure) {
+) (AttachmentData, *attachmentExpectation, *attachmentFailure) {
 	data := AttachmentData{
 		Name:              upload.Name,
 		Size:              upload.Size,
@@ -124,7 +135,7 @@ func attachLocalFileOnce(
 		AssignmentOutcome: attachmentAssignmentNotAttempted,
 	}
 	if err := validateLocalUploadUnchanged(upload); err != nil {
-		return data, &attachmentFailure{
+		return data, nil, &attachmentFailure{
 			Code:      "chatgpt_attachment_changed",
 			Message:   "ChatGPT attachment changed after validation and before assignment",
 			RetrySafe: true,
@@ -137,7 +148,7 @@ func attachLocalFileOnce(
 		upload.Name,
 	)
 	if err != nil {
-		return data, &attachmentFailure{
+		return data, nil, &attachmentFailure{
 			Code:      "chatgpt_attachment_preflight_failed",
 			Message:   "ChatGPT exact empty attachment input was not proven before assignment",
 			RetrySafe: true,
@@ -157,14 +168,14 @@ func attachLocalFileOnce(
 	if err != nil {
 		if attempted {
 			data.AssignmentOutcome = attachmentAssignmentUnknown
-			return data, &attachmentFailure{
+			return data, nil, &attachmentFailure{
 				Code:      "chatgpt_attachment_assignment_unknown",
 				Message:   "ChatGPT file assignment outcome is unknown; do not repeat the request",
 				RetrySafe: false,
 				Cause:     err,
 			}
 		}
-		return data, &attachmentFailure{
+		return data, nil, &attachmentFailure{
 			Code:      "chatgpt_attachment_assignment_not_performed",
 			Message:   "ChatGPT file assignment was not performed",
 			RetrySafe: true,
@@ -184,21 +195,53 @@ func attachLocalFileOnce(
 		); err != nil {
 			return false, err
 		}
-		return observation.OK, nil
+		return observation.OK || observation.DuplicateRejected, nil
 	})
 	data.AttachmentObserved = observation.OK
 	data.InputMatch = observation.InputMatch
 	data.RenderedAttachmentAdded = observation.RenderedAttachmentAdded
 	data.RenderedNameMatch = observation.RenderedNameMatch
+	data.RenderedName = observation.RenderedName
+	data.DuplicateRejected = observation.DuplicateRejected
+	data.ProcessingComplete = observation.OK && !observation.Processing
+	if observation.DuplicateRejected {
+		return data, nil, &attachmentFailure{
+			Code:      "chatgpt_attachment_duplicate_rejected",
+			Message:   "ChatGPT rejected the attachment as an already-uploaded identical file before Send; rebuild or rename the review artifact before retrying",
+			RetrySafe: true,
+		}
+	}
 	if err != nil || !observation.OK {
-		return data, &attachmentFailure{
+		return data, nil, &attachmentFailure{
 			Code:      "chatgpt_attachment_observation_incomplete",
 			Message:   "ChatGPT confirmed one file assignment but did not retain the exact active-composer file selection; do not repeat the request",
 			RetrySafe: false,
 			Cause:     err,
 		}
 	}
-	return data, nil
+	return data, &attachmentExpectation{
+		Name:                     upload.Name,
+		PreflightAttachmentCount: preflight.RenderedAttachmentCount,
+	}, nil
+}
+
+func observeExpectedAttachment(
+	ctx context.Context,
+	session *cdp.PageSession,
+	expectation *attachmentExpectation,
+	observation *attachmentObservation,
+) error {
+	if expectation == nil {
+		*observation = attachmentObservation{OK: true}
+		return nil
+	}
+	return observeAttachment(
+		ctx,
+		session,
+		expectation.Name,
+		expectation.PreflightAttachmentCount,
+		observation,
+	)
 }
 
 func validateLocalUploadUnchanged(upload localUpload) error {
@@ -261,19 +304,33 @@ func verifyAttachmentPreflight(
 	  const activeComposer = Boolean(
 	    composer && editors.length === 1 && composer.contains(editors[0])
 	  );
-	  const exactLine = value => String(value || '').split(/\r?\n/)
-	    .map(line => line.trim()).some(line => line === expected);
+	  const escapeRegExp = value => String(value || '')
+	    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	  const providerNameMatches = (actual, wanted) => {
+	    actual = String(actual || '').trim();
+	    wanted = String(wanted || '').trim();
+	    if (actual === wanted) return true;
+	    const dot = wanted.lastIndexOf('.');
+	    const stem = dot > 0 ? wanted.slice(0, dot) : wanted;
+	    const extension = dot > 0 ? wanted.slice(dot) : '';
+	    return new RegExp(
+	      '^' + escapeRegExp(stem) + '\\s*\\(\\d+\\)' +
+	      escapeRegExp(extension) + '$'
+	    ).test(actual);
+	  };
 	  const candidates = composer ? Array.from(composer.querySelectorAll(
-	    '[data-testid*="attachment"],[data-testid*="file"],[class*="attachment"]'
-	  )) : [];
+	    '[role="group"][aria-label]'
+	  )).filter(node =>
+	    node.querySelector('button[aria-label^="Remove file "]')
+	  ) : [];
 	  const preexistingNameMatch = candidates.some(node =>
-	    [node.textContent, node.getAttribute('aria-label'), node.getAttribute('title')]
-	      .some(exactLine)
+	    providerNameMatches(node.getAttribute('aria-label'), expected)
 	  );
 	  const inputFileCount = input && input.files ? input.files.length : -1;
 	  return {
 	    ok: activeComposer && input.type === 'file' &&
-	      inputFileCount === 0 && !preexistingNameMatch,
+	      inputFileCount === 0 && candidates.length === 0 &&
+	      !preexistingNameMatch,
 	    input_count: inputs.length,
 	    input_file_count: inputFileCount,
 	    preexisting_name_match: preexistingNameMatch,
@@ -393,6 +450,14 @@ func observeAttachment(
 	expression := fmt.Sprintf(`(() => {
 	  const expected = %s;
 	  const preflightAttachmentCount = %d;
+	  const visible = element => {
+	    if (!(element instanceof HTMLElement)) return false;
+	    const style = getComputedStyle(element);
+	    const rect = element.getBoundingClientRect();
+	    return style.display !== 'none' && style.visibility !== 'hidden' &&
+	      Number(style.opacity || '1') !== 0 &&
+	      rect.width > 0 && rect.height > 0;
+	  };
 	  const inputs = Array.from(document.querySelectorAll('#upload-files'));
 	  const editors = Array.from(document.querySelectorAll(
 	    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
@@ -404,29 +469,52 @@ func observeAttachment(
 	  );
 	  const files = input && input.files ? Array.from(input.files) : [];
 	  const inputMatch = files.length === 1 && files[0].name === expected;
-	  const exactLine = value => String(value || '').split(/\r?\n/)
-	    .map(line => line.trim()).some(line => line === expected);
 	  const candidates = composer ? Array.from(composer.querySelectorAll(
-	    '[data-testid*="attachment"],[data-testid*="file"],[class*="attachment"]'
-	  )) : [];
-	  const candidateNodes = Array.from(new Set(candidates.flatMap(node =>
-	    [node, ...node.querySelectorAll('*')]
-	  )));
-	  const renderedNameMatch = candidateNodes.some(node =>
-	    [node.textContent, node.getAttribute('aria-label'), node.getAttribute('title')]
-	      .some(exactLine)
+	    '[role="group"][aria-label]'
+	  )).filter(node =>
+	    node.querySelector('button[aria-label^="Remove file "]')
+	  ) : [];
+	  const matchingCandidates = candidates.filter(node =>
+	    String(node.getAttribute('aria-label') || '').trim() === expected
+	  );
+	  const matchingNames = matchingCandidates.map(node =>
+	    String(node.getAttribute('aria-label') || '').trim()
+	  );
+	  const duplicateRejected = Array.from(document.querySelectorAll(
+	    '[role="dialog"]'
+	  )).filter(visible).some(dialog => {
+	    const text = String(dialog.innerText || dialog.textContent || '')
+	      .replace(/\s+/g, ' ').trim().toLowerCase();
+	    return text.includes('already uploaded this file') &&
+	      text.includes('try uploading something new');
+	  });
+	  const renderedNameMatch = matchingNames.length === 1;
+	  const processing = matchingCandidates.some(node =>
+	    Array.from(node.querySelectorAll('[class*="animate-spin"]'))
+	      .some(visible)
 	  );
 	  const renderedAttachmentAdded =
-	    candidates.length > preflightAttachmentCount;
+	    candidates.length === preflightAttachmentCount + 1;
 	  return {
-	    ok: activeComposer && inputMatch,
+	    ok: !duplicateRejected && activeComposer && inputMatch &&
+	      renderedAttachmentAdded && renderedNameMatch && !processing,
 	    input_match: inputMatch,
 	    rendered_attachment_added: renderedAttachmentAdded,
 	    rendered_name_match: renderedNameMatch,
-	    rendered_attachment_count: candidates.length
+	    rendered_name: renderedNameMatch ? matchingNames[0] : '',
+	    rendered_attachment_count: candidates.length,
+	    duplicate_rejected: duplicateRejected,
+	    processing
 	  };
 	})()`, encodedName, preflightAttachmentCount)
-	return evaluateInto(ctx, session, expression, observation)
+	if err := evaluateInto(ctx, session, expression, observation); err != nil {
+		return err
+	}
+	if observation.RenderedName != fileName {
+		observation.OK = false
+		observation.RenderedNameMatch = false
+	}
+	return nil
 }
 
 func execPageSessionJSON(

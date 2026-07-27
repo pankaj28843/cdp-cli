@@ -187,6 +187,7 @@ func WaitForEvidence(
 		result.Stage = stage
 		result.StageObservations = 0
 		result.LastObservationError = nil
+		stagePolls := 0
 		if err != nil {
 			cancelStage()
 			return result, err
@@ -197,6 +198,7 @@ func WaitForEvidence(
 				break
 			}
 			ready, observationErr := observe(stageCtx)
+			stagePolls++
 			if stageCtx.Err() != nil {
 				break
 			}
@@ -216,7 +218,19 @@ func WaitForEvidence(
 				return result, nil
 			}
 
-			delay := interval
+			// Hydrating browser applications often need a little breathing
+			// room after reload. Use a bounded linear interval backoff while
+			// preserving one overall deadline for the whole sequence.
+			multiplier := stagePolls
+			stageDeadline, _ := stageCtx.Deadline()
+			delay := readinessPollDelay(
+				interval,
+				multiplier,
+				time.Until(stageDeadline),
+			)
+			if delay <= 0 {
+				break
+			}
 			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
@@ -238,4 +252,22 @@ func WaitForEvidence(
 		}
 	}
 	return result, nil
+}
+
+func readinessPollDelay(
+	interval time.Duration,
+	poll int,
+	remaining time.Duration,
+) time.Duration {
+	if interval <= 0 || poll <= 0 || remaining <= 0 {
+		return 0
+	}
+	if poll > 4 {
+		poll = 4
+	}
+	delay := interval * time.Duration(poll)
+	if delay <= 0 || delay > remaining {
+		return remaining
+	}
+	return delay
 }

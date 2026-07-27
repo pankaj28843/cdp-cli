@@ -111,6 +111,58 @@ func TestGateEnforcesSpacingAndCooldownThenCarriesHistory(t *testing.T) {
 	}
 }
 
+func TestExtendCooldownPreservesLatestObservedDeadline(t *testing.T) {
+	clock := newTestClock(
+		time.Date(2026, 7, 25, 18, 0, 0, 0, time.UTC),
+	)
+	gate, err := New(Config{
+		StateDir: t.TempDir(),
+		Now:      clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	lease, err := gate.Acquire(context.Background(), Request{
+		Provider: "chatgpt-rate", Operation: "transport", RunID: "rate-1",
+	})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	short := clock.Now().Add(5 * time.Minute)
+	if err := lease.Release(Release{
+		Outcome:       OutcomeRateLimited,
+		CooldownUntil: short,
+	}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	long := clock.Now().Add(time.Hour)
+	if err := gate.ExtendCooldown(
+		context.Background(),
+		Request{
+			Provider:  "chatgpt-rate",
+			Operation: "transport",
+			RunID:     "rate-evidence-2",
+		},
+		long,
+	); err != nil {
+		t.Fatalf("ExtendCooldown: %v", err)
+	}
+	record, found, err := gate.Status(
+		context.Background(),
+		"chatgpt-rate",
+	)
+	if err != nil || !found {
+		t.Fatalf("Status found=%v err=%v", found, err)
+	}
+	got, err := time.Parse(time.RFC3339Nano, record.CooldownUntil)
+	if err != nil {
+		t.Fatalf("parse cooldown: %v", err)
+	}
+	if !got.Equal(long) {
+		t.Fatalf("cooldown = %s, want %s", got, long)
+	}
+}
+
 func TestGateWaitsForMinimumSpacingAndRechecksAtomically(t *testing.T) {
 	clock := newTestClock(
 		time.Date(2026, 7, 25, 18, 0, 0, 0, time.UTC),

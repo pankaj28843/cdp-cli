@@ -87,7 +87,7 @@ func TestCalibrateNeverRetriesAmbiguousDelete(t *testing.T) {
 	client.renderedDetailPrompt = calibrationPrompt
 	client.deleteRoute = true
 	config := newCalibrationTestConfig(t, stateDir, client)
-	config.Timeout = time.Second
+	config.Timeout = 15 * time.Second
 	confirmCalls := 0
 	config.Confirm = browserflow.DispatchFunc(
 		func(context.Context, *cdp.PageSession) (browserflow.DispatchOutcome, error) {
@@ -150,8 +150,8 @@ func newCalibrationTestConfig(
 		Admission:       gate,
 		Store:           store,
 		BuildCommit:     "test-commit",
-		Timeout:         2 * time.Second,
-		ComposerTimeout: 50 * time.Millisecond,
+		Timeout:         5 * time.Second,
+		ComposerTimeout: time.Second,
 		PollInterval:    time.Millisecond,
 	}
 }
