@@ -127,9 +127,10 @@ cdp workflow agent chatgpt conversations await <conversation-id> \
 ```
 
 If the exact ChatGPT conversation shows `Stopped thinking` and its compose stop
-control is absent, it is terminal. Consume any answer already present. If
-list/detail has no usable answer, record terminal-without-review and do not
-keep polling, continue, replace, or reattach it.
+control is absent or disabled, it is terminal. Consume any answer already
+present through list/detail. If those reads expose no usable answer, record
+terminal-without-review and do not poll again, click Continue or Submit,
+replace or reattach files, or resubmit it.
 
 Entitlement-specific defaults belong in the owner-only cdp config, never in
 the open-source transport defaults:

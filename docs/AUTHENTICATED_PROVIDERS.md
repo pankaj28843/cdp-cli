@@ -88,10 +88,11 @@ Provider-specific `capabilities` output is the executable source of truth for
 which read, continue, delete, and auth operations are installed.
 
 When a ChatGPT conversation visibly ends with `Stopped thinking` and its
-compose stop control is absent, preserve its exact ID and treat it as terminal.
-Consume any assistant answer already present. If `list` or `detail` exposes no
-usable answer, record terminal-without-review and do not keep polling,
-continue, replace, or reattach it.
+compose stop control is absent or disabled, preserve its exact ID and treat it
+as terminal. Consume any assistant answer already present through list/detail.
+If those reads expose no usable answer, record terminal-without-review and do
+not poll again, click Continue or Submit, replace or reattach files, or
+resubmit it.
 
 For conversations that do not show this terminal UI condition, asynchronously
 active detail remains a reason to wait.
