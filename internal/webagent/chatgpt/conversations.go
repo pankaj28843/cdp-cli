@@ -25,6 +25,11 @@ const (
 	ConversationDetailSchemaVersion = "chatgpt-conversation-detail/v1"
 	ConversationDetailRoute         = "/backend-api/conversation/:conversation_id"
 	maxChatGPTResponseBytes         = 32 << 20
+
+	conversationCompletionIncomplete            = "incomplete"
+	conversationCompletionTerminal              = "terminal"
+	conversationCompletionTerminalNoAnswer      = "terminal_no_answer"
+	conversationCompletionReasonStoppedThinking = "stopped_thinking"
 )
 
 var (
@@ -75,13 +80,14 @@ type ConversationListData struct {
 }
 
 type ConversationDetailData struct {
-	SchemaVersion   string         `json:"schema_version"`
-	StatusCode      int            `json:"status_code"`
-	ConversationID  string         `json:"conversation_id"`
-	Text            string         `json:"text"`
-	CompletionState string         `json:"completion_state"`
-	ReadMode        string         `json:"read_mode"`
-	Metadata        map[string]any `json:"metadata"`
+	SchemaVersion    string         `json:"schema_version"`
+	StatusCode       int            `json:"status_code"`
+	ConversationID   string         `json:"conversation_id"`
+	Text             string         `json:"text"`
+	CompletionState  string         `json:"completion_state"`
+	CompletionReason string         `json:"completion_reason,omitempty"`
+	ReadMode         string         `json:"read_mode"`
+	Metadata         map[string]any `json:"metadata"`
 }
 
 type readFailure struct {
@@ -360,70 +366,125 @@ func readConversationUntil(
 		)
 	}
 	if config.BrowserConfig != nil || config.BrowserFallback != nil {
-		directConfig := config
-		directConfig.BrowserConfig = nil
-		directConfig.BrowserFallback = nil
-		direct := readConversationUntil(
-			ctx,
-			directConfig,
-			conversationID,
-			await,
-			deadline,
-			stopState,
-		)
-		switch stopState.observe() {
-		case awaitCancellation:
-			return replaceWithAwaitCanceled(
-				direct, operation, conversationID,
+		renderedProbeAttempts := 0
+		for {
+			directConfig := config
+			directConfig.BrowserConfig = nil
+			directConfig.BrowserFallback = nil
+			direct := readConversationUntil(
+				ctx,
+				directConfig,
+				conversationID,
+				await,
+				deadline,
+				stopState,
 			)
-		case awaitDeadline:
-			return incompleteAwaitAtDeadline(direct)
-		}
-		if direct.OK {
-			return direct
-		}
-		if !browserReadFallbackEligible(direct) {
-			return direct
-		}
-		browserConfig, fallbackFailure := resolveBrowserFallback(
-			ctx,
-			config,
-		)
-		switch stopState.observe() {
-		case awaitCancellation:
-			return replaceWithAwaitCanceled(
-				direct, operation, conversationID,
+			switch stopState.observe() {
+			case awaitCancellation:
+				return replaceWithAwaitCanceled(
+					direct, operation, conversationID,
+				)
+			case awaitDeadline:
+				return incompleteAwaitAtDeadline(direct)
+			}
+			renderedNoAnswerProbe :=
+				direct.OK && terminalNoAnswerCandidateData(direct.Data)
+			if direct.OK && !renderedNoAnswerProbe {
+				return direct
+			}
+			if !renderedNoAnswerProbe && !browserReadFallbackEligible(direct) {
+				return direct
+			}
+			browserConfig, fallbackFailure := resolveBrowserFallback(
+				ctx,
+				config,
 			)
-		case awaitDeadline:
-			return incompleteAwaitAtDeadline(direct)
-		}
-		if fallbackFailure != nil {
-			return recordDirectReadFallback(
-				replaceFailure(
-					direct,
-					fallbackFailure.code,
-					fallbackFailure.errClass,
-					fallbackFailure.message,
-					readNextCommands(
-						operation,
-						conversationRef(conversationID),
+			switch stopState.observe() {
+			case awaitCancellation:
+				return replaceWithAwaitCanceled(
+					direct, operation, conversationID,
+				)
+			case awaitDeadline:
+				return incompleteAwaitAtDeadline(direct)
+			}
+			if fallbackFailure != nil {
+				if renderedNoAnswerProbe {
+					direct = recordRenderedNoAnswerProbeUnavailable(direct)
+					if !await {
+						return direct
+					}
+					delays := config.AwaitDelays
+					if len(delays) == 0 {
+						delays = defaultAwaitDelays
+					}
+					renderedProbeAttempts++
+					delay, deadlineBound, ok := nextConversationAwaitDelay(
+						config,
+						nil,
+						delays,
+						renderedProbeAttempts,
+						deadline,
+					)
+					if !ok {
+						stopState.claim(awaitDeadline)
+						return incompleteAwaitAtDeadline(direct)
+					}
+					if err := waitReadDelay(ctx, config, delay); err != nil {
+						switch stopState.observe() {
+						case awaitCancellation:
+							return replaceWithAwaitCanceled(
+								direct,
+								operation,
+								conversationID,
+							)
+						case awaitDeadline:
+							return incompleteAwaitAtDeadline(direct)
+						default:
+							return replaceFailure(
+								direct,
+								"chatgpt_read_internal",
+								"internal",
+								"ChatGPT conversation await wait failed",
+								readNextCommands(
+									operation,
+									conversationRef(conversationID),
+								),
+							)
+						}
+					}
+					if deadlineBound {
+						stopState.claim(awaitDeadline)
+						return incompleteAwaitAtDeadline(direct)
+					}
+					continue
+				}
+				return recordDirectReadFallback(
+					replaceFailure(
+						direct,
+						fallbackFailure.code,
+						fallbackFailure.errClass,
+						fallbackFailure.message,
+						readNextCommands(
+							operation,
+							conversationRef(conversationID),
+						),
 					),
-				),
-				direct,
+					direct,
+				)
+			}
+			config.BrowserConfig = browserConfig
+			config.BrowserFallback = nil
+			browserResult := conversationViaBrowser(
+				ctx,
+				config,
+				direct.Evidence.RunID,
+				conversationID,
+				await,
+				deadline,
+				stopState,
 			)
+			return mergeDirectBrowserFallback(direct, browserResult)
 		}
-		config.BrowserConfig = browserConfig
-		config.BrowserFallback = nil
-		browserResult := conversationViaBrowser(
-			ctx,
-			config,
-			direct.Evidence.RunID,
-			conversationID,
-			await,
-			deadline,
-			stopState,
-		)
-		return mergeDirectBrowserFallback(direct, browserResult)
 	}
 	runID := webagent.NewRunID()
 	conversation := conversationRef(conversationID)
@@ -491,7 +552,9 @@ func readConversationUntil(
 			break
 		}
 		if failure == nil &&
-			(data.CompletionState != "incomplete" || !await) {
+			(data.CompletionState != conversationCompletionIncomplete ||
+				terminalNoAnswerCandidateData(data) ||
+				!await) {
 			break
 		}
 		delay, deadlineBound, ok := nextConversationAwaitDelay(
@@ -538,7 +601,7 @@ func readConversationUntil(
 		)
 	}
 	state := webagent.StateTerminal
-	if data.CompletionState != "terminal" {
+	if !terminalConversationCompletion(data.CompletionState) {
 		state = webagent.StateIncomplete
 	}
 	return readSuccessResult(
@@ -853,7 +916,7 @@ func newConversationDetailData(
 	data := ConversationDetailData{
 		SchemaVersion:   ConversationDetailSchemaVersion,
 		ConversationID:  conversationID,
-		CompletionState: "incomplete",
+		CompletionState: conversationCompletionIncomplete,
 		ReadMode:        readMode,
 		Metadata: map[string]any{
 			"source": "hydrated_conversation_detail",
@@ -863,6 +926,48 @@ func newConversationDetailData(
 		data.Metadata["transport"] = transport
 	}
 	return data
+}
+
+func terminalNoAnswerCandidateData(value any) bool {
+	var data ConversationDetailData
+	switch candidate := value.(type) {
+	case ConversationDetailData:
+		data = candidate
+	case *ConversationDetailData:
+		if candidate == nil {
+			return false
+		}
+		data = *candidate
+	default:
+		return false
+	}
+	if data.CompletionState != conversationCompletionIncomplete ||
+		strings.TrimSpace(data.Text) != "" ||
+		data.Metadata == nil {
+		return false
+	}
+	candidate, _ := data.Metadata["terminal_no_answer_candidate"].(bool)
+	return candidate
+}
+
+func terminalConversationCompletion(completionState string) bool {
+	return completionState == conversationCompletionTerminal ||
+		completionState == conversationCompletionTerminalNoAnswer
+}
+
+func recordRenderedNoAnswerProbeUnavailable(
+	result webagent.Result,
+) webagent.Result {
+	data, ok := result.Data.(ConversationDetailData)
+	if !ok {
+		return result
+	}
+	if data.Metadata == nil {
+		data.Metadata = map[string]any{}
+	}
+	data.Metadata["rendered_terminal_no_answer_confirmation"] = "unavailable"
+	result.Data = data
+	return result
 }
 
 func parseConversationDetailPayload(
@@ -972,6 +1077,15 @@ func extractConversationText(payload map[string]any) extractedConversation {
 			continue
 		}
 		text := strings.TrimSpace(messageText(message, true))
+		if index == 0 &&
+			terminalNoAnswerPayloadCandidate(text, message, activity) {
+			result.metadata["assistant_is_current_node"] = true
+			result.metadata["terminal_no_answer_candidate"] = true
+			result.metadata["terminal_no_answer_candidate_reason"] =
+				"finished_empty_current_assistant"
+			copyResultMetadata(result.metadata, message)
+			return result
+		}
 		if !terminalAnswerTextValid(text, message) {
 			continue
 		}
@@ -982,7 +1096,7 @@ func extractConversationText(payload map[string]any) extractedConversation {
 				activity == conversationActivityInactive) &&
 			message["status"] == "finished_successfully" &&
 			message["end_turn"] == true {
-			result.completionState = "terminal"
+			result.completionState = conversationCompletionTerminal
 		}
 		copyResultMetadata(result.metadata, message)
 		return result
@@ -1102,24 +1216,8 @@ func terminalAnswerTextValid(text string, message map[string]any) bool {
 	if text == "" || deepResearchControlPayload(text) {
 		return false
 	}
-	recipient, _ := message["recipient"].(string)
-	if recipient == "" {
-		author, _ := message["author"].(map[string]any)
-		recipient, _ = author["recipient"].(string)
-	}
-	if recipient != "" && recipient != "all" {
+	if !terminalAssistantEnvelopeValid(message) {
 		return false
-	}
-	metadata, _ := message["metadata"].(map[string]any)
-	for _, key := range []string{
-		"system1_search_query",
-		"search_query",
-		"tool_call",
-		"is_visually_hidden_from_conversation",
-	} {
-		if truthy(metadata[key]) {
-			return false
-		}
 	}
 	var control map[string]any
 	if json.Unmarshal([]byte(text), &control) == nil {
@@ -1154,6 +1252,42 @@ func terminalAnswerTextValid(text string, message map[string]any) bool {
 		}
 	}
 	return letters >= 2
+}
+
+func terminalNoAnswerPayloadCandidate(
+	text string,
+	message map[string]any,
+	activity conversationActivityState,
+) bool {
+	return strings.TrimSpace(text) == "" &&
+		(activity == conversationActivityAbsent ||
+			activity == conversationActivityInactive) &&
+		message["status"] == "finished_successfully" &&
+		message["end_turn"] == true &&
+		terminalAssistantEnvelopeValid(message)
+}
+
+func terminalAssistantEnvelopeValid(message map[string]any) bool {
+	recipient, _ := message["recipient"].(string)
+	if recipient == "" {
+		author, _ := message["author"].(map[string]any)
+		recipient, _ = author["recipient"].(string)
+	}
+	if recipient != "" && recipient != "all" {
+		return false
+	}
+	metadata, _ := message["metadata"].(map[string]any)
+	for _, key := range []string{
+		"system1_search_query",
+		"search_query",
+		"tool_call",
+		"is_visually_hidden_from_conversation",
+	} {
+		if truthy(metadata[key]) {
+			return false
+		}
+	}
+	return true
 }
 
 func deepResearchControlPayload(text string) bool {

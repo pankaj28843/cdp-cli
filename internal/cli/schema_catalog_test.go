@@ -110,6 +110,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"workflow-linkedin-collect",
 		"workflow-hacker-news-collect",
 		"workflow-arxiv-collect",
+		"workflow-pdf-to-markdown",
 		"source-collection-coverage",
 		"workflow-submit-search",
 		"workflow-web-research-serp",
@@ -119,6 +120,29 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 	for _, name := range critical {
 		if _, ok := catalog[name]; !ok {
 			t.Fatalf("schemaCatalog() missing critical schema %q", name)
+		}
+	}
+}
+
+func TestSchemaCatalogPDFToMarkdownContract(t *testing.T) {
+	workflow := schemaCatalog()["workflow-pdf-to-markdown"]
+	for _, field := range []string{"ok", "schema_version", "source", "extraction", "pages", "stats", "coverage", "artifacts"} {
+		if !catalogSchemaHasField(workflow, field) {
+			t.Fatalf("workflow-pdf-to-markdown schema missing %q: %+v", field, workflow)
+		}
+	}
+	if !catalogSchemaFieldContains(workflow, "source", "pdf_source", "SHA-256", "local") ||
+		!catalogSchemaFieldContains(workflow, "extraction", "pdf_text_extraction", "pdftotext", "embedded text layer", "never OCR") ||
+		!catalogSchemaFieldContains(workflow, "pages", "array<pdf_text_page>", "page provenance", "Markdown heading") ||
+		!catalogSchemaFieldContains(workflow, "stats", "pdf_text_stats", "page", "word", "character", "line") ||
+		!catalogSchemaFieldContains(workflow, "coverage", "pdf_text_coverage", "Meaningful", "thresholds") ||
+		!catalogSchemaFieldContains(workflow, "artifacts", "pdf_text_artifacts", "Markdown", "metadata", "SHA-256") {
+		t.Fatalf("workflow-pdf-to-markdown schema is incomplete: %+v", workflow)
+	}
+	coverage := schemaCatalog()["pdf-text-coverage"]
+	for _, field := range []string{"usable", "meaningful_page_count", "word_count", "alphanumeric_character_count", "min_meaningful_page_words", "min_meaningful_page_characters", "min_document_words", "min_document_characters"} {
+		if !catalogSchemaHasField(coverage, field) {
+			t.Fatalf("pdf-text-coverage schema missing %q: %+v", field, coverage)
 		}
 	}
 }
@@ -275,6 +299,9 @@ func TestSchemaCatalogWebResearchQueryContract(t *testing.T) {
 
 	if !catalogSchemaFieldContains(workflow, "queries", "array<web_research_query>", "query<TAB>", "applied only to Google", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026") {
 		t.Fatalf("workflow schema does not expose the custom-date query contract: %+v", workflow)
+	}
+	if !catalogSchemaFieldContains(workflow, "workflow", "workflow_summary", "navigation delay", "engine lane", "no delay before the first") {
+		t.Fatalf("workflow schema does not expose the navigation pacing contract: %+v", workflow)
 	}
 	if !catalogSchemaFieldContains(query, "query", "string", "non-empty") {
 		t.Fatalf("query schema does not expose the required query column: %+v", query)

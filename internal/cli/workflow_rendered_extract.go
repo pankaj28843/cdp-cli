@@ -184,6 +184,7 @@ type renderedExtractOptions struct {
 	Reload             bool
 	IgnoreCache        bool
 	ReusePage          *renderedExtractReusablePage
+	BeforeNavigate     func(context.Context) error
 }
 
 type renderedExtractResult struct {
@@ -198,6 +199,17 @@ type renderedExtractReusablePage struct {
 	CloseClient func(context.Context) error
 	Session     *cdp.PageSession
 	TargetID    string
+}
+
+type renderedExtractNavigateFunc func(context.Context, string) (string, error)
+
+func dispatchRenderedExtractNavigation(ctx context.Context, url string, beforeNavigate func(context.Context) error, navigate renderedExtractNavigateFunc) (string, error) {
+	if beforeNavigate != nil {
+		if err := beforeNavigate(ctx); err != nil {
+			return "", err
+		}
+	}
+	return navigate(ctx, url)
 }
 
 const renderedExtractCleanupTimeout = 5 * time.Second
@@ -616,7 +628,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if createdPage || (reusedPage && strings.TrimSpace(options.RawURL) != "") {
 		trigger = "navigate"
 		var navigateErr error
-		frameID, navigateErr = session.Navigate(ctx, navigationURL)
+		frameID, navigateErr = dispatchRenderedExtractNavigation(ctx, navigationURL, options.BeforeNavigate, session.Navigate)
 		if navigateErr != nil {
 			collectorErrors = append(collectorErrors, collectorError("navigation", navigateErr))
 		}

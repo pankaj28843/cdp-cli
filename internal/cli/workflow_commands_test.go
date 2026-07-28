@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cli"
@@ -83,6 +84,9 @@ func TestWorkflowWebResearchSERPHelp(t *testing.T) {
 		"character is # are ignored",
 		"applies it only to Google; other engines",
 		"cdr:1,cd_min:07/01/2026,cd_max:07/01/2026",
+		"--navigation-delay",
+		"minimum delay between navigation starts in each SERP engine lane",
+		"no delay before the first navigation",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("workflow web-research serp --help missing %q:\n%s", want, out.String())
@@ -114,10 +118,13 @@ func TestDescribeWorkflowWebResearchSERP(t *testing.T) {
 		t.Fatalf("describe workflow web-research serp output indicates failure: %s", out.String())
 	}
 	var queryFileUsage string
+	var navigationDelayUsage string
 	for _, flag := range got.Commands.Flags {
 		if flag.Name == "query-file" {
 			queryFileUsage = flag.Usage
-			break
+		}
+		if flag.Name == "navigation-delay" {
+			navigationDelayUsage = flag.Usage
 		}
 	}
 	for _, want := range []string{"query<TAB>Google tbs time filter", "# comment rows ignored"} {
@@ -129,6 +136,14 @@ func TestDescribeWorkflowWebResearchSERP(t *testing.T) {
 		if !hasExampleContaining(got.Commands.Examples, want) {
 			t.Fatalf("describe examples %#v missing %q", got.Commands.Examples, want)
 		}
+	}
+	for _, want := range []string{"minimum delay", "engine lane", "first navigation"} {
+		if !strings.Contains(navigationDelayUsage, want) {
+			t.Fatalf("describe navigation-delay usage %q missing %q", navigationDelayUsage, want)
+		}
+	}
+	if !hasExampleContaining(got.Commands.Examples, "--navigation-delay 30s") {
+		t.Fatalf("describe examples %#v missing progressive pacing example", got.Commands.Examples)
 	}
 }
 
@@ -2203,8 +2218,209 @@ func TestWorkflowWebResearchSERPPaginates(t *testing.T) {
 			t.Fatalf("workflow web-research serp artifact %q, want under %q", path, outDir)
 		}
 	}
-	if !strings.Contains(got.SERPs[0].Report.Artifacts.Markdown, filepath.Join("serps", "agentic-engineering", "page-1", "page.md")) || !strings.Contains(got.SERPs[1].Report.Artifacts.Markdown, filepath.Join("serps", "agentic-engineering", "page-2", "page.md")) {
+	artifactID := filepath.Base(filepath.Dir(filepath.Dir(got.SERPs[0].Report.Artifacts.Markdown)))
+	if !strings.HasPrefix(artifactID, "001-agentic-engineering--tbs-") ||
+		!strings.Contains(got.SERPs[0].Report.Artifacts.Markdown, filepath.Join(artifactID, "page-1", "page.md")) ||
+		!strings.Contains(got.SERPs[1].Report.Artifacts.Markdown, filepath.Join(artifactID, "page-2", "page.md")) {
 		t.Fatalf("workflow web-research serp artifact layout = %+v", got.SERPs)
+	}
+}
+
+func TestWorkflowWebResearchSERPReportsNavigationDelayWithoutSleepingBeforeFirst(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("agentic engineering\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	outDir := filepath.Join(tmpDir, "research")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(ctx, []string{
+		"workflow", "web-research", "serp",
+		"--query-file", queryFile,
+		"--result-pages", "1",
+		"--parallel", "1",
+		"--navigation-delay", "30s",
+		"--progress", "stderr",
+		"--out-dir", outDir,
+		"--wait", "250ms",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow web-research serp exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	var got struct {
+		Workflow struct {
+			NavigationDelay string `json:"navigation_delay"`
+			EngineLanes     []struct {
+				NavigationDelay string `json:"navigation_delay"`
+			} `json:"engine_lanes"`
+		} `json:"workflow"`
+		Artifacts struct {
+			QueriesJSON string `json:"queries_json"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode workflow output: %v", err)
+	}
+	if got.Workflow.NavigationDelay != "30s" {
+		t.Fatalf("workflow navigation_delay = %q, want 30s", got.Workflow.NavigationDelay)
+	}
+	if len(got.Workflow.EngineLanes) != 1 || got.Workflow.EngineLanes[0].NavigationDelay != "30s" {
+		t.Fatalf("workflow engine lanes = %+v, want one lane reporting 30s navigation delay", got.Workflow.EngineLanes)
+	}
+	queriesPayload, err := os.ReadFile(got.Artifacts.QueriesJSON)
+	if err != nil {
+		t.Fatalf("read queries metadata: %v", err)
+	}
+	var queriesMetadata struct {
+		NavigationDelay string `json:"navigation_delay"`
+	}
+	if err := json.Unmarshal(queriesPayload, &queriesMetadata); err != nil {
+		t.Fatalf("decode queries metadata: %v", err)
+	}
+	if queriesMetadata.NavigationDelay != "30s" {
+		t.Fatalf("queries metadata navigation_delay = %q, want 30s", queriesMetadata.NavigationDelay)
+	}
+	var progressEvent struct {
+		Event           string `json:"event"`
+		NavigationDelay string `json:"navigation_delay"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(errOut.Bytes()), &progressEvent); err != nil {
+		t.Fatalf("decode progress event %q: %v", errOut.String(), err)
+	}
+	if progressEvent.Event != "serp_page_complete" || progressEvent.NavigationDelay != "30s" {
+		t.Fatalf("progress event = %+v, want reported 30s navigation delay", progressEvent)
+	}
+}
+
+func TestWorkflowWebResearchSERPFastFailDoesNotDelayAfterFirstBlockedNavigation(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte("serp block fixture one\nsecond query\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(ctx, []string{
+		"workflow", "web-research", "serp",
+		"--query-file", queryFile,
+		"--result-pages", "1",
+		"--parallel", "1",
+		"--navigation-delay", "1h",
+		"--fast-fail-blocked",
+		"--blocked-failure-threshold", "1",
+		"--fallback-serp", "none",
+		"--out-dir", filepath.Join(tmpDir, "research"),
+		"--wait", "250ms",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("fast-fail workflow exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var got struct {
+		Workflow struct {
+			ScheduledResultPages int  `json:"scheduled_result_pages"`
+			FastFailTriggered    bool `json:"fast_fail_triggered"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode fast-fail workflow: %v", err)
+	}
+	if got.Workflow.ScheduledResultPages != 1 || !got.Workflow.FastFailTriggered {
+		t.Fatalf("fast-fail workflow = %+v, want one navigation and immediate stop", got.Workflow)
+	}
+}
+
+func TestWorkflowWebResearchSERPSeparatesIdenticalDatedAndUndatedArtifacts(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	const query = "production LLM systems"
+	const timeFilter = "cdr:1,cd_min:01/01/2026,cd_max:07/01/2026"
+	tmpDir := t.TempDir()
+	queryFile := filepath.Join(tmpDir, "queries.txt")
+	if err := os.WriteFile(queryFile, []byte(query+"\n"+query+"\t"+timeFilter+"\n"), 0o600); err != nil {
+		t.Fatalf("write query file: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "web-research", "serp",
+		"--query-file", queryFile,
+		"--result-pages", "1",
+		"--parallel", "1",
+		"--out-dir", filepath.Join(tmpDir, "research"),
+		"--wait", "250ms",
+		"--settle", "0",
+		"--min-visible-words", "1",
+		"--min-markdown-words", "1",
+		"--min-html-chars", "1",
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow exit code = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var got struct {
+		SERPs []struct {
+			TimeFilter string `json:"time_filter"`
+			Report     struct {
+				Workflow struct {
+					RequestedURL string `json:"requested_url"`
+				} `json:"workflow"`
+				Artifacts struct {
+					Markdown string `json:"markdown"`
+				} `json:"artifacts"`
+			} `json:"report"`
+		} `json:"serps"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode workflow output: %v", err)
+	}
+	if len(got.SERPs) != 2 {
+		t.Fatalf("SERP reports = %d, want 2", len(got.SERPs))
+	}
+	evergreenPath := got.SERPs[0].Report.Artifacts.Markdown
+	datedPath := got.SERPs[1].Report.Artifacts.Markdown
+	if evergreenPath == datedPath {
+		t.Fatalf("evergreen and dated Markdown paths collide at %q", evergreenPath)
+	}
+	if !strings.Contains(evergreenPath, filepath.Join("001-production-llm-systems--all-time", "page-1")) {
+		t.Fatalf("evergreen artifact path = %q", evergreenPath)
+	}
+	datedArtifactID := filepath.Base(filepath.Dir(filepath.Dir(datedPath)))
+	if !strings.HasPrefix(datedArtifactID, "002-production-llm-systems--tbs-") {
+		t.Fatalf("dated artifact path = %q, want input position and safe time-filter hash", datedPath)
+	}
+	for _, path := range []string{evergreenPath, datedPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("artifact %q was not written: %v", path, err)
+		}
+	}
+	if got.SERPs[0].TimeFilter != "" || got.SERPs[1].TimeFilter != timeFilter {
+		t.Fatalf("SERP time filters = %q and %q", got.SERPs[0].TimeFilter, got.SERPs[1].TimeFilter)
+	}
+	if strings.Contains(got.SERPs[0].Report.Workflow.RequestedURL, "tbs=") || !strings.Contains(got.SERPs[1].Report.Workflow.RequestedURL, "tbs=") {
+		t.Fatalf("requested URLs do not preserve dated/undated identity: %+v", got.SERPs)
 	}
 }
 

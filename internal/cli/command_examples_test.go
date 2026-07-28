@@ -48,6 +48,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp workflow x collect", want: []string{"x.com/karpathy/status", "x.com/karpathy", "--limit 200"}},
 		{path: "cdp workflow linkedin collect", want: []string{"linkedin.com/posts", "linkedin.com/company", "--limit 200"}},
 		{path: "cdp workflow arxiv collect", want: []string{"arxiv.org/abs", "--json"}},
+		{path: "cdp workflow pdf-to-markdown", want: []string{"workflow pdf-to-markdown", "--wait-download", ".page.target_id", "--target \"$pdf_target\""}},
 		{path: "cdp workflow web-research serp", want: []string{"--result-pages 3", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026"}},
 		{path: "cdp workflow web-research extract", want: []string{"--parallel 4", "--parallel 10"}},
 		{path: "cdp workflow feeds", want: []string{"--wait-load"}},
@@ -72,6 +73,33 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPublicWaitDownloadExamplesOwnAndSelectExactTarget(t *testing.T) {
+	for path, examples := range commandExamplesCatalog() {
+		for _, example := range examples {
+			if !strings.Contains(example, "click ") ||
+				!strings.Contains(example, "--wait-download") {
+				continue
+			}
+			for _, required := range []string{
+				"cdp --browser-mode headed open ",
+				"--task-id ",
+				".page.target_id",
+				"--target \"$",
+				"page close --target \"$",
+			} {
+				if !strings.Contains(example, required) {
+					t.Fatalf(
+						"public %q wait-download example must own, select, and close its exact target; missing %q in %q",
+						path,
+						required,
+						example,
+					)
+				}
+			}
+		}
 	}
 }
 

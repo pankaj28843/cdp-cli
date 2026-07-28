@@ -4,9 +4,139 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestWebResearchNavigationPacerZeroDoesNotSleep(t *testing.T) {
+	sleepCalls := 0
+	pacer := newWebResearchNavigationPacer(0, time.Now, func(context.Context, time.Duration) error {
+		sleepCalls++
+		return nil
+	})
+
+	for i := 0; i < 3; i++ {
+		if err := pacer.Wait(context.Background()); err != nil {
+			t.Fatalf("Wait() call %d error = %v", i+1, err)
+		}
+	}
+	if sleepCalls != 0 {
+		t.Fatalf("sleep calls = %d, want 0 when navigation delay is disabled", sleepCalls)
+	}
+}
+
+func TestWebResearchNavigationPacerDelaysBetweenConcurrentNavigations(t *testing.T) {
+	const delay = 30 * time.Second
+	now := time.Unix(1_700_000_000, 0)
+	var sleeps []time.Duration
+	pacer := newWebResearchNavigationPacer(delay, func() time.Time {
+		return now
+	}, func(_ context.Context, duration time.Duration) error {
+		sleeps = append(sleeps, duration)
+		now = now.Add(duration)
+		return nil
+	})
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- pacer.Wait(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	}
+	if len(sleeps) != 2 || sleeps[0] != delay || sleeps[1] != delay {
+		t.Fatalf("sleep durations = %v, want [%s %s] with no delay before the first navigation", sleeps, delay, delay)
+	}
+}
+
+func TestWebResearchNavigationPacerCancellationInterruptsDelay(t *testing.T) {
+	const delay = 30 * time.Second
+	now := time.Unix(1_700_000_000, 0)
+	sleepCalls := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pacer := newWebResearchNavigationPacer(delay, func() time.Time {
+		return now
+	}, func(sleepCtx context.Context, duration time.Duration) error {
+		sleepCalls++
+		if duration != delay {
+			t.Fatalf("sleep duration = %s, want %s", duration, delay)
+		}
+		cancel()
+		<-sleepCtx.Done()
+		return sleepCtx.Err()
+	})
+	if err := pacer.Wait(context.Background()); err != nil {
+		t.Fatalf("first Wait() error = %v", err)
+	}
+
+	err := pacer.Wait(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("second Wait() error = %v, want context.Canceled", err)
+	}
+	if sleepCalls != 1 {
+		t.Fatalf("sleep calls = %d, want 1", sleepCalls)
+	}
+}
+
+func TestWebResearchNavigationPacerMeasuresRecordedNavigationStarts(t *testing.T) {
+	const delay = 30 * time.Second
+	now := time.Unix(1_700_000_000, 0)
+	pacer := newWebResearchNavigationPacer(delay, func() time.Time {
+		return now
+	}, func(_ context.Context, duration time.Duration) error {
+		now = now.Add(duration)
+		return nil
+	})
+	var starts []time.Time
+	navigate := func(context.Context, string) (string, error) {
+		starts = append(starts, now)
+		return "frame", nil
+	}
+
+	for _, setupDuration := range []time.Duration{20 * time.Second, time.Second} {
+		now = now.Add(setupDuration)
+		if _, err := dispatchRenderedExtractNavigation(context.Background(), "https://example.test", pacer.Wait, navigate); err != nil {
+			t.Fatalf("dispatch navigation: %v", err)
+		}
+	}
+	if len(starts) != 2 {
+		t.Fatalf("navigation starts = %v, want two starts", starts)
+	}
+	if spacing := starts[1].Sub(starts[0]); spacing < delay {
+		t.Fatalf("navigation start spacing = %s, want at least %s", spacing, delay)
+	}
+}
+
+func TestWebResearchSERPArtifactIDIncludesInputPositionAndWindowIdentity(t *testing.T) {
+	const dateFilter = "cdr:1,cd_min:01/01/2026,cd_max:07/01/2026"
+	evergreen := webResearchSERPArtifactID(0, webResearchQuery{Text: "Production LLM systems"})
+	dated := webResearchSERPArtifactID(1, webResearchQuery{Text: "Production LLM systems", TimeFilter: dateFilter})
+	repeatedDated := webResearchSERPArtifactID(2, webResearchQuery{Text: "Production LLM systems", TimeFilter: dateFilter})
+
+	if evergreen != "001-production-llm-systems--all-time" {
+		t.Fatalf("evergreen artifact ID = %q", evergreen)
+	}
+	if !strings.HasPrefix(dated, "002-production-llm-systems--tbs-") {
+		t.Fatalf("dated artifact ID = %q, want stable input position and hashed tbs identity", dated)
+	}
+	if dated == repeatedDated || !strings.HasPrefix(repeatedDated, "003-production-llm-systems--tbs-") {
+		t.Fatalf("repeated dated artifact IDs = %q and %q, want collision-free input positions", dated, repeatedDated)
+	}
+	if strings.Contains(dated, dateFilter) || strings.ContainsAny(dated, ",:/") {
+		t.Fatalf("dated artifact ID %q exposes unsafe raw time filter %q", dated, dateFilter)
+	}
+}
 
 func TestDetectSERPBlocked(t *testing.T) {
 	blocked, signals := detectSERPBlocked(renderedExtractResult{

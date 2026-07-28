@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
+	"crypto/sha256"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
-
-	"net/url"
+	"sync"
+	"time"
 )
 
 type webResearchQuery struct {
@@ -41,6 +44,72 @@ type webResearchQueryCoverage struct {
 	FailedPages         int    `json:"failed_pages"`
 	Productive          bool   `json:"productive"`
 	Represented         bool   `json:"represented"`
+}
+
+type webResearchNavigationPacer struct {
+	delay time.Duration
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
+
+	mu             sync.Mutex
+	lastNavigation time.Time
+}
+
+func newWebResearchNavigationPacer(delay time.Duration, now func() time.Time, sleep func(context.Context, time.Duration) error) *webResearchNavigationPacer {
+	if now == nil {
+		now = time.Now
+	}
+	if sleep == nil {
+		sleep = sleepWebResearchNavigationDelay
+	}
+	return &webResearchNavigationPacer{delay: delay, now: now, sleep: sleep}
+}
+
+func (p *webResearchNavigationPacer) Wait(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.delay <= 0 {
+		return nil
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	now := p.now()
+	if p.lastNavigation.IsZero() {
+		p.lastNavigation = now
+		return nil
+	}
+	if remaining := p.delay - now.Sub(p.lastNavigation); remaining > 0 {
+		if err := p.sleep(ctx, remaining); err != nil {
+			return err
+		}
+	}
+	p.lastNavigation = p.now()
+	return nil
+}
+
+func sleepWebResearchNavigationDelay(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func webResearchSERPArtifactID(queryIndex int, query webResearchQuery) string {
+	window := "all-time"
+	if timeFilter := strings.TrimSpace(query.TimeFilter); timeFilter != "" {
+		sum := sha256.Sum256([]byte(timeFilter))
+		window = fmt.Sprintf("tbs-%x", sum[:6])
+	}
+	return fmt.Sprintf("%03d-%s--%s", queryIndex+1, webResearchSlug(query.Text), window)
 }
 
 func selectFairWebResearchCandidates(queries []webResearchQuery, pool []webResearchCandidate, maxCandidates int) ([]webResearchCandidate, []webResearchQueryCoverage) {

@@ -125,14 +125,17 @@ func recordSelectionReadiness(
 }
 
 type renderedObservation struct {
-	RouteMatches     bool     `json:"route_matches"`
-	ConversationID   string   `json:"conversation_id"`
-	Text             string   `json:"text"`
-	PromptCandidates []string `json:"prompt_candidates"`
-	Streaming        bool     `json:"is_streaming"`
-	TerminalControl  bool     `json:"terminal_control_present"`
-	AssistantCount   int      `json:"assistant_count"`
-	UserMessageCount int      `json:"user_message_count"`
+	RouteMatches                 bool     `json:"route_matches"`
+	ConversationID               string   `json:"conversation_id"`
+	Text                         string   `json:"text"`
+	PromptCandidates             []string `json:"prompt_candidates"`
+	Streaming                    bool     `json:"is_streaming"`
+	TerminalControl              bool     `json:"terminal_control_present"`
+	AssistantCount               int      `json:"assistant_count"`
+	UserMessageCount             int      `json:"user_message_count"`
+	StoppedThinkingMarkerPresent bool     `json:"stopped_thinking_marker_present"`
+	TerminalNoAnswer             bool     `json:"terminal_no_answer"`
+	TerminalNoAnswerReason       string   `json:"terminal_no_answer_reason"`
 }
 
 type chatgptSendDispatcher struct {
@@ -1476,16 +1479,41 @@ func observeRendered(
 	    'button[data-testid="copy-turn-action-button"][aria-label="Copy response"],' +
 	    'button[aria-label="Copy response"],button[aria-label="Regenerate response"]'
 	  )).some(visible));
+	  const normalizeMarker = value => String(value || '')
+	    .replace(/\s+/g, ' ')
+	    .trim()
+	    .toLowerCase();
+	  const stoppedThinkingMarker = Boolean(turn && Array.from(
+	    turn.querySelectorAll('*')
+	  ).some(node =>
+	    visible(node) &&
+	    normalizeMarker(node.innerText || node.textContent) ===
+	      'stopped thinking'
+	  ));
+	  const rawAssistantText = assistant ?
+	    String(assistant.innerText || assistant.textContent || '').trim() : '';
+	  const substantiveAssistantText =
+	    normalizeMarker(rawAssistantText) === 'stopped thinking' ?
+	      '' : rawAssistantText;
+	  const terminalNoAnswer =
+	    stoppedThinkingMarker &&
+	    !streamingState &&
+	    !streamingControl &&
+	    substantiveAssistantText === '';
 	  const match = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
 	  return {
 	    route_matches: Boolean(match),
 	    conversation_id: match ? match[1] : '',
-	    text: assistant ? String(assistant.innerText || assistant.textContent || '').trim() : '',
+	    text: substantiveAssistantText,
 	    prompt_candidates: promptCandidates,
 	    is_streaming: streamingState || streamingControl,
 	    terminal_control_present: terminalControl,
 	    assistant_count: assistants.length,
-	    user_message_count: users.length
+	    user_message_count: users.length,
+	    stopped_thinking_marker_present: stoppedThinkingMarker,
+	    terminal_no_answer: terminalNoAnswer,
+	    terminal_no_answer_reason: terminalNoAnswer ?
+	      'stopped_thinking' : ''
 	  };
 	})()`, observation)
 }

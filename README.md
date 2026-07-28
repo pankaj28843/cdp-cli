@@ -54,6 +54,7 @@ cdp workflow visible-posts 'https://x.com/<handle>' --limit 5 --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --out-dir tmp/research-all --json
 cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json
+cdp workflow pdf-to-markdown tmp/downloads/paper.pdf --out-dir tmp/paper-markdown --json
 cdp workflow agent providers --json
 cdp --browser-mode headed pages --json
 cdp workflow agent claude capabilities --json
@@ -124,6 +125,11 @@ printf '%s' 'Review this design.' |
 cdp workflow agent chatgpt conversations await <conversation-id> \
   --wait 40m --timeout 40m30s --json
 ```
+
+If the exact ChatGPT conversation shows `Stopped thinking` and its compose stop
+control is absent, it is terminal. Consume any answer already present. If
+list/detail has no usable answer, record terminal-without-review and do not
+keep polling, continue, replace, or reattach it.
 
 Entitlement-specific defaults belong in the owner-only cdp config, never in
 the open-source transport defaults:
@@ -253,6 +259,93 @@ mkdir -p tmp/research
 printf '%s\t%s\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries-exact-date.txt
 cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries-exact-date.txt --serp google --out-dir tmp/research/exact-date --json
 ```
+
+For progressive, human-reviewed Google research, keep one engine lane, sample
+one result page, stop on the first blocked page, and set a conservative minimum
+between navigation starts:
+
+```bash
+cdp --browser-mode headed workflow web-research serp \
+  --query-file tmp/research/queries.txt \
+  --serp google \
+  --fallback-serp none \
+  --parallel 1 \
+  --navigation-delay 30s \
+  --result-pages 1 \
+  --fast-fail-blocked \
+  --blocked-failure-threshold 1 \
+  --progress stderr \
+  --out-dir tmp/research/progressive-pass \
+  --json
+```
+
+`--navigation-delay` is cancellable and applies between navigation starts
+within each SERP engine lane; it does not delay the lane's first navigation.
+Parallel engine lanes pace independently. Review the pass artifacts before
+choosing another query or requesting deeper result pages. The delay is session
+stewardship, not a substitute for stopping when a consent, CAPTCHA, unusual
+traffic, authentication, or bot-check page appears.
+
+### Local PDF Text-Layer Extraction
+
+`workflow pdf-to-markdown` converts a local PDF's embedded text layer into
+deterministic, page-separated Markdown. It is browser-free and never performs
+OCR. Install its declared Poppler dependency first:
+
+```bash
+# Debian or Ubuntu
+sudo apt-get install poppler-utils
+
+# macOS with Homebrew
+brew install poppler
+```
+
+When the PDF is on a website, acquire it separately through the visible headed
+browser, then convert the downloaded local file:
+
+```bash
+pdf_target="$(
+  cdp --browser-mode headed open 'https://example.com/paper' \
+    --task-id pdf-download \
+    --json |
+    jq -r '.page.target_id'
+)"
+cdp --browser-mode headed click 'Download PDF' \
+  --by role --role link \
+  --target "$pdf_target" \
+  --wait-download \
+  --download-dir tmp/downloads \
+  --json
+cdp --browser-mode headed page close \
+  --target "$pdf_target" \
+  --wait-gone \
+  --json
+cdp workflow pdf-to-markdown tmp/downloads/paper.pdf \
+  --out-dir tmp/paper-markdown \
+  --json
+```
+
+The output directory contains owner-only `document.md` and `metadata.json`.
+The workflow copies the opened source bytes into a private temporary snapshot,
+hashes those same bytes, and passes that snapshot to Poppler. This binds the
+reported source SHA-256 to the exact bytes extracted even if the original path
+changes concurrently. The snapshot is removed after extraction.
+
+The JSON result and metadata record the source SHA-256, extraction engine,
+`ocr_used: false`, per-page provenance, page/word/character/line statistics,
+meaningful text coverage, and artifact hashes. Without `--out-dir`, the default
+is an input-derived path under `tmp/pdf-to-markdown/`.
+
+Meaningful coverage requires at least one page containing three alphanumeric
+words and 12 alphanumeric characters, and at least five words and 24
+alphanumeric characters across the document. Whitespace, lone page numbers,
+or similarly sparse glyphs therefore fail before artifact creation with stable
+code `text_layer_missing` and `data.reason: "ocr_required"`.
+
+Extracted UTF-8 text is streamed into a bounded 64 MiB buffer. Larger output
+fails with stable code `pdf_text_output_too_large` and
+`data.max_output_bytes: 67108864`. Use a separate, explicitly chosen OCR tool
+for scanned PDFs; this workflow will not silently change representations.
 
 ## Browser Runtime Modes
 

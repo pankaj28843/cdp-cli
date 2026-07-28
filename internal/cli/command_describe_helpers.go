@@ -50,6 +50,10 @@ func commandFlags(cmd *cobra.Command) []flagInfo {
 }
 
 func commandExamples(path string) []string {
+	return commandExamplesCatalog()[path]
+}
+
+func commandExamplesCatalog() map[string][]string {
 	examples := map[string][]string{
 		"cdp": {
 			"cdp doctor --json",
@@ -321,7 +325,7 @@ func commandExamples(path string) []string {
 			"cdp click 'button.covered' --force --json",
 			"cdp click '[data-testid=row]' --strategy raw-input --activate --wait-text 'Opened' --timeout 10s --json",
 			"cdp click 'Sign in' --by role --role link --wait-popup --wait-popup-url '/oauth' --json",
-			"cdp click 'Download report' --by role --role link --wait-download --wait-download-filename report --download-dir tmp/downloads --json",
+			"report_target=\"$(cdp --browser-mode headed open 'https://example.com/reports' --task-id report-download --json | jq -r '.page.target_id')\" && cdp --browser-mode headed click 'Download report' --by role --role link --target \"$report_target\" --wait-download --wait-download-filename report --download-dir tmp/downloads --json && cdp --browser-mode headed page close --target \"$report_target\" --wait-gone --json",
 			"cdp click 'Delete' --by role --role button --wait-dialog --wait-dialog-action dismiss --json",
 			"cdp click 'Upload file' --by label --wait-file-chooser --wait-file-chooser-mode single --json",
 			"cdp click 'Save' --by role --role button --wait-request --wait-request-match-url /api --wait-request-method POST --json",
@@ -673,6 +677,10 @@ func commandExamples(path string) []string {
 			"cdp --browser-mode headed workflow linkedin collect 'https://www.linkedin.com/company/the-pragmatic-engineer/posts/' --limit 200 --json",
 		},
 		"cdp workflow arxiv collect": {"cdp --browser-mode headed workflow arxiv collect 'https://arxiv.org/abs/2604.12374' --json"},
+		"cdp workflow pdf-to-markdown": {
+			"cdp workflow pdf-to-markdown tmp/downloads/paper.pdf --out-dir tmp/paper-markdown --json",
+			"pdf_target=\"$(cdp --browser-mode headed open 'https://example.com/paper' --task-id pdf-download --json | jq -r '.page.target_id')\" && cdp --browser-mode headed click 'Download PDF' --by role --role link --target \"$pdf_target\" --wait-download --download-dir tmp/downloads --json && cdp --browser-mode headed page close --target \"$pdf_target\" --wait-gone --json && cdp workflow pdf-to-markdown tmp/downloads/paper.pdf --json",
+		},
 		"cdp workflow google-maps-directions": {
 			"cdp --browser-mode headed workflow google-maps-directions 'Kongens Lyngby, Denmark' 'Stege, Denmark' --json",
 			"cdp --browser-mode headed workflow google-maps-directions 'Stege, Denmark' 'Møn Is, Hovgårdsvej 4, 4780 Stege, Denmark' --wait 30s --json",
@@ -714,6 +722,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow web-research serp": {
 			"printf '%s\\t%s\\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries-exact-date.txt && cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries-exact-date.txt --serp google --out-dir tmp/research/exact-date --json",
+			"cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --fallback-serp none --parallel 1 --navigation-delay 30s --result-pages 1 --fast-fail-blocked --blocked-failure-threshold 1 --progress stderr --out-dir tmp/research/progressive-pass --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --wait 20s --settle 2s --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --result-pages 2 --out-dir tmp/research-all --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp duckduckgo --fallback-serp google --result-pages 2 --out-dir tmp/research-ddg --json",
@@ -885,7 +894,7 @@ func commandExamples(path string) []string {
 		"cdp workflow agent gemini conversations delete <conversation-id> --json",
 	}
 
-	return examples[path]
+	return examples
 }
 
 func findCommand(root *cobra.Command, path string) (*cobra.Command, error) {

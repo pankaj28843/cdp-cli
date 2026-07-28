@@ -79,6 +79,51 @@ const incompleteDetailPayload = `{
   }
 }`
 
+const terminalNoAnswerCandidateDetailPayload = `{
+  "current_node":"answer",
+  "mapping":{
+    "answer":{
+      "parent":"prompt",
+      "message":{
+        "author":{"role":"assistant"},
+        "status":"finished_successfully",
+        "end_turn":true,
+        "content":{"content_type":"text","parts":[""]}
+      }
+    },
+    "prompt":{
+      "parent":"",
+      "message":{
+        "author":{"role":"user"},
+        "content":{"content_type":"text","parts":["Review."]}
+      }
+    }
+  }
+}`
+
+const activeNoAnswerDetailPayload = `{
+  "async_status":3,
+  "current_node":"answer",
+  "mapping":{
+    "answer":{
+      "parent":"prompt",
+      "message":{
+        "author":{"role":"assistant"},
+        "status":"finished_successfully",
+        "end_turn":true,
+        "content":{"content_type":"text","parts":[""]}
+      }
+    },
+    "prompt":{
+      "parent":"",
+      "message":{
+        "author":{"role":"user"},
+        "content":{"content_type":"text","parts":["Review."]}
+      }
+    }
+  }
+}`
+
 type authenticatedReadBrowser struct {
 	*testsupport.Browser
 	events []cdp.Event
@@ -541,6 +586,444 @@ func TestAwaitDirectIncompleteHonorsDeadlineWithoutBrowserFallback(
 			"detail_read_attempts = %d, want repeated capped backoff",
 			attempts,
 		)
+	}
+}
+
+func TestDetailAndAwaitProveRenderedTerminalNoAnswer(t *testing.T) {
+	tests := []struct {
+		name  string
+		await bool
+	}{
+		{name: "detail"},
+		{name: "await", await: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+			store := newReadTestStore(t, now)
+			client := newAuthenticatedReadBrowser(func(
+				expression string,
+				_ *testsupport.Browser,
+			) (any, error) {
+				switch {
+				case strings.Contains(expression, "signed_in:"):
+					return map[string]any{
+						"signed_in": true, "signed_out": false,
+					}, nil
+				case strings.Contains(expression, "const response = await fetch"):
+					return map[string]any{
+						"ok":          true,
+						"status_code": http.StatusOK,
+						"body":        terminalNoAnswerCandidateDetailPayload,
+					}, nil
+				case strings.Contains(
+					expression,
+					"terminal_no_answer_reason",
+				):
+					return map[string]any{
+						"route_matches":                   true,
+						"conversation_id":                 "conversation-1",
+						"text":                            "",
+						"prompt_candidates":               []any{"Review."},
+						"is_streaming":                    false,
+						"terminal_control_present":        true,
+						"assistant_count":                 1,
+						"user_message_count":              1,
+						"stopped_thinking_marker_present": true,
+						"terminal_no_answer":              true,
+						"terminal_no_answer_reason":       "stopped_thinking",
+					}, nil
+				default:
+					return map[string]any{}, nil
+				}
+			})
+			engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+			if err != nil {
+				t.Fatalf("NewRuntime: %v", err)
+			}
+			config := ReadConfig{
+				Store: store,
+				HTTPClient: fixedHTTPClient(
+					http.StatusOK,
+					terminalNoAnswerCandidateDetailPayload,
+				),
+				BrowserConfig: &BrowserConfig{
+					Client: client, Engine: engine, Journal: journal,
+				},
+				Now:         func() time.Time { return now },
+				AwaitDelays: []time.Duration{time.Second},
+				Wait: func(_ context.Context, delay time.Duration) error {
+					now = now.Add(delay)
+					return nil
+				},
+			}
+			var result webagent.Result
+			if test.await {
+				result = AwaitConversation(
+					context.Background(),
+					config,
+					"conversation-1",
+					5*time.Second,
+				)
+			} else {
+				result = DetailConversation(
+					context.Background(),
+					config,
+					"conversation-1",
+				)
+			}
+
+			data, ok := result.Data.(ConversationDetailData)
+			if !ok ||
+				!result.OK ||
+				result.State != webagent.StateTerminal ||
+				data.CompletionState != "terminal_no_answer" ||
+				data.CompletionReason != "stopped_thinking" ||
+				data.Text != "" ||
+				data.ReadMode != "observed_stable_http_plus_headed_rendered" ||
+				result.Evidence.Target == nil ||
+				!result.Evidence.Target.Closed ||
+				result.Cleanup.State != webagent.CleanupClosed {
+				t.Fatalf("result=%+v data=%+v", result, data)
+			}
+		})
+	}
+}
+
+func TestAwaitTerminalNoAnswerProbeResumesUntilLaterDirectAnswer(t *testing.T) {
+	tests := []struct {
+		name                string
+		renderedObservation func() (any, error)
+	}{
+		{
+			name: "inconclusive rendered confirmation",
+			renderedObservation: func() (any, error) {
+				return map[string]any{
+					"route_matches":            true,
+					"conversation_id":          "conversation-1",
+					"text":                     "",
+					"prompt_candidates":        []any{"Review."},
+					"is_streaming":             false,
+					"terminal_control_present": true,
+					"assistant_count":          1,
+					"user_message_count":       1,
+					"terminal_no_answer":       false,
+				}, nil
+			},
+		},
+		{
+			name: "unavailable rendered confirmation",
+			renderedObservation: func() (any, error) {
+				return nil, errors.New("rendered observation unavailable")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+			browserFetches := 0
+			waitCalls := 0
+			client := newAuthenticatedReadBrowser(func(
+				expression string,
+				_ *testsupport.Browser,
+			) (any, error) {
+				switch {
+				case strings.Contains(expression, "signed_in:"):
+					return map[string]any{
+						"signed_in": true, "signed_out": false,
+					}, nil
+				case strings.Contains(expression, "const response = await fetch"):
+					browserFetches++
+					body := terminalNoAnswerCandidateDetailPayload
+					if browserFetches > 1 {
+						body = terminalDetailPayload
+					}
+					return map[string]any{
+						"ok":          true,
+						"status_code": http.StatusOK,
+						"body":        body,
+					}, nil
+				case strings.Contains(
+					expression,
+					"terminal_no_answer_reason",
+				):
+					return test.renderedObservation()
+				default:
+					return map[string]any{}, nil
+				}
+			})
+			engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+			if err != nil {
+				t.Fatalf("NewRuntime: %v", err)
+			}
+			result := AwaitConversation(context.Background(), ReadConfig{
+				Store: newReadTestStore(t, now),
+				HTTPClient: fixedHTTPClient(
+					http.StatusOK,
+					terminalNoAnswerCandidateDetailPayload,
+				),
+				BrowserConfig: &BrowserConfig{
+					Client: client, Engine: engine, Journal: journal,
+				},
+				Now:         func() time.Time { return now },
+				AwaitDelays: []time.Duration{100 * time.Millisecond},
+				Wait: func(_ context.Context, delay time.Duration) error {
+					waitCalls++
+					now = now.Add(delay)
+					return nil
+				},
+			}, "conversation-1", 2*time.Second)
+
+			data, ok := result.Data.(ConversationDetailData)
+			if !ok ||
+				!result.OK ||
+				result.State != webagent.StateTerminal ||
+				data.CompletionState != conversationCompletionTerminal ||
+				data.Text != "Terminal review." {
+				t.Fatalf("result=%+v data=%+v", result, data)
+			}
+			if browserFetches != 2 || waitCalls < 1 {
+				t.Fatalf(
+					"browser fetches=%d waits=%d, want two fetches with a retry",
+					browserFetches,
+					waitCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestAwaitTerminalNoAnswerProbeOnlyReturnsIncompleteAtDeadline(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	browserFetches := 0
+	waitCalls := 0
+	client := newAuthenticatedReadBrowser(func(
+		expression string,
+		_ *testsupport.Browser,
+	) (any, error) {
+		switch {
+		case strings.Contains(expression, "signed_in:"):
+			return map[string]any{
+				"signed_in": true, "signed_out": false,
+			}, nil
+		case strings.Contains(expression, "const response = await fetch"):
+			browserFetches++
+			return map[string]any{
+				"ok":          true,
+				"status_code": http.StatusOK,
+				"body":        terminalNoAnswerCandidateDetailPayload,
+			}, nil
+		case strings.Contains(expression, "terminal_no_answer_reason"):
+			return map[string]any{
+				"route_matches":            true,
+				"conversation_id":          "conversation-1",
+				"text":                     "",
+				"prompt_candidates":        []any{"Review."},
+				"is_streaming":             false,
+				"terminal_control_present": true,
+				"assistant_count":          1,
+				"user_message_count":       1,
+				"terminal_no_answer":       false,
+			}, nil
+		default:
+			return map[string]any{}, nil
+		}
+	})
+	engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	result := AwaitConversation(context.Background(), ReadConfig{
+		Store: newReadTestStore(t, now),
+		HTTPClient: fixedHTTPClient(
+			http.StatusOK,
+			terminalNoAnswerCandidateDetailPayload,
+		),
+		BrowserConfig: &BrowserConfig{
+			Client: client, Engine: engine, Journal: journal,
+		},
+		Now:         func() time.Time { return now },
+		AwaitDelays: []time.Duration{250 * time.Millisecond},
+		Wait: func(_ context.Context, delay time.Duration) error {
+			waitCalls++
+			now = now.Add(delay)
+			return nil
+		},
+	}, "conversation-1", time.Second)
+
+	data, ok := result.Data.(ConversationDetailData)
+	if !ok ||
+		!result.OK ||
+		result.State != webagent.StateIncomplete ||
+		data.CompletionState != conversationCompletionIncomplete {
+		t.Fatalf("result=%+v data=%+v", result, data)
+	}
+	if browserFetches < 2 || waitCalls < 2 {
+		t.Fatalf(
+			"browser fetches=%d waits=%d, want polling through the deadline",
+			browserFetches,
+			waitCalls,
+		)
+	}
+}
+
+func TestAwaitUnavailableRenderedProbeResumesDirectPolling(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	directFetches := 0
+	fallbackCalls := 0
+	waitCalls := 0
+	httpClient := &http.Client{Transport: roundTripFunc(
+		func(*http.Request) (*http.Response, error) {
+			directFetches++
+			body := terminalNoAnswerCandidateDetailPayload
+			if directFetches > 1 {
+				body = terminalDetailPayload
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		},
+	)}
+	result := AwaitConversation(context.Background(), ReadConfig{
+		Store:      newReadTestStore(t, now),
+		HTTPClient: httpClient,
+		BrowserFallback: func(context.Context) (*BrowserConfig, error) {
+			fallbackCalls++
+			return nil, errors.New("headed confirmation unavailable")
+		},
+		Now:         func() time.Time { return now },
+		AwaitDelays: []time.Duration{100 * time.Millisecond},
+		Wait: func(_ context.Context, delay time.Duration) error {
+			waitCalls++
+			now = now.Add(delay)
+			return nil
+		},
+	}, "conversation-1", 2*time.Second)
+
+	data, ok := result.Data.(ConversationDetailData)
+	if !ok ||
+		!result.OK ||
+		result.State != webagent.StateTerminal ||
+		data.CompletionState != conversationCompletionTerminal ||
+		data.Text != "Terminal review." {
+		t.Fatalf("result=%+v data=%+v", result, data)
+	}
+	if directFetches != 2 || fallbackCalls != 1 || waitCalls < 1 {
+		t.Fatalf(
+			"direct fetches=%d fallback calls=%d waits=%d, want direct retry after unavailable confirmation",
+			directFetches,
+			fallbackCalls,
+			waitCalls,
+		)
+	}
+}
+
+func TestTerminalNoAnswerCandidateFailsClosed(t *testing.T) {
+	tests := []struct {
+		name              string
+		payload           string
+		rendered          map[string]any
+		wantState         webagent.State
+		wantCompletion    string
+		wantText          string
+		wantBrowserTarget bool
+	}{
+		{
+			name:           "active async state remains incomplete",
+			payload:        activeNoAnswerDetailPayload,
+			wantState:      webagent.StateIncomplete,
+			wantCompletion: "incomplete",
+		},
+		{
+			name:           "later hydrated answer wins without a browser probe",
+			payload:        terminalDetailPayload,
+			wantState:      webagent.StateTerminal,
+			wantCompletion: "terminal",
+			wantText:       "Terminal review.",
+		},
+		{
+			name:    "stale stop marker cannot override latest rendered answer",
+			payload: terminalNoAnswerCandidateDetailPayload,
+			rendered: map[string]any{
+				"route_matches":                   true,
+				"conversation_id":                 "conversation-1",
+				"text":                            "Later rendered answer.",
+				"prompt_candidates":               []any{"Review."},
+				"is_streaming":                    false,
+				"terminal_control_present":        true,
+				"assistant_count":                 2,
+				"user_message_count":              1,
+				"stopped_thinking_marker_present": false,
+				"terminal_no_answer":              false,
+				"terminal_no_answer_reason":       "",
+			},
+			wantState:         webagent.StateTerminal,
+			wantCompletion:    "terminal",
+			wantText:          "Later rendered answer.",
+			wantBrowserTarget: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+			store := newReadTestStore(t, now)
+			client := newAuthenticatedReadBrowser(func(
+				expression string,
+				_ *testsupport.Browser,
+			) (any, error) {
+				switch {
+				case strings.Contains(expression, "signed_in:"):
+					return map[string]any{
+						"signed_in": true, "signed_out": false,
+					}, nil
+				case strings.Contains(expression, "const response = await fetch"):
+					return map[string]any{
+						"ok":          true,
+						"status_code": http.StatusOK,
+						"body":        test.payload,
+					}, nil
+				case strings.Contains(
+					expression,
+					"terminal_no_answer_reason",
+				):
+					return test.rendered, nil
+				default:
+					return map[string]any{}, nil
+				}
+			})
+			engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+			if err != nil {
+				t.Fatalf("NewRuntime: %v", err)
+			}
+			result := DetailConversation(context.Background(), ReadConfig{
+				Store:      store,
+				HTTPClient: fixedHTTPClient(http.StatusOK, test.payload),
+				BrowserConfig: &BrowserConfig{
+					Client: client, Engine: engine, Journal: journal,
+				},
+				Now: func() time.Time { return now },
+			}, "conversation-1")
+
+			data, ok := result.Data.(ConversationDetailData)
+			if !ok ||
+				!result.OK ||
+				result.State != test.wantState ||
+				data.CompletionState != test.wantCompletion ||
+				data.CompletionReason != "" ||
+				data.Text != test.wantText {
+				t.Fatalf("result=%+v data=%+v", result, data)
+			}
+			if got := result.Evidence.Target != nil; got != test.wantBrowserTarget {
+				t.Fatalf(
+					"browser target observed = %v, want %v; result=%+v",
+					got,
+					test.wantBrowserTarget,
+					result,
+				)
+			}
+		})
 	}
 }
 

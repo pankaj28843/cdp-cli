@@ -340,8 +340,23 @@ func conversationViaBrowser(
 				if failure != nil && (!rateLimited || !await) {
 					break
 				}
+				if failure == nil && terminalNoAnswerCandidateData(data) {
+					confirmation := confirmRenderedTerminalNoAnswer(
+						ctx,
+						config,
+						lease.Session(),
+						conversationID,
+						await,
+						deadline,
+						&data,
+					)
+					if confirmation.terminal() || !await {
+						break
+					}
+				}
 				if failure == nil &&
-					(data.CompletionState != "incomplete" || !await) {
+					(data.CompletionState != conversationCompletionIncomplete ||
+						!await) {
 					break
 				}
 				delay, deadlineBound, ok := nextConversationAwaitDelay(
@@ -384,7 +399,7 @@ func conversationViaBrowser(
 				)
 			}
 			state := webagent.StateTerminal
-			if data.CompletionState != "terminal" {
+			if !terminalConversationCompletion(data.CompletionState) {
 				state = webagent.StateIncomplete
 				if err := lease.MarkIncomplete(context.Background()); err != nil {
 					statePersistenceFailed = true
@@ -413,7 +428,7 @@ func conversationViaBrowser(
 			stopState.observe()
 			result := operationSuccess(
 				runID, config.BuildCommit, operation,
-				webagent.StageObserveTerminal, browserReadMode,
+				webagent.StageObserveTerminal, readModeFromData(data),
 				target, pending, data, nil,
 			)
 			result.State = state
@@ -434,6 +449,105 @@ func conversationViaBrowser(
 		return incompleteAwaitAtDeadline(result)
 	}
 	return result
+}
+
+type renderedTerminalNoAnswerConfirmation string
+
+const (
+	renderedTerminalNoAnswerNotApplicable renderedTerminalNoAnswerConfirmation = "not_applicable"
+	renderedTerminalNoAnswerConfirmed     renderedTerminalNoAnswerConfirmation = "confirmed"
+	renderedTerminalNoAnswerSuperseded    renderedTerminalNoAnswerConfirmation = "superseded_by_rendered_answer"
+	renderedTerminalNoAnswerInconclusive  renderedTerminalNoAnswerConfirmation = "inconclusive"
+	renderedTerminalNoAnswerUnavailable   renderedTerminalNoAnswerConfirmation = "unavailable"
+)
+
+func (confirmation renderedTerminalNoAnswerConfirmation) terminal() bool {
+	return confirmation == renderedTerminalNoAnswerConfirmed ||
+		confirmation == renderedTerminalNoAnswerSuperseded
+}
+
+func confirmRenderedTerminalNoAnswer(
+	ctx context.Context,
+	config ReadConfig,
+	session *cdp.PageSession,
+	conversationID string,
+	await bool,
+	deadline time.Time,
+	data *ConversationDetailData,
+) renderedTerminalNoAnswerConfirmation {
+	if data == nil || !terminalNoAnswerCandidateData(data) {
+		return renderedTerminalNoAnswerNotApplicable
+	}
+	if data.Metadata == nil {
+		data.Metadata = map[string]any{}
+	}
+	data.Metadata["rendered_terminal_no_answer_confirmation"] =
+		string(renderedTerminalNoAnswerInconclusive)
+	route := Origin + "/c/" + url.PathEscape(conversationID)
+	if err := preparePage(
+		ctx,
+		config.BrowserConfig.Client,
+		session,
+		route,
+	); err != nil {
+		data.Metadata["rendered_terminal_no_answer_confirmation"] =
+			string(renderedTerminalNoAnswerUnavailable)
+		data.Metadata["rendered_terminal_no_answer_probe_error"] =
+			"exact_route_navigation_failed"
+		return renderedTerminalNoAnswerUnavailable
+	}
+
+	if await {
+		remaining := deadline.Sub(nowForRead(config))
+		if remaining <= 0 {
+			data.Metadata["rendered_terminal_no_answer_probe_error"] =
+				"await_deadline_elapsed"
+			return renderedTerminalNoAnswerInconclusive
+		}
+	}
+	var observation renderedObservation
+	data.Metadata["rendered_terminal_no_answer_probe_attempts"] = 1
+	if err := observeRendered(ctx, session, &observation); err != nil {
+		data.Metadata["rendered_terminal_no_answer_confirmation"] =
+			string(renderedTerminalNoAnswerUnavailable)
+		data.Metadata["rendered_terminal_no_answer_probe_error"] =
+			"rendered_observation_unavailable"
+		return renderedTerminalNoAnswerUnavailable
+	}
+	if !observation.RouteMatches ||
+		observation.ConversationID != conversationID ||
+		observation.AssistantCount < 1 ||
+		observation.Streaming {
+		return renderedTerminalNoAnswerInconclusive
+	}
+
+	data.ReadMode = "observed_stable_http_plus_headed_rendered"
+	data.Metadata["rendered_route_matches"] = true
+	data.Metadata["rendered_conversation_id"] = conversationID
+	if observation.TerminalNoAnswer &&
+		observation.TerminalNoAnswerReason ==
+			conversationCompletionReasonStoppedThinking &&
+		strings.TrimSpace(observation.Text) == "" {
+		data.Text = ""
+		data.CompletionState = conversationCompletionTerminalNoAnswer
+		data.CompletionReason = conversationCompletionReasonStoppedThinking
+		data.Metadata["rendered_terminal_no_answer_confirmation"] =
+			string(renderedTerminalNoAnswerConfirmed)
+		data.Metadata["rendered_stopped_thinking_marker_present"] = true
+		return renderedTerminalNoAnswerConfirmed
+	}
+
+	if !observation.TerminalControl ||
+		strings.TrimSpace(observation.Text) == "" {
+		return renderedTerminalNoAnswerInconclusive
+	}
+	data.Text = strings.TrimSpace(observation.Text)
+	data.CompletionState = conversationCompletionTerminal
+	data.CompletionReason = ""
+	data.Metadata["rendered_terminal_no_answer_confirmation"] =
+		string(renderedTerminalNoAnswerSuperseded)
+	data.Metadata["answer_source"] = "latest_rendered_assistant_turn"
+	return renderedTerminalNoAnswerSuperseded
 }
 
 func prepareBrowserRead(

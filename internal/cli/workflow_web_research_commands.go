@@ -44,6 +44,7 @@ func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	var fastFailBlocked bool
 	var blockedFailureThreshold int
 	var parallelEngines bool
+	var navigationDelay time.Duration
 	cmd := &cobra.Command{
 		Use:   "serp",
 		Short: "Collect rendered SERP artifacts and deduped research candidates",
@@ -57,13 +58,17 @@ character is # are ignored. Each remaining row has one of these forms:
 
 The optional second column is an opaque Google tbs value. cdp retains it as
 time_filter in output metadata and applies it only to Google; other engines
-ignore it.`,
+ignore it.
+
+--navigation-delay applies a cancellable minimum delay between navigation starts
+within each SERP engine lane. There is no delay before the first navigation.
+Parallel engine lanes are paced independently.`,
 		Example: `  printf '%s\t%s\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries.txt
-  cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --out-dir tmp/research --json`,
+  cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --parallel 1 --navigation-delay 30s --out-dir tmp/research --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if wait < 0 || settle < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 || blockedFailureThreshold < 0 {
-				return commandError("usage", "usage", "--wait, --settle, --max-candidates, --parallel, --result-pages, --blocked-failure-threshold, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --result-pages 3 --out-dir tmp/research --fast-fail-blocked --json"})
+			if wait < 0 || settle < 0 || navigationDelay < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 || blockedFailureThreshold < 0 {
+				return commandError("usage", "usage", "--wait, --settle, --navigation-delay, --max-candidates, --parallel, --result-pages, --blocked-failure-threshold, and quality thresholds must be non-negative", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --parallel 1 --navigation-delay 30s --out-dir tmp/research --fast-fail-blocked --json"})
 			}
 			if wait > 0 && settle > wait {
 				return commandError("usage", "usage", "--settle must not exceed positive --wait", ExitUsage, []string{"cdp workflow web-research serp --query-file tmp/queries.txt --wait 15s --settle 2s --json"})
@@ -134,7 +139,7 @@ ignore it.`,
 			if effectiveParallelEngines {
 				parallelEngineCount = len(primarySerps)
 			}
-			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "serps": primarySerps, "fallback_serp": fallbackSerp, "resolved_fallback_serp": resolvedFallbackSerp, "result_pages": resultPages, "parallel_engines": effectiveParallelEngines, "per_engine_parallel": perEngineParallel}, "", "  ")
+			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "serps": primarySerps, "fallback_serp": fallbackSerp, "resolved_fallback_serp": resolvedFallbackSerp, "result_pages": resultPages, "parallel_engines": effectiveParallelEngines, "per_engine_parallel": perEngineParallel, "navigation_delay": navigationDelay.String()}, "", "  ")
 			if err != nil {
 				return commandError("internal", "internal", fmt.Sprintf("marshal web research queries: %v", err), ExitInternal, []string{"cdp workflow web-research serp --json"})
 			}
@@ -162,12 +167,13 @@ ignore it.`,
 				FastFail  bool
 			}
 			type serpEngineLane struct {
-				Serp        string `json:"serp"`
-				PageReused  bool   `json:"page_reused"`
-				CreatedPage bool   `json:"created_page"`
-				Closed      bool   `json:"closed"`
-				CloseError  string `json:"close_error,omitempty"`
-				JobCount    int    `json:"job_count"`
+				Serp            string `json:"serp"`
+				PageReused      bool   `json:"page_reused"`
+				CreatedPage     bool   `json:"created_page"`
+				Closed          bool   `json:"closed"`
+				CloseError      string `json:"close_error,omitempty"`
+				JobCount        int    `json:"job_count"`
+				NavigationDelay string `json:"navigation_delay"`
 			}
 			type serpBatchResult struct {
 				Index   int
@@ -176,7 +182,7 @@ ignore it.`,
 				Stats   serpRunStats
 				Lane    serpEngineLane
 			}
-			runJob := func(activeSerp, artifactRoot string, job serpJob, reusePage *renderedExtractReusablePage) serpResult {
+			runJob := func(activeSerp, artifactRoot string, job serpJob, reusePage *renderedExtractReusablePage, pacer *webResearchNavigationPacer) serpResult {
 				query := queries[job.QueryIndex]
 				queryURL := webResearchSearchURL(activeSerp, query.Text, query.TimeFilter, job.SerpPage)
 				result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
@@ -189,13 +195,14 @@ ignore it.`,
 					Settle:             settle,
 					WaitUntil:          waitUntil,
 					Formats:            "snapshot,text,html,markdown,links",
-					OutDir:             filepath.Join(artifactRoot, webResearchSlug(query.Text), fmt.Sprintf("page-%d", job.SerpPage)),
+					OutDir:             filepath.Join(artifactRoot, webResearchSERPArtifactID(job.QueryIndex, query), fmt.Sprintf("page-%d", job.SerpPage)),
 					Serp:               activeSerp,
 					Limit:              80,
 					MinVisibleWords:    minVisibleWords,
 					MinMarkdownWords:   minMarkdownWords,
 					MinHTMLChars:       minHTMLChars,
 					ReusePage:          reusePage,
+					BeforeNavigate:     pacer.Wait,
 				})
 				return serpResult{Serp: activeSerp, QueryIndex: job.QueryIndex, SerpPage: job.SerpPage, Query: query, Result: result, Err: err}
 			}
@@ -211,8 +218,9 @@ ignore it.`,
 				if batchParallel <= 0 {
 					batchParallel = 1
 				}
+				pacer := newWebResearchNavigationPacer(navigationDelay, nil, nil)
 				var reusePage *renderedExtractReusablePage
-				lane := serpEngineLane{Serp: activeSerp}
+				lane := serpEngineLane{Serp: activeSerp, NavigationDelay: navigationDelay.String()}
 				if batchParallel == 1 && resultCount > 0 {
 					page, err := a.openRenderedExtractReusablePage(ctx, "about:blank", "web-research-serp-"+activeSerp)
 					if err != nil {
@@ -250,7 +258,7 @@ ignore it.`,
 					go func() {
 						defer wg.Done()
 						for job := range jobs {
-							results <- runJob(activeSerp, artifactRoot, job, reusePage)
+							results <- runJob(activeSerp, artifactRoot, job, reusePage, pacer)
 						}
 					}()
 				}
@@ -289,7 +297,7 @@ ignore it.`,
 						return
 					}
 					blocked, signals := detectSERPBlocked(result.Result)
-					event := map[string]any{"event": "serp_page_complete", "serp": activeSerp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "completed_result_pages": completedJobs, "scheduled_result_pages": scheduledJobs, "blocked": blocked, "signals": signals}
+					event := map[string]any{"event": "serp_page_complete", "serp": activeSerp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "completed_result_pages": completedJobs, "scheduled_result_pages": scheduledJobs, "navigation_delay": navigationDelay.String(), "blocked": blocked, "signals": signals}
 					if result.Err != nil {
 						event["err_class"] = classifyWorkflowSERPFailure(result.Err, result.Result)
 						event["error"] = result.Err.Error()
@@ -319,7 +327,7 @@ ignore it.`,
 						if !ok {
 							break
 						}
-						result := runJob(activeSerp, artifactRoot, job, reusePage)
+						result := runJob(activeSerp, artifactRoot, job, reusePage, pacer)
 						serpResults = append(serpResults, result)
 						scheduledJobs++
 						completedJobs++
@@ -585,6 +593,7 @@ ignore it.`,
 					"blocked_failure_threshold": blockedFailureLimit,
 					"fast_fail_triggered":       fastFailTriggered,
 					"progress":                  progress,
+					"navigation_delay":          navigationDelay.String(),
 					"parallel":                  parallel,
 					"out_dir":                   outDir,
 					"next_commands":             []string{"jq -r '.[].url' " + candidateOut + " > " + filepath.Join(outDir, "visit-urls.txt"), "cdp workflow web-research extract --url-file " + filepath.Join(outDir, "visit-urls.txt") + " --out-dir " + filepath.Join(outDir, "pages") + " --json"},
@@ -601,6 +610,7 @@ ignore it.`,
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for SERP artifacts and candidate files")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for each rendered SERP; use 0 for one immediate sample")
 	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
+	cmd.Flags().DurationVar(&navigationDelay, "navigation-delay", 0, "cancellable minimum delay between navigation starts in each SERP engine lane; no delay before the first navigation")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
 	cmd.Flags().IntVar(&parallel, "parallel", 3, "maximum parallel SERP tabs, capped at 3")
 	cmd.Flags().IntVar(&resultPages, "result-pages", 1, "SERP result pages per query to sample, capped at 3")
