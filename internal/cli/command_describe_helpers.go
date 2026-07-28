@@ -50,10 +50,6 @@ func commandFlags(cmd *cobra.Command) []flagInfo {
 }
 
 func commandExamples(path string) []string {
-	return commandExamplesCatalog()[path]
-}
-
-func commandExamplesCatalog() map[string][]string {
 	examples := map[string][]string{
 		"cdp": {
 			"cdp doctor --json",
@@ -894,7 +890,7 @@ func commandExamplesCatalog() map[string][]string {
 		"cdp workflow agent gemini conversations delete <conversation-id> --json",
 	}
 
-	return examples
+	return examples[path]
 }
 
 func findCommand(root *cobra.Command, path string) (*cobra.Command, error) {
