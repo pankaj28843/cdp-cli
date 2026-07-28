@@ -72,13 +72,14 @@ type artifactMetadata struct {
 }
 
 type browserBinaryFetchResult struct {
-	OK          bool   `json:"ok"`
-	StatusCode  int    `json:"status_code"`
-	BodyBase64  string `json:"body_base64"`
-	BodyBytes   int    `json:"body_bytes"`
-	ContentType string `json:"content_type"`
-	RetryAfter  string `json:"retry_after"`
-	Error       string `json:"error"`
+	OK                 bool   `json:"ok"`
+	StatusCode         int    `json:"status_code"`
+	BodyBase64         string `json:"body_base64"`
+	BodyBytes          int    `json:"body_bytes"`
+	ContentType        string `json:"content_type"`
+	RetryAfter         string `json:"retry_after"`
+	ResponseObservedAt string `json:"response_observed_at"`
+	Error              string `json:"error"`
 }
 
 func DownloadArtifact(
@@ -192,6 +193,14 @@ func DownloadArtifact(
 				lease,
 			)
 			if failure != nil {
+				return artifactFailure(
+					runID, config, webagent.StageAttached,
+					target, pending,
+					failure.code, failure.errClass,
+					failure.message, data, nil,
+				)
+			}
+			if failure = commitBrowserReadPreparation(ctx, lease); failure != nil {
 				return artifactFailure(
 					runID, config, webagent.StageAttached,
 					target, pending,
@@ -372,8 +381,7 @@ func locateArtifact(
 	conversationID string,
 	fileName string,
 ) (artifactLocator, error) {
-	detailID, _ := detail["conversation_id"].(string)
-	if detailID != "" && detailID != conversationID {
+	if !providerConversationIdentityMatches(detail, conversationID) {
 		return artifactLocator{}, fmt.Errorf(
 			"ChatGPT artifact detail id did not match the request",
 		)
@@ -596,24 +604,6 @@ func browserFetchBinary(
 	targetRoute string,
 	maxBytes int,
 ) (browserBinaryFetchResult, *readFailure) {
-	return browserFetchBinaryUnthrottled(
-		ctx,
-		session,
-		template,
-		endpoint,
-		targetRoute,
-		maxBytes,
-	)
-}
-
-func browserFetchBinaryUnthrottled(
-	ctx context.Context,
-	session *cdp.PageSession,
-	template RequestTemplate,
-	endpoint string,
-	targetRoute string,
-	maxBytes int,
-) (browserBinaryFetchResult, *readFailure) {
 	headers := browserFetchHeaders(
 		template.Headers,
 		endpoint,
@@ -640,8 +630,12 @@ func browserFetchBinaryUnthrottled(
 	      cache: 'no-store',
 	      redirect: 'manual'
 	    });
+	    const responseObservedAt = new Date().toISOString();
 	    const declared = Number(response.headers.get('content-length') || '');
 	    if (Number.isFinite(declared) && declared > %d) {
+	      if (response.body) {
+	        try { await response.body.cancel(); } catch (_) {}
+	      }
 	      return {
 	        ok: false,
 	        status_code: response.status,
@@ -649,6 +643,7 @@ func browserFetchBinaryUnthrottled(
 	        body_bytes: declared,
 	        content_type: response.headers.get('content-type') || '',
 	        retry_after: response.headers.get('retry-after') || '',
+	        response_observed_at: responseObservedAt,
 	        error: 'response_too_large'
 	      };
 	    }
@@ -660,6 +655,7 @@ func browserFetchBinaryUnthrottled(
 	        body_bytes: 0,
 	        content_type: response.headers.get('content-type') || '',
 	        retry_after: response.headers.get('retry-after') || '',
+	        response_observed_at: responseObservedAt,
 	        error: 'response_body_unavailable'
 	      };
 	    }
@@ -670,12 +666,12 @@ func browserFetchBinaryUnthrottled(
 	      const next = await reader.read();
 	      if (next.done) break;
 	      if (!(next.value instanceof Uint8Array)) {
-	        await reader.cancel();
+	        try { await reader.cancel(); } catch (_) {}
 	        throw new Error('invalid_response_chunk');
 	      }
 	      total += next.value.byteLength;
 	      if (total > %d) {
-	        await reader.cancel();
+	        try { await reader.cancel(); } catch (_) {}
 	        return {
 	          ok: false,
 	          status_code: response.status,
@@ -683,6 +679,7 @@ func browserFetchBinaryUnthrottled(
 	          body_bytes: total,
 	          content_type: response.headers.get('content-type') || '',
 	          retry_after: response.headers.get('retry-after') || '',
+	          response_observed_at: responseObservedAt,
 	          error: 'response_too_large'
 	        };
 	      }
@@ -708,6 +705,7 @@ func browserFetchBinaryUnthrottled(
 	      body_bytes: bytes.length,
 	      content_type: response.headers.get('content-type') || '',
 	      retry_after: response.headers.get('retry-after') || '',
+	      response_observed_at: responseObservedAt,
 	      error: ''
 	    };
 	  } catch (_) {
@@ -753,16 +751,24 @@ func browserFetchBinaryUnthrottled(
 		failure.code = "chatgpt_rate_limited"
 		failure.errClass = "rate_limit"
 		failure.message = "ChatGPT artifact content was rate limited"
-		failure.retryAt = retryAtFromHeader(
+		retryBase := time.Now().UTC()
+		if observedAt, err := time.Parse(
+			time.RFC3339Nano,
+			response.ResponseObservedAt,
+		); err == nil {
+			retryBase = observedAt.UTC()
+		}
+		failure.retryAt, _ = retryAtFromHeader(
 			response.RetryAfter,
-			time.Now().UTC(),
+			retryBase,
 		)
 	case 0:
 		failure.code = "chatgpt_artifact_content_unavailable"
 		failure.errClass = "connection"
 		failure.message = "ChatGPT artifact content fetch failed"
 	}
-	if response.Error == "response_too_large" {
+	if response.Error == "response_too_large" &&
+		response.StatusCode != http.StatusTooManyRequests {
 		failure.code = "chatgpt_artifact_content_too_large"
 		failure.errClass = "provider"
 		failure.message = "ChatGPT artifact content exceeded its bounded download size"

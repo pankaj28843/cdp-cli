@@ -15,20 +15,21 @@ const RecoverySchemaVersion = "browserflow-recovery/v1"
 type Phase string
 
 const (
-	PhasePlanned         Phase = "planned"
-	PhaseBudgetChecked   Phase = "budget_checked"
-	PhaseTargetOwned     Phase = "target_owned"
-	PhaseAttached        Phase = "attached"
-	PhasePrepared        Phase = "prepared"
-	PhaseActionPending   Phase = "action_pending"
-	PhaseActionPerformed Phase = "action_performed"
-	PhaseActionUnknown   Phase = "action_unknown"
-	PhaseAcknowledged    Phase = "acknowledged"
-	PhaseTerminal        Phase = "terminal"
-	PhaseIncomplete      Phase = "incomplete"
-	PhaseCleanupPending  Phase = "cleanup_pending"
-	PhaseClosed          Phase = "closed"
-	PhaseFailed          Phase = "failed"
+	PhasePlanned             Phase = "planned"
+	PhaseBudgetChecked       Phase = "budget_checked"
+	PhaseTargetCreatePending Phase = "target_create_pending"
+	PhaseTargetOwned         Phase = "target_owned"
+	PhaseAttached            Phase = "attached"
+	PhasePrepared            Phase = "prepared"
+	PhaseActionPending       Phase = "action_pending"
+	PhaseActionPerformed     Phase = "action_performed"
+	PhaseActionUnknown       Phase = "action_unknown"
+	PhaseAcknowledged        Phase = "acknowledged"
+	PhaseTerminal            Phase = "terminal"
+	PhaseIncomplete          Phase = "incomplete"
+	PhaseCleanupPending      Phase = "cleanup_pending"
+	PhaseClosed              Phase = "closed"
+	PhaseFailed              Phase = "failed"
 )
 
 type Dispatch string
@@ -339,6 +340,8 @@ func allowedTransition(from, to Phase) bool {
 	case PhasePlanned:
 		return to == PhaseBudgetChecked || to == PhaseFailed
 	case PhaseBudgetChecked:
+		return to == PhaseTargetCreatePending || to == PhaseFailed
+	case PhaseTargetCreatePending:
 		return to == PhaseTargetOwned || to == PhaseFailed
 	case PhaseTargetOwned:
 		return to == PhaseAttached || to == PhaseFailed
@@ -368,10 +371,11 @@ func allowedTransition(from, to Phase) bool {
 
 func validPhase(phase Phase) bool {
 	switch phase {
-	case PhasePlanned, PhaseBudgetChecked, PhaseTargetOwned, PhaseAttached,
-		PhasePrepared, PhaseActionPending, PhaseActionPerformed,
-		PhaseActionUnknown, PhaseAcknowledged, PhaseTerminal, PhaseIncomplete,
-		PhaseCleanupPending, PhaseClosed, PhaseFailed:
+	case PhasePlanned, PhaseBudgetChecked, PhaseTargetCreatePending,
+		PhaseTargetOwned, PhaseAttached, PhasePrepared, PhaseActionPending,
+		PhaseActionPerformed, PhaseActionUnknown, PhaseAcknowledged,
+		PhaseTerminal, PhaseIncomplete, PhaseCleanupPending, PhaseClosed,
+		PhaseFailed:
 		return true
 	default:
 		return false

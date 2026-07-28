@@ -2,6 +2,7 @@ package browserflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,9 +17,12 @@ import (
 const (
 	defaultCloseTimeout        = 10 * time.Second
 	defaultClosePollInterval   = 50 * time.Millisecond
+	defaultPersistenceTimeout  = 5 * time.Second
+	defaultReconcileTimeout    = 5 * time.Second
 	defaultMaxDispatchAttempts = 2
 	defaultAmbiguousCooldown   = 5 * time.Minute
 	headedInputLockName        = "headed-browser-input.lock"
+	targetMarkerPrefix         = "about:blank#cdp-cli-browserflow-"
 )
 
 type Config struct {
@@ -215,10 +219,46 @@ func (e *Engine) Acquire(ctx context.Context, request AcquireRequest) (*Lease, e
 		return err
 	}
 
-	targetID, err := cdp.CreateTargetWithClient(ctx, e.client, request.InitialURL)
-	if err != nil {
+	record.Phase = PhaseTargetCreatePending
+	if err := e.save(ctx, &record); err != nil {
 		return nil, errors.Join(
-			e.failWithoutTarget(ctx, record, "target_create_failed", fmt.Errorf("create exact target: %w", err)),
+			fmt.Errorf("persist target creation intent: %w", err),
+			releaseInput(),
+		)
+	}
+	targetID, err := cdp.CreateTargetWithClient(
+		ctx,
+		e.client,
+		targetMarkerURL(request.RunID),
+	)
+	if err != nil {
+		createErr := fmt.Errorf("create exact target: %w", err)
+		recoveredTargetID, reconcileErr := e.findMarkerTarget(request.RunID)
+		if reconcileErr != nil {
+			return nil, errors.Join(
+				createErr,
+				e.markMarkerReconciliationUnresolved(&record, reconcileErr),
+				releaseInput(),
+			)
+		}
+		if recoveredTargetID != "" {
+			record.TargetID = recoveredTargetID
+			record.LastErrorClass = "target_create_response_ambiguous"
+			_, cleanupErr := e.settleExactCleanup(&record, nil)
+			return nil, errors.Join(createErr, cleanupErr, releaseInput())
+		}
+		persistCtx, cancelPersist := context.WithTimeout(
+			context.Background(),
+			defaultPersistenceTimeout,
+		)
+		defer cancelPersist()
+		return nil, errors.Join(
+			e.failWithoutTarget(
+				persistCtx,
+				record,
+				"target_create_failed",
+				createErr,
+			),
 			releaseInput(),
 		)
 	}
@@ -274,6 +314,15 @@ func (e *Engine) Acquire(ctx context.Context, request AcquireRequest) (*Lease, e
 			releaseInput(),
 		)
 	}
+	if _, err := session.Navigate(ctx, request.InitialURL); err != nil {
+		record.LastErrorClass = "initial_navigation_failed"
+		_, cleanupErr := e.settleExactCleanup(&record, session)
+		return nil, errors.Join(
+			fmt.Errorf("navigate exact target %s to initial URL: %w", targetID, err),
+			cleanupErr,
+			releaseInput(),
+		)
+	}
 	return &Lease{
 		engine:    e,
 		session:   session,
@@ -294,11 +343,44 @@ func (e *Engine) Recover(ctx context.Context, runID string) (CleanupResult, erro
 			TargetGone: true,
 		}, nil
 	}
-	if record.TargetID == "" {
+	if record.TargetID == "" &&
+		record.Phase != PhaseTargetCreatePending &&
+		(record.Phase != PhaseFailed ||
+			record.LastErrorClass != "target_create_reconciliation_failed") {
 		return CleanupResult{
-			State:    CleanupNotRequired,
-			TargetID: "",
+			State: CleanupNotRequired,
 		}, nil
+	}
+	if record.TargetID == "" {
+		targetID, reconcileErr := e.findMarkerTarget(runID)
+		if reconcileErr != nil {
+			saveErr := e.markMarkerReconciliationUnresolved(
+				&record,
+				reconcileErr,
+			)
+			return CleanupResult{
+				State:        CleanupFailed,
+				FailurePhase: "marker_reconciliation",
+			}, saveErr
+		}
+		if targetID != "" {
+			record.TargetID = targetID
+			record.LastErrorClass = "target_create_response_ambiguous"
+		} else {
+			record.Phase = PhaseFailed
+			record.Cleanup = CleanupNotRequired
+			record.LastErrorClass = "target_create_failed"
+			persistCtx, cancelPersist := context.WithTimeout(
+				context.Background(),
+				defaultPersistenceTimeout,
+			)
+			saveErr := e.save(persistCtx, &record)
+			cancelPersist()
+			return CleanupResult{
+				State:    CleanupNotRequired,
+				TargetID: "",
+			}, saveErr
+		}
 	}
 
 	var evidenceErr error
@@ -311,13 +393,84 @@ func (e *Engine) Recover(ctx context.Context, runID string) (CleanupResult, erro
 		record.LastErrorClass = "action_dispatch_ambiguous_after_restart"
 		evidenceErr = e.save(ctx, &record)
 	}
+	cleanup, cleanupErr := e.settleExactCleanup(&record, nil)
+	return cleanup, errors.Join(evidenceErr, cleanupErr)
+}
+
+func targetMarkerURL(runID string) string {
+	sum := sha256.Sum256([]byte(runID))
+	return fmt.Sprintf("%s%x", targetMarkerPrefix, sum)
+}
+
+func (e *Engine) findMarkerTarget(runID string) (string, error) {
+	reconcileCtx, cancel := context.WithTimeout(
+		context.Background(),
+		defaultReconcileTimeout,
+	)
+	defer cancel()
+	markerURL := targetMarkerURL(runID)
+	for {
+		targets, err := cdp.ListTargetsWithClient(reconcileCtx, e.client)
+		if err != nil {
+			return "", fmt.Errorf(
+				"list targets for marker reconciliation: %w",
+				err,
+			)
+		}
+		var matches []string
+		for _, target := range targets {
+			if target.Type == "page" && target.URL == markerURL {
+				matches = append(matches, target.TargetID)
+			}
+		}
+		switch len(matches) {
+		case 1:
+			return matches[0], nil
+		case 0:
+			timer := time.NewTimer(e.closePollInterval)
+			select {
+			case <-reconcileCtx.Done():
+				timer.Stop()
+				return "", nil
+			case <-timer.C:
+			}
+		default:
+			return "", fmt.Errorf(
+				"marker reconciliation found %d exact page targets",
+				len(matches),
+			)
+		}
+	}
+}
+
+func (e *Engine) markMarkerReconciliationUnresolved(
+	record *Record,
+	cause error,
+) error {
+	record.Phase = PhaseFailed
+	record.Cleanup = CleanupFailed
+	record.LastErrorClass = "target_create_reconciliation_failed"
+	persistCtx, cancel := context.WithTimeout(
+		context.Background(),
+		defaultPersistenceTimeout,
+	)
+	defer cancel()
+	saveErr := e.save(persistCtx, record)
+	return errors.Join(
+		fmt.Errorf("reconcile created target marker: %w", cause),
+		saveErr,
+	)
+}
+
+func (e *Engine) settleExactCleanup(
+	record *Record,
+	session *cdp.PageSession,
+) (CleanupResult, error) {
 	record.Phase = PhaseCleanupPending
 	record.Cleanup = CleanupPending
-	if err := e.save(ctx, &record); err != nil {
-		evidenceErr = errors.Join(evidenceErr, err)
-	}
+	persistPendingErr := e.save(context.Background(), record)
 
-	cleanup := e.closeExactTarget(nil, record.TargetID)
+	cleanup := e.closeExactTarget(session, record.TargetID)
 	if cleanup.Error() == nil {
 		record.Phase = PhaseClosed
 		record.Cleanup = CleanupClosed
@@ -329,8 +482,12 @@ func (e *Engine) Recover(ctx context.Context, runID string) (CleanupResult, erro
 		record.Cleanup = CleanupFailed
 		record.LastErrorClass = "exact_target_cleanup_failed"
 	}
-	saveErr := e.save(context.Background(), &record)
-	return cleanup, errors.Join(evidenceErr, cleanup.Error(), saveErr)
+	saveErr := e.save(context.Background(), record)
+	return cleanup, errors.Join(
+		persistPendingErr,
+		cleanup.Error(),
+		saveErr,
+	)
 }
 
 func (l *Lease) TargetID() string {
@@ -663,6 +820,15 @@ func (e *Engine) failWithoutTarget(ctx context.Context, record Record, class str
 }
 
 func (e *Engine) save(ctx context.Context, record *Record) error {
+	if record.TargetID != "" {
+		// Persistence must never strand an owned target before cleanup can run.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(
+			context.Background(),
+			defaultPersistenceTimeout,
+		)
+		defer cancel()
+	}
 	record.UpdatedAt = e.timestamp()
 	return e.journal.Save(ctx, *record)
 }

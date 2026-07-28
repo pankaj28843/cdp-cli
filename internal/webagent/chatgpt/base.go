@@ -96,8 +96,8 @@ func runOwned(
 		TargetID: lease.TargetID(),
 	}
 	defer func() {
-		cleanup, closeErr := lease.Close(context.Background())
-		if closeErr != nil || cleanup.State != browserflow.CleanupClosed || !cleanup.TargetGone {
+		cleanup, _ := lease.Close(context.Background())
+		if cleanup.State != browserflow.CleanupClosed || !cleanup.TargetGone {
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{
@@ -308,8 +308,12 @@ func replaceFailure(
 	nextCommands []string,
 ) webagent.Result {
 	retrySafe := true
+	retryAt := ""
 	if result.Action != nil {
 		retrySafe = result.Action.RetrySafe
+	}
+	if result.Error != nil {
+		retryAt = result.Error.RetryAt
 	}
 	result.OK = false
 	result.State = webagent.StateFailed
@@ -318,6 +322,7 @@ func replaceFailure(
 		ErrClass:  errClass,
 		Message:   message,
 		RetrySafe: retrySafe,
+		RetryAt:   retryAt,
 	}
 	result.NextCommands = make([]string, 0, len(nextCommands))
 	result.NextCommands = append(result.NextCommands, nextCommands...)
@@ -380,7 +385,7 @@ func reconcileAcquireFailure(
 	runID string,
 ) (*webagent.TargetEvidence, webagent.CleanupEvidence, webagent.Stage) {
 	recoveryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	cleanup, recoverErr := config.Engine.Recover(recoveryCtx, runID)
+	cleanup, _ := config.Engine.Recover(recoveryCtx, runID)
 	cancel()
 	loadCtx, cancelLoad := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelLoad()
@@ -395,7 +400,8 @@ func reconcileAcquireFailure(
 		SessionID: record.SessionID,
 		Owned:     true,
 		Created:   true,
-		Closed:    recoverErr == nil && cleanup.TargetGone,
+		Closed: cleanup.State == browserflow.CleanupClosed &&
+			cleanup.TargetGone,
 	}
 	if target.Closed {
 		return target, webagent.CleanupEvidence{

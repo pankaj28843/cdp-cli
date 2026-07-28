@@ -3,7 +3,6 @@ package chatgpt
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -17,26 +16,26 @@ import (
 )
 
 const (
-	browserReadMode               = "observed_stable_http_via_headed_browser_context"
-	browserReadPersistenceTimeout = 5 * time.Second
+	browserReadMode = "observed_stable_http_via_headed_browser_context"
 )
 
 type browserFetchResult struct {
-	OK         bool   `json:"ok"`
-	StatusCode int    `json:"status_code"`
-	Body       string `json:"body"`
-	BodyBytes  int    `json:"body_bytes"`
-	RetryAfter string `json:"retry_after"`
-	Error      string `json:"error"`
+	OK                 bool   `json:"ok"`
+	StatusCode         int    `json:"status_code"`
+	Body               string `json:"body"`
+	BodyBytes          int    `json:"body_bytes"`
+	RetryAfter         string `json:"retry_after"`
+	ResponseObservedAt string `json:"response_observed_at"`
+	Error              string `json:"error"`
 }
 
 func listConversationsViaBrowser(
 	ctx context.Context,
 	config ReadConfig,
+	runID string,
 	limit int,
 	offset int,
 ) webagent.Result {
-	runID := webagent.NewRunID()
 	data := ConversationListData{
 		SchemaVersion: ConversationListSchemaVersion,
 		Conversations: []ConversationSummary{},
@@ -57,10 +56,9 @@ func listConversationsViaBrowser(
 	query.Set("is_archived", "false")
 	query.Set("is_starred", "false")
 	endpoint := Origin + ConversationListPath + "?" + query.Encode()
-	browserConfig := readBrowserConfig(*config.BrowserConfig)
 	return runOwned(
 		ctx,
-		browserConfig,
+		*config.BrowserConfig,
 		runID,
 		webagent.OperationConversationsList,
 		"",
@@ -84,16 +82,20 @@ func listConversationsViaBrowser(
 					webagent.StageAttached, target, pending, *failure, data, nil,
 				)
 			}
-			response, failure := browserReadFetch(
+			if failure = commitBrowserReadPreparation(ctx, lease); failure != nil {
+				return browserReadFailureResult(
+					runID, config.BuildCommit, webagent.OperationConversationsList,
+					webagent.StageAttached, target, pending, *failure, data, nil,
+				)
+			}
+			response, failure := browserFetch(
 				ctx,
-				config,
 				lease.Session(),
 				template,
 				endpoint,
 				ConversationListPath,
 			)
 			if failure != nil {
-				_ = lease.MarkIncomplete(context.Background())
 				data.StatusCode = failure.statusCode
 				return browserReadFailureResult(
 					runID, config.BuildCommit, webagent.OperationConversationsList,
@@ -102,7 +104,6 @@ func listConversationsViaBrowser(
 			}
 			var payload map[string]any
 			if err := decodeBoundedJSON(strings.NewReader(response.Body), &payload); err != nil {
-				_ = lease.MarkIncomplete(context.Background())
 				data.StatusCode = response.StatusCode
 				return browserReadFailureResult(
 					runID, config.BuildCommit, webagent.OperationConversationsList,
@@ -119,14 +120,13 @@ func listConversationsViaBrowser(
 			}
 			data, failure = parseConversationListPayload(data, payload, response.StatusCode)
 			if failure != nil {
-				_ = lease.MarkIncomplete(context.Background())
 				return browserReadFailureResult(
 					runID, config.BuildCommit, webagent.OperationConversationsList,
 					webagent.StageObserveTerminal, target, pending, *failure, data, nil,
 				)
 			}
 			data.ReadMode = browserReadMode
-			if err := persistBrowserReadState(lease, true); err != nil {
+			if err := lease.MarkTerminal(context.Background()); err != nil {
 				return browserReadFailureResult(
 					runID, config.BuildCommit, webagent.OperationConversationsList,
 					webagent.StageObserveTerminal, target, pending,
@@ -149,35 +149,49 @@ func listConversationsViaBrowser(
 func conversationViaBrowser(
 	ctx context.Context,
 	config ReadConfig,
+	runID string,
 	conversationID string,
 	await bool,
 	deadline time.Time,
+	stopState *awaitStopState,
 ) webagent.Result {
 	operation := webagent.OperationConversationsDetail
 	if await {
 		operation = webagent.OperationConversationsAwait
 	}
-	runID := webagent.NewRunID()
 	conversation := conversationRef(conversationID)
-	data := ConversationDetailData{
-		SchemaVersion:   ConversationDetailSchemaVersion,
-		ConversationID:  conversationID,
-		CompletionState: "incomplete",
-		ReadMode:        "candidate_browser_context_http",
-		Metadata: map[string]any{
-			"source":    "hydrated_conversation_detail",
-			"transport": "headed_browser_fetch",
-		},
-	}
+	data := newConversationDetailData(
+		conversationID,
+		"candidate_browser_context_http",
+		"headed_browser_fetch",
+	)
 	path := "/backend-api/conversation/" + url.PathEscape(conversationID)
 	endpoint := Origin + path
-	if await && deadline.IsZero() {
-		deadline = nowForRead(config).Add(3 * time.Minute)
+	switch stopState.observe() {
+	case awaitCancellation:
+		canceled := awaitCanceledFailure()
+		return readFailureResult(
+			runID,
+			config.BuildCommit,
+			operation,
+			*canceled,
+			data,
+			conversation,
+		)
+	case awaitDeadline:
+		return readSuccessResult(
+			runID,
+			config.BuildCommit,
+			operation,
+			webagent.StateIncomplete,
+			data,
+			conversation,
+		)
 	}
-	browserConfig := readBrowserConfig(*config.BrowserConfig)
-	return runOwned(
+	statePersistenceFailed := false
+	result := runOwned(
 		ctx,
-		browserConfig,
+		*config.BrowserConfig,
 		runID,
 		operation,
 		"",
@@ -189,16 +203,70 @@ func conversationViaBrowser(
 			target *webagent.TargetEvidence,
 			pending webagent.CleanupEvidence,
 		) webagent.Result {
+			incompleteResult := func() webagent.Result {
+				result := operationSuccess(
+					runID,
+					config.BuildCommit,
+					operation,
+					webagent.StageAttached,
+					readModeFromData(data),
+					target,
+					pending,
+					data,
+					nil,
+				)
+				result.State = webagent.StateIncomplete
+				result.Conversation = conversation
+				return result
+			}
+			switch stopState.observe() {
+			case awaitCancellation:
+				return browserReadFailureResult(
+					runID, config.BuildCommit, operation,
+					webagent.StageAttached, target, pending,
+					*awaitCanceledFailure(), data, conversation,
+				)
+			case awaitDeadline:
+				return incompleteResult()
+			}
 			template, failure := prepareBrowserRead(
 				ctx,
 				*config.BrowserConfig,
 				config.Store,
 				lease,
 			)
+			switch stopState.observe() {
+			case awaitCancellation:
+				return browserReadFailureResult(
+					runID, config.BuildCommit, operation,
+					webagent.StageAttached, target, pending,
+					*awaitCanceledFailure(), data, conversation,
+				)
+			case awaitDeadline:
+				return incompleteResult()
+			}
 			if failure != nil {
 				return browserReadFailureResult(
 					runID, config.BuildCommit, operation,
 					webagent.StageAttached, target, pending, *failure, data, conversation,
+				)
+			}
+			failure = commitBrowserReadPreparation(ctx, lease)
+			switch stopState.observe() {
+			case awaitCancellation:
+				return browserReadFailureResult(
+					runID, config.BuildCommit, operation,
+					webagent.StageAttached, target, pending,
+					*awaitCanceledFailure(), data, conversation,
+				)
+			case awaitDeadline:
+				return incompleteResult()
+			}
+			if failure != nil {
+				return browserReadFailureResult(
+					runID, config.BuildCommit, operation,
+					webagent.StageAttached, target, pending,
+					*failure, data, conversation,
 				)
 			}
 			delays := config.AwaitDelays
@@ -206,93 +274,109 @@ func conversationViaBrowser(
 				delays = defaultAwaitDelays
 			}
 			attempts := 0
+			stop := awaitContinue
 			for {
-				fetchCtx, cancelFetch, fetchAllowed :=
-					boundedAwaitFetchContext(
-						ctx,
-						config,
-						await,
-						deadline,
-					)
-				if !fetchAllowed {
+				stop = stopState.observe()
+				if stop != awaitContinue {
 					break
 				}
 				attempts++
-				response, fetchFailure := browserReadFetch(
-					fetchCtx,
-					config,
+				response, fetchFailure := browserFetch(
+					ctx,
 					lease.Session(),
 					template,
 					endpoint,
 					ConversationDetailRoute,
 				)
+				fetchStop := stopState.observe()
+				nextData := newConversationDetailData(
+					conversationID,
+					"candidate_browser_context_http",
+					"headed_browser_fetch",
+				)
+				nextFailure := fetchFailure
 				if fetchFailure != nil {
-					failure = fetchFailure
-					data.StatusCode = fetchFailure.statusCode
-					fetchDeadlineHit := errors.Is(
-						fetchCtx.Err(),
-						context.DeadlineExceeded,
-					)
-					cancelFetch()
-					if await &&
-						fetchDeadlineHit &&
-						awaitDeadlineElapsed(fetchCtx) {
+					nextData.StatusCode = fetchFailure.statusCode
+				} else {
+					var payload map[string]any
+					if err := decodeBoundedJSON(
+						strings.NewReader(response.Body),
+						&payload,
+					); err != nil {
+						nextFailure = &readFailure{
+							code:       "chatgpt_invalid_detail_response",
+							errClass:   "provider",
+							message:    "ChatGPT conversation detail returned an invalid bounded response",
+							statusCode: response.StatusCode,
+						}
+						nextData.StatusCode = response.StatusCode
+					} else {
+						nextData, nextFailure =
+							parseConversationDetailPayload(
+								nextData,
+								payload,
+								response.StatusCode,
+							)
+					}
+				}
+				if nextData.StatusCode != 0 {
+					nextData.ReadMode = browserReadMode
+				}
+				if nextData.StatusCode != 0 || data.StatusCode == 0 {
+					data, failure = nextData, nextFailure
+				}
+				if fetchStop != awaitContinue {
+					stop = fetchStop
+					if stop == awaitDeadline && data.StatusCode == 0 {
 						failure = nil
 					}
 					break
 				}
-				cancelFetch()
-				var payload map[string]any
-				if err := decodeBoundedJSON(
-					strings.NewReader(response.Body),
-					&payload,
-				); err != nil {
-					failure = &readFailure{
-						code:       "chatgpt_invalid_detail_response",
-						errClass:   "provider",
-						message:    "ChatGPT conversation detail returned an invalid bounded response",
-						statusCode: response.StatusCode,
-					}
-					data.StatusCode = response.StatusCode
+				if nextData.StatusCode == 0 {
 					break
 				}
-				data, failure = parseConversationDetailPayload(
-					data,
-					payload,
-					response.StatusCode,
+				rateLimited := failure != nil &&
+					failure.errClass == "rate_limit"
+				if failure != nil && (!rateLimited || !await) {
+					break
+				}
+				if failure == nil &&
+					(data.CompletionState != "incomplete" || !await) {
+					break
+				}
+				delay, deadlineBound, ok := nextConversationAwaitDelay(
+					config,
+					failure,
+					delays,
+					attempts,
+					deadline,
 				)
-				if failure != nil ||
-					data.CompletionState != "incomplete" ||
-					!await {
-					break
-				}
-				remaining := deadline.Sub(nowForRead(config))
-				delay, ok := nextAwaitDelay(delays, attempts, remaining)
 				if !ok {
 					break
 				}
-				if err := waitReadDelay(ctx, config, delay); err != nil {
-					if awaitDeadlineElapsed(ctx) {
-						failure = nil
-					} else {
-						failure = &readFailure{
-							code:     "chatgpt_await_canceled",
-							errClass: "timeout",
-							message:  "ChatGPT conversation await was canceled before terminal detail",
-						}
-					}
-				}
-				if failure != nil {
+				err := waitReadDelay(ctx, config, delay)
+				if deadlineBound && err == nil {
+					stop = stopState.claim(awaitDeadline)
 					break
 				}
-				if !nowForRead(config).Before(deadline) {
+				if err != nil {
+					stop = stopState.observe()
+					if stop == awaitContinue && failure == nil {
+						failure = internalReadFailure(
+							"ChatGPT conversation await wait failed",
+						)
+					}
 					break
 				}
 			}
-			data.ReadMode = browserReadMode
 			data.Metadata["detail_read_attempts"] = attempts
+			if stop == awaitContinue {
+				stop = stopState.observe()
+			}
+			if stop == awaitDeadline && data.StatusCode == 0 {
+				failure = nil
+			}
 			if failure != nil {
-				_ = lease.MarkIncomplete(context.Background())
 				return browserReadFailureResult(
 					runID, config.BuildCommit, operation,
 					webagent.StageObserveTerminal, target, pending,
@@ -302,7 +386,8 @@ func conversationViaBrowser(
 			state := webagent.StateTerminal
 			if data.CompletionState != "terminal" {
 				state = webagent.StateIncomplete
-				if err := persistBrowserReadState(lease, false); err != nil {
+				if err := lease.MarkIncomplete(context.Background()); err != nil {
+					statePersistenceFailed = true
 					return browserReadFailureResult(
 						runID, config.BuildCommit, operation,
 						webagent.StageObserveTerminal, target, pending,
@@ -313,7 +398,8 @@ func conversationViaBrowser(
 						conversation,
 					)
 				}
-			} else if err := persistBrowserReadState(lease, true); err != nil {
+			} else if err := lease.MarkTerminal(context.Background()); err != nil {
+				statePersistenceFailed = true
 				return browserReadFailureResult(
 					runID, config.BuildCommit, operation,
 					webagent.StageObserveTerminal, target, pending,
@@ -324,6 +410,7 @@ func conversationViaBrowser(
 					conversation,
 				)
 			}
+			stopState.observe()
 			result := operationSuccess(
 				runID, config.BuildCommit, operation,
 				webagent.StageObserveTerminal, browserReadMode,
@@ -334,45 +421,19 @@ func conversationViaBrowser(
 			return result
 		},
 	)
-}
-
-func persistBrowserReadState(
-	lease *browserflow.Lease,
-	terminal bool,
-) error {
-	if lease == nil {
-		return fmt.Errorf("ChatGPT browser read lease is unavailable")
+	if result.Cleanup.State == webagent.CleanupFailed ||
+		statePersistenceFailed {
+		return result
 	}
-	persistCtx, cancel := context.WithTimeout(
-		context.Background(),
-		browserReadPersistenceTimeout,
-	)
-	defer cancel()
-	if terminal {
-		return lease.MarkTerminal(persistCtx)
+	switch stopState.observe() {
+	case awaitCancellation:
+		return replaceWithAwaitCanceled(
+			result, operation, conversationID,
+		)
+	case awaitDeadline:
+		return incompleteAwaitAtDeadline(result)
 	}
-	return lease.MarkIncomplete(persistCtx)
-}
-
-func browserReadFetch(
-	ctx context.Context,
-	config ReadConfig,
-	session *cdp.PageSession,
-	template RequestTemplate,
-	endpoint string,
-	targetRoute string,
-) (browserFetchResult, *readFailure) {
-	return browserFetch(
-		ctx,
-		session,
-		template,
-		endpoint,
-		targetRoute,
-	)
-}
-
-func readBrowserConfig(config BrowserConfig) BrowserConfig {
-	return config
+	return result
 }
 
 func prepareBrowserRead(
@@ -461,17 +522,29 @@ func prepareBrowserRead(
 			"ChatGPT refreshed browser-context read evidence could not be persisted",
 		)
 	}
+	return template, nil
+}
+
+func commitBrowserReadPreparation(
+	ctx context.Context,
+	lease *browserflow.Lease,
+) *readFailure {
+	if ctx.Err() != nil {
+		return internalReadFailure(
+			"ChatGPT stable browser-context read preparation was canceled",
+		)
+	}
 	if err := lease.MarkPrepared(ctx); err != nil {
-		return RequestTemplate{}, internalReadFailure(
+		return internalReadFailure(
 			"ChatGPT stable browser-context read preparation could not be persisted",
 		)
 	}
 	if err := lease.ReleaseInput(); err != nil {
-		return RequestTemplate{}, internalReadFailure(
+		return internalReadFailure(
 			"ChatGPT stable browser-context read could not release the headed input lease",
 		)
 	}
-	return template, nil
+	return nil
 }
 
 func browserReadTemplate(
@@ -529,22 +602,6 @@ func browserFetch(
 	endpoint string,
 	targetRoute string,
 ) (browserFetchResult, *readFailure) {
-	return browserFetchUnthrottled(
-		ctx,
-		session,
-		template,
-		endpoint,
-		targetRoute,
-	)
-}
-
-func browserFetchUnthrottled(
-	ctx context.Context,
-	session *cdp.PageSession,
-	template RequestTemplate,
-	endpoint string,
-	targetRoute string,
-) (browserFetchResult, *readFailure) {
 	headers := browserFetchHeaders(template.Headers, endpoint, targetRoute)
 	encodedEndpoint, err := json.Marshal(endpoint)
 	if err != nil {
@@ -567,23 +624,75 @@ func browserFetchUnthrottled(
 	      cache: 'no-store',
 	      redirect: 'manual'
 	    });
-	    const body = await response.text();
-	    if (body.length > %d) {
+	    const responseObservedAt = new Date().toISOString();
+	    const declaredHeader = response.headers.get('content-length') || '';
+	    const declared = Number(declaredHeader);
+	    if (declaredHeader !== '' &&
+	        Number.isFinite(declared) &&
+	        declared > %d) {
+	      if (response.body) {
+	        try { await response.body.cancel(); } catch (_) {}
+	      }
 	      return {
 	        ok: false,
 	        status_code: response.status,
 	        body: '',
-	        body_bytes: body.length,
+	        body_bytes: declared,
 	        retry_after: response.headers.get('retry-after') || '',
+	        response_observed_at: responseObservedAt,
 	        error: 'response_too_large'
 	      };
 	    }
+	    if (!response.body) {
+	      return {
+	        ok: response.status === 200,
+	        status_code: response.status,
+	        body: '',
+	        body_bytes: 0,
+	        retry_after: response.headers.get('retry-after') || '',
+	        response_observed_at: responseObservedAt,
+	        error: ''
+	      };
+	    }
+	    const reader = response.body.getReader();
+	    const chunks = [];
+	    let total = 0;
+	    while (true) {
+	      const next = await reader.read();
+	      if (next.done) break;
+	      if (!(next.value instanceof Uint8Array)) {
+	        try { await reader.cancel(); } catch (_) {}
+	        throw new Error('invalid_response_chunk');
+	      }
+	      total += next.value.byteLength;
+	      if (total > %d) {
+	        try { await reader.cancel(); } catch (_) {}
+	        return {
+	          ok: false,
+	          status_code: response.status,
+	          body: '',
+	          body_bytes: total,
+	          retry_after: response.headers.get('retry-after') || '',
+	          response_observed_at: responseObservedAt,
+	          error: 'response_too_large'
+	        };
+	      }
+	      chunks.push(next.value);
+	    }
+	    const bytes = new Uint8Array(total);
+	    let offset = 0;
+	    for (const chunk of chunks) {
+	      bytes.set(chunk, offset);
+	      offset += chunk.byteLength;
+	    }
+	    const body = new TextDecoder().decode(bytes);
 	    return {
 	      ok: response.status === 200,
 	      status_code: response.status,
 	      body,
-	      body_bytes: body.length,
+	      body_bytes: total,
 	      retry_after: response.headers.get('retry-after') || '',
+	      response_observed_at: responseObservedAt,
 	      error: ''
 	    };
 	  } catch (_) {
@@ -594,9 +703,14 @@ func browserFetchUnthrottled(
 	      body_bytes: 0,
 	      retry_after: '',
 	      error: 'fetch_failed'
-	    };
+	      };
 	  }
-	})()`, encodedEndpoint, encodedHeaders, maxChatGPTResponseBytes)
+	})()`,
+		encodedEndpoint,
+		encodedHeaders,
+		maxChatGPTResponseBytes,
+		maxChatGPTResponseBytes,
+	)
 	var response browserFetchResult
 	if err := evaluateInto(ctx, session, expression, &response); err != nil {
 		return browserFetchResult{}, &readFailure{
@@ -623,18 +737,29 @@ func browserFetchUnthrottled(
 		failure.code = "chatgpt_rate_limited"
 		failure.errClass = "rate_limit"
 		failure.message = "ChatGPT stable browser-context read was rate limited"
-		failure.retryAt = retryAtFromHeader(response.RetryAfter, time.Now().UTC())
+		retryBase := time.Now().UTC()
+		if observedAt, err := time.Parse(
+			time.RFC3339Nano,
+			response.ResponseObservedAt,
+		); err == nil {
+			retryBase = observedAt.UTC()
+		}
+		failure.retryAt, failure.retryAuthoritative = retryAtFromHeader(
+			response.RetryAfter,
+			retryBase,
+		)
 	case 0:
 		failure.code = "chatgpt_browser_fetch_unavailable"
 		failure.errClass = "connection"
 		failure.message = "ChatGPT stable browser-context HTTP fetch failed"
 	}
-	if response.Error == "response_too_large" {
+	if response.Error == "response_too_large" &&
+		response.StatusCode != http.StatusTooManyRequests {
 		failure.code = "chatgpt_browser_fetch_response_too_large"
 		failure.errClass = "provider"
 		failure.message = "ChatGPT stable browser-context response exceeded its bound"
 	}
-	return browserFetchResult{}, failure
+	return response, failure
 }
 
 func browserFetchHeaders(
@@ -680,7 +805,7 @@ func browserReadFailureResult(
 ) webagent.Result {
 	result := operationFailure(
 		runID, buildCommit, operation,
-		stage, "browser_context_stable_http",
+		stage, readModeFromData(data),
 		target, cleanup,
 		failure.code, failure.errClass, failure.message,
 		data, readNextCommands(operation, conversation),

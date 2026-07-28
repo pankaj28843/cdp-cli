@@ -2,11 +2,15 @@ package chatgpt
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browserflow"
+	"github.com/pankaj28843/cdp-cli/internal/testsupport"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -93,22 +97,22 @@ func TestLocateArtifactRejectsMismatchAmbiguityAndUnsafePath(t *testing.T) {
 			match: "no finished artifact",
 		},
 		{
-			name: "conversation_mismatch",
-			detail: artifactDetail(
-				"sandbox:/mnt/data/artifact.csv",
-				"assistant-one",
-			),
+			name: "invalid_conversation_identity",
+			detail: func() map[string]any {
+				detail := artifactDetail(
+					"sandbox:/mnt/data/artifact.csv",
+					"assistant-one",
+				)
+				detail["conversation_id"] = 7
+				return detail
+			}(),
 			match: "detail id",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			conversationID := "conversation-id"
-			if test.name == "conversation_mismatch" {
-				conversationID = "different-id"
-			}
 			if _, err := locateArtifact(
 				test.detail,
-				conversationID,
+				"conversation-id",
 				fileName,
 			); err == nil || !strings.Contains(err.Error(), test.match) {
 				t.Fatalf("locateArtifact error = %v", err)
@@ -280,5 +284,62 @@ func TestArtifactDestinationRejectsSymlinkAndInvalidInputBeforeBrowser(t *testin
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("invalid artifact result validation: %v", err)
+	}
+}
+
+func TestOversizedArtifactRateLimitKeepsRateLimitFailure(t *testing.T) {
+	observedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	client := testsupport.NewBrowser()
+	client.Evaluate = func(
+		expression string,
+		_ *testsupport.Browser,
+	) (any, error) {
+		if !strings.Contains(expression, "const response = await fetch") {
+			return map[string]any{}, nil
+		}
+		return map[string]any{
+			"ok":                   false,
+			"status_code":          http.StatusTooManyRequests,
+			"retry_after":          "1",
+			"response_observed_at": observedAt.Format(time.RFC3339Nano),
+			"error":                "response_too_large",
+		}, nil
+	}
+	engine, _, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	lease, err := engine.Acquire(
+		context.Background(),
+		browserflow.AcquireRequest{
+			RunID:      "artifact-rate-limit",
+			Provider:   "chatgpt",
+			Operation:  string(webagent.OperationArtifactDownload),
+			InitialURL: "about:blank",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer func() {
+		if _, closeErr := lease.Close(context.Background()); closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+	}()
+
+	_, failure := browserFetchBinary(
+		context.Background(),
+		lease.Session(),
+		RequestTemplate{},
+		Origin+"/backend-api/estuary/content",
+		"/backend-api/estuary/content",
+		1,
+	)
+	if failure == nil ||
+		failure.code != "chatgpt_rate_limited" ||
+		failure.errClass != "rate_limit" ||
+		failure.statusCode != http.StatusTooManyRequests ||
+		!failure.retryAt.Equal(observedAt.Add(time.Second)) {
+		t.Fatalf("artifact failure = %+v", failure)
 	}
 }

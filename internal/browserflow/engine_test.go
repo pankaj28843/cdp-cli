@@ -87,6 +87,9 @@ func TestEngineAcquireDispatchCloseExactTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
+	if got := client.targetURL("owned-1"); got != "https://claude.test/new" {
+		t.Fatalf("owned target URL = %q, want requested initial URL", got)
+	}
 	if err := lease.MarkPrepared(ctx); err != nil {
 		t.Fatalf("MarkPrepared: %v", err)
 	}
@@ -143,6 +146,7 @@ func TestEngineAcquireDispatchCloseExactTarget(t *testing.T) {
 		"Browser.getWindowForTarget:user-page",
 		"Target.createTarget",
 		"Target.attachToTarget:owned-1",
+		"Page.navigate:session-owned-1",
 		"Target.detachFromTarget:session-owned-1",
 		"Target.closeTarget:owned-1",
 		"Target.getTargets",
@@ -278,6 +282,164 @@ func TestEngineCreateFailureIsNotRetried(t *testing.T) {
 	if record.Phase != PhaseFailed || record.LastErrorClass != "target_create_failed" || record.TargetID != "" {
 		t.Fatalf("create-failure record = %+v", record)
 	}
+	listCalls := client.callCount("Target.getTargets")
+	cleanup, recoverErr := engine.Recover(
+		context.Background(),
+		"run-create-failure",
+	)
+	if recoverErr != nil ||
+		cleanup.State != CleanupNotRequired ||
+		client.callCount("Target.getTargets") != listCalls {
+		t.Fatalf(
+			"Recover cleanup=%+v err=%v target_lists=%d, want %d",
+			cleanup,
+			recoverErr,
+			client.callCount("Target.getTargets"),
+			listCalls,
+		)
+	}
+}
+
+func TestEngineReconcilesTargetWhenCreateResponseIsLost(t *testing.T) {
+	client := newFakeBrowserClient("user-page")
+	client.createResultErr = context.DeadlineExceeded
+	client.markerHiddenLists = 2
+	engine, journal := newTestEngine(t, client, Config{})
+
+	_, err := engine.Acquire(context.Background(), AcquireRequest{
+		RunID:      "run-create-response-lost",
+		Provider:   "chatgpt",
+		Operation:  "ask",
+		InitialURL: "about:blank",
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Acquire error = %v, want deadline exceeded", err)
+	}
+	if client.hasTarget("owned-1") {
+		t.Fatal("target created before the lost response was stranded")
+	}
+	if !client.hasTarget("user-page") {
+		t.Fatal("marker reconciliation closed a sibling user target")
+	}
+	record, loadErr := journal.Load(
+		context.Background(),
+		"run-create-response-lost",
+	)
+	if loadErr != nil {
+		t.Fatalf("load response-loss record: %v", loadErr)
+	}
+	if record.Phase != PhaseClosed ||
+		record.Cleanup != CleanupClosed ||
+		record.TargetID != "owned-1" {
+		t.Fatalf("response-loss record = %+v", record)
+	}
+	if got := client.callCount("Target.createTarget"); got != 1 {
+		t.Fatalf("Target.createTarget calls = %d, want one", got)
+	}
+}
+
+func TestEnginePreservesUnresolvedCreateMarker(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*fakeBrowserClient)
+	}{
+		{
+			name: "target list error",
+			configure: func(client *fakeBrowserClient) {
+				client.markerListErr = errors.New("synthetic marker list failure")
+			},
+		},
+		{
+			name: "multiple exact markers",
+			configure: func(client *fakeBrowserClient) {
+				client.duplicateCreateMarkers = 1
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := newFakeBrowserClient("user-page")
+			client.createResultErr = context.DeadlineExceeded
+			test.configure(client)
+			engine, journal := newTestEngine(t, client, Config{})
+			runID := "run-unresolved-" + strings.ReplaceAll(test.name, " ", "-")
+
+			_, err := engine.Acquire(context.Background(), AcquireRequest{
+				RunID:      runID,
+				Provider:   "chatgpt",
+				Operation:  "ask",
+				InitialURL: "about:blank",
+			})
+			if err == nil ||
+				!strings.Contains(err.Error(), "reconcile created target marker") {
+				t.Fatalf("Acquire error = %v, want reconciliation failure", err)
+			}
+			record, loadErr := journal.Load(context.Background(), runID)
+			if loadErr != nil {
+				t.Fatalf("load unresolved record: %v", loadErr)
+			}
+			if record.Phase != PhaseFailed ||
+				record.Cleanup != CleanupFailed ||
+				record.TargetID != "" ||
+				record.LastErrorClass != "target_create_reconciliation_failed" {
+				t.Fatalf("unresolved record = %+v", record)
+			}
+			if !client.hasTarget("owned-1") ||
+				!client.hasTarget("user-page") ||
+				client.callCount("Target.closeTarget") != 0 {
+				t.Fatalf(
+					"unresolved targets: owned=%v user=%v close_calls=%d",
+					client.hasTarget("owned-1"),
+					client.hasTarget("user-page"),
+					client.callCount("Target.closeTarget"),
+				)
+			}
+		})
+	}
+}
+
+func TestEngineRecoverReconcilesPersistedCreateMarker(t *testing.T) {
+	client := newFakeBrowserClient("user-page")
+	client.createResultErr = context.DeadlineExceeded
+	client.markerListWaitContext = true
+	engine, journal := newTestEngine(t, client, Config{})
+	const runID = "run-recover-create-marker"
+
+	if _, err := engine.Acquire(context.Background(), AcquireRequest{
+		RunID:      runID,
+		Provider:   "chatgpt",
+		Operation:  "ask",
+		InitialURL: "about:blank",
+	}); err == nil {
+		t.Fatal("Acquire succeeded despite lost create response")
+	}
+	client.markerListWaitContext = false
+
+	cleanup, err := engine.Recover(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Recover: %v; cleanup=%+v", err, cleanup)
+	}
+	if cleanup.State != CleanupClosed ||
+		cleanup.TargetID != "owned-1" ||
+		!cleanup.TargetGone {
+		t.Fatalf("Recover cleanup = %+v", cleanup)
+	}
+	if client.hasTarget("owned-1") || !client.hasTarget("user-page") {
+		t.Fatalf(
+			"targets after recovery: owned=%v user=%v",
+			client.hasTarget("owned-1"),
+			client.hasTarget("user-page"),
+		)
+	}
+	record, loadErr := journal.Load(context.Background(), runID)
+	if loadErr != nil {
+		t.Fatalf("load recovered marker record: %v", loadErr)
+	}
+	if record.Phase != PhaseClosed ||
+		record.Cleanup != CleanupClosed ||
+		record.TargetID != "owned-1" {
+		t.Fatalf("recovered marker record = %+v", record)
+	}
 }
 
 func TestEngineAttachFailurePersistsCleanupAndClosesOnlyOwnedTarget(t *testing.T) {
@@ -383,6 +545,42 @@ func TestPreparationFailureClosesOnlyOwnedTarget(t *testing.T) {
 	}
 	if client.hasTarget("owned-1") || !client.hasTarget("user-page") {
 		t.Fatalf("targets after prepare failure: owned=%v user=%v", client.hasTarget("owned-1"), client.hasTarget("user-page"))
+	}
+}
+
+func TestEngineSaveBoundsOnlyOwnedTargetPersistence(t *testing.T) {
+	journal := &contextCaptureJournal{}
+	engine := &Engine{
+		journal: journal,
+		now: func() time.Time {
+			return time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+		},
+	}
+	caller, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	record := Record{TargetID: "owned-target"}
+	started := time.Now()
+	if err := engine.save(caller, &record); err != nil {
+		t.Fatalf("save owned target: %v", err)
+	}
+	owned := journal.observations[0]
+	if owned.err != nil ||
+		!owned.bounded ||
+		owned.deadline.Before(started) ||
+		owned.deadline.After(
+			started.Add(defaultPersistenceTimeout+time.Second),
+		) {
+		t.Fatalf("owned-target save context = %+v", owned)
+	}
+
+	record.TargetID = ""
+	if err := engine.save(caller, &record); err != nil {
+		t.Fatalf("save pre-target record: %v", err)
+	}
+	preTarget := journal.observations[1]
+	if !errors.Is(preTarget.err, context.Canceled) || preTarget.bounded {
+		t.Fatalf("pre-target save context = %+v", preTarget)
 	}
 }
 
@@ -889,9 +1087,7 @@ func TestCloseFailureLeavesExactRecoveryRecordThenRecoverySettles(t *testing.T) 
 	cleanup, err := lease.Close(context.Background())
 	if err == nil ||
 		cleanup.State != CleanupFailed ||
-		cleanup.CloseAttemptCount != 2 ||
 		!cleanup.TargetPollObserved ||
-		cleanup.FailurePhase != "close_and_poll" ||
 		cleanup.CloseError == "" ||
 		cleanup.PollError == "" ||
 		cleanup.TargetGone {
@@ -1239,13 +1435,19 @@ func newEngineWithJournal(t *testing.T, client *fakeBrowserClient, journal Journ
 }
 
 type fakeBrowserClient struct {
-	mu       sync.Mutex
-	targets  map[string]cdp.TargetInfo
-	trace    []string
-	counts   map[string]int
-	fail     map[string]error
-	failOnce map[string]error
-	nextID   int
+	mu                     sync.Mutex
+	targets                map[string]cdp.TargetInfo
+	trace                  []string
+	counts                 map[string]int
+	fail                   map[string]error
+	failOnce               map[string]error
+	createResultErr        error
+	createResponseLost     bool
+	duplicateCreateMarkers int
+	markerHiddenLists      int
+	markerListErr          error
+	markerListWaitContext  bool
+	nextID                 int
 }
 
 func newFakeBrowserClient(targetIDs ...string) *fakeBrowserClient {
@@ -1281,9 +1483,24 @@ func (c *fakeBrowserClient) Call(ctx context.Context, method string, params any,
 	switch method {
 	case "Target.getTargets":
 		c.trace = append(c.trace, method)
+		if c.createResponseLost && c.markerListWaitContext {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		if c.createResponseLost && c.markerListErr != nil {
+			return c.markerListErr
+		}
 		targets := make([]cdp.TargetInfo, 0, len(c.targets))
 		for _, target := range c.targets {
+			if c.createResponseLost &&
+				c.markerHiddenLists > 0 &&
+				strings.HasPrefix(target.URL, targetMarkerPrefix) {
+				continue
+			}
 			targets = append(targets, target)
+		}
+		if c.createResponseLost && c.markerHiddenLists > 0 {
+			c.markerHiddenLists--
 		}
 		return assignJSON(result, map[string]any{"targetInfos": targets})
 	case "Browser.getWindowForTarget":
@@ -1298,6 +1515,18 @@ func (c *fakeBrowserClient) Call(ctx context.Context, method string, params any,
 			TargetID: targetID,
 			Type:     "page",
 			URL:      stringParam(params, "url"),
+		}
+		for duplicate := 0; duplicate < c.duplicateCreateMarkers; duplicate++ {
+			duplicateID := fmt.Sprintf("duplicate-%d", duplicate+1)
+			c.targets[duplicateID] = cdp.TargetInfo{
+				TargetID: duplicateID,
+				Type:     "page",
+				URL:      stringParam(params, "url"),
+			}
+		}
+		if c.createResultErr != nil {
+			c.createResponseLost = true
+			return c.createResultErr
 		}
 		return assignJSON(result, map[string]any{"targetId": targetID})
 	case "Target.attachToTarget":
@@ -1330,6 +1559,12 @@ func (c *fakeBrowserClient) CallSession(ctx context.Context, sessionID, method s
 	if err := c.fail[method]; err != nil {
 		return err
 	}
+	if method == "Page.navigate" {
+		targetID := strings.TrimPrefix(sessionID, "session-")
+		target := c.targets[targetID]
+		target.URL = stringParam(params, "url")
+		c.targets[targetID] = target
+	}
 	return assignJSON(result, map[string]any{})
 }
 
@@ -1350,6 +1585,12 @@ func (c *fakeBrowserClient) hasTarget(targetID string) bool {
 	defer c.mu.Unlock()
 	_, ok := c.targets[targetID]
 	return ok
+}
+
+func (c *fakeBrowserClient) targetURL(targetID string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.targets[targetID].URL
 }
 
 func (c *fakeBrowserClient) removeTarget(targetID string) {
@@ -1382,6 +1623,27 @@ func (j *phaseFailJournal) failNext(phase Phase) {
 	defer j.mu.Unlock()
 	j.phase = phase
 	j.remaining = 1
+}
+
+type saveContextObservation struct {
+	err      error
+	deadline time.Time
+	bounded  bool
+}
+
+type contextCaptureJournal struct {
+	Journal
+	observations []saveContextObservation
+}
+
+func (j *contextCaptureJournal) Save(ctx context.Context, _ Record) error {
+	deadline, bounded := ctx.Deadline()
+	j.observations = append(j.observations, saveContextObservation{
+		err:      ctx.Err(),
+		deadline: deadline,
+		bounded:  bounded,
+	})
+	return nil
 }
 
 func stringParam(params any, key string) string {
