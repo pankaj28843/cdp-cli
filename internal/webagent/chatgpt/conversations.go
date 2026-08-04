@@ -9,9 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +28,13 @@ const (
 	ConversationDetailSchemaVersion = "chatgpt-conversation-detail/v1"
 	ConversationDetailRoute         = "/backend-api/conversation/:conversation_id"
 	maxChatGPTResponseBytes         = 32 << 20
+	maxConversationAttachments      = 64
+	maxAttachmentSourceRunes        = 4096
+	maxAttachmentAltRunes           = 1024
+	maxAttachmentNameRunes          = 512
+	maxAttachmentMetadataRunes      = 256
+	maxAttachmentDimension          = 1 << 20
+	maxAttachmentSizeBytes          = 1 << 50
 
 	conversationCompletionIncomplete            = "incomplete"
 	conversationCompletionTerminal              = "terminal"
@@ -33,7 +43,10 @@ const (
 )
 
 var (
-	conversationIDPattern         = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+	conversationIDPattern               = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+	attachmentSignedURIParameterPattern = regexp.MustCompile(
+		`(?i)[a-z][a-z0-9+.-]*:[^[:space:]<>"']*[?#][^[:space:]<>"']+`,
+	)
 	errResponseBodyReadIncomplete = errors.New("response body read did not complete")
 	errAwaitDeadlineElapsed       = errors.New(
 		"ChatGPT conversation await deadline elapsed",
@@ -80,14 +93,28 @@ type ConversationListData struct {
 }
 
 type ConversationDetailData struct {
-	SchemaVersion    string         `json:"schema_version"`
-	StatusCode       int            `json:"status_code"`
-	ConversationID   string         `json:"conversation_id"`
-	Text             string         `json:"text"`
-	CompletionState  string         `json:"completion_state"`
-	CompletionReason string         `json:"completion_reason,omitempty"`
-	ReadMode         string         `json:"read_mode"`
-	Metadata         map[string]any `json:"metadata"`
+	SchemaVersion    string                   `json:"schema_version"`
+	StatusCode       int                      `json:"status_code"`
+	ConversationID   string                   `json:"conversation_id"`
+	Text             string                   `json:"text"`
+	Attachments      []ConversationAttachment `json:"attachments"`
+	CompletionState  string                   `json:"completion_state"`
+	CompletionReason string                   `json:"completion_reason,omitempty"`
+	ReadMode         string                   `json:"read_mode"`
+	Metadata         map[string]any           `json:"metadata"`
+}
+
+type ConversationAttachment struct {
+	Kind               string `json:"kind"`
+	Alt                string `json:"alt,omitempty"`
+	Source             string `json:"source,omitempty"`
+	FileID             string `json:"file_id,omitempty"`
+	FileName           string `json:"file_name,omitempty"`
+	MIMEType           string `json:"mime_type,omitempty"`
+	SizeBytes          int64  `json:"size_bytes,omitempty"`
+	Width              int    `json:"width,omitempty"`
+	Height             int    `json:"height,omitempty"`
+	sourceIdentityHash string
 }
 
 type readFailure struct {
@@ -916,6 +943,7 @@ func newConversationDetailData(
 	data := ConversationDetailData{
 		SchemaVersion:   ConversationDetailSchemaVersion,
 		ConversationID:  conversationID,
+		Attachments:     []ConversationAttachment{},
 		CompletionState: conversationCompletionIncomplete,
 		ReadMode:        readMode,
 		Metadata: map[string]any{
@@ -943,6 +971,7 @@ func terminalNoAnswerCandidateData(value any) bool {
 	}
 	if data.CompletionState != conversationCompletionIncomplete ||
 		strings.TrimSpace(data.Text) != "" ||
+		len(data.Attachments) != 0 ||
 		data.Metadata == nil {
 		return false
 	}
@@ -987,6 +1016,7 @@ func parseConversationDetailPayload(
 	}
 	extracted := extractConversationText(payload)
 	data.Text = extracted.text
+	data.Attachments = extracted.attachments
 	data.CompletionState = extracted.completionState
 	for key, value := range extracted.metadata {
 		data.Metadata[key] = value
@@ -1016,6 +1046,7 @@ func providerConversationIdentityMatches(
 
 type extractedConversation struct {
 	text            string
+	attachments     []ConversationAttachment
 	completionState string
 	metadata        map[string]any
 }
@@ -1031,6 +1062,7 @@ const (
 
 func extractConversationText(payload map[string]any) extractedConversation {
 	result := extractedConversation{
+		attachments:     []ConversationAttachment{},
 		completionState: "incomplete",
 		metadata:        map[string]any{},
 	}
@@ -1077,8 +1109,14 @@ func extractConversationText(payload map[string]any) extractedConversation {
 			continue
 		}
 		text := strings.TrimSpace(messageText(message, true))
+		attachments, attachmentsTruncated := conversationAttachments(message)
 		if index == 0 &&
-			terminalNoAnswerPayloadCandidate(text, message, activity) {
+			terminalNoAnswerPayloadCandidate(
+				text,
+				attachments,
+				message,
+				activity,
+			) {
 			result.metadata["assistant_is_current_node"] = true
 			result.metadata["terminal_no_answer_candidate"] = true
 			result.metadata["terminal_no_answer_candidate_reason"] =
@@ -1086,10 +1124,17 @@ func extractConversationText(payload map[string]any) extractedConversation {
 			copyResultMetadata(result.metadata, message)
 			return result
 		}
-		if !terminalAnswerTextValid(text, message) {
+		if !terminalAssistantContentValid(text, attachments, message) {
 			continue
 		}
 		result.text = text
+		result.attachments = attachments
+		if len(attachments) > 0 {
+			result.metadata["attachment_count"] = len(attachments)
+		}
+		if attachmentsTruncated {
+			result.metadata["attachments_truncated"] = true
+		}
 		result.metadata["assistant_is_current_node"] = index == 0
 		if index == 0 &&
 			(activity == conversationActivityAbsent ||
@@ -1211,6 +1256,751 @@ func messageText(message map[string]any, allowCode bool) string {
 	return ""
 }
 
+func conversationAttachments(
+	message map[string]any,
+) ([]ConversationAttachment, bool) {
+	candidates := make([]ConversationAttachment, 0)
+	appendAttachment := func(attachment ConversationAttachment) {
+		if !conversationAttachmentUsable(attachment) {
+			return
+		}
+		candidates = append(candidates, attachment)
+	}
+	appendValues := func(value any, kindHint string) {
+		switch values := value.(type) {
+		case []any:
+			for _, value := range values {
+				switch typed := value.(type) {
+				case map[string]any:
+					if attachment, ok := conversationAttachmentFromRaw(
+						typed,
+						kindHint,
+					); ok {
+						appendAttachment(attachment)
+					}
+				case string:
+					for _, attachment := range sandboxAttachments(typed) {
+						appendAttachment(attachment)
+					}
+				}
+			}
+		case map[string]any:
+			if attachment, ok := conversationAttachmentFromRaw(
+				values,
+				kindHint,
+			); ok {
+				appendAttachment(attachment)
+			}
+		case string:
+			for _, attachment := range sandboxAttachments(values) {
+				appendAttachment(attachment)
+			}
+		}
+	}
+
+	metadata, _ := message["metadata"].(map[string]any)
+	if metadata != nil {
+		appendValues(metadata["attachments"], "file")
+		appendValues(metadata["files"], "file")
+		appendValues(metadata["images"], "image")
+	}
+	content, _ := message["content"].(map[string]any)
+	if content != nil {
+		appendValues(content["parts"], "")
+		appendValues(content["attachments"], "file")
+		appendValues(content["files"], "file")
+	}
+
+	sort.Slice(candidates, func(first int, second int) bool {
+		return conversationAttachmentLess(candidates[first], candidates[second])
+	})
+	attachments := make(
+		[]ConversationAttachment,
+		0,
+		min(len(candidates), maxConversationAttachments),
+	)
+	truncated := false
+	for _, candidate := range candidates {
+		merged := candidate
+		matched := false
+		for index := 0; index < len(attachments); {
+			if !conversationAttachmentsMatch(attachments[index], merged) {
+				index++
+				continue
+			}
+			matched = true
+			merged = mergeConversationAttachment(attachments[index], merged)
+			attachments = append(
+				attachments[:index],
+				attachments[index+1:]...,
+			)
+			// Safe partial records can reveal another compatible identity.
+			index = 0
+		}
+		if !matched && len(attachments) >= maxConversationAttachments {
+			truncated = true
+			continue
+		}
+		attachments = append(attachments, merged)
+	}
+	sort.Slice(attachments, func(first int, second int) bool {
+		return conversationAttachmentLess(attachments[first], attachments[second])
+	})
+	return attachments, truncated
+}
+
+func conversationAttachmentFromRaw(
+	raw map[string]any,
+	kindHint string,
+) (ConversationAttachment, bool) {
+	metadata, _ := raw["metadata"].(map[string]any)
+	contentType := attachmentString(
+		raw,
+		metadata,
+		maxAttachmentMetadataRunes,
+		"content_type",
+		"attachment_type",
+		"type",
+		"kind",
+	)
+	mimeType := stableAttachmentMIMEType(
+		attachmentString(
+			raw,
+			metadata,
+			maxAttachmentMetadataRunes,
+			"mime_type",
+			"mimeType",
+		),
+	)
+	width := attachmentPositiveInt64(
+		raw,
+		metadata,
+		maxAttachmentDimension,
+		"width",
+		"pixel_width",
+		"container_pixel_width",
+	)
+	height := attachmentPositiveInt64(
+		raw,
+		metadata,
+		maxAttachmentDimension,
+		"height",
+		"pixel_height",
+		"container_pixel_height",
+	)
+	kind := normalizedAttachmentKind(
+		kindHint,
+		contentType,
+		mimeType,
+		raw,
+		width,
+		height,
+	)
+	if kind == "" {
+		return ConversationAttachment{}, false
+	}
+	sourceRaw := attachmentSourceValue(raw)
+	if sourceRaw == "" && metadata != nil {
+		sourceRaw = attachmentSourceValue(metadata)
+	}
+	source, sourceIdentityHash := stableAttachmentSourceParts(sourceRaw)
+	attachment := ConversationAttachment{
+		Kind: kind,
+		Alt: stableAttachmentAlt(
+			attachmentString(
+				raw,
+				metadata,
+				maxAttachmentAltRunes,
+				"alt_text",
+				"alt",
+				"description",
+			),
+		),
+		Source: source,
+		FileID: stableAttachmentID(
+			attachmentString(
+				raw,
+				metadata,
+				maxAttachmentMetadataRunes,
+				"file_id",
+				"fileId",
+				"id",
+			),
+		),
+		FileName: stableAttachmentName(
+			attachmentString(
+				raw,
+				metadata,
+				maxAttachmentNameRunes,
+				"file_name",
+				"filename",
+				"name",
+			),
+		),
+		MIMEType: mimeType,
+		SizeBytes: attachmentPositiveInt64(
+			raw,
+			metadata,
+			maxAttachmentSizeBytes,
+			"size_bytes",
+			"file_size_bytes",
+			"size",
+		),
+		Width:              int(width),
+		Height:             int(height),
+		sourceIdentityHash: sourceIdentityHash,
+	}
+	if attachment.Source == "sandbox_artifact" &&
+		attachment.FileName == "" {
+		attachment.FileName = sandboxAttachmentName(raw)
+		if attachment.FileName == "" && metadata != nil {
+			attachment.FileName = sandboxAttachmentName(metadata)
+		}
+	}
+	return attachment, conversationAttachmentUsable(attachment)
+}
+
+func normalizedAttachmentKind(
+	kindHint string,
+	contentType string,
+	mimeType string,
+	raw map[string]any,
+	width int64,
+	height int64,
+) string {
+	kindHint = strings.ToLower(strings.TrimSpace(kindHint))
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	if kindHint == "image" ||
+		strings.Contains(contentType, "image") ||
+		strings.HasPrefix(mimeType, "image/") ||
+		raw["image_url"] != nil ||
+		raw["image_asset_pointer"] != nil ||
+		width > 0 ||
+		height > 0 {
+		return "image"
+	}
+	if kindHint == "file" ||
+		strings.Contains(contentType, "file") ||
+		strings.Contains(contentType, "asset") ||
+		mimeType != "" ||
+		raw["asset_pointer"] != nil ||
+		raw["file_asset_pointer"] != nil ||
+		raw["file_id"] != nil ||
+		raw["file_name"] != nil ||
+		raw["filename"] != nil {
+		return "file"
+	}
+	return ""
+}
+
+func attachmentString(
+	raw map[string]any,
+	metadata map[string]any,
+	maxRunes int,
+	keys ...string,
+) string {
+	for _, values := range []map[string]any{raw, metadata} {
+		for _, key := range keys {
+			value, _ := values[key].(string)
+			if value = boundedAttachmentString(value, maxRunes); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func attachmentSourceValue(raw map[string]any) string {
+	for _, key := range []string{
+		"asset_pointer",
+		"image_asset_pointer",
+		"file_asset_pointer",
+		"source",
+		"download_url",
+		"url",
+		"image_url",
+		"sandbox_path",
+	} {
+		value := raw[key]
+		if nested, ok := value.(map[string]any); ok {
+			value = nested["url"]
+			if value == nil {
+				value = nested["asset_pointer"]
+			}
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func stableAttachmentSource(value string) string {
+	source, _ := stableAttachmentSourceParts(value)
+	return source
+}
+
+func stableAttachmentSourceParts(value string) (string, string) {
+	value = boundedAttachmentString(value, maxAttachmentSourceRunes)
+	if value == "" {
+		return "", ""
+	}
+	normalized := strings.ToLower(strings.ReplaceAll(value, "\\", "/"))
+	if strings.HasPrefix(normalized, "sandbox:") ||
+		normalized == "/mnt/data" ||
+		strings.HasPrefix(normalized, "/mnt/data/") {
+		return "sandbox_artifact", ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.User != nil {
+		return "", ""
+	}
+	if privateAttachmentPath(parsed.Path) ||
+		(parsed.Path != "" && path.Clean(parsed.Path) != parsed.Path) {
+		return "", ""
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "sediment", "file-service":
+		if parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", ""
+		}
+		return value, ""
+	case "https":
+		if parsed.Host == "" {
+			return "", ""
+		}
+		sourceIdentityHash := ""
+		if parsed.RawQuery != "" || parsed.ForceQuery {
+			identityURL := *parsed
+			identityURL.Fragment = ""
+			identityURL.RawFragment = ""
+			sum := sha256.Sum256([]byte(identityURL.String()))
+			sourceIdentityHash = hex.EncodeToString(sum[:])
+		}
+		parsed.RawQuery = ""
+		parsed.ForceQuery = false
+		parsed.Fragment = ""
+		parsed.RawFragment = ""
+		return parsed.String(), sourceIdentityHash
+	case "":
+		if parsed.RawQuery != "" ||
+			parsed.Fragment != "" ||
+			strings.ContainsAny(value, " \t\r\n") ||
+			!strings.HasPrefix(parsed.Path, "/backend-api/") {
+			return "", ""
+		}
+		return value, ""
+	default:
+		return "", ""
+	}
+}
+
+func stableAttachmentAlt(value string) string {
+	value = boundedAttachmentString(value, maxAttachmentAltRunes)
+	if value == "" {
+		return ""
+	}
+	normalized := strings.ToLower(strings.ReplaceAll(value, "\\", "/"))
+	if strings.Contains(normalized, "sandbox:") ||
+		strings.Contains(normalized, "file:/") ||
+		privateAttachmentText(value) ||
+		attachmentSignedURIParameterPattern.MatchString(value) {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err == nil && parsed.Scheme != "" &&
+		(parsed.RawQuery != "" || parsed.Fragment != "") {
+		return ""
+	}
+	return value
+}
+
+func stableAttachmentID(value string) string {
+	for _, character := range value {
+		if unicode.IsLetter(character) ||
+			unicode.IsDigit(character) ||
+			strings.ContainsRune("-_.:", character) {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func stableAttachmentName(value string) string {
+	value = strings.ReplaceAll(value, "\\", "/")
+	if parsed, err := url.Parse(value); err == nil && parsed.Scheme != "" {
+		value = parsed.Path
+	}
+	value = path.Base(value)
+	if value == "." || value == "/" || strings.ContainsAny(value, "?#") {
+		return ""
+	}
+	return boundedAttachmentString(value, maxAttachmentNameRunes)
+}
+
+func stableAttachmentMIMEType(value string) string {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil || !strings.Contains(mediaType, "/") {
+		return ""
+	}
+	return strings.ToLower(mediaType)
+}
+
+func privateAttachmentPath(value string) bool {
+	value = strings.ToLower(strings.ReplaceAll(value, "\\", "/"))
+	for _, prefix := range []string{
+		"/users/",
+		"/" + "home/",
+		"/private/",
+		"/root/",
+		"/tmp/",
+		"/var/folders/",
+		"/var/tmp/",
+		"/mnt/",
+		"c:/users/",
+	} {
+		if value == strings.TrimSuffix(prefix, "/") ||
+			strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func privateAttachmentText(value string) bool {
+	value = strings.ReplaceAll(value, "\\", "/")
+	tokens := strings.FieldsFunc(value, func(character rune) bool {
+		return unicode.IsSpace(character) ||
+			strings.ContainsRune(`()[]{}<>"',;=`, character)
+	})
+	for _, token := range tokens {
+		token = strings.Trim(token, ".!?")
+		if localAttachmentPathToken(token) {
+			return true
+		}
+	}
+	return false
+}
+
+func localAttachmentPathToken(value string) bool {
+	value = strings.ToLower(value)
+	if strings.HasPrefix(value, "~/") {
+		return true
+	}
+	if len(value) >= 3 &&
+		value[0] >= 'a' && value[0] <= 'z' &&
+		value[1] == ':' && value[2] == '/' {
+		return true
+	}
+	return len(value) > 1 && strings.HasPrefix(value, "/")
+}
+
+func sandboxAttachments(text string) []ConversationAttachment {
+	attachments := []ConversationAttachment{}
+	seen := map[string]bool{}
+	for _, pattern := range sandboxPathPatterns {
+		for _, match := range pattern.FindAllStringSubmatch(text, -1) {
+			if len(match) < 2 {
+				continue
+			}
+			normalized, ok := normalizeSandboxPath(match[1])
+			if !ok || seen[normalized] {
+				continue
+			}
+			seen[normalized] = true
+			attachments = append(attachments, ConversationAttachment{
+				Kind:     "file",
+				Source:   "sandbox_artifact",
+				FileName: path.Base(normalized),
+			})
+		}
+	}
+	return attachments
+}
+
+func sandboxAttachmentName(raw map[string]any) string {
+	value := attachmentSourceValue(raw)
+	value = strings.TrimPrefix(value, "sandbox:")
+	normalized, ok := normalizeSandboxPath(value)
+	if !ok {
+		return ""
+	}
+	return path.Base(normalized)
+}
+
+func boundedAttachmentString(value string, maxRunes int) string {
+	value = cleanSingleLine(value)
+	if value == "" || maxRunes < 1 {
+		return ""
+	}
+	if len([]rune(value)) > maxRunes {
+		return ""
+	}
+	return value
+}
+
+func attachmentPositiveInt64(
+	raw map[string]any,
+	metadata map[string]any,
+	maxValue int64,
+	keys ...string,
+) int64 {
+	for _, values := range []map[string]any{raw, metadata} {
+		for _, key := range keys {
+			if value, ok := positiveAttachmentInt64(
+				values[key],
+				maxValue,
+			); ok {
+				return value
+			}
+		}
+	}
+	return 0
+}
+
+func positiveAttachmentInt64(value any, maxValue int64) (int64, bool) {
+	var parsed int64
+	switch typed := value.(type) {
+	case float64:
+		if typed <= 0 || typed > float64(maxValue) {
+			return 0, false
+		}
+		parsed = int64(typed)
+		if float64(parsed) != typed {
+			return 0, false
+		}
+	case float32:
+		if typed <= 0 || float64(typed) > float64(maxValue) {
+			return 0, false
+		}
+		parsed = int64(typed)
+		if float32(parsed) != typed {
+			return 0, false
+		}
+	case int:
+		parsed = int64(typed)
+	case int64:
+		parsed = typed
+	case json.Number:
+		parsedValue, err := strconv.ParseInt(typed.String(), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		parsed = parsedValue
+	case string:
+		parsedValue, err := strconv.ParseInt(
+			strings.TrimSpace(typed),
+			10,
+			64,
+		)
+		if err != nil {
+			return 0, false
+		}
+		parsed = parsedValue
+	default:
+		return 0, false
+	}
+	return parsed, parsed > 0 && parsed <= maxValue
+}
+
+func conversationAttachmentUsable(attachment ConversationAttachment) bool {
+	if attachment.Kind != "image" && attachment.Kind != "file" {
+		return false
+	}
+	return attachment.Source != "" ||
+		attachment.FileID != "" ||
+		attachment.FileName != "" ||
+		attachment.MIMEType != "" ||
+		attachment.Alt != "" ||
+		attachment.SizeBytes != 0 ||
+		attachment.Width != 0 ||
+		attachment.Height != 0
+}
+
+func conversationAttachmentLess(
+	first ConversationAttachment,
+	second ConversationAttachment,
+) bool {
+	if first.Kind != second.Kind {
+		return first.Kind < second.Kind
+	}
+	if first.FileID != second.FileID {
+		return first.FileID < second.FileID
+	}
+	if first.Source != second.Source {
+		return first.Source < second.Source
+	}
+	if first.sourceIdentityHash != second.sourceIdentityHash {
+		return first.sourceIdentityHash < second.sourceIdentityHash
+	}
+	if first.FileName != second.FileName {
+		return first.FileName < second.FileName
+	}
+	if first.MIMEType != second.MIMEType {
+		return first.MIMEType < second.MIMEType
+	}
+	if first.Alt != second.Alt {
+		return first.Alt < second.Alt
+	}
+	if first.SizeBytes != second.SizeBytes {
+		return first.SizeBytes < second.SizeBytes
+	}
+	if first.Width != second.Width {
+		return first.Width < second.Width
+	}
+	return first.Height < second.Height
+}
+
+func conversationAttachmentsMatch(
+	current ConversationAttachment,
+	candidate ConversationAttachment,
+) bool {
+	if current.Kind != candidate.Kind ||
+		!conversationAttachmentUsable(current) ||
+		!conversationAttachmentUsable(candidate) {
+		return false
+	}
+	fileIDMatches := false
+	if current.FileID != "" && candidate.FileID != "" {
+		if current.FileID != candidate.FileID {
+			return false
+		}
+		fileIDMatches = true
+	}
+	currentSource := comparableAttachmentSource(current)
+	candidateSource := comparableAttachmentSource(candidate)
+	sourceMatches := false
+	if currentSource != "" && candidateSource != "" {
+		if currentSource != candidateSource {
+			return false
+		}
+		sourceMatches = true
+	}
+	fileNameMatches := false
+	if current.FileName != "" && candidate.FileName != "" {
+		fileNameMatches = strings.EqualFold(
+			current.FileName,
+			candidate.FileName,
+		)
+	}
+	return fileIDMatches || sourceMatches || fileNameMatches
+}
+
+func comparableAttachmentSource(attachment ConversationAttachment) string {
+	if attachment.sourceIdentityHash != "" {
+		return "query:" + attachment.sourceIdentityHash
+	}
+	source := attachment.Source
+	if source == "" || source == "sandbox_artifact" {
+		return ""
+	}
+	parsed, err := url.Parse(source)
+	if err == nil && parsed.Path == artifactContentRoute {
+		return ""
+	}
+	return source
+}
+
+func mergeConversationAttachment(
+	current ConversationAttachment,
+	candidate ConversationAttachment,
+) ConversationAttachment {
+	current.Alt = preferredAttachmentString(current.Alt, candidate.Alt)
+	current.Source = preferredAttachmentSource(current.Source, candidate.Source)
+	current.FileID = preferredAttachmentString(current.FileID, candidate.FileID)
+	current.FileName = preferredAttachmentString(
+		current.FileName,
+		candidate.FileName,
+	)
+	current.MIMEType = preferredAttachmentString(
+		current.MIMEType,
+		candidate.MIMEType,
+	)
+	current.SizeBytes = max(current.SizeBytes, candidate.SizeBytes)
+	current.Width, current.Height = preferredAttachmentDimensions(
+		current.Width,
+		current.Height,
+		candidate.Width,
+		candidate.Height,
+	)
+	current.sourceIdentityHash = preferredAttachmentString(
+		current.sourceIdentityHash,
+		candidate.sourceIdentityHash,
+	)
+	return current
+}
+
+func preferredAttachmentDimensions(
+	currentWidth int,
+	currentHeight int,
+	candidateWidth int,
+	candidateHeight int,
+) (int, int) {
+	currentQuality := attachmentDimensionQuality(currentWidth, currentHeight)
+	candidateQuality := attachmentDimensionQuality(
+		candidateWidth,
+		candidateHeight,
+	)
+	if candidateQuality > currentQuality {
+		return candidateWidth, candidateHeight
+	}
+	if candidateQuality < currentQuality {
+		return currentWidth, currentHeight
+	}
+	currentArea := int64(currentWidth) * int64(currentHeight)
+	candidateArea := int64(candidateWidth) * int64(candidateHeight)
+	if candidateArea > currentArea ||
+		(candidateArea == currentArea && candidateWidth > currentWidth) ||
+		(candidateArea == currentArea && candidateWidth == currentWidth &&
+			candidateHeight > currentHeight) {
+		return candidateWidth, candidateHeight
+	}
+	return currentWidth, currentHeight
+}
+
+func attachmentDimensionQuality(width int, height int) int {
+	if width > 0 && height > 0 {
+		return 2
+	}
+	if width > 0 || height > 0 {
+		return 1
+	}
+	return 0
+}
+
+func preferredAttachmentString(current string, candidate string) string {
+	if current == "" {
+		return candidate
+	}
+	if candidate == "" || current <= candidate {
+		return current
+	}
+	return candidate
+}
+
+func preferredAttachmentSource(current string, candidate string) string {
+	if current == "sandbox_artifact" && candidate != "" {
+		return candidate
+	}
+	if candidate == "sandbox_artifact" && current != "" {
+		return current
+	}
+	return preferredAttachmentString(current, candidate)
+}
+
+func terminalAssistantContentValid(
+	text string,
+	attachments []ConversationAttachment,
+	message map[string]any,
+) bool {
+	if len(attachments) > 0 {
+		return terminalAssistantEnvelopeValid(message)
+	}
+	return terminalAnswerTextValid(text, message)
+}
+
 func terminalAnswerTextValid(text string, message map[string]any) bool {
 	text = strings.TrimSpace(text)
 	if text == "" || deepResearchControlPayload(text) {
@@ -1256,10 +2046,12 @@ func terminalAnswerTextValid(text string, message map[string]any) bool {
 
 func terminalNoAnswerPayloadCandidate(
 	text string,
+	attachments []ConversationAttachment,
 	message map[string]any,
 	activity conversationActivityState,
 ) bool {
 	return strings.TrimSpace(text) == "" &&
+		len(attachments) == 0 &&
 		(activity == conversationActivityAbsent ||
 			activity == conversationActivityInactive) &&
 		message["status"] == "finished_successfully" &&

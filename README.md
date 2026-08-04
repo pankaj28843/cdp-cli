@@ -326,6 +326,11 @@ cdp workflow pdf-to-markdown tmp/downloads/paper.pdf \
   --json
 ```
 
+When a completed download uses an explicit `--download-dir`, cdp retains a
+sanitized plain filename derived from Chrome's suggested filename. Existing
+files are never overwritten: collisions use `name (1).ext`, `name (2).ext`,
+and so on. Download JSON reports the final retained path in `file_path`.
+
 The output directory contains owner-only `document.md` and `metadata.json`.
 The workflow copies the opened source bytes into a private temporary snapshot,
 hashes those same bytes, and passes that snapshot to Poppler. This binds the

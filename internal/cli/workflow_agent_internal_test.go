@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 )
 
 func TestSelectHeadedProviderRuntimeOverridesAmbientDefaultOnly(t *testing.T) {
@@ -80,5 +81,75 @@ func TestRenderWebAgentFailurePreservesEnvelopeAndNonzeroExit(t *testing.T) {
 	}
 	if got.OK || got.Error == nil || got.Error.Code != "claude_auth_missing" {
 		t.Fatalf("rendered result = %+v", got)
+	}
+}
+
+func TestRenderWebAgentResultPreservesAttachmentOnlyChatGPTDetail(
+	t *testing.T,
+) {
+	var out bytes.Buffer
+	a := &app{
+		out:  &out,
+		err:  &bytes.Buffer{},
+		opts: options{json: true},
+	}
+	result := webagent.Result{
+		OK:            true,
+		SchemaVersion: webagent.OperationSchemaVersion,
+		Provider:      webagent.ProviderChatGPT,
+		Operation:     webagent.OperationConversationsDetail,
+		State:         webagent.StateTerminal,
+		Stage:         webagent.StageObserveTerminal,
+		Data: chatgpt.ConversationDetailData{
+			SchemaVersion:  chatgpt.ConversationDetailSchemaVersion,
+			StatusCode:     200,
+			ConversationID: "conversation-image-only",
+			Attachments: []chatgpt.ConversationAttachment{
+				{
+					Kind:      "image",
+					Alt:       "Generated high-resolution image",
+					Source:    "sediment://file_generated_image",
+					SizeBytes: 2457600,
+					Width:     1536,
+					Height:    1024,
+				},
+			},
+			CompletionState: "terminal",
+			ReadMode:        "candidate_http",
+			Metadata:        map[string]any{},
+		},
+		Evidence: webagent.Evidence{
+			RunID:       "wa-render-attachment-only",
+			BuildCommit: "test-commit",
+			BrowserMode: "none",
+			ReadMode:    "candidate_http",
+		},
+		Cleanup:      webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+		NextCommands: []string{},
+	}
+
+	if err := a.renderWebAgentResult(
+		context.Background(),
+		"chatgpt conversation detail: terminal",
+		result,
+	); err != nil {
+		t.Fatalf("render attachment-only detail: %v", err)
+	}
+	var rendered struct {
+		Data struct {
+			Text        string                           `json:"text"`
+			Attachments []chatgpt.ConversationAttachment `json:"attachments"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &rendered); err != nil {
+		t.Fatalf("decode rendered detail: %v\n%s", err, out.String())
+	}
+	if rendered.Data.Text != "" ||
+		len(rendered.Data.Attachments) != 1 ||
+		rendered.Data.Attachments[0].Source !=
+			"sediment://file_generated_image" ||
+		rendered.Data.Attachments[0].Width != 1536 ||
+		rendered.Data.Attachments[0].Height != 1024 {
+		t.Fatalf("rendered detail = %+v", rendered.Data)
 	}
 }

@@ -875,6 +875,10 @@ func TestWaitDownloadJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	downloadDir := t.TempDir()
+	guidPath := filepath.Join(downloadDir, "download-1")
+	if err := os.WriteFile(guidPath, []byte("report bytes"), 0o600); err != nil {
+		t.Fatalf("write GUID download fixture: %v", err)
+	}
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"wait", "download", "--match-url", "/download/report.csv", "--filename-contains", "report.csv", "--download-dir", downloadDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
@@ -950,10 +954,11 @@ func TestWaitDownloadJSON(t *testing.T) {
 	if strings.Contains(got.Event.URL, "token=abc") || strings.Contains(got.Download.URL, "token=abc") || !strings.Contains(got.Event.URL, "redacted") {
 		t.Fatalf("wait download URL was not safely redacted: event=%q download=%q", got.Event.URL, got.Download.URL)
 	}
-	if got.Progress.Kind != "progress" || got.Progress.GUID != "download-1" || got.Progress.State != "completed" || got.Progress.TotalBytes != 18 || got.Progress.ReceivedBytes != 18 || got.Progress.FilePath != "/tmp/cdp-downloads/download-1" || got.Progress.CDPMethod != "Browser.downloadProgress" {
+	wantPath := filepath.Join(downloadDir, "report.csv")
+	if got.Progress.Kind != "progress" || got.Progress.GUID != "download-1" || got.Progress.State != "completed" || got.Progress.TotalBytes != 18 || got.Progress.ReceivedBytes != 18 || got.Progress.FilePath != wantPath || got.Progress.CDPMethod != "Browser.downloadProgress" {
 		t.Fatalf("wait download progress = %+v, want completed progress metadata", got.Progress)
 	}
-	if got.Download.GUID != "download-1" || got.Download.SuggestedFilename != "report.csv" || got.Download.State != "completed" || !got.Download.Completed || got.Download.Canceled || got.Download.TotalBytes != 18 || got.Download.ReceivedBytes != 18 {
+	if got.Download.GUID != "download-1" || got.Download.SuggestedFilename != "report.csv" || got.Download.State != "completed" || !got.Download.Completed || got.Download.Canceled || got.Download.TotalBytes != 18 || got.Download.ReceivedBytes != 18 || got.Download.FilePath != wantPath {
 		t.Fatalf("wait download summary = %+v, want completed download", got.Download)
 	}
 	if got.Wait.Evidence.Headers || got.Wait.Evidence.Bodies || !got.Wait.Evidence.Bounded {
@@ -971,6 +976,14 @@ func TestWaitDownloadJSON(t *testing.T) {
 	}
 	if !hasListCommand {
 		t.Fatalf("wait download next commands = %+v, want download dir listing", got.NextCommands)
+	}
+	if content, err := os.ReadFile(wantPath); err != nil {
+		t.Fatalf("read retained download: %v", err)
+	} else if string(content) != "report bytes" {
+		t.Errorf("retained download = %q, want report bytes", content)
+	}
+	if _, err := os.Lstat(guidPath); !os.IsNotExist(err) {
+		t.Errorf("GUID path still exists after download finalization: %v", err)
 	}
 }
 

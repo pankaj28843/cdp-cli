@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -19,9 +22,17 @@ const (
 	downloadWaitKind               = "download"
 	downloadWaitCDPMethodWillBegin = "Browser.downloadWillBegin"
 	downloadWaitCDPMethodProgress  = "Browser.downloadProgress"
+	downloadFinalizeVisibilityWait = 500 * time.Millisecond
+	downloadFinalizeVisibilityPoll = 10 * time.Millisecond
+	downloadFilenameMaxBytes       = 255
+	downloadExtensionMaxBytes      = 32
+	downloadFilenameMaxCollisions  = 10_000
 )
 
-var errDownloadCanceled = errors.New("download canceled")
+var (
+	errDownloadCanceled     = errors.New("download canceled")
+	errDownloadFinalization = errors.New("download finalization failed")
+)
 
 type downloadWaitCriteria struct {
 	URLContains      string `json:"url_contains,omitempty"`
@@ -30,9 +41,10 @@ type downloadWaitCriteria struct {
 }
 
 type downloadWaitOptions struct {
-	Criteria    downloadWaitCriteria
-	DownloadDir string
-	Redact      string
+	Criteria                  downloadWaitCriteria
+	DownloadDir               string
+	Redact                    string
+	FinalizeSuggestedFilename bool
 }
 
 type downloadWaitEvent struct {
@@ -71,14 +83,16 @@ func (a *app) newWaitDownloadCommand() *cobra.Command {
 		Short: "Wait for a browser download to start or complete",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			explicitDownloadDir := strings.TrimSpace(downloadDir)
 			opts := downloadWaitOptions{
 				Criteria: downloadWaitCriteria{
 					URLContains:      strings.TrimSpace(matchURL),
 					FilenameContains: strings.TrimSpace(filenameContains),
 					State:            strings.TrimSpace(state),
 				},
-				DownloadDir: strings.TrimSpace(downloadDir),
-				Redact:      redact,
+				DownloadDir:               explicitDownloadDir,
+				Redact:                    redact,
+				FinalizeSuggestedFilename: explicitDownloadDir != "",
 			}
 			if err := a.normalizeDownloadWaitOptions(&opts); err != nil {
 				return err
@@ -222,6 +236,17 @@ func collectDownloadEvent(ctx context.Context, client browserEventClient, opts d
 			return false, errDownloadCanceled
 		}
 		if opts.Criteria.State == "completed" && downloadEvent.State == "completed" {
+			finalPath, err := finalizeCompletedDownload(ctx, opts, *observation.Begin, downloadEvent)
+			if err != nil {
+				observation.LastEvent = &downloadEvent
+				observation.Progress = &downloadEvent
+				return false, err
+			}
+			if finalPath != "" {
+				downloadEvent.FilePath = finalPath
+				observation.LastEvent = &downloadEvent
+				observation.Progress = &downloadEvent
+			}
 			observation.Matched = true
 			return true, nil
 		}
@@ -237,6 +262,317 @@ func collectDownloadEvent(ctx context.Context, client browserEventClient, opts d
 			return observation, err
 		}
 	}
+}
+
+func finalizeCompletedDownload(ctx context.Context, opts downloadWaitOptions, begin, progress downloadWaitEvent) (string, error) {
+	if !opts.FinalizeSuggestedFilename || progress.State != "completed" {
+		return progress.FilePath, nil
+	}
+	guid := begin.GUID
+	if strings.TrimSpace(guid) != guid || !plainDownloadFilename(guid) {
+		return "", fmt.Errorf("%w: browser supplied an unsafe download guid", errDownloadFinalization)
+	}
+
+	downloadDir := filepath.Clean(opts.DownloadDir)
+	sourcePath := filepath.Join(downloadDir, guid)
+	if filepath.Dir(sourcePath) != downloadDir {
+		return "", fmt.Errorf("%w: guid path escaped the download directory", errDownloadFinalization)
+	}
+	sourceInfo, err := waitForCompletedDownloadFile(ctx, sourcePath)
+	if err != nil {
+		return "", err
+	}
+
+	filename := sanitizeSuggestedDownloadFilename(begin.SuggestedFilename)
+	if filename == "" {
+		filename = sanitizeSuggestedDownloadFilename("download-" + guid)
+	}
+	if filename == "" {
+		filename = "download"
+	}
+	finalPath, err := retainDownloadWithoutOverwriteFrom(sourcePath, downloadDir, filename, sourceInfo, localDownloadFileOperations())
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errDownloadFinalization, err)
+	}
+	if filepath.Dir(filepath.Clean(finalPath)) != downloadDir {
+		return "", fmt.Errorf("%w: retained path escaped the download directory", errDownloadFinalization)
+	}
+	retainedInfo, err := os.Lstat(finalPath)
+	if err != nil {
+		return "", fmt.Errorf("%w: inspect retained download: %v", errDownloadFinalization, err)
+	}
+	if !retainedInfo.Mode().IsRegular() || !os.SameFile(sourceInfo, retainedInfo) {
+		return "", fmt.Errorf("%w: retained download changed before completion was reported", errDownloadFinalization)
+	}
+	return finalPath, nil
+}
+
+func waitForCompletedDownloadFile(ctx context.Context, sourcePath string) (os.FileInfo, error) {
+	deadline := time.NewTimer(downloadFinalizeVisibilityWait)
+	defer deadline.Stop()
+	poll := time.NewTicker(downloadFinalizeVisibilityPoll)
+	defer poll.Stop()
+
+	for {
+		info, visible, err := completedDownloadFileInfo(sourcePath)
+		if err != nil {
+			return nil, err
+		}
+		if visible {
+			return info, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline.C:
+			info, visible, err := completedDownloadFileInfo(sourcePath)
+			if err != nil {
+				return nil, err
+			}
+			if visible {
+				return info, nil
+			}
+			return nil, fmt.Errorf(
+				"%w: completed guid file did not become visible within %s",
+				errDownloadFinalization,
+				downloadFinalizeVisibilityWait,
+			)
+		case <-poll.C:
+		}
+	}
+}
+
+func completedDownloadFileInfo(sourcePath string) (os.FileInfo, bool, error) {
+	info, err := os.Lstat(sourcePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: inspect guid file: %v", errDownloadFinalization, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("%w: guid path is not a regular file", errDownloadFinalization)
+	}
+	return info, true, nil
+}
+
+func plainDownloadFilename(name string) bool {
+	return name != "" &&
+		name != "." &&
+		name != ".." &&
+		!strings.ContainsRune(name, '\x00') &&
+		!strings.ContainsAny(name, `/\`) &&
+		filepath.Base(name) == name
+}
+
+func sanitizeSuggestedDownloadFilename(suggested string) string {
+	filename := path.Base(strings.ReplaceAll(strings.TrimSpace(suggested), `\`, "/"))
+	if filename == "." || filename == ".." {
+		return ""
+	}
+	var sanitized strings.Builder
+	for _, r := range filename {
+		switch {
+		case unicode.IsControl(r), strings.ContainsRune(`<>:"|?*`, r):
+			sanitized.WriteRune('_')
+		default:
+			sanitized.WriteRune(r)
+		}
+	}
+	filename = strings.TrimRight(strings.TrimSpace(sanitized.String()), ". ")
+	if !plainDownloadFilename(filename) {
+		return ""
+	}
+	if windowsReservedDownloadFilename(filename) {
+		filename = "_" + filename
+	}
+	filename = boundedDownloadFilename(filename, "")
+	if !plainDownloadFilename(filename) {
+		return ""
+	}
+	return filename
+}
+
+func boundedDownloadFilename(filename, suffix string) string {
+	stem, extension := downloadFilenameParts(filename)
+	stemBudget := downloadFilenameMaxBytes - len(suffix) - len(extension)
+	if stemBudget < 1 {
+		stem = filename
+		extension = ""
+		stemBudget = downloadFilenameMaxBytes - len(suffix)
+	}
+	stem = strings.TrimRight(truncateUTF8Bytes(stem, stemBudget), ". ")
+	if stem == "" {
+		stem = truncateUTF8Bytes("download", stemBudget)
+	}
+	return stem + suffix + extension
+}
+
+func downloadFilenameParts(filename string) (string, string) {
+	extension := path.Ext(filename)
+	stem := strings.TrimSuffix(filename, extension)
+	if stem == "" || extension == "." || len(extension) > downloadExtensionMaxBytes {
+		return filename, ""
+	}
+	return stem, extension
+}
+
+func truncateUTF8Bytes(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end]
+}
+
+func windowsReservedDownloadFilename(filename string) bool {
+	stem := filename
+	if dot := strings.IndexByte(stem, '.'); dot >= 0 {
+		stem = stem[:dot]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
+	}
+}
+
+type downloadFileOperations struct {
+	lstat  func(string) (os.FileInfo, error)
+	link   func(string, string) error
+	remove func(string) error
+}
+
+func localDownloadFileOperations() downloadFileOperations {
+	return downloadFileOperations{
+		lstat:  os.Lstat,
+		link:   os.Link,
+		remove: os.Remove,
+	}
+}
+
+func retainDownloadWithoutOverwrite(sourcePath, downloadDir, filename string) (string, error) {
+	sourceInfo, err := os.Lstat(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("inspect guid file before retaining: %w", err)
+	}
+	if !sourceInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("guid path is not a regular file")
+	}
+	return retainDownloadWithoutOverwriteFrom(sourcePath, downloadDir, filename, sourceInfo, localDownloadFileOperations())
+}
+
+func retainDownloadWithoutOverwriteFrom(sourcePath, downloadDir, filename string, expectedSource os.FileInfo, fileOps downloadFileOperations) (string, error) {
+	if expectedSource == nil || !expectedSource.Mode().IsRegular() {
+		return "", fmt.Errorf("guid path is not a regular file")
+	}
+	currentSource, err := fileOps.lstat(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("revalidate guid file before retaining: %w", err)
+	}
+	if !currentSource.Mode().IsRegular() || !os.SameFile(expectedSource, currentSource) {
+		return "", fmt.Errorf("guid file changed before retaining")
+	}
+
+	filename = boundedDownloadFilename(filename, "")
+	if !plainDownloadFilename(filename) {
+		return "", fmt.Errorf("suggested filename is not a plain filename")
+	}
+	for collision := 0; collision < downloadFilenameMaxCollisions; collision++ {
+		suffix := ""
+		if collision > 0 {
+			suffix = fmt.Sprintf(" (%d)", collision)
+		}
+		candidateName := boundedDownloadFilename(filename, suffix)
+		candidatePath := filepath.Join(downloadDir, candidateName)
+		if filepath.Dir(candidatePath) != downloadDir {
+			return "", fmt.Errorf("suggested filename escaped the download directory")
+		}
+		if candidatePath == sourcePath {
+			currentSource, err := fileOps.lstat(sourcePath)
+			if err != nil {
+				return "", fmt.Errorf("revalidate retained guid file: %w", err)
+			}
+			if !currentSource.Mode().IsRegular() || !os.SameFile(expectedSource, currentSource) {
+				return "", fmt.Errorf("retained guid file changed")
+			}
+			return candidatePath, nil
+		}
+		if err := fileOps.link(sourcePath, candidatePath); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("retain completed download as %s: %w", candidateName, err)
+		}
+		if err := revalidateLinkedDownload(sourcePath, candidatePath, expectedSource, fileOps); err != nil {
+			rollbackErr := removeRetainedDownloadCandidate(candidatePath, expectedSource, fileOps)
+			if rollbackErr != nil {
+				return "", fmt.Errorf("%v (rollback failed: %v)", err, rollbackErr)
+			}
+			return "", err
+		}
+		if err := fileOps.remove(sourcePath); err != nil {
+			rollbackErr := removeRetainedDownloadCandidate(candidatePath, expectedSource, fileOps)
+			if rollbackErr != nil {
+				return "", fmt.Errorf("remove guid file after retaining %s: %v (rollback failed: %v)", candidateName, err, rollbackErr)
+			}
+			return "", fmt.Errorf("remove guid file after retaining %s: %w", candidateName, err)
+		}
+		retainedInfo, err := fileOps.lstat(candidatePath)
+		if err != nil {
+			return "", fmt.Errorf("revalidate retained download %s: %w", candidateName, err)
+		}
+		if !retainedInfo.Mode().IsRegular() || !os.SameFile(expectedSource, retainedInfo) {
+			return "", fmt.Errorf("retained download %s changed after removing guid file", candidateName)
+		}
+		return candidatePath, nil
+	}
+	return "", fmt.Errorf("retain completed download: too many filename collisions for %s", filename)
+}
+
+func revalidateLinkedDownload(sourcePath, candidatePath string, expectedSource os.FileInfo, fileOps downloadFileOperations) error {
+	currentSource, err := fileOps.lstat(sourcePath)
+	if err != nil {
+		return fmt.Errorf("revalidate guid file after linking: %w", err)
+	}
+	retainedInfo, err := fileOps.lstat(candidatePath)
+	if err != nil {
+		return fmt.Errorf("inspect retained download after linking: %w", err)
+	}
+	if !currentSource.Mode().IsRegular() || !retainedInfo.Mode().IsRegular() ||
+		!os.SameFile(expectedSource, currentSource) ||
+		!os.SameFile(expectedSource, retainedInfo) ||
+		!os.SameFile(currentSource, retainedInfo) {
+		return fmt.Errorf("guid file changed while retaining completed download")
+	}
+	return nil
+}
+
+func removeRetainedDownloadCandidate(candidatePath string, expectedSource os.FileInfo, fileOps downloadFileOperations) error {
+	current, err := fileOps.lstat(candidatePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect retained candidate before rollback: %w", err)
+	}
+	if !current.Mode().IsRegular() || !os.SameFile(expectedSource, current) {
+		return fmt.Errorf("refuse to remove changed retained candidate")
+	}
+	if err := fileOps.remove(candidatePath); err != nil {
+		return fmt.Errorf("remove retained candidate: %w", err)
+	}
+	return nil
 }
 
 func downloadWaitEventFromCDP(event cdp.Event) (downloadWaitEvent, bool) {
@@ -396,6 +732,16 @@ func downloadWaitError(ctx context.Context, targetID string, opts downloadWaitOp
 			"download_canceled",
 			"check_failed",
 			fmt.Sprintf("wait download observed a matching download for target %s, but it was canceled", targetID),
+			ExitCheckFailed,
+			downloadWaitRemediations(opts),
+			report,
+		)
+	}
+	if errors.Is(err, errDownloadFinalization) {
+		return commandErrorWithData(
+			"download_finalize_failed",
+			"check_failed",
+			fmt.Sprintf("wait download completed for target %s, but retaining the suggested filename failed: %v", targetID, err),
 			ExitCheckFailed,
 			downloadWaitRemediations(opts),
 			report,

@@ -53,22 +53,23 @@ type askCompletionHook func(
 ) webagent.Result
 
 type AskData struct {
-	SchemaVersion      string          `json:"schema_version"`
-	ConversationMode   string          `json:"conversation_mode"`
-	ProductMode        string          `json:"product_mode"`
-	Intelligence       string          `json:"intelligence"`
-	ThinkingPolicy     string          `json:"thinking_policy"`
-	MinimumThinking    string          `json:"minimum_thinking,omitempty"`
-	ModelPolicy        string          `json:"model_policy"`
-	Model              string          `json:"model,omitempty"`
-	Text               string          `json:"text"`
-	CompletionState    string          `json:"completion_state"`
-	ReadMode           string          `json:"read_mode"`
-	PromptFingerprint  string          `json:"prompt_fingerprint,omitempty"`
-	PromptCharacters   int             `json:"prompt_characters"`
-	DetailReadAttempts int             `json:"detail_read_attempts"`
-	Attachment         *AttachmentData `json:"attachment,omitempty"`
-	Metadata           map[string]any  `json:"metadata"`
+	SchemaVersion      string                   `json:"schema_version"`
+	ConversationMode   string                   `json:"conversation_mode"`
+	ProductMode        string                   `json:"product_mode"`
+	Intelligence       string                   `json:"intelligence"`
+	ThinkingPolicy     string                   `json:"thinking_policy"`
+	MinimumThinking    string                   `json:"minimum_thinking,omitempty"`
+	ModelPolicy        string                   `json:"model_policy"`
+	Model              string                   `json:"model,omitempty"`
+	Text               string                   `json:"text"`
+	CompletionState    string                   `json:"completion_state"`
+	ReadMode           string                   `json:"read_mode"`
+	PromptFingerprint  string                   `json:"prompt_fingerprint,omitempty"`
+	PromptCharacters   int                      `json:"prompt_characters"`
+	DetailReadAttempts int                      `json:"detail_read_attempts"`
+	Attachment         *AttachmentData          `json:"attachment,omitempty"`
+	Attachments        []ConversationAttachment `json:"attachments"`
+	Metadata           map[string]any           `json:"metadata"`
 }
 
 type composerObservation struct {
@@ -238,6 +239,7 @@ func Ask(
 		CompletionState:  "not_submitted",
 		ReadMode:         "not_started",
 		PromptCharacters: utf8.RuneCountInString(prompt),
+		Attachments:      []ConversationAttachment{},
 		Metadata:         map[string]any{},
 	}
 	notPerformed := notPerformedAction()
@@ -934,16 +936,11 @@ func Ask(
 				)
 			}
 			stored, _ := parseConversationDetailPayload(
-				ConversationDetailData{
-					SchemaVersion:   ConversationDetailSchemaVersion,
-					ConversationID:  conversationID,
-					CompletionState: "incomplete",
-					ReadMode:        browserReadMode,
-					Metadata: map[string]any{
-						"source":    "hydrated_conversation_detail",
-						"transport": "same_target_browser_fetch",
-					},
-				},
+				newConversationDetailData(
+					conversationID,
+					browserReadMode,
+					"same_target_browser_fetch",
+				),
 				payload,
 				response.StatusCode,
 			)
@@ -968,8 +965,10 @@ func Ask(
 				)
 			}
 			if stored.CompletionState == "terminal" &&
-				strings.TrimSpace(stored.Text) != "" {
+				(strings.TrimSpace(stored.Text) != "" ||
+					len(stored.Attachments) > 0) {
 				data.Text = stored.Text
+				data.Attachments = stored.Attachments
 				data.CompletionState = "terminal"
 				data.ReadMode = browserReadMode
 				data.Metadata["answer_source"] =
@@ -1587,6 +1586,11 @@ func fetchOneHydratedDetail(
 	template RequestTemplate,
 	conversationID string,
 ) (ConversationDetailData, *readFailure) {
+	data := newConversationDetailData(
+		conversationID,
+		browserReadMode,
+		"same_target_browser_fetch",
+	)
 	detailPath := "/backend-api/conversation/" +
 		url.PathEscape(conversationID)
 	response, failure := browserFetch(
@@ -1597,14 +1601,14 @@ func fetchOneHydratedDetail(
 		ConversationDetailRoute,
 	)
 	if failure != nil {
-		return ConversationDetailData{}, failure
+		return data, failure
 	}
 	var payload map[string]any
 	if err := decodeBoundedJSON(
 		strings.NewReader(response.Body),
 		&payload,
 	); err != nil {
-		return ConversationDetailData{}, &readFailure{
+		return data, &readFailure{
 			code:       "chatgpt_invalid_detail_response",
 			errClass:   "provider",
 			message:    "ChatGPT hydrated conversation detail was invalid",
@@ -1612,16 +1616,7 @@ func fetchOneHydratedDetail(
 		}
 	}
 	stored, parseFailure := parseConversationDetailPayload(
-		ConversationDetailData{
-			SchemaVersion:   ConversationDetailSchemaVersion,
-			ConversationID:  conversationID,
-			CompletionState: "incomplete",
-			ReadMode:        browserReadMode,
-			Metadata: map[string]any{
-				"source":    "hydrated_conversation_detail",
-				"transport": "same_target_browser_fetch",
-			},
-		},
+		data,
 		payload,
 		response.StatusCode,
 	)

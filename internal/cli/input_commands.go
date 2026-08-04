@@ -415,14 +415,16 @@ func (a *app) newClickCommand() *cobra.Command {
 				}
 			}
 			if waitDownload {
+				explicitDownloadDir := strings.TrimSpace(waitDownloadDir)
 				downloadOpts = downloadWaitOptions{
 					Criteria: downloadWaitCriteria{
 						URLContains:      strings.TrimSpace(waitDownloadURL),
 						FilenameContains: strings.TrimSpace(waitDownloadFilename),
 						State:            strings.TrimSpace(waitDownloadState),
 					},
-					DownloadDir: strings.TrimSpace(waitDownloadDir),
-					Redact:      waitDownloadRedact,
+					DownloadDir:               explicitDownloadDir,
+					Redact:                    waitDownloadRedact,
+					FinalizeSuggestedFilename: explicitDownloadDir != "",
 				}
 				if err := a.normalizeDownloadWaitOptions(&downloadOpts); err != nil {
 					return err

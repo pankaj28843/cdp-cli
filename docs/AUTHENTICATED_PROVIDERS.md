@@ -87,6 +87,15 @@ cdp workflow agent chatgpt conversations await <conversation-id> \
 Provider-specific `capabilities` output is the executable source of truth for
 which read, continue, delete, and auth operations are installed.
 
+ChatGPT hydrated detail exposes bounded current-assistant `attachments` with
+image/file kind and safe available metadata such as alt text, stable source,
+file identity, MIME type, byte size, and pixel dimensions. A finished current
+assistant containing only an attachment is a terminal answer; it is not a
+terminal-without-answer candidate. Signed URL query data and local or sandbox
+paths are not emitted in attachment metadata; a safe basename may still be
+reported as `file_name`. The direct Ask result returns that same safe attachment
+array when its terminal answer came from hydrated detail.
+
 When a ChatGPT conversation visibly ends with `Stopped thinking` and its
 compose stop control is absent or disabled, preserve its exact ID and treat it
 as terminal. Consume any assistant answer already present through list/detail.

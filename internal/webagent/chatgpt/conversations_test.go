@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -96,6 +97,40 @@ const terminalNoAnswerCandidateDetailPayload = `{
       "message":{
         "author":{"role":"user"},
         "content":{"content_type":"text","parts":["Review."]}
+      }
+    }
+  }
+}`
+
+const imageOnlyDetailPayload = `{
+  "conversation_id":"conversation-1",
+  "async_status":4,
+  "current_node":"answer",
+  "mapping":{
+    "answer":{
+      "parent":"prompt",
+      "message":{
+        "author":{"role":"assistant"},
+        "status":"finished_successfully",
+        "end_turn":true,
+        "content":{
+          "content_type":"multimodal_text",
+          "parts":[{
+            "content_type":"image_asset_pointer",
+            "asset_pointer":"sediment://file_synthetic_generated_image",
+            "size_bytes":2457600,
+            "width":1536,
+            "height":1024,
+            "alt_text":"A synthetic high-resolution generated image"
+          }]
+        }
+      }
+    },
+    "prompt":{
+      "parent":"",
+      "message":{
+        "author":{"role":"user"},
+        "content":{"content_type":"text","parts":["Generate an image."]}
       }
     }
   }
@@ -685,6 +720,853 @@ func TestDetailAndAwaitProveRenderedTerminalNoAnswer(t *testing.T) {
 				!result.Evidence.Target.Closed ||
 				result.Cleanup.State != webagent.CleanupClosed {
 				t.Fatalf("result=%+v data=%+v", result, data)
+			}
+		})
+	}
+}
+
+func TestDetailImageOnlyAssistantIsTerminalWithoutRenderedFallback(
+	t *testing.T,
+) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	client := newAuthenticatedReadBrowser(func(
+		expression string,
+		_ *testsupport.Browser,
+	) (any, error) {
+		switch {
+		case strings.Contains(expression, "signed_in:"):
+			return map[string]any{
+				"signed_in": true, "signed_out": false,
+			}, nil
+		case strings.Contains(expression, "const response = await fetch"):
+			return map[string]any{
+				"ok":          true,
+				"status_code": http.StatusOK,
+				"body":        imageOnlyDetailPayload,
+			}, nil
+		case strings.Contains(expression, "terminal_no_answer_reason"):
+			return map[string]any{
+				"route_matches":            true,
+				"conversation_id":          "conversation-1",
+				"text":                     "",
+				"prompt_candidates":        []any{"Generate an image."},
+				"is_streaming":             false,
+				"terminal_control_present": true,
+				"assistant_count":          1,
+				"user_message_count":       1,
+				"terminal_no_answer":       false,
+			}, nil
+		default:
+			return map[string]any{}, nil
+		}
+	})
+	engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	result := DetailConversation(context.Background(), ReadConfig{
+		Store:      newReadTestStore(t, now),
+		HTTPClient: fixedHTTPClient(http.StatusOK, imageOnlyDetailPayload),
+		BrowserConfig: &BrowserConfig{
+			Client: client, Engine: engine, Journal: journal,
+		},
+		Now: func() time.Time { return now },
+	}, "conversation-1")
+
+	data, ok := result.Data.(ConversationDetailData)
+	if !ok {
+		t.Fatalf("result data type = %T", result.Data)
+	}
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal detail data: %v", err)
+	}
+	var contract struct {
+		Attachments []struct {
+			Kind      string `json:"kind"`
+			Alt       string `json:"alt"`
+			Source    string `json:"source"`
+			SizeBytes int64  `json:"size_bytes"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(encoded, &contract); err != nil {
+		t.Fatalf("unmarshal detail contract: %v", err)
+	}
+	counts, _, _, _, _, _, _ := client.Snapshot()
+	terminalNoAnswer, _ := data.Metadata["terminal_no_answer_candidate"].(bool)
+	if !result.OK ||
+		result.State != webagent.StateTerminal ||
+		data.CompletionState != conversationCompletionTerminal ||
+		data.Text != "" ||
+		terminalNoAnswer ||
+		len(contract.Attachments) != 1 ||
+		contract.Attachments[0].Kind != "image" ||
+		contract.Attachments[0].Alt !=
+			"A synthetic high-resolution generated image" ||
+		contract.Attachments[0].Source !=
+			"sediment://file_synthetic_generated_image" ||
+		contract.Attachments[0].SizeBytes != 2457600 ||
+		contract.Attachments[0].Width != 1536 ||
+		contract.Attachments[0].Height != 1024 ||
+		counts["Target.createTarget"] != 0 ||
+		counts["Target.closeTarget"] != 0 ||
+		result.Evidence.Target != nil ||
+		result.Cleanup.State != webagent.CleanupNotRequired {
+		t.Fatalf(
+			"create=%d close=%d result=%+v data=%+v attachments=%+v",
+			counts["Target.createTarget"],
+			counts["Target.closeTarget"],
+			result,
+			data,
+			contract.Attachments,
+		)
+	}
+}
+
+func TestDetailImageOnlyAssistantBrowserFallbackClosesOnlyOwnedTarget(
+	t *testing.T,
+) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	client := newAuthenticatedReadBrowser(func(
+		expression string,
+		_ *testsupport.Browser,
+	) (any, error) {
+		switch {
+		case strings.Contains(expression, "signed_in:"):
+			return map[string]any{
+				"signed_in":  true,
+				"signed_out": false,
+			}, nil
+		case strings.Contains(expression, "const response = await fetch"):
+			return map[string]any{
+				"ok":          true,
+				"status_code": http.StatusOK,
+				"body":        imageOnlyDetailPayload,
+			}, nil
+		default:
+			return map[string]any{}, nil
+		}
+	})
+	engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	result := DetailConversation(context.Background(), ReadConfig{
+		Store: newReadTestStore(t, now),
+		HTTPClient: fixedHTTPClient(
+			http.StatusServiceUnavailable,
+			"",
+		),
+		BrowserConfig: &BrowserConfig{
+			Client:  client,
+			Engine:  engine,
+			Journal: journal,
+		},
+		Now: func() time.Time { return now },
+	}, "conversation-1")
+
+	data, ok := result.Data.(ConversationDetailData)
+	counts, _, _, _, _, _, targets := client.Snapshot()
+	_, userTargetPreserved := targets["user-page"]
+	if !ok ||
+		!result.OK ||
+		result.State != webagent.StateTerminal ||
+		data.CompletionState != conversationCompletionTerminal ||
+		len(data.Attachments) != 1 ||
+		data.Attachments[0].Kind != "image" ||
+		counts["Target.createTarget"] != 1 ||
+		counts["Target.closeTarget"] != 1 ||
+		len(targets) != 1 ||
+		!userTargetPreserved ||
+		result.Evidence.Target == nil ||
+		!result.Evidence.Target.Owned ||
+		!result.Evidence.Target.Closed ||
+		result.Evidence.Target.TargetID == "user-page" ||
+		result.Cleanup.State != webagent.CleanupClosed ||
+		result.Cleanup.TargetID != result.Evidence.Target.TargetID {
+		t.Fatalf(
+			"create=%d close=%d targets=%v result=%+v data=%+v",
+			counts["Target.createTarget"],
+			counts["Target.closeTarget"],
+			targets,
+			result,
+			data,
+		)
+	}
+}
+
+func TestConversationAttachmentsExposeSafeFileMetadata(t *testing.T) {
+	message := map[string]any{
+		"content": map[string]any{
+			"content_type": "multimodal_text",
+			"parts": []any{
+				"[Download](sandbox:/mnt/data/synthetic-report.csv)",
+			},
+		},
+		"metadata": map[string]any{
+			"attachments": []any{
+				map[string]any{
+					"content_type":   "file_asset_pointer",
+					"file_id":        "file_synthetic_report",
+					"file_name":      "synthetic-report.csv",
+					"mime_type":      "text/csv",
+					"size_bytes":     "128",
+					"download_url":   "https://chatgpt.com/backend-api/estuary/content?sig=private-test-value",
+					"sandbox_path":   "/mnt/data/synthetic-report.csv",
+					"irrelevant_key": "ignored",
+				},
+			},
+		},
+	}
+
+	attachments, truncated := conversationAttachments(message)
+	if truncated || len(attachments) != 1 {
+		t.Fatalf("attachments=%+v truncated=%v", attachments, truncated)
+	}
+	metadata := attachments[0]
+	if metadata.Kind != "file" ||
+		metadata.FileID != "file_synthetic_report" ||
+		metadata.FileName != "synthetic-report.csv" ||
+		metadata.MIMEType != "text/csv" ||
+		metadata.SizeBytes != 128 ||
+		metadata.Source !=
+			"https://chatgpt.com/backend-api/estuary/content" ||
+		strings.Contains(metadata.Source, "private-test-value") ||
+		strings.Contains(metadata.Source, "/mnt/data/") {
+		t.Fatalf("metadata=%+v", metadata)
+	}
+}
+
+func TestStableAttachmentSourceRejectsPrivateLocations(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "signed HTTPS query and fragment are removed",
+			raw:  "https://chatgpt.com/backend-api/files/file-1/download?sig=private#private",
+			want: "https://chatgpt.com/backend-api/files/file-1/download",
+		},
+		{
+			name: "same-origin provider route is stable",
+			raw:  "/backend-api/files/file-1/download",
+			want: "/backend-api/files/file-1/download",
+		},
+		{
+			name: "sandbox URI is opaque",
+			raw:  "sandbox:/mnt/data/private-report.csv",
+			want: "sandbox_artifact",
+		},
+		{
+			name: "sandbox path is opaque",
+			raw:  "/mnt/data/private-report.csv",
+			want: "sandbox_artifact",
+		},
+		{name: "macOS home path", raw: "/Users/example/private.png"},
+		{name: "macOS private path", raw: "/private/var/folders/private.png"},
+		{name: "Linux home path", raw: "/" + "home/example/private.png"},
+		{name: "file URL", raw: "file:///private/var/private.png"},
+		{name: "relative filesystem path", raw: "../../private.png"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := stableAttachmentSource(test.raw); got != test.want {
+				t.Fatalf(
+					"stableAttachmentSource(%q) = %q, want %q",
+					test.raw,
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
+func TestConversationAttachmentMetadataDoesNotLeakPrivateLocations(
+	t *testing.T,
+) {
+	attachment, ok := conversationAttachmentFromRaw(map[string]any{
+		"content_type":        "image_asset_pointer",
+		"image_asset_pointer": "https://chatgpt.com/backend-api/files/file-1/download?sig=private-value",
+		"id":                  "sandbox:/mnt/data/private-id",
+		"file_name":           "/Users/example/private-image.png",
+		"alt_text":            "sandbox:/mnt/data/private-image.png",
+		"width":               float64(1536),
+		"height":              float64(1024),
+	}, "")
+	if !ok {
+		t.Fatal("safe attachment metadata was discarded")
+	}
+	encoded, err := json.Marshal(attachment)
+	if err != nil {
+		t.Fatalf("marshal attachment: %v", err)
+	}
+	serialized := string(encoded)
+	if attachment.Source !=
+		"https://chatgpt.com/backend-api/files/file-1/download" ||
+		attachment.FileID != "" ||
+		attachment.FileName != "private-image.png" ||
+		attachment.Alt != "" ||
+		strings.Contains(serialized, "private-value") ||
+		strings.Contains(serialized, "sandbox:") ||
+		strings.Contains(serialized, "/mnt/data/") ||
+		strings.Contains(serialized, "/Users/") {
+		t.Fatalf("attachment leaked private metadata: %s", serialized)
+	}
+}
+
+func TestConversationAttachmentAltDoesNotExposeEmbeddedSignedURL(
+	t *testing.T,
+) {
+	attachment, ok := conversationAttachmentFromRaw(map[string]any{
+		"content_type":  "image_asset_pointer",
+		"asset_pointer": "sediment://file_safe_image",
+		"alt_text": "Open https://files.example.test/image.png" +
+			"?sig=private-alt-value to download",
+	}, "")
+	if !ok {
+		t.Fatal("safe image pointer was discarded")
+	}
+	encoded, err := json.Marshal(attachment)
+	if err != nil {
+		t.Fatalf("marshal attachment: %v", err)
+	}
+	if attachment.Alt != "" ||
+		strings.Contains(string(encoded), "private-alt-value") ||
+		strings.Contains(string(encoded), "?sig=") {
+		t.Fatalf("attachment leaked signed alt URL: %s", encoded)
+	}
+}
+
+func TestConversationAttachmentsMergePartialStableIdentities(t *testing.T) {
+	byIDAndSource := map[string]any{
+		"content_type":  "file_asset_pointer",
+		"file_id":       "file_synthetic_shared",
+		"asset_pointer": "sediment://file_synthetic_shared",
+	}
+	byIDAndName := map[string]any{
+		"content_type": "file_asset_pointer",
+		"file_id":      "file_synthetic_shared",
+		"file_name":    "synthetic-shared.pdf",
+		"mime_type":    "application/pdf",
+	}
+	bySourceAndSize := map[string]any{
+		"content_type":  "file_asset_pointer",
+		"asset_pointer": "sediment://file_synthetic_shared",
+		"size_bytes":    float64(4096),
+		"alt_text":      "Synthetic shared report",
+	}
+	orders := [][]any{
+		{byIDAndSource, byIDAndName, bySourceAndSize},
+		{bySourceAndSize, byIDAndName, byIDAndSource},
+	}
+	var firstJSON string
+	for index, values := range orders {
+		attachments, truncated := conversationAttachments(map[string]any{
+			"metadata": map[string]any{"attachments": values},
+		})
+		if truncated || len(attachments) != 1 {
+			t.Fatalf(
+				"order=%d attachments=%+v truncated=%v",
+				index,
+				attachments,
+				truncated,
+			)
+		}
+		attachment := attachments[0]
+		if attachment.Kind != "file" ||
+			attachment.FileID != "file_synthetic_shared" ||
+			attachment.Source != "sediment://file_synthetic_shared" ||
+			attachment.FileName != "synthetic-shared.pdf" ||
+			attachment.MIMEType != "application/pdf" ||
+			attachment.SizeBytes != 4096 ||
+			attachment.Alt != "Synthetic shared report" {
+			t.Fatalf("order=%d attachment=%+v", index, attachment)
+		}
+		encoded, err := json.Marshal(attachment)
+		if err != nil {
+			t.Fatalf("marshal order %d: %v", index, err)
+		}
+		if index == 0 {
+			firstJSON = string(encoded)
+		} else if string(encoded) != firstJSON {
+			t.Fatalf(
+				"order-dependent merge:\nfirst=%s\nnext=%s",
+				firstJSON,
+				encoded,
+			)
+		}
+	}
+}
+
+func TestConversationAttachmentsDoNotMergeGenericSignedDownloadRoutes(
+	t *testing.T,
+) {
+	attachments, truncated := conversationAttachments(map[string]any{
+		"content": map[string]any{
+			"parts": []any{
+				map[string]any{
+					"content_type": "image_asset_pointer",
+					"download_url": "https://chatgpt.com/backend-api/estuary/content?sig=first-private-value",
+					"width":        float64(1024),
+					"height":       float64(1024),
+				},
+				map[string]any{
+					"content_type": "image_asset_pointer",
+					"download_url": "https://chatgpt.com/backend-api/estuary/content?sig=second-private-value",
+					"width":        float64(1024),
+					"height":       float64(1024),
+				},
+			},
+		},
+	})
+	if truncated || len(attachments) != 2 {
+		t.Fatalf("attachments=%+v truncated=%v", attachments, truncated)
+	}
+	encoded, err := json.Marshal(attachments)
+	if err != nil {
+		t.Fatalf("marshal attachments: %v", err)
+	}
+	if strings.Contains(string(encoded), "private-value") ||
+		strings.Contains(string(encoded), "sig=") {
+		t.Fatalf("attachments leaked signed query data: %s", encoded)
+	}
+}
+
+func TestConversationAttachmentsPreservePrivateHTTPSIdentityAcrossPermutations(
+	t *testing.T,
+) {
+	first := map[string]any{
+		"content_type": "image_asset_pointer",
+		"download_url": "https://files.example.test/download" +
+			"?asset=first-private-value&sig=first-private-signature",
+		"alt_text": "First generated image",
+		"width":    float64(1200),
+		"height":   float64(800),
+	}
+	firstDetails := map[string]any{
+		"content_type": "image_asset_pointer",
+		"download_url": "https://files.example.test/download" +
+			"?asset=first-private-value&sig=first-private-signature",
+		"mime_type": "image/png",
+	}
+	second := map[string]any{
+		"content_type": "image_asset_pointer",
+		"download_url": "https://files.example.test/download" +
+			"?asset=second-private-value&sig=second-private-signature",
+		"alt_text": "Second generated image",
+		"width":    float64(1200),
+		"height":   float64(800),
+	}
+	orders := [][]any{
+		{first, firstDetails, second},
+		{first, second, firstDetails},
+		{firstDetails, first, second},
+		{firstDetails, second, first},
+		{second, first, firstDetails},
+		{second, firstDetails, first},
+	}
+
+	var firstJSON string
+	for index, values := range orders {
+		attachments, truncated := conversationAttachments(map[string]any{
+			"content": map[string]any{"parts": values},
+		})
+		if truncated || len(attachments) != 2 {
+			t.Fatalf(
+				"permutation=%d attachments=%+v truncated=%v",
+				index,
+				attachments,
+				truncated,
+			)
+		}
+		alts := map[string]bool{}
+		for _, attachment := range attachments {
+			if attachment.Source != "https://files.example.test/download" {
+				t.Fatalf(
+					"permutation=%d source=%q",
+					index,
+					attachment.Source,
+				)
+			}
+			alts[attachment.Alt] = true
+		}
+		if !alts["First generated image"] ||
+			!alts["Second generated image"] {
+			t.Fatalf("permutation=%d attachments=%+v", index, attachments)
+		}
+		encoded, err := json.Marshal(attachments)
+		if err != nil {
+			t.Fatalf("marshal permutation %d: %v", index, err)
+		}
+		serialized := string(encoded)
+		for _, privateValue := range []string{
+			"first-private-value",
+			"second-private-value",
+			"first-private-signature",
+			"second-private-signature",
+			"asset=",
+			"sig=",
+		} {
+			if strings.Contains(serialized, privateValue) {
+				t.Fatalf(
+					"permutation=%d leaked %q: %s",
+					index,
+					privateValue,
+					serialized,
+				)
+			}
+		}
+		if index == 0 {
+			firstJSON = serialized
+		} else if serialized != firstJSON {
+			t.Fatalf(
+				"order-dependent private identity output:\nfirst=%s\nnext=%s",
+				firstJSON,
+				serialized,
+			)
+		}
+	}
+}
+
+func TestConversationAttachmentsDoNotMergeConflictingIdentityBridge(
+	t *testing.T,
+) {
+	assetA := map[string]any{
+		"content_type":  "file_asset_pointer",
+		"file_id":       "file_asset_a",
+		"asset_pointer": "sediment://source_asset_a",
+		"file_name":     "asset-a.pdf",
+	}
+	assetB := map[string]any{
+		"content_type":  "file_asset_pointer",
+		"file_id":       "file_asset_b",
+		"asset_pointer": "sediment://source_asset_b",
+		"file_name":     "asset-b.pdf",
+	}
+	conflictingBridge := map[string]any{
+		"content_type":  "file_asset_pointer",
+		"file_id":       "file_asset_a",
+		"asset_pointer": "sediment://source_asset_b",
+		"alt_text":      "Conflicting bridge record",
+	}
+	orders := [][]any{
+		{assetA, assetB, conflictingBridge},
+		{assetA, conflictingBridge, assetB},
+		{assetB, assetA, conflictingBridge},
+		{assetB, conflictingBridge, assetA},
+		{conflictingBridge, assetA, assetB},
+		{conflictingBridge, assetB, assetA},
+	}
+
+	var firstJSON string
+	for index, values := range orders {
+		attachments, truncated := conversationAttachments(map[string]any{
+			"metadata": map[string]any{"attachments": values},
+		})
+		if truncated || len(attachments) != 3 {
+			t.Fatalf(
+				"permutation=%d attachments=%+v truncated=%v",
+				index,
+				attachments,
+				truncated,
+			)
+		}
+		identities := map[string]bool{}
+		for _, attachment := range attachments {
+			identities[attachment.FileID+"|"+attachment.Source] = true
+		}
+		for _, identity := range []string{
+			"file_asset_a|sediment://source_asset_a",
+			"file_asset_b|sediment://source_asset_b",
+			"file_asset_a|sediment://source_asset_b",
+		} {
+			if !identities[identity] {
+				t.Fatalf(
+					"permutation=%d missing identity %q: %+v",
+					index,
+					identity,
+					attachments,
+				)
+			}
+		}
+		encoded, err := json.Marshal(attachments)
+		if err != nil {
+			t.Fatalf("marshal permutation %d: %v", index, err)
+		}
+		if index == 0 {
+			firstJSON = string(encoded)
+		} else if string(encoded) != firstJSON {
+			t.Fatalf(
+				"order-dependent conflict output:\nfirst=%s\nnext=%s",
+				firstJSON,
+				encoded,
+			)
+		}
+	}
+}
+
+func TestConversationAttachmentsKeepDeterministicOutputBounded(t *testing.T) {
+	values := make([]any, 0, maxConversationAttachments+2)
+	for index := 0; index < maxConversationAttachments+2; index++ {
+		values = append(values, map[string]any{
+			"content_type":  "file_asset_pointer",
+			"file_id":       fmt.Sprintf("file_%03d", index),
+			"asset_pointer": fmt.Sprintf("sediment://source_%03d", index),
+		})
+	}
+	reversed := append([]any(nil), values...)
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
+	}
+
+	var firstJSON string
+	for index, orderedValues := range [][]any{values, reversed} {
+		attachments, truncated := conversationAttachments(map[string]any{
+			"metadata": map[string]any{"attachments": orderedValues},
+		})
+		if !truncated || len(attachments) != maxConversationAttachments {
+			t.Fatalf(
+				"permutation=%d attachments=%d truncated=%v",
+				index,
+				len(attachments),
+				truncated,
+			)
+		}
+		encoded, err := json.Marshal(attachments)
+		if err != nil {
+			t.Fatalf("marshal permutation %d: %v", index, err)
+		}
+		if index == 0 {
+			firstJSON = string(encoded)
+		} else if string(encoded) != firstJSON {
+			t.Fatalf(
+				"order-dependent bounded output:\nfirst=%s\nnext=%s",
+				firstJSON,
+				encoded,
+			)
+		}
+	}
+}
+
+func TestConversationAttachmentsPreserveObservedDimensionPairs(
+	t *testing.T,
+) {
+	tests := []struct {
+		name   string
+		first  [2]int
+		second [2]int
+	}{
+		{
+			name:   "crossed complete dimensions",
+			first:  [2]int{1920, 800},
+			second: [2]int{1280, 1080},
+		},
+		{
+			name:   "complete and wider partial dimensions",
+			first:  [2]int{1920, 1080},
+			second: [2]int{2560, 0},
+		},
+		{
+			name:   "complementary partial dimensions",
+			first:  [2]int{2560, 0},
+			second: [2]int{0, 1440},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first := map[string]any{
+				"content_type": "image_asset_pointer",
+				"file_id":      "file_shared_image",
+				"width":        float64(test.first[0]),
+				"height":       float64(test.first[1]),
+			}
+			second := map[string]any{
+				"content_type": "image_asset_pointer",
+				"file_id":      "file_shared_image",
+				"width":        float64(test.second[0]),
+				"height":       float64(test.second[1]),
+			}
+			orders := [][]any{{first, second}, {second, first}}
+			observed := map[[2]int]bool{
+				test.first:  true,
+				test.second: true,
+			}
+			var firstJSON string
+			for index, values := range orders {
+				attachments, truncated := conversationAttachments(map[string]any{
+					"content": map[string]any{"parts": values},
+				})
+				if truncated || len(attachments) != 1 {
+					t.Fatalf(
+						"permutation=%d attachments=%+v truncated=%v",
+						index,
+						attachments,
+						truncated,
+					)
+				}
+				dimensions := [2]int{
+					attachments[0].Width,
+					attachments[0].Height,
+				}
+				if !observed[dimensions] {
+					t.Fatalf(
+						"permutation=%d invented dimensions=%v, observed=%v",
+						index,
+						dimensions,
+						observed,
+					)
+				}
+				encoded, err := json.Marshal(attachments)
+				if err != nil {
+					t.Fatalf("marshal permutation %d: %v", index, err)
+				}
+				if index == 0 {
+					firstJSON = string(encoded)
+				} else if string(encoded) != firstJSON {
+					t.Fatalf(
+						"order-dependent dimensions:\nfirst=%s\nnext=%s",
+						firstJSON,
+						encoded,
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestStableAttachmentAltRejectsSignedURIsAndLocalPaths(t *testing.T) {
+	privateValues := []string{
+		"Open s3://private-bucket/image.png?X-Amz-Signature=private-value",
+		"Open ftp://files.example.test/image.png?token=private-value",
+		"Open custom+asset:item?signature=private-value",
+		"Open file:/Volumes/External/private-image.png",
+		"Rendered from /Volumes/External/private-image.png",
+		"Rendered from /opt/project/private-image.png",
+		`Rendered from C:\workspace\private-image.png`,
+		"Rendered from D:/workspace/private-image.png",
+		`Rendered from \\server\share\private-image.png`,
+		"Rendered from //server/share/private-image.png",
+		"Rendered from ~/private-image.png",
+	}
+	for _, value := range privateValues {
+		if got := stableAttachmentAlt(value); got != "" {
+			t.Errorf("stableAttachmentAlt(%q) = %q, want empty", value, got)
+		}
+	}
+
+	ordinaryProse := []string{
+		"A blue/green deployment diagram",
+		"A comparison of Windows, macOS, and network storage",
+		"Volume 2 cover art",
+		"Choose yes/no in the illustrated dialog",
+		"A cinematic 16/9 landscape image",
+	}
+	for _, value := range ordinaryProse {
+		if got := stableAttachmentAlt(value); got != value {
+			t.Errorf("stableAttachmentAlt(%q) = %q, want unchanged", value, got)
+		}
+	}
+}
+
+func TestConversationDetailTransportsReturnEmptyAttachmentArrays(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		config      func(*testing.T) ReadConfig
+		wantTarget  bool
+		wantCleanup webagent.CleanupState
+	}{
+		{
+			name: "direct",
+			config: func(t *testing.T) ReadConfig {
+				return ReadConfig{
+					Store:      newReadTestStore(t, now),
+					HTTPClient: fixedHTTPClient(http.StatusOK, terminalDetailPayload),
+					Now:        func() time.Time { return now },
+				}
+			},
+			wantCleanup: webagent.CleanupNotRequired,
+		},
+		{
+			name: "headed browser fallback",
+			config: func(t *testing.T) ReadConfig {
+				client := newAuthenticatedReadBrowser(func(
+					expression string,
+					_ *testsupport.Browser,
+				) (any, error) {
+					switch {
+					case strings.Contains(expression, "signed_in:"):
+						return map[string]any{
+							"signed_in":  true,
+							"signed_out": false,
+						}, nil
+					case strings.Contains(expression, "const response = await fetch"):
+						return map[string]any{
+							"ok":          true,
+							"status_code": http.StatusOK,
+							"body":        terminalDetailPayload,
+						}, nil
+					default:
+						return map[string]any{}, nil
+					}
+				})
+				engine, journal, err := testsupport.NewRuntime(
+					t.TempDir(),
+					client,
+				)
+				if err != nil {
+					t.Fatalf("NewRuntime: %v", err)
+				}
+				return ReadConfig{
+					Store: newReadTestStore(t, now),
+					HTTPClient: fixedHTTPClient(
+						http.StatusServiceUnavailable,
+						"",
+					),
+					BrowserConfig: &BrowserConfig{
+						Client:  client,
+						Engine:  engine,
+						Journal: journal,
+					},
+					Now: func() time.Time { return now },
+				}
+			},
+			wantTarget:  true,
+			wantCleanup: webagent.CleanupClosed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := DetailConversation(
+				context.Background(),
+				test.config(t),
+				"conversation-1",
+			)
+			data, ok := result.Data.(ConversationDetailData)
+			if !ok || !result.OK || result.State != webagent.StateTerminal {
+				t.Fatalf("result=%+v data=%+v", result, data)
+			}
+			if data.Attachments == nil || len(data.Attachments) != 0 {
+				t.Fatalf("attachments=%#v", data.Attachments)
+			}
+			encoded, err := json.Marshal(data)
+			if err != nil {
+				t.Fatalf("marshal detail data: %v", err)
+			}
+			if !strings.Contains(string(encoded), `"attachments":[]`) {
+				t.Fatalf("detail JSON omitted empty attachments: %s", encoded)
+			}
+			if (result.Evidence.Target != nil) != test.wantTarget ||
+				result.Cleanup.State != test.wantCleanup {
+				t.Fatalf("result=%+v", result)
+			}
+			if result.Evidence.Target != nil &&
+				!result.Evidence.Target.Closed {
+				t.Fatalf("owned target was not closed: %+v", result.Evidence.Target)
 			}
 		})
 	}

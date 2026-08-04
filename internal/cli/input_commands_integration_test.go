@@ -178,6 +178,10 @@ func TestClickWaitDownloadJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	downloadDir := t.TempDir()
+	guidPath := filepath.Join(downloadDir, "click-download-1")
+	if err := os.WriteFile(guidPath, []byte("click report bytes"), 0o600); err != nil {
+		t.Fatalf("write GUID download fixture: %v", err)
+	}
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"click", "a#download", "--target", "download-page", "--wait-download", "--wait-download-url", "/download/click-report.csv", "--wait-download-filename", "click-report", "--download-dir", downloadDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
@@ -237,7 +241,8 @@ func TestClickWaitDownloadJSON(t *testing.T) {
 	if got.DownloadEvent.Kind != "will-begin" || got.DownloadEvent.GUID != "click-download-1" || got.DownloadEvent.SuggestedFilename != "click-report.csv" || strings.Contains(got.DownloadEvent.URL, "token=abc") {
 		t.Fatalf("click wait download event = %+v, want redacted will-begin event", got.DownloadEvent)
 	}
-	if got.DownloadProgress.State != "completed" || got.DownloadProgress.TotalBytes != 24 || got.DownloadProgress.ReceivedBytes != 24 || got.DownloadProgress.FilePath != "/tmp/cdp-downloads/click-download-1" {
+	wantPath := filepath.Join(downloadDir, "click-report.csv")
+	if got.DownloadProgress.State != "completed" || got.DownloadProgress.TotalBytes != 24 || got.DownloadProgress.ReceivedBytes != 24 || got.DownloadProgress.FilePath != wantPath {
 		t.Fatalf("click wait download progress = %+v, want completed progress", got.DownloadProgress)
 	}
 	if got.Download.GUID != "click-download-1" || got.Download.SuggestedFilename != "click-report.csv" || got.Download.State != "completed" || !got.Download.Completed || got.Download.ReceivedBytes != 24 || strings.Contains(got.Download.URL, "token=abc") {
@@ -245,6 +250,147 @@ func TestClickWaitDownloadJSON(t *testing.T) {
 	}
 	if len(got.NextCommands) == 0 || !strings.HasPrefix(got.NextCommands[0], "ls -lah ") {
 		t.Fatalf("click wait download next commands = %+v, want download directory listing", got.NextCommands)
+	}
+	if content, err := os.ReadFile(wantPath); err != nil {
+		t.Fatalf("read retained click download: %v", err)
+	} else if string(content) != "click report bytes" {
+		t.Errorf("retained click download = %q, want click report bytes", content)
+	}
+	if _, err := os.Lstat(guidPath); !os.IsNotExist(err) {
+		t.Errorf("GUID path still exists after click download finalization: %v", err)
+	}
+}
+
+func TestClickWaitDownloadRetainsSafeSuggestedFilenameJSON(t *testing.T) {
+	tests := []struct {
+		name              string
+		suggestedFilename string
+		wantFilename      string
+		existingFilename  string
+	}{
+		{
+			name:              "real ChatGPT image filename",
+			suggestedFilename: "ChatGPT Image Aug 4, 2026, 04_14_48 AM.png",
+			wantFilename:      "ChatGPT Image Aug 4, 2026, 04_14_48 AM.png",
+		},
+		{
+			name:              "existing filename is not overwritten",
+			suggestedFilename: "report.png",
+			wantFilename:      "report (1).png",
+			existingFilename:  "report.png",
+		},
+		{
+			name:              "path traversal is reduced to a plain filename",
+			suggestedFilename: `../../nested\escape.png`,
+			wantFilename:      "escape.png",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			downloadDir := t.TempDir()
+			guid := "click-download-guid"
+			guidPath := filepath.Join(downloadDir, guid)
+			if err := os.WriteFile(guidPath, []byte("new image bytes"), 0o600); err != nil {
+				t.Fatalf("write GUID download fixture: %v", err)
+			}
+			if tt.existingFilename != "" {
+				if err := os.WriteFile(filepath.Join(downloadDir, tt.existingFilename), []byte("existing image bytes"), 0o600); err != nil {
+					t.Fatalf("write collision fixture: %v", err)
+				}
+			}
+
+			server := newFakeCDPServer(t, []map[string]any{
+				{
+					"targetId":         "click-download-finalize-page",
+					"type":             "page",
+					"title":            "Download App",
+					"url":              "https://example.test/downloads",
+					"attached":         false,
+					"downloadOnClick":  true,
+					"downloadGUID":     guid,
+					"downloadURL":      "https://example.test/download/image.png",
+					"downloadFilename": tt.suggestedFilename,
+					"downloadFilePath": guidPath,
+				},
+			})
+			t.Cleanup(server.Close)
+			startFakeDaemon(t, server, "browser_url")
+
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), []string{
+				"click", "a#download",
+				"--target", "click-download-finalize-page",
+				"--wait-download",
+				"--download-dir", downloadDir,
+				"--json",
+			}, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitOK {
+				t.Fatalf("click wait download exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+			}
+
+			var got struct {
+				DownloadWait struct {
+					Progress struct {
+						FilePath string `json:"file_path"`
+					} `json:"progress"`
+					LastEvent struct {
+						FilePath string `json:"file_path"`
+					} `json:"last_event"`
+				} `json:"download_wait"`
+				DownloadProgress struct {
+					FilePath string `json:"file_path"`
+				} `json:"download_progress"`
+				Download struct {
+					FilePath string `json:"file_path"`
+				} `json:"download"`
+				LastDownloadEvent struct {
+					FilePath string `json:"file_path"`
+				} `json:"last_download_event"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("click wait download output is invalid JSON: %v", err)
+			}
+
+			wantPath := filepath.Join(downloadDir, tt.wantFilename)
+			paths := []struct {
+				field string
+				path  string
+			}{
+				{field: "download_wait.progress.file_path", path: got.DownloadWait.Progress.FilePath},
+				{field: "download_wait.last_event.file_path", path: got.DownloadWait.LastEvent.FilePath},
+				{field: "download_progress.file_path", path: got.DownloadProgress.FilePath},
+				{field: "download.file_path", path: got.Download.FilePath},
+				{field: "last_download_event.file_path", path: got.LastDownloadEvent.FilePath},
+			}
+			for _, reported := range paths {
+				if reported.path != wantPath {
+					t.Errorf("%s = %q, want finalized path %q", reported.field, reported.path, wantPath)
+				}
+				if filepath.Dir(filepath.Clean(reported.path)) != filepath.Clean(downloadDir) {
+					t.Errorf("%s = %q escaped download dir %q", reported.field, reported.path, downloadDir)
+				}
+			}
+			if _, err := os.Stat(guidPath); !os.IsNotExist(err) {
+				t.Errorf("GUID path still exists after finalization: %v", err)
+			}
+			content, err := os.ReadFile(wantPath)
+			if err != nil {
+				t.Fatalf("read finalized download: %v", err)
+			}
+			if string(content) != "new image bytes" {
+				t.Errorf("finalized content = %q, want new image bytes", content)
+			}
+			if tt.existingFilename != "" {
+				existing, err := os.ReadFile(filepath.Join(downloadDir, tt.existingFilename))
+				if err != nil {
+					t.Fatalf("read collision fixture: %v", err)
+				}
+				if string(existing) != "existing image bytes" {
+					t.Errorf("existing collision file was replaced: %q", existing)
+				}
+			}
+		})
 	}
 }
 
