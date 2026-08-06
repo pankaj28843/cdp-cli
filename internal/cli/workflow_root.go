@@ -20,6 +20,7 @@ func (a *app) newWorkflowCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowLinkedInCommand())
 	cmd.AddCommand(a.newWorkflowArxivCommand())
 	cmd.AddCommand(a.newWorkflowPDFToMarkdownCommand())
+	cmd.AddCommand(a.newWorkflowGoogleTranslateCommand())
 	cmd.AddCommand(a.newWorkflowGoogleMapsDirectionsCommand())
 	cmd.AddCommand(a.newWorkflowConsoleErrorsCommand())
 	cmd.AddCommand(a.newWorkflowNetworkFailuresCommand())

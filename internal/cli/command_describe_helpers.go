@@ -677,6 +677,12 @@ func commandExamples(path string) []string {
 			"cdp workflow pdf-to-markdown tmp/downloads/paper.pdf --out-dir tmp/paper-markdown --json",
 			"pdf_target=\"$(cdp --browser-mode headed open 'https://example.com/paper' --task-id pdf-download --json | jq -r '.page.target_id')\" && cdp --browser-mode headed click 'Download PDF' --by role --role link --target \"$pdf_target\" --wait-download --download-dir tmp/downloads --json && cdp --browser-mode headed page close --target \"$pdf_target\" --wait-gone --json && cdp workflow pdf-to-markdown tmp/downloads/paper.pdf --json",
 		},
+		"cdp workflow google-translate": {
+			"cdp --browser-mode headed workflow google-translate --text 'Dette er en kort test.' --source da --target en --json",
+			"cdp --browser-mode headed workflow google-translate --file \"$HOME/Downloads/Pelvic floor training confirmation.pdf\" --target en --out-dir tmp/translated-scan --wait 5m --json",
+			"cdp --browser-mode headed workflow google-translate --url 'https://da.wikipedia.org/wiki/Danmark' --target en --output tmp/denmark.txt --json",
+			"cdp --browser-mode headed workflow google-translate --text-file tmp/danish.txt --source da --target en --chunk-size 4800 --wait 5m --json",
+		},
 		"cdp workflow google-maps-directions": {
 			"cdp --browser-mode headed workflow google-maps-directions 'Kongens Lyngby, Denmark' 'Stege, Denmark' --json",
 			"cdp --browser-mode headed workflow google-maps-directions 'Stege, Denmark' 'Møn Is, Hovgårdsvej 4, 4780 Stege, Denmark' --wait 30s --json",
