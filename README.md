@@ -554,10 +554,13 @@ the corpus with `CDP_E2E_URL_FILE` containing 10–20 unique, fragment-free
 HTTP(S) URLs. `CDP_E2E_MIN_SUCCESS` may relax a diagnostic run but cannot be
 lower than 10; the default remains the full corpus size. Failed runs retain
 their temporary evidence path, while successful evidence is removed unless
-`CDP_E2E_KEEP_ARTIFACTS=1`. Retained `run-metadata.json` and `evidence.json`
-record the exact URL set, browser mode, UTC timestamps, requested/final URLs,
-readiness outcomes, and failure classes. The real-site lane is diagnostic;
-deterministic synthetic tests remain the merge gate.
+`CDP_E2E_KEEP_ARTIFACTS=1`. A run retries the full corpus once when every
+reported page failure is explicitly retryable and no infrastructure failure was
+reported; the first report is retained as `initial-report.json`. Retained
+`run-metadata.json` and `evidence.json` record the exact URL set, browser mode,
+UTC timestamps, requested/final URLs, readiness outcomes, and failure classes.
+The real-site lane is diagnostic; deterministic synthetic tests remain the
+merge gate.
 
 `make install` copies the binary to `$(HOME)/.local/bin` by default. Override
 with `PREFIX=/usr/local` or another install prefix.

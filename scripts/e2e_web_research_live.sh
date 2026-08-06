@@ -43,6 +43,8 @@ url_file="$run_root/urls.txt"
 expected_json="$run_root/expected-urls.json"
 report_json="$run_root/report.json"
 report_stderr="$run_root/report.stderr"
+initial_report_json="$run_root/initial-report.json"
+initial_report_stderr="$run_root/initial-report.stderr"
 metadata_json="$run_root/run-metadata.json"
 evidence_json="$run_root/evidence.json"
 out_dir="$run_root/pages"
@@ -209,6 +211,26 @@ set +e
   --json >"$report_json" 2>"$report_stderr"
 workflow_code=$?
 set -e
+if [[ "$workflow_code" -ne 0 ]] && jq -e '
+  (.failures | type == "array" and length > 0) and
+  ((.workflow.infrastructure_failures // 0) == 0) and
+  all(.failures[]; (.retryable // false) == true)
+' "$report_json" >/dev/null 2>&1; then
+  cp "$report_json" "$initial_report_json"
+  cp "$report_stderr" "$initial_report_stderr"
+  echo "retrying live web-research corpus once after retryable page failures" >&2
+  set +e
+  "$binary" "${mode_args[@]}" workflow web-research extract \
+    --url-file "$url_file" \
+    --out-dir "$out_dir" \
+    --max-pages "$url_count" \
+    --parallel "$parallel" \
+    --wait "$wait_time" \
+    --settle "$settle_time" \
+    --json >"$report_json" 2>"$report_stderr"
+  workflow_code=$?
+  set -e
+fi
 run_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if jq -e 'type == "object"' "$report_json" >/dev/null 2>&1; then
   jq -n \
