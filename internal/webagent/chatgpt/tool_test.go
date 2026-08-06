@@ -12,6 +12,11 @@ func TestNormalizeTool(t *testing.T) {
 		{name: "empty", input: "", want: ""},
 		{name: "canonical", input: "create-image", want: ToolCreateImage},
 		{name: "human label", input: "Create image", want: ToolCreateImage},
+		{name: "web search canonical", input: "web-search", want: ToolWebSearch},
+		{name: "web search label", input: "Web search", want: ToolWebSearch},
+		{name: "github", input: "GitHub", want: ToolGitHub},
+		{name: "openai platform", input: "OpenAI Platform", want: ToolOpenAIPlatform},
+		{name: "visualize", input: "Visualize", want: ToolVisualize},
 		{name: "unsupported", input: "deep-research", err: true},
 	}
 	for _, test := range tests {
@@ -30,6 +35,40 @@ func TestNormalizeTool(t *testing.T) {
 				t.Fatalf("NormalizeTool(%q) = %q, want %q", test.input, got, test.want)
 			}
 		})
+	}
+}
+
+func TestChatGPTToolPolicies(t *testing.T) {
+	for _, tool := range []string{ToolCreateImage, ToolVisualize} {
+		if !isImageTool(tool) {
+			t.Fatalf("%s should be an image-producing tool", tool)
+		}
+	}
+	for _, tool := range []string{ToolWebSearch, ToolGitHub, ToolOpenAIPlatform, ToolVisualize} {
+		if !usesAnswerNowGate(tool) {
+			t.Fatalf("%s should use the provider Answer now gate", tool)
+		}
+	}
+	if usesAnswerNowGate(ToolCreateImage) {
+		t.Fatal("create-image should not require the provider Answer now gate")
+	}
+}
+
+func TestRenderedPromptMatchesRequiresTheSubmittedFingerprint(t *testing.T) {
+	observation := renderedObservation{
+		PromptCandidates: []string{"the submitted prompt"},
+	}
+	if !renderedPromptMatches(
+		observation,
+		fingerprintPrompt("the submitted prompt"),
+	) {
+		t.Fatal("same rendered prompt should prove identity")
+	}
+	if renderedPromptMatches(
+		observation,
+		fingerprintPrompt("a stale prompt"),
+	) {
+		t.Fatal("a stale rendered prompt must not prove identity")
 	}
 }
 

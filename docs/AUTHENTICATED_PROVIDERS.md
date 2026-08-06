@@ -51,6 +51,21 @@ printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm.
     --stdin --tool create-image --thinking Pro \
     --model 'GPT-5.6 Sol' --timeout 40m --json
 
+printf '%s' 'What changed in the official Agent Skills specification, and what should I change in my local skill library?' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool web-search --thinking Medium \
+    --model 'GPT-5.6 Sol' --timeout 8m --json
+
+printf '%s' 'Please check whether the GitHub connector is available here, without changing anything.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool github --thinking Medium \
+    --model 'GPT-5.6 Sol' --timeout 8m --json
+
+printf '%s' 'Turn the six Agent Skills review checks into a small, readable visual.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool visualize --thinking Pro \
+    --model 'GPT-5.6 Sol' --timeout 40m --json
+
 printf '%s' 'Review this design.' |
   cdp workflow agent claude ask --stdin --json
 
@@ -85,6 +100,27 @@ the text field is empty. If a stable zero-byte placeholder persists, the
 provider performs one bounded `about:blank` → exact-conversation navigation
 recovery, never a Retry click or a second Send; a deadline without decoded
 pixels is returned as incomplete with the exact await command.
+
+The verified direct tool values are `create-image`, `visualize`, `web-search`,
+`github`, and `openai-platform`. Web search and the connector probes can show a
+provider-side `Answer now` control; the workflow clicks that exact control at
+most once and never counts it as another prompt submission. GitHub and OpenAI
+Platform are honest connector probes: selection, one Send, and readable
+response are supported, but the response may say that the connector is not
+connected, which does not grant repository, organization, API-key, or billing
+access. Deep research remains capability-only because its report is inside an
+embedded sandbox not readable through the current page/frame boundary. Gmail
+remains capability-only until its visible Connect step is authorized and
+proven. The visible `Work` switch is also capability-only: this CLI verifies
+and submits in `Chat` because it has no product-selection flag or Work
+lifecycle. `Visualize` follows the same attachment-only image contract as
+Create image and may take many minutes.
+
+Rendered completion is causal, not merely textual: the same route, one user
+message, and the submitted prompt fingerprint must be present. A stale answer
+cannot satisfy a fresh ask. For image tools, a textual provider error is not an
+image answer; decoded pixels are required, and the performed request remains
+incomplete if they never arrive.
 
 Perplexity asks use one identity-checked enabled `Submit` click. An Enter key
 can leave the question in the root composer without submitting it, and the

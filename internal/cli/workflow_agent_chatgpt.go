@@ -134,8 +134,8 @@ func (a *app) newWorkflowAgentChatGPTResearchCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "research [PROMPT]",
 		Short: "Report the live ChatGPT Deep Research boundary",
-		Long: "Deep Research submission is intentionally unavailable until the headed paid UI exposes one exact runtime product control. " +
-			"The current browser-observed surface proves ordinary Chat selection and file upload, but not Deep Research.",
+		Long: "Deep Research remains capability-only at this boundary. The headed UI accepts the mode and embeds its report in a sandboxed app, but the current cdp page/frame reader cannot prove a readable terminal report or export lifecycle. " +
+			"No guessed DOM action, iframe replay, or second Send is attempted.",
 		Example: "  printf '%s' 'Research this topic.' | cdp workflow agent chatgpt research --stdin --browser-export --json",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -155,7 +155,7 @@ func (a *app) newWorkflowAgentChatGPTResearchCommand() *cobra.Command {
 				a.build.Commit,
 				webagent.OperationResearch,
 				"chatgpt_deep_research_control_unproven",
-				"ChatGPT Deep Research is unavailable because the exact headed runtime control is not currently proven",
+				"ChatGPT Deep Research is visible and selectable, but its embedded sandbox report is not readable through the current cdp page/frame boundary",
 			)
 			return a.renderWebAgentResult(
 				ctx,
@@ -183,7 +183,7 @@ func (a *app) newWorkflowAgentChatGPTConversationsExportResearchCommand() *cobra
 	return &cobra.Command{
 		Use:   "export-research CONVERSATION_ID",
 		Short: "Report the live ChatGPT research-export boundary",
-		Long: "Rendered Deep Research export remains unavailable until one exact completed research surface and export control are live-proven. " +
+		Long: "Rendered Deep Research export remains unavailable because the report is hosted in an embedded sandbox whose completed readable surface and export control are not exposed through the current cdp page/frame boundary. " +
 			"No guessed DOM action or replay is attempted.",
 		Example: "  cdp workflow agent chatgpt conversations export-research CONVERSATION_ID --json",
 		Args:    cobra.ExactArgs(1),
@@ -195,7 +195,7 @@ func (a *app) newWorkflowAgentChatGPTConversationsExportResearchCommand() *cobra
 				a.build.Commit,
 				webagent.OperationResearchExport,
 				"chatgpt_research_export_unproven",
-				"ChatGPT research export is unavailable because no exact completed headed research surface is currently proven",
+				"ChatGPT research export is unavailable because the embedded Deep Research report and export control are not readable through the current cdp page/frame boundary",
 			)
 			return a.renderWebAgentResult(
 				ctx,
@@ -698,16 +698,20 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible ChatGPT request",
-		Long: "Open one fresh headed tab, apply the configured or explicit thinking/model policy, optionally select the verified image tool, submit the exact prompt with one Send, " +
-			"read the assistant response or generated image, preserve the observed conversation ID, and close only that tab.",
+		Long: "Open one fresh headed tab, apply the configured or explicit thinking/model policy, optionally select one verified tool, submit the exact prompt with one Send, " +
+			"advance one provider Answer-now gate when it appears, read the assistant response or generated image, preserve the observed conversation ID, and close only that tab.",
 		Example: "  printf '%s' 'I keep waking with the taste of salt in my mouth, and every morning there is one more wet footprint on the attic stairs. Write the opening scene of an original gothic story.' | cdp workflow agent chatgpt ask --stdin --thinking Medium --model 'GPT-5.6 Sol' --json\n" +
 			"  printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm. Paint the moment the keeper opens it.' | cdp workflow agent chatgpt ask --stdin --tool create-image --thinking Pro --model 'GPT-5.6 Sol' --json --timeout 40m",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			commandTimeout := 4 * time.Minute
-			if normalizedTool, err := chatgpt.NormalizeTool(tool); err == nil &&
-				normalizedTool == chatgpt.ToolCreateImage {
-				commandTimeout = 40 * time.Minute
+			if normalizedTool, err := chatgpt.NormalizeTool(tool); err == nil {
+				switch normalizedTool {
+				case chatgpt.ToolWebSearch, chatgpt.ToolGitHub, chatgpt.ToolOpenAIPlatform:
+					commandTimeout = 8 * time.Minute
+				case chatgpt.ToolCreateImage, chatgpt.ToolVisualize:
+					commandTimeout = 40 * time.Minute
+				}
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, commandTimeout)
 			defer cancel()
@@ -780,9 +784,13 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 			timeout := a.opts.timeout
 			if timeout <= 0 {
 				timeout = 4 * time.Minute
-				if normalizedTool, err := chatgpt.NormalizeTool(tool); err == nil &&
-					normalizedTool == chatgpt.ToolCreateImage {
-					timeout = 40 * time.Minute
+				if normalizedTool, err := chatgpt.NormalizeTool(tool); err == nil {
+					switch normalizedTool {
+					case chatgpt.ToolWebSearch, chatgpt.ToolGitHub, chatgpt.ToolOpenAIPlatform:
+						timeout = 8 * time.Minute
+					case chatgpt.ToolCreateImage, chatgpt.ToolVisualize:
+						timeout = 40 * time.Minute
+					}
 				}
 			}
 			result := chatgpt.Ask(ctx, chatgpt.AskConfig{
@@ -811,7 +819,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 		&tool,
 		"tool",
 		"",
-		"verified ChatGPT tool: create-image; other visible tools remain capability-only",
+		"verified ChatGPT tools: create-image, visualize, web-search, github, openai-platform; deep research and Gmail remain capability-only",
 	)
 	addChatGPTSelectionFlags(
 		cmd,

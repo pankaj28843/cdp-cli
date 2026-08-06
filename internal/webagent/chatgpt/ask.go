@@ -16,14 +16,15 @@ import (
 )
 
 const (
-	AskSchemaVersion           = "chatgpt-ask/v1"
-	MaxPromptCharacters        = 18_000
-	defaultAskTimeout          = 4 * time.Minute
-	defaultImageAskTimeout     = 40 * time.Minute
-	defaultComposerTimeout     = 45 * time.Second
-	defaultAmbiguousCooldown   = 5 * time.Minute
-	finalSelectionGuardTimeout = 5 * time.Second
-	renderedWaitFraction       = 0.85
+	AskSchemaVersion              = "chatgpt-ask/v1"
+	MaxPromptCharacters           = 18_000
+	defaultAskTimeout             = 4 * time.Minute
+	defaultProviderGateAskTimeout = 8 * time.Minute
+	defaultImageAskTimeout        = 40 * time.Minute
+	defaultComposerTimeout        = 45 * time.Second
+	defaultAmbiguousCooldown      = 5 * time.Minute
+	finalSelectionGuardTimeout    = 5 * time.Second
+	renderedWaitFraction          = 0.85
 )
 
 type AskConfig struct {
@@ -336,7 +337,9 @@ func Ask(
 	data.PromptFingerprint = fingerprintPrompt(prompt)
 	if config.Timeout <= 0 {
 		config.Timeout = defaultAskTimeout
-		if tool == ToolCreateImage {
+		if usesAnswerNowGate(tool) {
+			config.Timeout = defaultProviderGateAskTimeout
+		} else if isImageTool(tool) {
 			config.Timeout = defaultImageAskTimeout
 		}
 	}
@@ -887,10 +890,44 @@ func Ask(
 				deadline,
 				renderedWaitFraction,
 			)
-			if data.Tool == ToolCreateImage {
+			if usesAnswerNowGate(data.Tool) {
+				data.Metadata["rendered_wait_policy"] =
+					"full_timeout_for_provider_answer_gate"
+				renderedDeadline = deadline
+			} else if isImageTool(data.Tool) {
 				renderedDeadline = deadline
 				data.Metadata["rendered_wait_policy"] =
-					"full_timeout_for_image_generation"
+					"full_timeout_for_image_or_visualization_generation"
+			}
+			if usesAnswerNowGate(data.Tool) {
+				gateClicked, gateAttempts, gateErr :=
+					advanceChatGPTAnswerNowGate(
+						ctx,
+						session,
+						renderedDeadline,
+						config.PollInterval,
+					)
+				data.Metadata["answer_gate_observation_attempts"] =
+					gateAttempts
+				data.Metadata["answer_gate_click_count"] = 0
+				if gateClicked {
+					data.Metadata["answer_gate_click_count"] = 1
+				}
+				if gateErr != nil {
+					_ = lease.MarkIncomplete(context.Background())
+					data.CompletionState = "answer_gate_unavailable"
+					data.ReadMode = browserReadMode
+					data.Metadata["answer_source"] =
+						"same_target_rendered_provider_gate"
+					return finishAsk(
+						ctx, lease,
+						runID, config, webagent.StateIncomplete,
+						target, pending, action, conversation, data,
+						[]string{
+							conversationAwaitCommand(conversationID),
+						},
+					)
+				}
 			}
 			rendered, renderedStable, renderedAttempts := waitRenderedAnswer(
 				ctx,
@@ -922,14 +959,16 @@ func Ask(
 			)
 			data.Metadata["rendered_prompt_identity_proved"] =
 				renderedPromptMatched
-			textAnswerReady := len(strings.TrimSpace(rendered.Text)) >=
-				minimumUsefulAnswerChars(prompt) &&
+			textAnswerReady := !isImageTool(data.Tool) &&
+				len(strings.TrimSpace(rendered.Text)) >=
+					minimumUsefulAnswerChars(prompt) &&
 				terminalAnswerTextValid(rendered.Text, map[string]any{})
-			imageAnswerReady := data.Tool == ToolCreateImage &&
+			imageAnswerReady := isImageTool(data.Tool) &&
 				rendered.GeneratedImageReady
 			renderedTerminal := rendered.RouteMatches &&
 				rendered.ConversationID == conversationID &&
 				rendered.UserMessageCount == 1 &&
+				renderedPromptMatched &&
 				!rendered.Streaming &&
 				(textAnswerReady || imageAnswerReady) &&
 				(rendered.TerminalControl || imageAnswerReady)
@@ -1090,9 +1129,9 @@ func Ask(
 					},
 				)
 			}
-			if stored.CompletionState == "terminal" &&
-				(strings.TrimSpace(stored.Text) != "" ||
-					len(stored.Attachments) > 0) {
+			storedAnswerReady := len(stored.Attachments) > 0 ||
+				(!isImageTool(data.Tool) && strings.TrimSpace(stored.Text) != "")
+			if stored.CompletionState == "terminal" && storedAnswerReady {
 				data.Text = stored.Text
 				data.Attachments = stored.Attachments
 				data.CompletionState = "terminal"
@@ -1767,14 +1806,21 @@ func observeRendered(
 	    'button[data-testid="stop-button"],button[aria-label*="Stop"],' +
 	    'button[aria-label*="stop"]'
 	  )).some(visible);
-	  const terminalControl = Boolean(turn && Array.from(turn.querySelectorAll(
-	    'button[data-testid="copy-turn-action-button"][aria-label="Copy response"],' +
-	    'button[aria-label="Copy response"],button[aria-label="Regenerate response"]'
-	  )).some(visible));
 	  const normalizeMarker = value => String(value || '')
 	    .replace(/\s+/g, ' ')
 	    .trim()
 	    .toLowerCase();
+	  const rawAssistantText = assistant ?
+	    String(assistant.innerText || assistant.textContent || '').trim() : '';
+	  const substantiveAssistantText =
+	    normalizeMarker(rawAssistantText) === 'stopped thinking' ?
+	      '' : rawAssistantText;
+	  const terminalControl = Boolean(turn && Array.from(turn.querySelectorAll(
+	    'button[data-testid="copy-turn-action-button"],' +
+	    'button[aria-label^="Copy"],button[aria-label="Regenerate response"]'
+	  )).some(visible)) ||
+	    (substantiveAssistantText.length >= 40 &&
+	      !streamingState && !streamingControl);
 	  const stoppedThinkingMarker = Boolean(turn && Array.from(
 	    turn.querySelectorAll('*')
 	  ).some(node =>
@@ -1782,11 +1828,6 @@ func observeRendered(
 	    normalizeMarker(node.innerText || node.textContent) ===
 	      'stopped thinking'
 	  ));
-	  const rawAssistantText = assistant ?
-	    String(assistant.innerText || assistant.textContent || '').trim() : '';
-	  const substantiveAssistantText =
-	    normalizeMarker(rawAssistantText) === 'stopped thinking' ?
-	      '' : rawAssistantText;
 	  const terminalNoAnswer =
 	    stoppedThinkingMarker &&
 	    !streamingState &&
@@ -1814,6 +1855,112 @@ func observeRendered(
 	      Number(readyImage.naturalHeight || readyImage.height || 0) : 0
 	  };
 	})()`, observation)
+}
+
+type answerNowObservation struct {
+	Count              int     `json:"count"`
+	X                  float64 `json:"x"`
+	Y                  float64 `json:"y"`
+	TerminalControl    bool    `json:"terminal_control"`
+	AssistantTextReady bool    `json:"assistant_text_ready"`
+}
+
+// advanceChatGPTAnswerNowGate handles the provider-side continuation that can
+// appear after a tool has gathered sources or prepared an output. It is not a second Send:
+// the prompt is already acknowledged, and this exact button is clicked at
+// most once. If the provider answers without showing the gate, the normal
+// rendered-answer reader continues unchanged.
+func advanceChatGPTAnswerNowGate(
+	ctx context.Context,
+	session *cdp.PageSession,
+	deadline time.Time,
+	poll time.Duration,
+) (bool, int, error) {
+	attempts := 0
+	for time.Now().Before(deadline) {
+		attempts++
+		var gate answerNowObservation
+		if err := observeAnswerNowGate(ctx, session, &gate); err != nil {
+			if ctx.Err() != nil {
+				return false, attempts, ctx.Err()
+			}
+			if !waitForObservation(ctx, poll, time.Until(deadline)) {
+				break
+			}
+			continue
+		}
+		if gate.Count > 1 {
+			return false, attempts, fmt.Errorf(
+				"ChatGPT exposed multiple Answer now controls",
+			)
+		}
+		if gate.Count == 1 {
+			outcome, err := browserflow.ClickPoint(ctx, session, gate.X, gate.Y)
+			if err != nil {
+				return false, attempts, fmt.Errorf(
+					"click ChatGPT Answer now control: %w", err,
+				)
+			}
+			if outcome.Dispatch != browserflow.DispatchPerformed {
+				return false, attempts, fmt.Errorf(
+					"ChatGPT Answer now control click was not performed",
+				)
+			}
+			return true, attempts, nil
+		}
+		if gate.TerminalControl || gate.AssistantTextReady {
+			return false, attempts, nil
+		}
+		if !waitForObservation(ctx, poll, time.Until(deadline)) {
+			break
+		}
+	}
+	return false, attempts, nil
+}
+
+func observeAnswerNowGate(
+	ctx context.Context,
+	session *cdp.PageSession,
+	observation *answerNowObservation,
+) error {
+	expression := `(() => {
+  const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+  const visible = element => {
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 &&
+      style.display !== 'none' && style.visibility !== 'hidden' &&
+      Number(style.opacity || '1') !== 0 && !element.disabled;
+  };
+  const buttons = Array.from(document.querySelectorAll('button')).filter(
+    button => visible(button) && normalize(button.innerText || button.textContent) === 'Answer now'
+  );
+  const turns = Array.from(document.querySelectorAll(
+    'section[data-turn="assistant"],[data-message-author-role="assistant"]'
+  ));
+  const turn = turns.length ? turns[turns.length - 1] : null;
+  const text = normalize(turn && (turn.innerText || turn.textContent));
+  const terminalButton = Boolean(turn && Array.from(turn.querySelectorAll(
+	    'button[data-testid="copy-turn-action-button"],button[aria-label^="Copy"],button[aria-label="Regenerate response"]'
+  )).some(visible));
+  const streaming = Array.from(document.querySelectorAll(
+    'button[data-testid="stop-button"],button[aria-label*="Stop"],button[aria-label*="stop"]'
+  )).some(visible);
+  const terminal = terminalButton || (text.length >= 40 && !streaming);
+  const ready = text.length >= 40 && terminal;
+  const button = buttons.length === 1 ? buttons[0] : null;
+  const rect = button ? button.getBoundingClientRect() : null;
+  return {
+    count: buttons.length,
+    x: rect ? rect.left + rect.width / 2 : 0,
+    y: rect ? rect.top + rect.height / 2 : 0,
+    terminal_control: terminal,
+    assistant_text_ready: ready
+  };
+
+})()`
+	return evaluateInto(ctx, session, expression, observation)
 }
 
 func waitRenderedAnswer(
@@ -1862,16 +2009,22 @@ func waitRenderedAnswer(
 			current.ImageRecoveryAttempted = imageRecoveryAttempted
 			observation = current
 			text := strings.TrimSpace(observation.Text)
+			promptMatched := renderedPromptMatches(
+				observation,
+				fingerprintPrompt(prompt),
+			)
 			valid := observation.RouteMatches &&
 				observation.ConversationID == conversationID &&
 				observation.UserMessageCount == 1 &&
+				promptMatched &&
 				!observation.Streaming &&
-				((len(text) >= minimumUsefulAnswerChars(prompt) &&
+				((!isImageTool(tool) &&
+					len(text) >= minimumUsefulAnswerChars(prompt) &&
 					terminalAnswerTextValid(text, map[string]any{})) ||
-					(tool == ToolCreateImage && observation.GeneratedImageReady))
+					(isImageTool(tool) && observation.GeneratedImageReady))
 			if valid {
 				resultKey := text
-				if tool == ToolCreateImage && observation.GeneratedImageReady {
+				if isImageTool(tool) && observation.GeneratedImageReady {
 					resultKey = fmt.Sprintf(
 						"image:%d",
 						observation.GeneratedImageCount,
@@ -1884,7 +2037,7 @@ func waitRenderedAnswer(
 					stable = 1
 				}
 				if observation.TerminalControl ||
-					(tool == ToolCreateImage && stable >= 2) {
+					(isImageTool(tool) && stable >= 2) {
 					return observation, stable, attempts
 				}
 			} else {
@@ -1923,7 +2076,7 @@ func imagePlaceholderNeedsRecovery(
 	tool string,
 	observation renderedObservation,
 ) bool {
-	return tool == ToolCreateImage &&
+	return isImageTool(tool) &&
 		observation.RouteMatches &&
 		!observation.Streaming &&
 		observation.GeneratedImageCount > 0 &&
@@ -1936,7 +2089,7 @@ func imageGenerationPending(
 	promptMatched bool,
 	textAnswerReady bool,
 ) bool {
-	return tool == ToolCreateImage &&
+	return isImageTool(tool) &&
 		promptMatched &&
 		observation.RouteMatches &&
 		observation.UserMessageCount == 1 &&

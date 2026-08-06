@@ -126,21 +126,53 @@ printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm.
   cdp workflow agent chatgpt ask \
     --stdin --tool create-image --thinking Pro \
     --model 'GPT-5.6 Sol' --json --timeout 40m
+printf '%s' 'What changed in the official Agent Skills specification, and what should I change in my local skill library?' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool web-search --thinking Medium \
+    --model 'GPT-5.6 Sol' --json --timeout 8m
+printf '%s' 'Please check whether the GitHub connector is available here, without changing anything.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool github --thinking Medium \
+    --model 'GPT-5.6 Sol' --json --timeout 8m
+printf '%s' 'Please check whether the OpenAI Platform connector is available here, without creating a key or changing settings.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool openai-platform --thinking Medium \
+    --model 'GPT-5.6 Sol' --json --timeout 8m
+printf '%s' 'Turn the six Agent Skills review checks into a small, readable visual.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool visualize --thinking Pro \
+    --model 'GPT-5.6 Sol' --json --timeout 40m
 cdp workflow agent chatgpt conversations await <conversation-id> \
   --wait 40m --timeout 40m30s --json
 ```
 
 `Instant` is for instant ideas, `Medium` is the practical daily setting, and
-`Pro` is the deepest setting and takes the most time. Image asks wait for the
-full configured timeout because the UI may show a placeholder or stale Retry
-control before the decoded image arrives. If a final image is in an earlier
-assistant turn while an empty trailing turn remains, the image-bearing turn is
-authoritative; inspect `output_kind=image` and attachments even when text is
-empty. If the same target holds a stable zero-byte image placeholder, the
-provider performs one bounded recovery navigation through `about:blank` back to
-the exact conversation URL; it never clicks Retry or sends the prompt again. If
-pixels still do not decode by the deadline, it returns an incomplete,
-already-submitted result with the exact await command.
+`Pro` is the deepest setting and takes the most time. Web search, GitHub, and
+OpenAI Platform may pause at a provider-side `Answer now` control; the ask
+workflow clicks that exact visible control at most once, never treating it as a
+second Send. GitHub and OpenAI Platform selection/readback are supported even
+when the connector answers that it is not connected; a visible pill does not
+grant repository, organization, key, or billing access. Create image and
+Visualize return `output_kind=image` and may have empty text. Image asks wait
+for the full configured timeout because the UI may show a placeholder or stale
+Retry control before decoded pixels arrive. If a final image is in an earlier
+assistant turn while an empty trailing turn remains, that image-bearing turn is
+authoritative. A stable zero-byte placeholder gets one bounded
+`about:blank` → exact-conversation recovery; the provider never clicks Retry or
+sends the prompt again. Deep research remains capability-only because its
+report is hosted in an embedded sandbox whose readable lifecycle is not exposed
+by the current page/frame boundary; Gmail remains capability-only until its
+visible Connect step is explicitly authorized and proven. If image pixels do
+not decode by the deadline, the result is incomplete but already submitted and
+includes the exact await command.
+
+Terminal text and image acceptance also require the fresh route, exactly one
+user message, and a rendered prompt fingerprint matching the submitted prompt.
+A stale prior answer or a textual image-service error cannot satisfy an image
+ask; image tools need decoded pixels and otherwise remain incomplete.
+
+The visible `Work` switch remains unsupported: this CLI verifies and submits
+in `Chat` because it has no product-selection flag or Work lifecycle.
 
 If the exact ChatGPT conversation shows `Stopped thinking` and its compose stop
 control is absent or disabled, it is terminal. Consume any answer already

@@ -10,8 +10,16 @@ import (
 )
 
 const (
-	ToolCreateImage      = "create-image"
-	toolCreateImageLabel = "Create image"
+	ToolCreateImage         = "create-image"
+	ToolWebSearch           = "web-search"
+	ToolGitHub              = "github"
+	ToolOpenAIPlatform      = "openai-platform"
+	ToolVisualize           = "visualize"
+	toolCreateImageLabel    = "Create image"
+	toolWebSearchLabel      = "Web search"
+	toolGitHubLabel         = "GitHub"
+	toolOpenAIPlatformLabel = "OpenAI Platform"
+	toolVisualizeLabel      = "Visualize"
 )
 
 // NormalizeTool accepts only tools whose full send-and-read lifecycle is
@@ -29,8 +37,20 @@ func NormalizeTool(value string) (string, error) {
 	if normalized == "create image" {
 		return ToolCreateImage, nil
 	}
+	if normalized == "web search" || normalized == "search web" {
+		return ToolWebSearch, nil
+	}
+	if normalized == "github" {
+		return ToolGitHub, nil
+	}
+	if normalized == "openai platform" {
+		return ToolOpenAIPlatform, nil
+	}
+	if normalized == "visualize" {
+		return ToolVisualize, nil
+	}
 	return "", fmt.Errorf(
-		"unsupported ChatGPT tool %q; the verified direct-ask tool is create-image",
+		"unsupported ChatGPT tool %q; verified direct-ask tools are create-image, web-search, github, openai-platform, and visualize",
 		value,
 	)
 }
@@ -39,8 +59,29 @@ func toolDisplayLabel(tool string) string {
 	switch tool {
 	case ToolCreateImage:
 		return toolCreateImageLabel
+	case ToolWebSearch:
+		return toolWebSearchLabel
+	case ToolGitHub:
+		return toolGitHubLabel
+	case ToolOpenAIPlatform:
+		return toolOpenAIPlatformLabel
+	case ToolVisualize:
+		return toolVisualizeLabel
 	default:
 		return ""
+	}
+}
+
+func isImageTool(tool string) bool {
+	return tool == ToolCreateImage || tool == ToolVisualize
+}
+
+func usesAnswerNowGate(tool string) bool {
+	switch tool {
+	case ToolWebSearch, ToolGitHub, ToolOpenAIPlatform, ToolVisualize:
+		return true
+	default:
+		return false
 	}
 }
 
