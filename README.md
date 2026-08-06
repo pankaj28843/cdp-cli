@@ -118,13 +118,29 @@ policy, not another thinking level; `--minimum-thinking` makes downgrade
 failure explicit before Send. Models remain a separate control:
 
 ```bash
-printf '%s' 'Review this design.' |
+printf '%s' 'I’m about to ship this change and I’m uneasy about the retry path. Read the attached diff like a careful teammate: find the smallest concrete failure, show me where it happens, and suggest one falsifiable test.' |
   cdp workflow agent chatgpt ask \
-    --stdin --thinking highest --minimum-thinking extra-high \
-    --model highest --json --timeout 40m
+    --stdin --file ./change.diff --thinking Medium \
+    --model 'GPT-5.6 Sol' --json --timeout 10m
+printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm. Paint the moment the keeper opens it: cinematic, quietly hopeful, painterly realism, wide frame, no lettering.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool create-image --thinking Pro \
+    --model 'GPT-5.6 Sol' --json --timeout 40m
 cdp workflow agent chatgpt conversations await <conversation-id> \
   --wait 40m --timeout 40m30s --json
 ```
+
+`Instant` is for instant ideas, `Medium` is the practical daily setting, and
+`Pro` is the deepest setting and takes the most time. Image asks wait for the
+full configured timeout because the UI may show a placeholder or stale Retry
+control before the decoded image arrives. If a final image is in an earlier
+assistant turn while an empty trailing turn remains, the image-bearing turn is
+authoritative; inspect `output_kind=image` and attachments even when text is
+empty. If the same target holds a stable zero-byte image placeholder, the
+provider performs one bounded recovery navigation through `about:blank` back to
+the exact conversation URL; it never clicks Retry or sends the prompt again. If
+pixels still do not decode by the deadline, it returns an incomplete,
+already-submitted result with the exact await command.
 
 If the exact ChatGPT conversation shows `Stopped thinking` and its compose stop
 control is absent or disabled, it is terminal. Consume any answer already
@@ -159,6 +175,13 @@ Attached ChatGPT files must retain the exact requested basename before Send.
 The final Send guard rechecks the resolved thinking/model, exact prompt, route,
 and attachment. Long answer observation does not hold the short-lived
 headed-browser input lease, so independent asks can overlap after submission.
+
+Perplexity asks click one observed enabled `Submit` control rather than
+assuming an Enter key submitted the question. The provider also follows a
+temporary `/search/new/<id>` to the final `/search/<id>` route only when the
+rendered prompt fingerprint still matches. A performed dispatch with
+`raw_input_count=1` is never resent, including when stored-detail auth is
+expired and the terminal answer is returned from the rendered page.
 
 ChatGPT conversation list/detail/await use captured-template direct HTTP first.
 Only an eligible auth/transport failure lazily initializes one headed fallback;

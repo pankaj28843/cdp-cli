@@ -41,14 +41,15 @@ returns that response.
 ## Examples
 
 ```bash
-printf '%s' 'Review this design.' |
+printf '%s' 'I’m about to ship this change and I’m uneasy about the retry path. Read the attached diff like a careful teammate: find the smallest concrete failure, show me where it happens, and suggest one falsifiable test.' |
   cdp workflow agent chatgpt ask \
-    --stdin \
-    --thinking highest \
-    --minimum-thinking extra-high \
-    --model highest \
-    --timeout 40m \
-    --json
+    --stdin --file ./change.diff --thinking Medium \
+    --model 'GPT-5.6 Sol' --timeout 10m --json
+
+printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm. Paint the moment the keeper opens it: cinematic, quietly hopeful, painterly realism, wide frame, no lettering.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --tool create-image --thinking Pro \
+    --model 'GPT-5.6 Sol' --timeout 40m --json
 
 printf '%s' 'Review this design.' |
   cdp workflow agent claude ask --stdin --json
@@ -67,10 +68,29 @@ printf '%s' 'Critique this itinerary.' |
 ```
 
 ChatGPT keeps the current thinking and model unless flags or owner-local config
-request a selection. `highest` chooses the highest visible option;
+request a selection. `Medium` is the practical daily setting; `Pro` takes the
+most time for the deepest reasoning. `GPT-5.6 Sol` is a model, independent of
+the reasoning setting. `highest` chooses the highest visible option;
 `--minimum-thinking` fails before Send if the visible selection is below the
 requested floor. Attached files must keep the requested basename and remain
 visible at the final Send guard.
+
+`Instant` is for instant ideas, `Medium` is the practical daily setting, and
+`Pro` is the deepest setting and takes the most time. Image generation can
+show a placeholder or stale Retry control before the decoded image arrives;
+the image ask waits through the full configured timeout and treats an earlier
+assistant turn containing a decoded image as authoritative over an empty
+trailing assistant turn. Inspect `output_kind=image` and attachments even when
+the text field is empty. If a stable zero-byte placeholder persists, the
+provider performs one bounded `about:blank` → exact-conversation navigation
+recovery, never a Retry click or a second Send; a deadline without decoded
+pixels is returned as incomplete with the exact await command.
+
+Perplexity asks use one identity-checked enabled `Submit` click. An Enter key
+can leave the question in the root composer without submitting it, and the
+provider may replace a temporary `/search/new/<id>` route with a final
+`/search/<id>` route. The final route is accepted only when its rendered
+question fingerprint matches; a performed dispatch is never resent.
 
 ## Conversation Reads
 

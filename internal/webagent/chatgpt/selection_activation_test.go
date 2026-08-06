@@ -74,6 +74,38 @@ func TestActivateSelectionControlDoesNotDispatchOnIdentityMiss(t *testing.T) {
 	}
 }
 
+func TestActivateChatGPTToolUsesVisiblePlusMenuIdentity(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(
+			`{"ok":true,"count":1,"activated":true}`,
+		),
+	}
+	session := newSelectionActivationSession(t, client)
+
+	if err := activateSelectionControl(
+		context.Background(),
+		session,
+		"tool",
+		"Create image",
+	); err != nil {
+		t.Fatalf("activateSelectionControl: %v", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("calls = %+v, want one identity-bound activation", client.calls)
+	}
+	evaluation := string(client.calls[0].params)
+	for _, required := range []string{
+		"div[tabindex",
+		"data-fill",
+		"Create image",
+		"elementFromPoint",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("tool activation expression missing %q: %s", required, evaluation)
+		}
+	}
+}
+
 func TestPrepareExactPromptActivatesEditorBeforeTextInput(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluations: []json.RawMessage{
@@ -106,6 +138,40 @@ func TestPrepareExactPromptActivatesEditorBeforeTextInput(t *testing.T) {
 				client.calls[index].method,
 				want,
 			)
+		}
+	}
+}
+
+func TestPrepareExactPromptWithToolActivatesSelectedEditorBeforeTextInput(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluations: []json.RawMessage{
+			json.RawMessage(`{"ok":true,"count":1,"activated":true}`),
+			json.RawMessage(`{"ok":true}`),
+		},
+	}
+	session := newSelectionActivationSession(t, client)
+
+	if err := prepareExactPromptWithTool(
+		context.Background(),
+		session,
+		"current prompt",
+		ToolCreateImage,
+	); err != nil {
+		t.Fatalf("prepareExactPromptWithTool: %v", err)
+	}
+	if len(client.calls) != 3 || client.calls[0].method != "Runtime.evaluate" ||
+		client.calls[1].method != "Runtime.evaluate" ||
+		client.calls[2].method != "Input.insertText" {
+		t.Fatalf("calls = %+v, want two identity checks then text input", client.calls)
+	}
+	evaluation := string(client.calls[1].params)
+	for _, required := range []string{
+		"data-inline-selection-pill",
+		"Create image",
+		"range.collapse(false)",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("tool editor expression missing %q: %s", required, evaluation)
 		}
 	}
 }

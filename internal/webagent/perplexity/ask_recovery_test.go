@@ -37,6 +37,10 @@ func TestAskUsesLiveSearchAndRenderedFallbackAfterPreMutationRecovery(
 				"search_selected": ready,
 				"assistant_count": 0,
 				"conversation_id": "",
+				"submit_count":    count,
+				"submit_ready":    ready,
+				"submit_x":        100,
+				"submit_y":        100,
 			}, nil
 		case strings.Contains(expression, "range.selectNodeContents"):
 			return map[string]any{"ok": true}, nil

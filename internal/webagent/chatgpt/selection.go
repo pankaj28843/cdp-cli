@@ -947,6 +947,34 @@ func activateSelectionControl(
 	    candidates = editors;
 	    break;
 	  }
+	  case 'editor-tool': {
+	    const editors = Array.from(document.querySelectorAll(
+	      '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+	    )).filter((element, index, values) =>
+	      values.indexOf(element) === index &&
+	      element.isContentEditable && enabled(element) &&
+	      Array.from(element.querySelectorAll(
+	        '[data-inline-selection-pill][data-keyword]'
+	      )).some(pill => label(pill).toLowerCase() === expected)
+	    );
+	    candidates = editors;
+	    break;
+	  }
+	  case 'tool-menu':
+	    candidates = Array.from(document.querySelectorAll(
+	      'button#composer-plus-btn'
+	    )).filter(element => enabled(element));
+	    break;
+	  case 'tool':
+	    candidates = Array.from(document.querySelectorAll(
+	      'div[tabindex="0"][data-fill]'
+	    )).filter(element => {
+	      const popover = element.closest('div[class*="popover"]');
+	      const first = element.querySelector('span.max-w-full,span');
+	      return enabled(element) && Boolean(popover) && visible(popover) &&
+	        label(first).toLowerCase() === expected;
+	    });
+	    break;
 	  case 'product':
 	    candidates = Array.from(document.querySelectorAll(
 	      'button[role="radio"]'

@@ -19,7 +19,7 @@ var (
 	}
 	allowedTools = []string{
 		"Add photos & files", "Create image", "Web search", "Deep research",
-		"GitHub", "Visualize", "OpenAI Platform", "Atlassian Rovo",
+		"GitHub", "OpenAI Platform", "Visualize", "Gmail",
 	}
 )
 
@@ -189,6 +189,14 @@ func RefreshCapabilities(
 				true,
 			)
 			probe.SelectedModel = selection.SelectedModel
+			if toolOptions, toolErr := inspectChatGPTToolOptions(
+				ctx,
+				session,
+				config.Timeout,
+				250*time.Millisecond,
+			); toolErr == nil {
+				probe.Tools = toolOptions
+			}
 			probe = sanitizeCapabilityProbe(probe)
 			probe.ModelOptionsObserved =
 				len(probe.ModelOptions) > 0 &&
@@ -277,6 +285,9 @@ func capabilityStateAndMessage(probe capabilityProbe) (string, string) {
 	message = "Chat product and logically ordered thinking modes were observed in the headed composer; the model catalog was not observed."
 	if probe.ModelOptionsObserved {
 		message = "Chat product, logically ordered thinking modes, and visible model options were observed in the headed composer."
+	}
+	if len(probe.Tools) > 0 {
+		message += " The visible plus-menu tools were also sampled; tool visibility is not direct-ask support."
 	}
 	return state, message
 }
@@ -422,7 +433,7 @@ const capabilityProbeExpression = `(async () => {
 
   const toolsKnown = [
     'Add photos & files', 'Create image', 'Web search', 'Deep research',
-    'GitHub', 'Visualize', 'OpenAI Platform', 'Atlassian Rovo'
+    'GitHub', 'OpenAI Platform', 'Visualize', 'Gmail'
   ];
   const menuText = Array.from(document.querySelectorAll(
       '[role="menuitemradio"],[role="menuitem"],[role="option"]'

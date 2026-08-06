@@ -19,6 +19,7 @@ const (
 	AskSchemaVersion           = "chatgpt-ask/v1"
 	MaxPromptCharacters        = 18_000
 	defaultAskTimeout          = 4 * time.Minute
+	defaultImageAskTimeout     = 40 * time.Minute
 	defaultComposerTimeout     = 45 * time.Second
 	defaultAmbiguousCooldown   = 5 * time.Minute
 	finalSelectionGuardTimeout = 5 * time.Second
@@ -29,6 +30,7 @@ type AskConfig struct {
 	BrowserConfig
 	Store           *Store
 	FilePath        string
+	Tool            string
 	Timeout         time.Duration
 	ComposerTimeout time.Duration
 	PollInterval    time.Duration
@@ -61,6 +63,8 @@ type AskData struct {
 	MinimumThinking    string                   `json:"minimum_thinking,omitempty"`
 	ModelPolicy        string                   `json:"model_policy"`
 	Model              string                   `json:"model,omitempty"`
+	Tool               string                   `json:"tool,omitempty"`
+	OutputKind         string                   `json:"output_kind,omitempty"`
 	Text               string                   `json:"text"`
 	CompletionState    string                   `json:"completion_state"`
 	ReadMode           string                   `json:"read_mode"`
@@ -97,6 +101,8 @@ type composerObservation struct {
 	UserMessageCount        int     `json:"user_message_count"`
 	ConversationID          string  `json:"conversation_id"`
 	SpecializedSurfaceCount int     `json:"specialized_surface_count"`
+	ToolCount               int     `json:"tool_count"`
+	SelectedTool            string  `json:"selected_tool"`
 }
 
 type selectionObservation struct {
@@ -137,12 +143,18 @@ type renderedObservation struct {
 	StoppedThinkingMarkerPresent bool     `json:"stopped_thinking_marker_present"`
 	TerminalNoAnswer             bool     `json:"terminal_no_answer"`
 	TerminalNoAnswerReason       string   `json:"terminal_no_answer_reason"`
+	GeneratedImageCount          int      `json:"generated_image_count"`
+	GeneratedImageReady          bool     `json:"generated_image_ready"`
+	GeneratedImageWidth          int      `json:"generated_image_width"`
+	GeneratedImageHeight         int      `json:"generated_image_height"`
+	ImageRecoveryAttempted       bool     `json:"image_recovery_attempted"`
 }
 
 type chatgptSendDispatcher struct {
 	prompt       string
 	intelligence string
 	model        string
+	tool         string
 	attachment   *attachmentExpectation
 }
 
@@ -181,13 +193,24 @@ func (d chatgptSendDispatcher) Dispatch(
 	// operation may occur between this passive observation and the one raw
 	// Send click, otherwise attachment-driven layout could stale the point.
 	var observation composerObservation
-	if err := observeComposer(
+	observeErr := observeComposer(
 		ctx,
 		session,
 		d.prompt,
 		d.intelligence,
 		&observation,
-	); err != nil ||
+	)
+	if d.tool != "" {
+		observeErr = observeComposerWithTool(
+			ctx,
+			session,
+			d.prompt,
+			toolDisplayLabel(d.tool),
+			d.intelligence,
+			&observation,
+		)
+	}
+	if observeErr != nil ||
 		!observation.RouteReady ||
 		!observation.EditorReady ||
 		observation.EditorCount != 1 ||
@@ -204,7 +227,11 @@ func (d chatgptSendDispatcher) Dispatch(
 		!observation.SendReady ||
 		observation.AssistantCount != 0 ||
 		observation.UserMessageCount != 0 ||
-		observation.ConversationID != "" {
+		observation.ConversationID != "" ||
+		(d.tool != "" && !strings.EqualFold(
+			observation.SelectedTool,
+			toolDisplayLabel(d.tool),
+		)) {
 		return browserflow.DispatchOutcome{
 			Dispatch: browserflow.DispatchNotPerformed,
 		}, fmt.Errorf("exact ChatGPT Send control was not actionable")
@@ -253,7 +280,23 @@ func Ask(
 			[]string{"cdp workflow agent chatgpt ask --help"},
 		)
 	}
+	tool, toolErr := NormalizeTool(config.Tool)
+	data.Tool = tool
+	if toolErr != nil {
+		return askFailure(
+			runID, config, webagent.StagePlanned, nil,
+			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+			notPerformed, nil,
+			"chatgpt_tool_invalid", "usage",
+			toolErr.Error(), "", data,
+			[]string{"cdp workflow agent chatgpt ask --help"},
+		)
+	}
 	config.Selection = selectionPolicy
+	config.Tool = tool
+	if tool != "" {
+		data.Metadata["tool_policy"] = tool
+	}
 	if strings.TrimSpace(prompt) == "" {
 		return askFailure(
 			runID, config, webagent.StagePlanned, nil,
@@ -293,6 +336,9 @@ func Ask(
 	data.PromptFingerprint = fingerprintPrompt(prompt)
 	if config.Timeout <= 0 {
 		config.Timeout = defaultAskTimeout
+		if tool == ToolCreateImage {
+			config.Timeout = defaultImageAskTimeout
+		}
 	}
 	if config.ComposerTimeout <= 0 {
 		config.ComposerTimeout = defaultComposerTimeout
@@ -472,6 +518,28 @@ func Ask(
 				append([]string{}, selection.ModelOptions...)
 			data.Intelligence = selection.Intelligence
 			data.Model = selection.Model
+			if tool != "" {
+				selectedTool, toolSelectionErr := selectChatGPTTool(
+					ctx,
+					session,
+					tool,
+					config.ComposerTimeout,
+					config.PollInterval,
+				)
+				if toolSelectionErr != nil {
+					data.Metadata["tool_selection_failure"] = toolSelectionErr.Error()
+					_ = lease.MarkIncomplete(context.Background())
+					return askFailure(
+						runID, config, webagent.StageAttached, target, pending,
+						notPerformed, nil,
+						"chatgpt_tool_selection_failed", "capability",
+						"ChatGPT could not select and verify the requested plus-menu tool before Send",
+						"", data, cleanupCommands(runID, pending),
+					)
+				}
+				data.Tool = selectedTool
+				data.Metadata["selected_tool"] = selectedTool
+			}
 			var expectedAttachment *attachmentExpectation
 			if upload != nil {
 				attachment, expectation, attachFailure := attachLocalFileOnce(
@@ -513,12 +581,13 @@ func Ask(
 				}
 			}
 			dispatcher := config.Send
-			verifyAttempts, composer, verifyErr := prepareVerifiedPrompt(
+			verifyAttempts, composer, verifyErr := prepareVerifiedPromptWithTool(
 				ctx,
 				session,
 				prompt,
 				data.Intelligence,
 				data.Model,
+				data.Tool,
 				expectedAttachment,
 				config.ComposerTimeout,
 				config.PollInterval,
@@ -613,6 +682,7 @@ func Ask(
 					prompt:       prompt,
 					intelligence: data.Intelligence,
 					model:        data.Model,
+					tool:         data.Tool,
 					attachment:   expectedAttachment,
 				}
 			}
@@ -817,17 +887,33 @@ func Ask(
 				deadline,
 				renderedWaitFraction,
 			)
+			if data.Tool == ToolCreateImage {
+				renderedDeadline = deadline
+				data.Metadata["rendered_wait_policy"] =
+					"full_timeout_for_image_generation"
+			}
 			rendered, renderedStable, renderedAttempts := waitRenderedAnswer(
 				ctx,
 				session,
 				conversationID,
 				prompt,
+				data.Tool,
 				renderedDeadline,
 				config.PollInterval,
 			)
 			data.Metadata["rendered_read_attempts"] = renderedAttempts
 			data.Metadata["rendered_assistant_count"] = rendered.AssistantCount
 			data.Metadata["rendered_terminal_stable_reads"] = renderedStable
+			data.Metadata["rendered_generated_image_count"] =
+				rendered.GeneratedImageCount
+			data.Metadata["rendered_generated_image_ready"] =
+				rendered.GeneratedImageReady
+			data.Metadata["rendered_generated_image_width"] =
+				rendered.GeneratedImageWidth
+			data.Metadata["rendered_generated_image_height"] =
+				rendered.GeneratedImageHeight
+			data.Metadata["rendered_image_recovery_attempted"] =
+				rendered.ImageRecoveryAttempted
 			data.Metadata["rendered_prompt_candidate_count"] =
 				len(rendered.PromptCandidates)
 			renderedPromptMatched := renderedPromptMatches(
@@ -836,15 +922,34 @@ func Ask(
 			)
 			data.Metadata["rendered_prompt_identity_proved"] =
 				renderedPromptMatched
+			textAnswerReady := len(strings.TrimSpace(rendered.Text)) >=
+				minimumUsefulAnswerChars(prompt) &&
+				terminalAnswerTextValid(rendered.Text, map[string]any{})
+			imageAnswerReady := data.Tool == ToolCreateImage &&
+				rendered.GeneratedImageReady
 			renderedTerminal := rendered.RouteMatches &&
 				rendered.ConversationID == conversationID &&
 				rendered.UserMessageCount == 1 &&
 				!rendered.Streaming &&
-				rendered.TerminalControl &&
-				len(strings.TrimSpace(rendered.Text)) >= minimumUsefulAnswerChars(prompt) &&
-				terminalAnswerTextValid(rendered.Text, map[string]any{})
+				(textAnswerReady || imageAnswerReady) &&
+				(rendered.TerminalControl || imageAnswerReady)
 			if renderedTerminal {
 				data.Text = strings.TrimSpace(rendered.Text)
+				if imageAnswerReady && !textAnswerReady {
+					// The rendered turn can contain only UI controls such as
+					// "Edit". The image attachment is the answer; do not expose
+					// that control label as answer text.
+					data.Text = ""
+					data.OutputKind = "image"
+					data.Metadata["answer_kind"] = "generated_image"
+					data.Attachments = []ConversationAttachment{{
+						Kind:   "image",
+						Alt:    "Generated image",
+						Source: "headed_browser_rendered",
+						Width:  rendered.GeneratedImageWidth,
+						Height: rendered.GeneratedImageHeight,
+					}}
+				}
 				data.CompletionState = "terminal"
 				data.ReadMode = "headed_browser_rendered"
 				data.Metadata["answer_source"] =
@@ -867,6 +972,27 @@ func Ask(
 							"cdp workflow agent chatgpt conversations detail %s --json",
 							conversationID,
 						),
+					},
+				)
+			}
+			if imageGenerationPending(
+				data.Tool,
+				rendered,
+				renderedPromptMatched,
+				textAnswerReady,
+			) {
+				_ = lease.MarkIncomplete(context.Background())
+				data.CompletionState = "incomplete"
+				data.ReadMode = browserReadMode
+				data.Metadata["answer_source"] =
+					"same_target_rendered_generated_image_pending"
+				data.Metadata["generated_image_pending"] = true
+				return finishAsk(
+					ctx, lease,
+					runID, config, webagent.StateIncomplete,
+					target, pending, action, conversation, data,
+					[]string{
+						conversationAwaitCommand(conversationID),
 					},
 				)
 			}
@@ -1018,6 +1144,24 @@ func observeComposer(
 	expectedThinking string,
 	observation *composerObservation,
 ) error {
+	return observeComposerWithTool(
+		ctx,
+		session,
+		prompt,
+		"",
+		expectedThinking,
+		observation,
+	)
+}
+
+func observeComposerWithTool(
+	ctx context.Context,
+	session *cdp.PageSession,
+	prompt string,
+	expectedTool string,
+	expectedThinking string,
+	observation *composerObservation,
+) error {
 	promptJSON, err := json.Marshal(prompt)
 	if err != nil {
 		return fmt.Errorf("encode ChatGPT prompt verification")
@@ -1026,8 +1170,13 @@ func observeComposer(
 	if err != nil {
 		return fmt.Errorf("encode ChatGPT thinking verification")
 	}
+	toolJSON, err := json.Marshal(expectedTool)
+	if err != nil {
+		return fmt.Errorf("encode ChatGPT tool verification")
+	}
 	expression := fmt.Sprintf(`(() => {
 	  const expected = %s;
+	  const expectedTool = %s;
 	  const expectedThinking = %s;
 	  const normalize = value => String(value || '').replace(/\r\n/g, '\n');
 	  const label = element => String(
@@ -1060,17 +1209,25 @@ func observeComposer(
 	      y,
 	    };
 	  };
-	  const editors = Array.from(document.querySelectorAll(
+	  const allEditors = Array.from(document.querySelectorAll(
 	    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
 	  )).filter((element, index, values) =>
 	    values.indexOf(element) === index && visible(element) && element.isContentEditable
 	  );
+	  const editors = expectedTool ? allEditors.filter(editor =>
+	    Array.from(editor.querySelectorAll(
+	      '[data-inline-selection-pill][data-keyword]'
+	    )).some(pill => label(pill).toLowerCase() === expectedTool.toLowerCase())
+	  ) : allEditors;
 	  const editor = editors.length === 1 ? editors[0] : null;
 	  const inlineText = node => {
 	    if (node.nodeType === Node.TEXT_NODE) {
 	      return node.nodeValue || '';
 	    }
 	    if (!(node instanceof HTMLElement)) return '';
+	    if (node.matches(
+	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
+	    )) return '';
 	    if (node.tagName === 'BR') return '\n';
 	    return Array.from(node.childNodes).map(inlineText).join('');
 	  };
@@ -1082,6 +1239,24 @@ func observeComposer(
 	  };
 	  const canonicalEditorText = editor ?
 	    normalize(Array.from(editor.childNodes).map(blockText).join('\n')) : '';
+	  const withoutToolPill = node => {
+	    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+	    if (!(node instanceof HTMLElement)) return '';
+	    if (node.matches(
+	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
+	    )) return '';
+	    if (node.tagName === 'BR') return '\n';
+	    return Array.from(node.childNodes).map(withoutToolPill).join('');
+	  };
+	  const toolFreeEditorText = editor ? normalize(
+	    Array.from(editor.childNodes).map(withoutToolPill).join('\n')
+	  ).replace(/^\s+|\s+$/g, '') : '';
+	  const editorPromptText = expectedTool ? toolFreeEditorText : canonicalEditorText;
+	  const selectedTools = editor ? Array.from(editor.querySelectorAll(
+	    '[data-inline-selection-pill][data-keyword]'
+	  )).filter(visible).map(pill => String(
+	    pill.getAttribute('data-keyword') || label(pill)
+	  ).trim()).filter(Boolean) : [];
 	  const radios = Array.from(document.querySelectorAll(
 	    'button[role="radio"]'
 	  )).filter(visible);
@@ -1134,22 +1309,23 @@ func observeComposer(
 	    '[data-testid*="deep-research"][aria-pressed="true"],' +
 	    '[data-testid*="agent"][aria-pressed="true"]'
 	  ));
-	  const editorInnerText = editor ? normalize(editor.innerText || '') : '';
-	  const editorTextContent = editor ? normalize(editor.textContent || '') : '';
+	  const editorInnerText = editor ? (expectedTool ? toolFreeEditorText : normalize(editor.innerText || '')) : '';
+	  const editorTextContent = editor ? (expectedTool ? toolFreeEditorText : normalize(editor.textContent || '')) : '';
+	  const expectedPrompt = expectedTool ? normalize(expected).replace(/^\s+|\s+$/g, '') : normalize(expected);
 	  return {
 	    route_ready: location.origin === 'https://chatgpt.com' &&
 	      location.pathname === '/',
 	    editor_ready: Boolean(editor),
 	    editor_count: editors.length,
 	    prompt_matches: Boolean(editor) &&
-	      canonicalEditorText === normalize(expected),
+	      editorPromptText === expectedPrompt,
 	    inner_text_matches: Boolean(editor) &&
-	      editorInnerText === normalize(expected),
+	      editorInnerText === expectedPrompt,
 	    text_content_matches: Boolean(editor) &&
-	      editorTextContent === normalize(expected),
+	      editorTextContent === expectedPrompt,
 	    canonical_matches: Boolean(editor) &&
-	      canonicalEditorText === normalize(expected),
-	    expected_characters: normalize(expected).length,
+	      editorPromptText === expectedPrompt,
+	    expected_characters: expectedPrompt.length,
 	    inner_text_characters: editorInnerText.length,
 	    text_content_characters: editorTextContent.length,
 	    canonical_characters: canonicalEditorText.length,
@@ -1167,9 +1343,11 @@ func observeComposer(
 	    assistant_count: assistants.length,
 	    user_message_count: users.length,
 	    conversation_id: route ? route[1] : '',
-	    specialized_surface_count: specialized.length
+	    specialized_surface_count: specialized.length,
+	    tool_count: selectedTools.length,
+	    selected_tool: selectedTools.length === 1 ? selectedTools[0] : ''
 	  };
-	})()`, promptJSON, thinkingJSON)
+	})()`, promptJSON, toolJSON, thinkingJSON)
 	return evaluateInto(ctx, session, expression, observation)
 }
 
@@ -1178,22 +1356,46 @@ func prepareExactPrompt(
 	session *cdp.PageSession,
 	prompt string,
 ) error {
+	return prepareExactPromptWithTool(ctx, session, prompt, "")
+}
+
+func prepareExactPromptWithTool(
+	ctx context.Context,
+	session *cdp.PageSession,
+	prompt string,
+	tool string,
+) error {
+	activationKind := "editor"
+	activationLabel := ""
+	if tool != "" {
+		activationKind = "editor-tool"
+		activationLabel = toolDisplayLabel(tool)
+	}
 	if err := activateSelectionControl(
 		ctx,
 		session,
-		"editor",
-		"",
+		activationKind,
+		activationLabel,
 	); err != nil {
 		return fmt.Errorf("activate exact ChatGPT composer before text input: %w", err)
 	}
 	var selected struct {
 		OK bool `json:"ok"`
 	}
-	if err := evaluateInto(ctx, session, `(() => {
+	toolLabelJSON, err := json.Marshal(toolDisplayLabel(tool))
+	if err != nil {
+		return fmt.Errorf("encode ChatGPT tool label")
+	}
+	expression := fmt.Sprintf(`(() => {
 	  const editors = Array.from(document.querySelectorAll(
 	    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
 	  )).filter((element, index, values) =>
-	    values.indexOf(element) === index && element.isContentEditable
+	    values.indexOf(element) === index && element.isContentEditable &&
+	    (%s === '' || Array.from(element.querySelectorAll(
+	      '[data-inline-selection-pill][data-keyword]'
+	    )).some(pill => String(
+	      pill.getAttribute('data-keyword') || pill.innerText || pill.textContent || ''
+	    ).trim().toLowerCase() === %s.toLowerCase()))
 	  );
 	  if (editors.length !== 1) return {ok: false};
 	  const editor = editors[0];
@@ -1202,13 +1404,59 @@ func prepareExactPrompt(
 	  if (!selection) return {ok: false};
 	  const range = document.createRange();
 	  range.selectNodeContents(editor);
+	  if (%s !== '') range.collapse(false);
 	  selection.removeAllRanges();
 	  selection.addRange(range);
 	  return {ok: document.activeElement === editor};
-	})()`, &selected); err != nil || !selected.OK {
+	})()`, toolLabelJSON, toolLabelJSON, toolLabelJSON)
+	if err := evaluateInto(ctx, session, expression, &selected); err != nil || !selected.OK {
 		return fmt.Errorf("select exact ChatGPT composer")
 	}
 	return browserflow.InsertText(ctx, session, prompt)
+}
+
+func observeComposerForTool(
+	ctx context.Context,
+	session *cdp.PageSession,
+	prompt string,
+	tool string,
+	intelligence string,
+	observation *composerObservation,
+) error {
+	if tool == "" {
+		return observeComposer(ctx, session, prompt, intelligence, observation)
+	}
+	return observeComposerWithTool(
+		ctx,
+		session,
+		prompt,
+		toolDisplayLabel(tool),
+		intelligence,
+		observation,
+	)
+}
+
+func composerPreparedForTool(
+	observation composerObservation,
+	intelligence string,
+	tool string,
+) bool {
+	if !composerPreparedExceptSend(observation, intelligence) {
+		return false
+	}
+	return tool == "" || strings.EqualFold(
+		observation.SelectedTool,
+		toolDisplayLabel(tool),
+	)
+}
+
+func composerReadyForTool(
+	observation composerObservation,
+	intelligence string,
+	tool string,
+) bool {
+	return composerPreparedForTool(observation, intelligence, tool) &&
+		observation.SendReady
 }
 
 func prepareVerifiedPrompt(
@@ -1217,6 +1465,30 @@ func prepareVerifiedPrompt(
 	prompt string,
 	intelligence string,
 	model string,
+	attachment *attachmentExpectation,
+	timeout time.Duration,
+	poll time.Duration,
+) (int, composerObservation, error) {
+	return prepareVerifiedPromptWithTool(
+		ctx,
+		session,
+		prompt,
+		intelligence,
+		model,
+		"",
+		attachment,
+		timeout,
+		poll,
+	)
+}
+
+func prepareVerifiedPromptWithTool(
+	ctx context.Context,
+	session *cdp.PageSession,
+	prompt string,
+	intelligence string,
+	model string,
+	tool string,
 	attachment *attachmentExpectation,
 	timeout time.Duration,
 	poll time.Duration,
@@ -1231,7 +1503,7 @@ func prepareVerifiedPrompt(
 	// deadline instead of closing the exact target after a fixed small count.
 	for attempt := 1; ; attempt++ {
 		attempts = attempt
-		if err := prepareExactPrompt(ctx, session, prompt); err != nil {
+		if err := prepareExactPromptWithTool(ctx, session, prompt, tool); err != nil {
 			lastErr = err
 		} else if err := verifySelectionAtSend(
 			ctx,
@@ -1253,26 +1525,28 @@ func prepareVerifiedPrompt(
 			lastErr = fmt.Errorf(
 				"exact ChatGPT attachment changed before Send",
 			)
-		} else if err := observeComposer(
+		} else if err := observeComposerForTool(
 			ctx,
 			session,
 			prompt,
+			tool,
 			intelligence,
 			&observation,
 		); err != nil {
 			lastErr = err
-		} else if composerReadyForSend(observation, intelligence) {
+		} else if composerReadyForTool(observation, intelligence, tool) {
 			return attempt, observation, nil
-		} else if composerPreparedExceptSend(observation, intelligence) {
+		} else if composerPreparedForTool(observation, intelligence, tool) {
 			waitAttempts, waitErr := pollUntil(
 				ctx,
 				time.Until(deadline),
 				poll,
 				func() (bool, error) {
-					if err := observeComposer(
+					if err := observeComposerForTool(
 						ctx,
 						session,
 						prompt,
+						tool,
 						intelligence,
 						&observation,
 					); err != nil {
@@ -1286,9 +1560,10 @@ func prepareVerifiedPrompt(
 					); err != nil {
 						return false, err
 					}
-					return composerReadyForSend(
+					return composerReadyForTool(
 						observation,
 						intelligence,
+						tool,
 					) && attachmentState.OK, nil
 				},
 			)
@@ -1303,10 +1578,11 @@ func prepareVerifiedPrompt(
 					poll,
 				); err != nil {
 					lastErr = err
-				} else if err := observeComposer(
+				} else if err := observeComposerForTool(
 					ctx,
 					session,
 					prompt,
+					tool,
 					intelligence,
 					&observation,
 				); err != nil {
@@ -1320,7 +1596,7 @@ func prepareVerifiedPrompt(
 					&attachmentState,
 				); err != nil ||
 					!attachmentState.OK ||
-					!composerReadyForSend(observation, intelligence) {
+					!composerReadyForTool(observation, intelligence, tool) {
 					lastErr = fmt.Errorf(
 						"ChatGPT composer or attachment changed after final selection verification",
 					)
@@ -1408,8 +1684,11 @@ func observeRendered(
 	    '[data-message-author-role="user"]'
 	  )));
 	  const users = userTurns.length ? userTurns : userMessages;
-	  const assistantTurn = assistants.length ?
-	    assistants[assistants.length - 1] : null;
+	  const imageAssistantTurn = [...assistants].reverse().find(turn =>
+	    turn.querySelector('img[alt^="Generated image"]')
+	  );
+	  const assistantTurn = imageAssistantTurn || (assistants.length ?
+	    assistants[assistants.length - 1] : null);
 	  const userTurn = users.length ? users[users.length - 1] : null;
 	  const assistant = assistantTurn && (
 	    assistantTurn.matches('[data-message-author-role="assistant"]') ?
@@ -1435,6 +1714,9 @@ func observeRendered(
 	      return node.nodeValue || '';
 	    }
 	    if (!(node instanceof HTMLElement)) return '';
+	    if (node.matches(
+	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
+	    )) return '';
 	    if (node.tagName === 'BR') return '\n';
 	    return Array.from(node.childNodes).map(inlineText).join('');
 	  };
@@ -1453,9 +1735,13 @@ func observeRendered(
 	        node instanceof HTMLElement &&
 	          ['P', 'DIV'].includes(node.tagName)
 	      );
-	    return blockStructured ?
+	    const value = blockStructured ?
 	      children.map(blockText).join('\n') :
-	      String(element.textContent || '');
+	      inlineText(element);
+	    const hasSelectionPill = Boolean(element.querySelector(
+	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
+	    ));
+	    return hasSelectionPill ? value.replace(/^\s+/, '') : value;
 	  };
 	  const promptCandidates = unique([
 	    user && user.innerText,
@@ -1467,6 +1753,13 @@ func observeRendered(
 	  const turn = assistantTurn || assistant && assistant.closest(
 	    'section[data-turn="assistant"],[data-turn="assistant"]'
 	  );
+	  const generatedImages = assistantTurn ? unique(Array.from(
+	    assistantTurn.querySelectorAll('img[alt^="Generated image"]')
+	  ).filter(visible)) : [];
+	  const readyImage = generatedImages.find(image =>
+	    image.complete && image.naturalWidth > 0
+	  );
+	  const generatedImageReady = Boolean(readyImage);
 	  const streamingState = turn ? Array.from(turn.querySelectorAll(
 	    '[data-is-streaming="true"],[aria-busy="true"]'
 	  )).some(visible) : false;
@@ -1512,7 +1805,13 @@ func observeRendered(
 	    stopped_thinking_marker_present: stoppedThinkingMarker,
 	    terminal_no_answer: terminalNoAnswer,
 	    terminal_no_answer_reason: terminalNoAnswer ?
-	      'stopped_thinking' : ''
+      'stopped_thinking' : '',
+	    generated_image_count: generatedImages.length,
+	    generated_image_ready: generatedImageReady,
+	    generated_image_width: readyImage ?
+	      Number(readyImage.naturalWidth || readyImage.width || 0) : 0,
+	    generated_image_height: readyImage ?
+	      Number(readyImage.naturalHeight || readyImage.height || 0) : 0
 	  };
 	})()`, observation)
 }
@@ -1522,37 +1821,74 @@ func waitRenderedAnswer(
 	session *cdp.PageSession,
 	conversationID string,
 	prompt string,
+	tool string,
 	deadline time.Time,
 	poll time.Duration,
 ) (renderedObservation, int, int) {
 	var observation renderedObservation
-	lastText := ""
+	lastResult := ""
 	stable := 0
 	attempts := 0
+	imagePendingReads := 0
+	imageRecoveryAttempted := false
 	for time.Now().Before(deadline) {
 		attempts++
 		current := renderedObservation{}
 		if err := observeRendered(ctx, session, &current); err == nil {
+			if imagePlaceholderNeedsRecovery(tool, current) {
+				imagePendingReads++
+			} else {
+				imagePendingReads = 0
+			}
+			if imagePendingReads >= 2 && !imageRecoveryAttempted {
+				imageRecoveryAttempted = true
+				if err := recoverImageNavigation(
+					ctx,
+					session,
+					conversationID,
+				); err == nil {
+					lastResult = ""
+					stable = 0
+					if !waitForObservation(
+						ctx,
+						poll,
+						time.Until(deadline),
+					) {
+						break
+					}
+					continue
+				}
+			}
+			current.ImageRecoveryAttempted = imageRecoveryAttempted
 			observation = current
 			text := strings.TrimSpace(observation.Text)
 			valid := observation.RouteMatches &&
 				observation.ConversationID == conversationID &&
 				observation.UserMessageCount == 1 &&
 				!observation.Streaming &&
-				len(text) >= minimumUsefulAnswerChars(prompt) &&
-				terminalAnswerTextValid(text, map[string]any{})
+				((len(text) >= minimumUsefulAnswerChars(prompt) &&
+					terminalAnswerTextValid(text, map[string]any{})) ||
+					(tool == ToolCreateImage && observation.GeneratedImageReady))
 			if valid {
-				if text == lastText {
+				resultKey := text
+				if tool == ToolCreateImage && observation.GeneratedImageReady {
+					resultKey = fmt.Sprintf(
+						"image:%d",
+						observation.GeneratedImageCount,
+					)
+				}
+				if resultKey == lastResult {
 					stable++
 				} else {
-					lastText = text
+					lastResult = resultKey
 					stable = 1
 				}
-				if observation.TerminalControl {
+				if observation.TerminalControl ||
+					(tool == ToolCreateImage && stable >= 2) {
 					return observation, stable, attempts
 				}
 			} else {
-				lastText = ""
+				lastResult = ""
 				stable = 0
 			}
 		}
@@ -1562,9 +1898,51 @@ func waitRenderedAnswer(
 	}
 	current := renderedObservation{}
 	if err := observeRendered(ctx, session, &current); err == nil {
+		current.ImageRecoveryAttempted = imageRecoveryAttempted
 		observation = current
 	}
 	return observation, stable, attempts
+}
+
+func recoverImageNavigation(
+	ctx context.Context,
+	session *cdp.PageSession,
+	conversationID string,
+) error {
+	if _, err := session.Navigate(ctx, "about:blank"); err != nil {
+		return fmt.Errorf("navigate to image recovery blank page: %w", err)
+	}
+	conversationURL := Origin + "/c/" + url.PathEscape(conversationID)
+	if _, err := session.Navigate(ctx, conversationURL); err != nil {
+		return fmt.Errorf("navigate back to image conversation: %w", err)
+	}
+	return nil
+}
+
+func imagePlaceholderNeedsRecovery(
+	tool string,
+	observation renderedObservation,
+) bool {
+	return tool == ToolCreateImage &&
+		observation.RouteMatches &&
+		!observation.Streaming &&
+		observation.GeneratedImageCount > 0 &&
+		!observation.GeneratedImageReady
+}
+
+func imageGenerationPending(
+	tool string,
+	observation renderedObservation,
+	promptMatched bool,
+	textAnswerReady bool,
+) bool {
+	return tool == ToolCreateImage &&
+		promptMatched &&
+		observation.RouteMatches &&
+		observation.UserMessageCount == 1 &&
+		!observation.Streaming &&
+		!textAnswerReady &&
+		!observation.GeneratedImageReady
 }
 
 func renderedPromptMatches(

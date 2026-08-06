@@ -49,14 +49,18 @@ type AskData struct {
 }
 
 type composerObservation struct {
-	RouteReady     bool   `json:"route_ready"`
-	EditorReady    bool   `json:"editor_ready"`
-	EditorCount    int    `json:"editor_count"`
-	PromptMatches  bool   `json:"prompt_matches"`
-	SearchCount    int    `json:"search_count"`
-	SearchSelected bool   `json:"search_selected"`
-	AssistantCount int    `json:"assistant_count"`
-	ConversationID string `json:"conversation_id"`
+	RouteReady     bool    `json:"route_ready"`
+	EditorReady    bool    `json:"editor_ready"`
+	EditorCount    int     `json:"editor_count"`
+	PromptMatches  bool    `json:"prompt_matches"`
+	SearchCount    int     `json:"search_count"`
+	SearchSelected bool    `json:"search_selected"`
+	AssistantCount int     `json:"assistant_count"`
+	ConversationID string  `json:"conversation_id"`
+	SubmitCount    int     `json:"submit_count"`
+	SubmitReady    bool    `json:"submit_ready"`
+	SubmitX        float64 `json:"submit_x"`
+	SubmitY        float64 `json:"submit_y"`
 }
 
 type askObservation struct {
@@ -69,33 +73,71 @@ type askObservation struct {
 }
 
 type perplexitySendDispatcher struct {
-	prompt string
+	prompt  string
+	timeout time.Duration
+	poll    time.Duration
 }
 
 func (d perplexitySendDispatcher) Dispatch(
 	ctx context.Context,
 	session *cdp.PageSession,
 ) (browserflow.DispatchOutcome, error) {
-	var observation composerObservation
-	if err := observeComposer(
+	observation, err := observePerplexitySendReady(
 		ctx,
 		session,
 		d.prompt,
-		&observation,
-	); err != nil ||
-		!observation.RouteReady ||
-		!observation.EditorReady ||
-		observation.EditorCount != 1 ||
-		!observation.PromptMatches ||
-		observation.SearchCount != 1 ||
-		!observation.SearchSelected ||
-		observation.AssistantCount != 0 ||
-		observation.ConversationID != "" {
+		d.timeout,
+		d.poll,
+	)
+	if err != nil {
 		return browserflow.DispatchOutcome{
 			Dispatch: browserflow.DispatchNotPerformed,
-		}, fmt.Errorf("exact Perplexity Send control was not actionable")
+		}, err
 	}
-	return browserflow.PressEnterOnSelector(ctx, session, "#ask-input")
+	return browserflow.ClickPoint(
+		ctx,
+		session,
+		observation.SubmitX,
+		observation.SubmitY,
+	)
+}
+
+func observePerplexitySendReady(
+	ctx context.Context,
+	session *cdp.PageSession,
+	prompt string,
+	timeout time.Duration,
+	poll time.Duration,
+) (composerObservation, error) {
+	if timeout <= 0 {
+		timeout = defaultComposerTimeout
+	}
+	if poll <= 0 {
+		poll = 250 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	var observation composerObservation
+	for time.Now().Before(deadline) {
+		if err := observeComposer(ctx, session, prompt, &observation); err == nil &&
+			observation.RouteReady &&
+			observation.EditorReady &&
+			observation.EditorCount == 1 &&
+			observation.PromptMatches &&
+			observation.SearchCount == 1 &&
+			observation.SearchSelected &&
+			observation.SubmitCount == 1 &&
+			observation.SubmitReady &&
+			observation.AssistantCount == 0 &&
+			observation.ConversationID == "" {
+			return observation, nil
+		}
+		if !waitRendered(ctx, poll, time.Until(deadline)) {
+			break
+		}
+	}
+	return observation, fmt.Errorf(
+		"exact Perplexity Submit control was not actionable after bounded observation",
+	)
 }
 
 func Ask(
@@ -290,10 +332,15 @@ func Ask(
 			dispatcher := config.Send
 			if dispatcher == nil {
 				dispatcher = perplexitySendDispatcher{
-					prompt: prompt,
+					prompt:  prompt,
+					timeout: config.ComposerTimeout,
+					poll:    config.PollInterval,
 				}
 			}
-			outcome, _ := lease.Dispatch(ctx, dispatcher)
+			outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
+			if dispatchErr != nil {
+				data.Metadata["dispatch_error"] = dispatchErr.Error()
+			}
 			action := actionEvidence(lease.Record())
 			_ = lease.ReleaseInput()
 			if outcome.Dispatch == browserflow.DispatchNotPerformed ||
@@ -346,6 +393,79 @@ func Ask(
 			}
 			conversationID := observation.ConversationID
 			conversation := conversationRef(conversationID)
+			initialConversationID := conversationID
+
+			renderedStable := 0
+			renderedCandidateReads := 0
+			lastRenderedText := ""
+			detailAttempts := 0
+			renderedDeadline := webagent.FractionalDeadline(
+				time.Now(),
+				deadline,
+				renderedWaitFraction,
+			)
+			data.Metadata["rendered_wait_fraction"] =
+				renderedWaitFraction
+			for time.Now().Before(renderedDeadline) {
+				detailAttempts++
+				_ = observeAskState(ctx, session, &observation)
+				if observation.RouteMatches &&
+					conversationIDPattern.MatchString(observation.ConversationID) &&
+					strings.TrimSpace(observation.Prompt) != "" &&
+					fingerprintPrompt(strings.TrimSpace(observation.Prompt)) ==
+						data.PromptFingerprint &&
+					observation.ConversationID != conversationID {
+					conversationID = observation.ConversationID
+					conversation = conversationRef(conversationID)
+					data.Metadata["conversation_route_transition"] = true
+					data.Metadata["initial_conversation_id"] =
+						initialConversationID
+				}
+				if renderedAnswerCandidate(
+					observation,
+					conversationID,
+				) {
+					renderedCandidateReads++
+					if observation.Text == lastRenderedText {
+						renderedStable++
+					} else {
+						lastRenderedText = observation.Text
+						renderedStable = 1
+					}
+					if renderedCandidateReads >= 2 {
+						break
+					}
+				} else {
+					renderedCandidateReads = 0
+					renderedStable = 0
+					lastRenderedText = ""
+				}
+				if !waitRendered(
+					ctx,
+					config.PollInterval,
+					time.Until(renderedDeadline),
+				) {
+					break
+				}
+			}
+			data.DetailReadAttempts = detailAttempts
+			data.Metadata["rendered_answer_count"] = observation.AnswerCount
+			data.Metadata["rendered_terminal_stable_reads"] = renderedStable
+			data.Metadata["rendered_terminal_candidate_reads"] =
+				renderedCandidateReads
+			renderedPromptMatched := false
+			if promptFingerprint := fingerprintPrompt(observation.Prompt); strings.TrimSpace(observation.Prompt) != "" {
+				data.Metadata["rendered_prompt_fingerprint"] = promptFingerprint
+				renderedPromptMatched =
+					promptFingerprint == data.PromptFingerprint
+				data.Metadata["rendered_prompt_identity_proved"] =
+					renderedPromptMatched
+				if !renderedPromptMatched {
+					data.Metadata["rendered_prompt_diagnostics"] =
+						promptIdentityDiagnostics(prompt, observation.Prompt)
+				}
+			}
+			conversation = conversationRef(conversationID)
 			if err := lease.Acknowledge(ctx, conversationID); err != nil {
 				retryAt := retryAtFromRecord(
 					lease.Record(),
@@ -362,66 +482,18 @@ func Ask(
 			}
 			action = actionEvidence(lease.Record())
 
-			renderedStable := 0
-			lastRenderedText := ""
-			detailAttempts := 0
-			renderedDeadline := webagent.FractionalDeadline(
-				time.Now(),
-				deadline,
-				renderedWaitFraction,
-			)
-			data.Metadata["rendered_wait_fraction"] =
-				renderedWaitFraction
-			for time.Now().Before(renderedDeadline) {
-				detailAttempts++
-				_ = observeAskState(ctx, session, &observation)
-				if observation.RouteMatches &&
-					observation.ConversationID == conversationID &&
-					observation.AnswerCount > 0 &&
-					strings.TrimSpace(observation.Text) != "" &&
-					!observation.Streaming {
-					if observation.Text == lastRenderedText {
-						renderedStable++
-					} else {
-						lastRenderedText = observation.Text
-						renderedStable = 1
-					}
-					if renderedStable >= 2 {
-						break
-					}
-				} else {
-					renderedStable = 0
-					lastRenderedText = ""
-				}
-				if !waitRendered(
-					ctx,
-					config.PollInterval,
-					time.Until(renderedDeadline),
-				) {
-					break
-				}
-			}
-			data.DetailReadAttempts = detailAttempts
-			data.Metadata["rendered_answer_count"] = observation.AnswerCount
-			data.Metadata["rendered_terminal_stable_reads"] = renderedStable
-			renderedPromptMatched := false
-			if promptFingerprint := fingerprintPrompt(observation.Prompt); strings.TrimSpace(observation.Prompt) != "" {
-				data.Metadata["rendered_prompt_fingerprint"] = promptFingerprint
-				renderedPromptMatched =
-					promptFingerprint == data.PromptFingerprint
-				data.Metadata["rendered_prompt_identity_proved"] =
-					renderedPromptMatched
-				if !renderedPromptMatched {
-					data.Metadata["rendered_prompt_diagnostics"] =
-						promptIdentityDiagnostics(prompt, observation.Prompt)
-				}
-			}
+			renderedTerminal := renderedCandidateReads >= 2 &&
+				renderedAnswerCandidate(
+					observation,
+					conversationID,
+				) && renderedPromptMatched
 
 			stored := ConversationDetailData{}
 			var storedFailure *readFailure
 			if templateAvailable {
+				storedCtx, cancelStored := context.WithTimeout(ctx, 5*time.Second)
 				stored, storedFailure = fetchConversationDetail(
-					ctx,
+					storedCtx,
 					ReadConfig{
 						Store:       config.Store,
 						HTTPClient:  config.HTTPClient,
@@ -431,6 +503,7 @@ func Ask(
 					template,
 					conversationID,
 				)
+				cancelStored()
 				data.Metadata["stored_detail_attempts"] = 1
 			} else {
 				storedFailure = &readFailure{
@@ -513,22 +586,20 @@ func Ask(
 					},
 				)
 			}
-			renderedTerminal := renderedStable >= 2 &&
-				observation.RouteMatches &&
-				observation.ConversationID == conversationID &&
-				renderedPromptMatched &&
-				!observation.Streaming &&
-				strings.TrimSpace(observation.Text) != ""
 			if renderedTerminal &&
-				storedFailure != nil &&
-				storedFailure.code == "perplexity_browser_context_required" {
+				(storedFailure != nil || stored.CompletionState != "terminal" ||
+					strings.TrimSpace(stored.Text) == "") {
 				data.Text = strings.TrimSpace(observation.Text)
 				data.CompletionState = "terminal"
 				data.ReadMode = "headed_browser_fallback"
 				data.Metadata["source"] =
 					"headed_cdp_visible_submit_rendered_answer"
 				data.Metadata["formatting"] = "rendered_visible_text"
-				data.Metadata["stored_detail_state"] = "browser_context_required"
+				if storedFailure != nil {
+					data.Metadata["stored_detail_state"] = storedFailure.code
+				} else {
+					data.Metadata["stored_detail_state"] = stored.CompletionState
+				}
 				if err := lease.MarkTerminal(ctx); err != nil {
 					return askFailure(
 						runID, config, webagent.StageAcknowledged,
@@ -616,6 +687,11 @@ func observeComposer(
 	  const searches = Array.from(document.querySelectorAll('button')).filter(button =>
 	    visible(button) && (button.innerText || button.textContent || '').trim() === 'Search'
 	  );
+	  const submits = Array.from(document.querySelectorAll(
+	    'button[aria-label="Submit"]'
+	  )).filter(visible);
+	  const submit = submits.length === 1 ? submits[0] : null;
+	  const submitRect = submit ? submit.getBoundingClientRect() : null;
 	  const editorText = editor?.textContent || '';
 	  const match = location.pathname.match(/^\/search\/([A-Za-z0-9-]+)$/);
 	  return {
@@ -629,6 +705,10 @@ func observeComposer(
 	      searches[0].getAttribute('aria-pressed') === 'true',
 	    assistant_count: document.querySelectorAll('main div.prose').length,
 	    conversation_id: match ? match[1] : '',
+	    submit_count: submits.length,
+	    submit_ready: Boolean(submit && !submit.disabled),
+	    submit_x: submitRect ? submitRect.left + submitRect.width / 2 : -1,
+	    submit_y: submitRect ? submitRect.top + submitRect.height / 2 : -1,
 	  };
 	})()`, promptJSON)
 	return evaluateInto(ctx, session, expression, observation)
@@ -811,6 +891,17 @@ func observeAskState(
 	    answer_count: answers.length,
 	  };
 	})()`, observation)
+}
+
+func renderedAnswerCandidate(
+	observation askObservation,
+	conversationID string,
+) bool {
+	return observation.RouteMatches &&
+		observation.ConversationID == conversationID &&
+		observation.AnswerCount > 0 &&
+		strings.TrimSpace(observation.Text) != "" &&
+		!observation.Streaming
 }
 
 func askFailure(
