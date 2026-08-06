@@ -1105,7 +1105,8 @@ func extractConversationText(payload map[string]any) extractedConversation {
 	}
 	for index, node := range nodes {
 		message, _ := node["message"].(map[string]any)
-		if messageRole(message) != "assistant" {
+		role := messageRole(message)
+		if role != "assistant" && role != "tool" {
 			continue
 		}
 		text := strings.TrimSpace(messageText(message, true))
@@ -1124,7 +1125,15 @@ func extractConversationText(payload map[string]any) extractedConversation {
 			copyResultMetadata(result.metadata, message)
 			return result
 		}
-		if !terminalAssistantContentValid(text, attachments, message) {
+		if role == "tool" {
+			// Current ChatGPT image/file tools persist the answer as a
+			// finished tool message. It can sit behind an assistant reasoning
+			// recap, so restricting this walk to assistant messages loses a
+			// real attachment and falsely reports an incomplete conversation.
+			if !terminalToolAttachmentValid(attachments, message) {
+				continue
+			}
+		} else if !terminalAssistantContentValid(text, attachments, message) {
 			continue
 		}
 		result.text = text
@@ -1136,17 +1145,27 @@ func extractConversationText(payload map[string]any) extractedConversation {
 			result.metadata["attachments_truncated"] = true
 		}
 		result.metadata["assistant_is_current_node"] = index == 0
-		if index == 0 &&
+		result.metadata["output_role"] = role
+		if (index == 0 || role == "tool") &&
 			(activity == conversationActivityAbsent ||
 				activity == conversationActivityInactive) &&
 			message["status"] == "finished_successfully" &&
-			message["end_turn"] == true {
+			(message["end_turn"] == true || role == "tool") {
 			result.completionState = conversationCompletionTerminal
 		}
 		copyResultMetadata(result.metadata, message)
 		return result
 	}
 	return result
+}
+
+func terminalToolAttachmentValid(
+	attachments []ConversationAttachment,
+	message map[string]any,
+) bool {
+	return len(attachments) > 0 &&
+		message["status"] == "finished_successfully" &&
+		terminalAssistantEnvelopeValid(message)
 }
 
 func conversationActivity(

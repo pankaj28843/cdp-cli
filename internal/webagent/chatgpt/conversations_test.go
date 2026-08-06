@@ -136,6 +136,46 @@ const imageOnlyDetailPayload = `{
   }
 }`
 
+const terminalToolImageDetailPayload = `{
+  "async_status":null,
+  "current_node":"recap",
+  "mapping":{
+    "recap":{
+      "parent":"tool-image",
+      "message":{
+        "author":{"role":"assistant"},
+        "content":{"content_type":"reasoning_recap","content":"Worked for 1m."}
+      }
+    },
+    "tool-image":{
+      "parent":"prompt",
+      "message":{
+        "author":{"role":"tool"},
+        "recipient":"all",
+        "status":"finished_successfully",
+        "content":{
+          "content_type":"multimodal_text",
+          "parts":[{
+            "content_type":"image_asset_pointer",
+            "asset_pointer":"sediment://file_synthetic_tool_image",
+            "mime_type":"image/png",
+            "size_bytes":2048,
+            "width":320,
+            "height":180
+          }]
+        }
+      }
+    },
+    "prompt":{
+      "parent":"",
+      "message":{
+        "author":{"role":"user"},
+        "content":{"content_type":"text","parts":["Generate an image."]}
+      }
+    }
+  }
+}`
+
 const activeNoAnswerDetailPayload = `{
   "async_status":3,
   "current_node":"answer",
@@ -822,6 +862,39 @@ func TestDetailImageOnlyAssistantIsTerminalWithoutRenderedFallback(
 			data,
 			contract.Attachments,
 		)
+	}
+}
+
+func TestConversationDetailAcceptsFinishedToolImageAfterReasoningRecap(
+	t *testing.T,
+) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(terminalToolImageDetailPayload), &payload); err != nil {
+		t.Fatalf("decode synthetic tool image payload: %v", err)
+	}
+	data, failure := parseConversationDetailPayload(
+		newConversationDetailData(
+			"conversation-tool-image",
+			"candidate_http",
+			"",
+		),
+		payload,
+		http.StatusOK,
+	)
+	if failure != nil ||
+		data.CompletionState != conversationCompletionTerminal ||
+		data.Text != "" ||
+		len(data.Attachments) != 1 ||
+		data.Attachments[0].Kind != "image" ||
+		data.Attachments[0].Source != "sediment://file_synthetic_tool_image" ||
+		data.Attachments[0].MIMEType != "image/png" ||
+		data.Attachments[0].SizeBytes != 2048 ||
+		data.Attachments[0].Width != 320 ||
+		data.Attachments[0].Height != 180 {
+		t.Fatalf("data=%+v failure=%+v", data, failure)
+	}
+	if role, _ := data.Metadata["output_role"].(string); role != "tool" {
+		t.Fatalf("output_role=%v metadata=%+v", data.Metadata["output_role"], data.Metadata)
 	}
 }
 
