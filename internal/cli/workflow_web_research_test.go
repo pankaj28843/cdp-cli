@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pankaj28843/cdp-cli/internal/config"
 )
 
 func TestReadWebResearchQueries(t *testing.T) {
@@ -99,6 +101,9 @@ func TestWebResearchSearchURLByEngine(t *testing.T) {
 			if tt.engine == "google" && parsed.Query().Get("tbs") != exactDate {
 				t.Fatalf("google tbs was not preserved exactly: %s", rawURL)
 			}
+			if tt.engine == "google" && (parsed.Query().Get("udm") != "" || parsed.Query().Get("aep") != "") {
+				t.Fatalf("default Google URL = %s, want ordinary SERP navigation", rawURL)
+			}
 			if tt.engine != "google" && parsed.Query().Get("tbs") != "" {
 				t.Fatalf("%s unexpectedly received Google tbs: %s", tt.engine, rawURL)
 			}
@@ -114,5 +119,122 @@ func TestWebResearchSupportedSERPSet(t *testing.T) {
 	}
 	if isWebResearchSupportedSERP("yahoo") {
 		t.Fatalf("unexpected supported engine")
+	}
+}
+
+func TestParseWebResearchGoogleAIPolicy(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "", want: webResearchGoogleAIDefault},
+		{input: " AUTO ", want: "auto"},
+		{input: "mode", want: "mode"},
+		{input: "off", want: "off"},
+	}
+	for _, tt := range tests {
+		got, err := parseWebResearchGoogleAIPolicy(tt.input)
+		if err != nil {
+			t.Fatalf("parseWebResearchGoogleAIPolicy(%q) error = %v", tt.input, err)
+		}
+		if got != tt.want {
+			t.Fatalf("parseWebResearchGoogleAIPolicy(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+	if _, err := parseWebResearchGoogleAIPolicy("summarize"); err == nil || !strings.Contains(err.Error(), "unsupported Google AI response policy") {
+		t.Fatalf("invalid Google AI policy error = %v, want classified policy error", err)
+	}
+}
+
+func TestWebResearchSearchURLWithGoogleAI(t *testing.T) {
+	autoURL := webResearchSearchURLWithGoogleAI("google", "agentic engineering", "", 1, "auto")
+	autoParsed, err := url.Parse(autoURL)
+	if err != nil {
+		t.Fatalf("parse auto URL: %v", err)
+	}
+	if autoParsed.Query().Get("udm") != "" || autoParsed.Query().Get("aep") != "" {
+		t.Fatalf("auto Google URL = %s, want standard SERP without AI Mode selectors", autoURL)
+	}
+
+	modeURL := webResearchSearchURLWithGoogleAI("google", "agentic engineering", "", 1, "mode")
+	modeParsed, err := url.Parse(modeURL)
+	if err != nil {
+		t.Fatalf("parse AI Mode URL: %v", err)
+	}
+	if modeParsed.Query().Get("udm") != "50" || modeParsed.Query().Get("aep") != "1" {
+		t.Fatalf("AI Mode URL = %s, want udm=50 and aep=1", modeURL)
+	}
+
+	otherURL := webResearchSearchURLWithGoogleAI("bing", "agentic engineering", "", 1, "mode")
+	otherParsed, err := url.Parse(otherURL)
+	if err != nil {
+		t.Fatalf("parse non-Google URL: %v", err)
+	}
+	if otherParsed.Query().Get("udm") != "" || otherParsed.Query().Get("aep") != "" {
+		t.Fatalf("non-Google URL = %s, Google AI policy must be ignored", otherURL)
+	}
+}
+
+func TestResolveWebResearchGoogleAIPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested string
+		explicit  bool
+		cfg       config.Config
+		want      webResearchGoogleAIPolicyResolution
+	}{
+		{
+			name:      "safe inline default",
+			requested: webResearchGoogleAIDefault,
+			want: webResearchGoogleAIPolicyResolution{
+				Policy: webResearchGoogleAIAuto, Source: webResearchGoogleAIPolicySourceDefault,
+			},
+		},
+		{
+			name:      "configured exclusive mode",
+			requested: webResearchGoogleAIDefault,
+			cfg: config.Config{Agents: config.AgentConfig{Google: config.GoogleAgentConfig{
+				ExclusiveAIMode: true,
+			}}},
+			want: webResearchGoogleAIPolicyResolution{
+				Policy: webResearchGoogleAIMode, Source: webResearchGoogleAIPolicySourceConfig, Exclusive: true,
+			},
+		},
+		{
+			name:      "explicit auto overrides exclusive config",
+			requested: webResearchGoogleAIAuto,
+			explicit:  true,
+			cfg: config.Config{Agents: config.AgentConfig{Google: config.GoogleAgentConfig{
+				ExclusiveAIMode: true,
+			}}},
+			want: webResearchGoogleAIPolicyResolution{
+				Policy: webResearchGoogleAIAuto, Source: webResearchGoogleAIPolicySourceFlag,
+			},
+		},
+		{
+			name:      "explicit off overrides exclusive config",
+			requested: webResearchGoogleAIOff,
+			explicit:  true,
+			cfg: config.Config{Agents: config.AgentConfig{Google: config.GoogleAgentConfig{
+				ExclusiveAIMode: true,
+			}}},
+			want: webResearchGoogleAIPolicyResolution{
+				Policy: webResearchGoogleAIOff, Source: webResearchGoogleAIPolicySourceFlag,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveWebResearchGoogleAIPolicy(tt.requested, tt.explicit, tt.cfg)
+			if err != nil {
+				t.Fatalf("resolveWebResearchGoogleAIPolicy() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveWebResearchGoogleAIPolicy() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+	if _, err := resolveWebResearchGoogleAIPolicy("unsupported", true, config.Config{}); err == nil {
+		t.Fatal("explicit unsupported policy returned nil error")
 	}
 }

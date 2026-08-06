@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +29,7 @@ func (a *app) newWorkflowWebResearchCommand() *cobra.Command {
 func (a *app) newWorkflowWebResearchSERPCommand() *cobra.Command {
 	var queryFile string
 	var serp string
+	var googleAI string
 	var fallbackSerp string
 	var maxCandidates int
 	var candidateOut string
@@ -60,11 +62,18 @@ The optional second column is an opaque Google tbs value. cdp retains it as
 time_filter in output metadata and applies it only to Google; other engines
 ignore it.
 
+Google AI response capture defaults to inline auto expansion, which is the
+safe choice for managed corporate browsers. Set agents.google.exclusive_ai_mode
+to true in the cdp config to make separate Google AI Mode navigation the
+default on a non-isolated machine. An explicit --google-ai auto|mode|off
+always overrides that machine policy for one run.
+
 --navigation-delay applies a cancellable minimum delay between navigation starts
 within each SERP engine lane. There is no delay before the first navigation.
 Parallel engine lanes are paced independently.`,
 		Example: `  printf '%s\t%s\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries.txt
-  cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --parallel 1 --navigation-delay 30s --out-dir tmp/research --json`,
+  cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --parallel 1 --navigation-delay 30s --wait 30s --settle 3s --out-dir tmp/research --json
+  cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --google-ai mode --parallel 1 --wait 30s --settle 3s --out-dir tmp/research-ai-mode --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 || settle < 0 || navigationDelay < 0 || maxCandidates < 0 || parallel < 0 || resultPages < 0 || minVisibleWords < 0 || minMarkdownWords < 0 || minHTMLChars < 0 || blockedFailureThreshold < 0 {
@@ -104,6 +113,17 @@ Parallel engine lanes are paced independently.`,
 				return commandError("usage", "usage", "--serp must be one of, all, or a comma-separated list from: "+webResearchSERPList(), ExitUsage, []string{"cdp workflow web-research serp --serp google --json", "cdp workflow web-research serp --serp google,bing --json", "cdp workflow web-research serp --serp all --json"})
 			}
 			serp = strings.Join(primarySerps, ",")
+			cfg, err := config.Load(a.opts.config)
+			if err != nil {
+				return commandError("invalid_config", "usage", err.Error(), ExitUsage, []string{"cdp --config <path> browser mode get --json"})
+			}
+			googleAIPolicy, policyErr := resolveWebResearchGoogleAIPolicy(googleAI, cmd.Flags().Changed("google-ai"), cfg)
+			if policyErr != nil {
+				return commandError("usage", "usage", "--google-ai must be auto, mode, or off", ExitUsage, []string{"cdp workflow web-research serp --google-ai auto --query-file tmp/queries.txt --json", "cdp workflow web-research serp --google-ai mode --query-file tmp/queries.txt --json"})
+			}
+			googleAI = googleAIPolicy.Policy
+			googleAISource := googleAIPolicy.Source
+			googleAIExclusive := googleAIPolicy.Exclusive
 			fallbackSerp = strings.TrimSpace(strings.ToLower(fallbackSerp))
 			if fallbackSerp == "" {
 				fallbackSerp = "auto"
@@ -139,7 +159,7 @@ Parallel engine lanes are paced independently.`,
 			if effectiveParallelEngines {
 				parallelEngineCount = len(primarySerps)
 			}
-			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "serps": primarySerps, "fallback_serp": fallbackSerp, "resolved_fallback_serp": resolvedFallbackSerp, "result_pages": resultPages, "parallel_engines": effectiveParallelEngines, "per_engine_parallel": perEngineParallel, "navigation_delay": navigationDelay.String()}, "", "  ")
+			queriesPayload, err := json.MarshalIndent(map[string]any{"queries": queries, "count": len(queries), "serp": serp, "serps": primarySerps, "google_ai": googleAI, "google_ai_source": googleAISource, "google_ai_exclusive": googleAIExclusive, "fallback_serp": fallbackSerp, "resolved_fallback_serp": resolvedFallbackSerp, "result_pages": resultPages, "parallel_engines": effectiveParallelEngines, "per_engine_parallel": perEngineParallel, "navigation_delay": navigationDelay.String()}, "", "  ")
 			if err != nil {
 				return commandError("internal", "internal", fmt.Sprintf("marshal web research queries: %v", err), ExitInternal, []string{"cdp workflow web-research serp --json"})
 			}
@@ -184,7 +204,7 @@ Parallel engine lanes are paced independently.`,
 			}
 			runJob := func(activeSerp, artifactRoot string, job serpJob, reusePage *renderedExtractReusablePage, pacer *webResearchNavigationPacer) serpResult {
 				query := queries[job.QueryIndex]
-				queryURL := webResearchSearchURL(activeSerp, query.Text, query.TimeFilter, job.SerpPage)
+				queryURL := webResearchSearchURLWithGoogleAI(activeSerp, query.Text, query.TimeFilter, job.SerpPage, googleAI)
 				result, err := a.runRenderedExtractWorkflow(cmd, renderedExtractOptions{
 					WorkflowName:       "web-research-serp",
 					ArtifactTypePrefix: "web-research-serp",
@@ -197,6 +217,7 @@ Parallel engine lanes are paced independently.`,
 					Formats:            "snapshot,text,html,markdown,links",
 					OutDir:             filepath.Join(artifactRoot, webResearchSERPArtifactID(job.QueryIndex, query), fmt.Sprintf("page-%d", job.SerpPage)),
 					Serp:               activeSerp,
+					GoogleAI:           googleAI,
 					Limit:              80,
 					MinVisibleWords:    minVisibleWords,
 					MinMarkdownWords:   minMarkdownWords,
@@ -416,6 +437,7 @@ Parallel engine lanes are paced independently.`,
 			queryOmittedByPoolCap := make([]int, len(queries))
 			queryBlockedPages := make([]int, len(queries))
 			queryFailedPages := make([]int, len(queries))
+			googleAIResponseCount := 0
 			for index := range queryCandidateSeen {
 				queryCandidateSeen[index] = map[string]bool{}
 			}
@@ -430,6 +452,9 @@ Parallel engine lanes are paced independently.`,
 						continue
 					}
 					serpReports = append(serpReports, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "report": result.Result.Report})
+					if result.Result.GoogleAI != nil && result.Result.GoogleAI.Status == "present" {
+						googleAIResponseCount++
+					}
 					if blocked, signals := detectSERPBlocked(result.Result); blocked {
 						failures = append(failures, map[string]any{"serp": result.Serp, "query": result.Query.Text, "time_filter": result.Query.TimeFilter, "serp_page": result.SerpPage, "err_class": "serp_blocked", "message": result.Serp + " served a consent, CAPTCHA, auth, or bot-check page", "signals": signals})
 						warnings = append(warnings, fmt.Sprintf("%s SERP page %d for query %q was blocked by a consent, CAPTCHA, auth, or bot-check page", result.Serp, result.SerpPage, result.Query.Text))
@@ -566,6 +591,10 @@ Parallel engine lanes are paced independently.`,
 					"name":                      "web-research-serp",
 					"serp":                      serp,
 					"serps":                     primarySerps,
+					"google_ai":                 googleAI,
+					"google_ai_source":          googleAISource,
+					"google_ai_exclusive":       googleAIExclusive,
+					"google_ai_response_count":  googleAIResponseCount,
 					"engine_count":              len(primarySerps),
 					"parallel_engines":          effectiveParallelEngines,
 					"parallel_engine_count":     parallelEngineCount,
@@ -604,12 +633,13 @@ Parallel engine lanes are paced independently.`,
 	}
 	cmd.Flags().StringVar(&queryFile, "query-file", "", "query file: query or query<TAB>Google tbs time filter per row; blank and # comment rows ignored")
 	cmd.Flags().StringVar(&serp, "serp", "google", "SERP extractor: google, bing, brave, duckduckgo, kagi, all, or a comma-separated engine list")
+	cmd.Flags().StringVar(&googleAI, "google-ai", webResearchGoogleAIDefault, "Google-only rendered AI response policy: auto expands inline (default; config may select mode), mode navigates exclusive AI Mode, off disables capture")
 	cmd.Flags().StringVar(&fallbackSerp, "fallback-serp", "auto", "fallback SERP after blocked zero-candidate primary runs: auto, none, google, bing, brave, duckduckgo, or kagi")
 	cmd.Flags().IntVar(&maxCandidates, "max-candidates", 100, "maximum deduped candidates to emit; use 0 for no limit")
 	cmd.Flags().StringVar(&candidateOut, "candidate-out", "", "path for deduped candidates JSON")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for SERP artifacts and candidate files")
-	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "hard deadline for each rendered SERP; use 0 for one immediate sample")
-	cmd.Flags().DurationVar(&settle, "settle", 2*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
+	cmd.Flags().DurationVar(&wait, "wait", 30*time.Second, "hard deadline for each rendered SERP, including inline AI response arrival; use 0 for one immediate sample")
+	cmd.Flags().DurationVar(&settle, "settle", 3*time.Second, "continuous content-fingerprint quiet time required after readiness thresholds pass; use 0 to disable")
 	cmd.Flags().DurationVar(&navigationDelay, "navigation-delay", 0, "cancellable minimum delay between navigation starts in each SERP engine lane; no delay before the first navigation")
 	cmd.Flags().StringVar(&waitUntil, "wait-until", "useful-content", "readiness policy: useful-content or dom-stable require enabled thresholds plus settling; load completes on document load")
 	cmd.Flags().IntVar(&parallel, "parallel", 3, "maximum parallel SERP tabs, capped at 3")

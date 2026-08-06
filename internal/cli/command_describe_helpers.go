@@ -718,8 +718,10 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow web-research serp": {
 			"printf '%s\\t%s\\n' 'agentic engineering' 'cdr:1,cd_min:07/01/2026,cd_max:07/01/2026' > tmp/research/queries-exact-date.txt && cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries-exact-date.txt --serp google --out-dir tmp/research/exact-date --json",
+			"cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --google-ai auto --wait 30s --settle 3s --out-dir tmp/research/google-ai-overview --json",
+			"cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --google-ai mode --wait 30s --settle 3s --out-dir tmp/research/google-ai-mode --json",
 			"cdp --browser-mode headed workflow web-research serp --query-file tmp/research/queries.txt --serp google --fallback-serp none --parallel 1 --navigation-delay 30s --result-pages 1 --fast-fail-blocked --blocked-failure-threshold 1 --progress stderr --out-dir tmp/research/progressive-pass --json",
-			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --wait 20s --settle 2s --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
+			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp google --result-pages 3 --max-candidates 200 --wait 30s --settle 3s --candidate-out tmp/research/candidates.json --out-dir tmp/research --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --result-pages 2 --out-dir tmp/research-all --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp duckduckgo --fallback-serp google --result-pages 2 --out-dir tmp/research-ddg --json",
 			"cdp workflow web-research serp --query-file tmp/research/queries.txt --serp bing --result-pages 3 --fast-fail-blocked --blocked-failure-threshold 3 --progress stderr --json",
@@ -739,6 +741,8 @@ func commandExamples(path string) []string {
 			"cdp workflow agent gemini capabilities --json",
 			"cdp workflow agent gemini capabilities refresh --json",
 			"printf '%s' 'Review this design.' | cdp workflow agent gemini ask --stdin --json",
+			"cdp --config cdp.json workflow web-research serp --query-file tmp/queries.txt --serp google --json # agents.google.exclusive_ai_mode selects inline or exclusive AI Mode",
+			"cdp workflow web-research serp --query-file tmp/queries.txt --serp google --google-ai auto --json # one-run corporate/Zscaler override",
 			"cdp schema webagent-operation --json",
 		},
 		"cdp workflow agent providers": {

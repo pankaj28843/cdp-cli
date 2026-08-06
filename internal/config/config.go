@@ -40,7 +40,8 @@ type Config struct {
 	Artifacts ArtifactConfig `json:"artifacts,omitempty"`
 	Agents    AgentConfig    `json:"agents,omitempty"`
 
-	browserModeSet bool
+	browserModeSet           bool
+	googleExclusiveAIModeSet bool
 }
 
 type BrowserConfig struct {
@@ -70,7 +71,15 @@ type ArtifactConfig struct {
 }
 
 type AgentConfig struct {
-	ChatGPT ChatGPTConfig `json:"chatgpt,omitempty"`
+	Google  GoogleAgentConfig `json:"google,omitempty"`
+	ChatGPT ChatGPTConfig     `json:"chatgpt,omitempty"`
+}
+
+// GoogleAgentConfig contains machine-specific Google rendered-agent
+// preferences. Exclusive AI Mode is opt-in because managed corporate browsers
+// may isolate or block the separate Google AI Mode route.
+type GoogleAgentConfig struct {
+	ExclusiveAIMode bool `json:"exclusive_ai_mode,omitempty"`
 }
 
 // ChatGPTConfig contains owner-specific selection preferences. Empty values
@@ -203,6 +212,10 @@ func (c Config) BrowserModeConfigured() bool {
 	return c.browserModeSet || c.Browser.Mode != ""
 }
 
+func (c Config) GoogleExclusiveAIModeConfigured() bool {
+	return c.googleExclusiveAIModeSet || c.Agents.Google.ExclusiveAIMode
+}
+
 type fileConfig struct {
 	Profile   string              `json:"profile,omitempty"`
 	Timeout   string              `json:"timeout,omitempty"`
@@ -212,7 +225,12 @@ type fileConfig struct {
 }
 
 type fileAgentConfig struct {
-	ChatGPT *fileChatGPTConfig `json:"chatgpt,omitempty"`
+	Google  *fileGoogleAgentConfig `json:"google,omitempty"`
+	ChatGPT *fileChatGPTConfig     `json:"chatgpt,omitempty"`
+}
+
+type fileGoogleAgentConfig struct {
+	ExclusiveAIMode bool `json:"exclusive_ai_mode"`
 }
 
 type fileChatGPTConfig struct {
@@ -323,11 +341,17 @@ func decode(data []byte) (Config, error) {
 			cfg.Artifacts.MaxLogSizeBytes = size
 		}
 	}
-	if raw.Agents != nil && raw.Agents.ChatGPT != nil {
-		cfg.Agents.ChatGPT = ChatGPTConfig{
-			Thinking:        strings.TrimSpace(raw.Agents.ChatGPT.Thinking),
-			MinimumThinking: strings.TrimSpace(raw.Agents.ChatGPT.MinimumThinking),
-			Model:           strings.TrimSpace(raw.Agents.ChatGPT.Model),
+	if raw.Agents != nil {
+		if raw.Agents.Google != nil {
+			cfg.Agents.Google.ExclusiveAIMode = raw.Agents.Google.ExclusiveAIMode
+			cfg.googleExclusiveAIModeSet = true
+		}
+		if raw.Agents.ChatGPT != nil {
+			cfg.Agents.ChatGPT = ChatGPTConfig{
+				Thinking:        strings.TrimSpace(raw.Agents.ChatGPT.Thinking),
+				MinimumThinking: strings.TrimSpace(raw.Agents.ChatGPT.MinimumThinking),
+				Model:           strings.TrimSpace(raw.Agents.ChatGPT.Model),
+			}
 		}
 	}
 	return cfg, nil
@@ -396,11 +420,19 @@ func encode(cfg Config) ([]byte, error) {
 			raw.Artifacts.MaxLogSize = artifacts.FormatByteSize(cfg.Artifacts.MaxLogSizeBytes)
 		}
 	}
-	if cfg.Agents.ChatGPT.Thinking != "" ||
+	if cfg.googleExclusiveAIModeSet ||
+		cfg.Agents.Google.ExclusiveAIMode ||
+		cfg.Agents.ChatGPT.Thinking != "" ||
 		cfg.Agents.ChatGPT.MinimumThinking != "" ||
 		cfg.Agents.ChatGPT.Model != "" {
-		raw.Agents = &fileAgentConfig{
-			ChatGPT: &fileChatGPTConfig{
+		raw.Agents = &fileAgentConfig{}
+		if cfg.googleExclusiveAIModeSet || cfg.Agents.Google.ExclusiveAIMode {
+			raw.Agents.Google = &fileGoogleAgentConfig{ExclusiveAIMode: cfg.Agents.Google.ExclusiveAIMode}
+		}
+		if cfg.Agents.ChatGPT.Thinking != "" ||
+			cfg.Agents.ChatGPT.MinimumThinking != "" ||
+			cfg.Agents.ChatGPT.Model != "" {
+			raw.Agents.ChatGPT = &fileChatGPTConfig{
 				Thinking: strings.TrimSpace(
 					cfg.Agents.ChatGPT.Thinking,
 				),
@@ -408,7 +440,7 @@ func encode(cfg Config) ([]byte, error) {
 					cfg.Agents.ChatGPT.MinimumThinking,
 				),
 				Model: strings.TrimSpace(cfg.Agents.ChatGPT.Model),
-			},
+			}
 		}
 	}
 

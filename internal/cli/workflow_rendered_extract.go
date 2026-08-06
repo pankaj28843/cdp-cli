@@ -175,6 +175,7 @@ type renderedExtractOptions struct {
 	Formats            string
 	OutDir             string
 	Serp               string
+	GoogleAI           string
 	ContentExtractor   string
 	Limit              int
 	MinVisibleWords    int
@@ -192,6 +193,7 @@ type renderedExtractResult struct {
 	Human    string
 	Links    renderedExtractLinks
 	Warnings []string
+	GoogleAI *webResearchGoogleAIResponse
 }
 
 type renderedExtractReusablePage struct {
@@ -507,6 +509,13 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if options.Serp != "auto" && options.Serp != "none" && !isWebResearchSupportedSERP(options.Serp) {
 		return renderedExtractResult{}, commandError("usage", "usage", "--serp must be auto, none, or one of: "+webResearchSERPList(), ExitUsage, []string{options.UsageCommand + " 'https://www.google.com/search?q=test' --serp google --json"})
 	}
+	if strings.TrimSpace(options.GoogleAI) != "" {
+		googleAIPolicy, policyErr := parseWebResearchGoogleAIPolicy(options.GoogleAI)
+		if policyErr != nil {
+			return renderedExtractResult{}, commandError("usage", "usage", "--google-ai must be auto, mode, or off", ExitUsage, []string{options.UsageCommand + " --google-ai auto --json"})
+		}
+		options.GoogleAI = googleAIPolicy
+	}
 	options.ContentExtractor = strings.TrimSpace(strings.ToLower(options.ContentExtractor))
 	if options.ContentExtractor == "" {
 		options.ContentExtractor = "auto"
@@ -625,6 +634,19 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	trigger := "observe"
 	reloaded := false
 	frameID := ""
+	pageStartedAt := time.Now()
+	contentWarnings := make([]string, 0, 2)
+	googleAIExpanded := false
+	var readinessHook func(context.Context)
+	if serpMode == "google" && options.GoogleAI != "" && options.GoogleAI != webResearchGoogleAIOff {
+		readinessHook = func(hookCtx context.Context) {
+			expanded, expansionErr := expandWebResearchGoogleAIResponse(hookCtx, session, options.GoogleAI)
+			if expansionErr != nil {
+				return
+			}
+			googleAIExpanded = googleAIExpanded || expanded
+		}
+	}
 	if createdPage || (reusedPage && strings.TrimSpace(options.RawURL) != "") {
 		trigger = "navigate"
 		var navigateErr error
@@ -641,7 +663,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		}
 	}
 
-	readiness, err := waitForRenderedExtractReadiness(ctx, session, captureSelector, options.Wait, options.Settle, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars)
+	readiness, err := waitForRenderedExtractReadiness(ctx, session, captureSelector, options.Wait, options.Settle, options.WaitUntil, options.MinVisibleWords, options.MinHTMLChars, readinessHook)
 	if err != nil {
 		return renderedExtractResult{}, err
 	}
@@ -672,7 +694,6 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	visibleText := strings.Join(snapshotTextValues(snapshot.Items), "\n")
 	markdown := htmlToResearchMarkdown(pageHTML)
 	contentProvenance := newRenderedExtractContentProvenance(contentPlan, finalURL)
-	contentWarnings := make([]string, 0, 1)
 	var discussionExpansion renderedExtractDiscussionExpansion
 	var preExpansionReadiness *renderedExtractReadiness
 	if contentPlan.Strategy != renderedExtractContentStrategyLegacyHTML {
@@ -741,6 +762,24 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	if err != nil {
 		return renderedExtractResult{}, err
 	}
+	var googleAIResponse *webResearchGoogleAIResponse
+	if serpMode == "google" && options.GoogleAI != "" && options.GoogleAI != webResearchGoogleAIOff {
+		googleAIWait := options.Wait
+		if googleAIWait > 0 {
+			if elapsed := time.Since(pageStartedAt); elapsed >= googleAIWait {
+				googleAIWait = 0
+			} else {
+				googleAIWait -= elapsed
+			}
+		}
+		googleAIResponse, err = waitForWebResearchGoogleAIResponse(ctx, session, rawURL, options.GoogleAI, googleAIWait, options.Settle)
+		if err != nil {
+			googleAIResponse = newUnavailableWebResearchGoogleAIResponse(rawURL, options.GoogleAI, err)
+			contentWarnings = append(contentWarnings, googleAIResponse.Warnings...)
+		} else {
+			googleAIResponse.Expanded = googleAIResponse.Expanded || googleAIExpanded
+		}
+	}
 	postCaptureReadiness, consistencyErr := collectRenderedExtractReadiness(ctx, session, captureSelector)
 	if consistencyErr != nil {
 		collectorErrors = append(collectorErrors, collectorError("capture_consistency", consistencyErr))
@@ -777,6 +816,24 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 	linksPayload, err := json.MarshalIndent(links, "", "  ")
 	if err != nil {
 		return renderedExtractResult{}, commandError("internal", "internal", fmt.Sprintf("marshal links artifact: %v", err), ExitInternal, []string{options.UsageCommand + " <url> --json"})
+	}
+	var googleAIJSONPayload []byte
+	var googleAIMarkdown []byte
+	if googleAIResponse != nil {
+		googleAIJSONPath := filepath.Clean(filepath.Join(options.OutDir, "google-ai-response.json"))
+		googleAIMarkdownPath := filepath.Clean(filepath.Join(options.OutDir, "google-ai-response.md"))
+		googleAIResponse.Artifacts = map[string]string{
+			"json":     googleAIJSONPath,
+			"markdown": googleAIMarkdownPath,
+		}
+		googleAIJSONPayload, err = json.MarshalIndent(map[string]any{
+			"google_ai": googleAIResponse,
+			"full_text": googleAIResponse.fullText,
+		}, "", "  ")
+		if err != nil {
+			return renderedExtractResult{}, commandError("internal", "internal", fmt.Sprintf("marshal Google AI response artifact: %v", err), ExitInternal, []string{options.UsageCommand + " --google-ai auto --json"})
+		}
+		googleAIMarkdown = []byte(webResearchGoogleAIResponseMarkdown(googleAIResponse))
 	}
 	diagnostics := map[string]any{
 		"readiness":        readiness,
@@ -824,6 +881,16 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		if err := writeArtifact("links_json", artifactPrefix+"-links-json", filepath.Join(options.OutDir, "links.json"), append(linksPayload, '\n')); err != nil {
 			return renderedExtractResult{}, err
 		}
+	}
+	if googleAIResponse != nil {
+		if err := writeArtifact("google_ai_json", artifactPrefix+"-google-ai-json", googleAIResponse.Artifacts["json"], append(googleAIJSONPayload, '\n')); err != nil {
+			return renderedExtractResult{}, err
+		}
+		if err := writeArtifact("google_ai_markdown", artifactPrefix+"-google-ai-markdown", googleAIResponse.Artifacts["markdown"], googleAIMarkdown); err != nil {
+			return renderedExtractResult{}, err
+		}
+		googleAIResponse.Artifacts["json"] = artifactPaths["google_ai_json"]
+		googleAIResponse.Artifacts["markdown"] = artifactPaths["google_ai_markdown"]
 	}
 	if len(warnings) > 0 || len(collectorErrors) > 0 {
 		if err := writeArtifact("diagnostics_json", artifactPrefix+"-diagnostics-json", filepath.Join(options.OutDir, "diagnostics.json"), append(diagnosticsPayload, '\n')); err != nil {
@@ -888,11 +955,14 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			"partial":           renderedExtractWorkflowPartial(qualityPassed, collectorErrors),
 		},
 	}
+	if googleAIResponse != nil {
+		report["google_ai"] = googleAIResponse
+	}
 	if len(warnings) > 0 || len(collectorErrors) > 0 {
 		report["diagnostics"] = diagnostics
 	}
 	human := fmt.Sprintf("%s\t%s\t%d words\t%d links", options.WorkflowName, finalURL, visibleWordCount, len(links.Results))
-	return renderedExtractResult{Report: report, Human: human, Links: links, Warnings: warnings}, nil
+	return renderedExtractResult{Report: report, Human: human, Links: links, Warnings: warnings, GoogleAI: googleAIResponse}, nil
 }
 
 func renderedExtractFormatSet(formats string) map[string]bool {
@@ -932,13 +1002,21 @@ func renderedExtractSERPMode(rawURL, mode string) string {
 	}
 }
 
-func waitForRenderedExtractReadiness(ctx context.Context, session *cdp.PageSession, selector string, wait, settle time.Duration, waitUntil string, minWords, minHTMLChars int) (renderedExtractReadiness, error) {
+func waitForRenderedExtractReadiness(ctx context.Context, session *cdp.PageSession, selector string, wait, settle time.Duration, waitUntil string, minWords, minHTMLChars int, hooks ...func(context.Context)) (renderedExtractReadiness, error) {
+	var hook func(context.Context)
+	if len(hooks) > 0 {
+		hook = hooks[0]
+	}
 	return waitForRenderedExtractReadinessFunc(ctx, func(ctx context.Context, selector string) (renderedExtractReadiness, error) {
 		return collectRenderedExtractReadiness(ctx, session, selector)
-	}, selector, wait, settle, waitUntil, minWords, minHTMLChars, 500*time.Millisecond)
+	}, selector, wait, settle, waitUntil, minWords, minHTMLChars, 500*time.Millisecond, hook)
 }
 
-func waitForRenderedExtractReadinessFunc(ctx context.Context, collect func(context.Context, string) (renderedExtractReadiness, error), selector string, wait, settle time.Duration, waitUntil string, minWords, minHTMLChars int, pollInterval time.Duration) (renderedExtractReadiness, error) {
+func waitForRenderedExtractReadinessFunc(ctx context.Context, collect func(context.Context, string) (renderedExtractReadiness, error), selector string, wait, settle time.Duration, waitUntil string, minWords, minHTMLChars int, pollInterval time.Duration, hooks ...func(context.Context)) (renderedExtractReadiness, error) {
+	var hook func(context.Context)
+	if len(hooks) > 0 {
+		hook = hooks[0]
+	}
 	deadline := time.Now().Add(wait)
 	tracker := renderedExtractReadinessTracker{}
 	policy := renderedExtractReadinessPolicy{WaitUntil: waitUntil, MinWords: minWords, MinHTMLChars: minHTMLChars, Settle: settle}
@@ -961,6 +1039,9 @@ func waitForRenderedExtractReadinessFunc(ctx context.Context, collect func(conte
 		return renderedExtractReadiness{}, contextError()
 	}
 	if wait == 0 {
+		if hook != nil {
+			hook(ctx)
+		}
 		readiness, err := collect(ctx, selector)
 		if err != nil {
 			return renderedExtractReadiness{}, err
@@ -985,6 +1066,9 @@ func waitForRenderedExtractReadinessFunc(ctx context.Context, collect func(conte
 		}
 		resultCh := make(chan collectResult, 1)
 		go func() {
+			if hook != nil {
+				hook(waitCtx)
+			}
 			readiness, err := collect(waitCtx, selector)
 			resultCh <- collectResult{readiness: readiness, err: err}
 		}()

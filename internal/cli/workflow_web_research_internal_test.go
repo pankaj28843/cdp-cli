@@ -189,6 +189,67 @@ func TestRenderedExtractLinksExpressionDecodesDuckDuckGoRedirects(t *testing.T) 
 	}
 }
 
+func TestWebResearchGoogleAIResponseExpressionUsesSemanticFallbacks(t *testing.T) {
+	expression := webResearchGoogleAIResponseExpression("auto")
+	for _, want := range []string{
+		"#m-x-content",
+		"AI Overview",
+		"data-sfc-root",
+		"AI Mode conversation:",
+		"udm",
+		"sources_truncated",
+		"externalSource",
+	} {
+		if !strings.Contains(expression, want) {
+			t.Fatalf("Google AI response expression missing %q", want)
+		}
+	}
+}
+
+func TestWebResearchGoogleAIExpansionExpressionStaysInline(t *testing.T) {
+	expression := webResearchGoogleAIExpansionExpression("auto")
+	for _, want := range []string{
+		"data-aim",
+		"show more ai overview",
+		"aria-expanded=\"false\"",
+		"control.click()",
+		"clicked",
+	} {
+		if !strings.Contains(expression, want) {
+			t.Fatalf("Google AI expansion expression missing %q", want)
+		}
+	}
+	if strings.Contains(expression, "location.assign") || strings.Contains(expression, "location.replace") {
+		t.Fatal("inline Google AI expansion must not navigate the page")
+	}
+}
+
+func TestWebResearchGoogleAIResponseBoundsInlineTextAndSources(t *testing.T) {
+	response := &webResearchGoogleAIResponse{
+		RequestedMode: "auto",
+		Mode:          "overview",
+		Status:        "present",
+		fullText:      strings.Repeat("response ", webResearchGoogleAIInlineTextLimit),
+		Sources: []webResearchGoogleAISource{
+			{Title: "B", URL: "https://b.example.test", Source: "b.example.test"},
+			{Title: "A", URL: "https://a.example.test", Source: "a.example.test"},
+		},
+	}
+	response.Text, response.TextTruncated = boundWebResearchGoogleAIText(response.fullText, webResearchGoogleAIInlineTextLimit)
+	response.TextLength = len([]rune(response.fullText))
+	if !response.TextTruncated || len([]rune(response.Text)) == 0 || len([]rune(response.Text)) > webResearchGoogleAIInlineTextLimit {
+		t.Fatalf("bounded response = truncated=%v length=%d, want explicit bounded text", response.TextTruncated, len([]rune(response.Text)))
+	}
+	markdown := webResearchGoogleAIResponseMarkdown(response)
+	if !strings.Contains(markdown, "## Rendered response") || !strings.Contains(markdown, "https://a.example.test") || !strings.Contains(markdown, "https://b.example.test") {
+		preview := markdown
+		if len(preview) > 400 {
+			preview = preview[:400]
+		}
+		t.Fatalf("Google AI response Markdown = %q, want full response and sorted source links", preview)
+	}
+}
+
 func TestSelectFairWebResearchCandidatesRepresentsEachProductiveQueryBeforeRefill(t *testing.T) {
 	queries := []webResearchQuery{{Text: "first"}, {Text: "second"}, {Text: "third"}}
 	pool := []webResearchCandidate{

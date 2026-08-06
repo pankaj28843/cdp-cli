@@ -18,10 +18,18 @@ func (a *app) newWorkflowAgentCommand() *cobra.Command {
 		Use:   "agent",
 		Short: "Run authenticated web-agent provider workflows",
 		Long: "Expose capability-backed authenticated provider workflows behind one stable operation envelope. " +
-			"Provider browser mechanics live below the CLI boundary; capability metadata never probes Chrome.",
+			"Provider browser mechanics live below the CLI boundary; capability metadata never probes Chrome.\n\n" +
+			"Google rendered search AI mode is configured as a machine policy and used by " +
+			"`workflow web-research serp`: leave `agents.google.exclusive_ai_mode` unset or false " +
+			"for inline AI Overview expansion on corporate/Zscaler browsers, or set it true " +
+			"for exclusive Google AI Mode navigation on a non-isolated machine. An explicit " +
+			"`--google-ai auto|mode|off` overrides the config for one run.",
 		Example: "  cdp workflow agent providers --json\n" +
 			"  cdp workflow agent claude capabilities --json\n" +
 			"  cdp workflow agent gemini capabilities --json\n" +
+			"  cdp --config cdp.json workflow web-research serp --query-file tmp/queries.txt --serp google --json\n" +
+			"  cdp workflow web-research serp --query-file tmp/queries.txt --serp google --google-ai auto --json\n" +
+			"  cdp workflow web-research serp --query-file tmp/queries.txt --serp google --google-ai mode --json\n" +
 			"  cdp schema webagent-operation --json",
 	}
 	cmd.AddCommand(a.newWorkflowAgentProvidersCommand())

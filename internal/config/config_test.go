@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +87,9 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
     }
   },
   "agents": {
+    "google": {
+      "exclusive_ai_mode": true
+    },
     "chatgpt": {
       "thinking": "highest",
       "minimum_thinking": "extra-high",
@@ -133,6 +137,9 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	if got := cfg.Agents.ChatGPT.Thinking; got != "highest" {
 		t.Fatalf("ChatGPT.Thinking = %q, want highest", got)
 	}
+	if !cfg.Agents.Google.ExclusiveAIMode {
+		t.Fatalf("Google.ExclusiveAIMode = false, want true")
+	}
 	if got := cfg.Agents.ChatGPT.MinimumThinking; got != "extra-high" {
 		t.Fatalf(
 			"ChatGPT.MinimumThinking = %q, want extra-high",
@@ -160,6 +167,37 @@ func TestLoadParsesArtifactRetentionConfig(t *testing.T) {
 	}
 	if cfg.Artifacts.Retention != 240*time.Hour || cfg.Artifacts.MaxLogSizeBytes != 32<<20 {
 		t.Fatalf("artifact config = %+v", cfg.Artifacts)
+	}
+}
+
+func TestLoadAndSavePreserveExplicitGoogleExclusiveAIModeFalse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"agents":{"google":{"exclusive_ai_mode":false}}}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.GoogleExclusiveAIModeConfigured() || cfg.Agents.Google.ExclusiveAIMode {
+		t.Fatalf("loaded explicit false config = %+v, want configured false", cfg.Agents.Google)
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(data), `"exclusive_ai_mode": false`) {
+		t.Fatalf("saved config omitted explicit false: %s", data)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload saved config: %v", err)
+	}
+	if !loaded.GoogleExclusiveAIModeConfigured() || loaded.Agents.Google.ExclusiveAIMode {
+		t.Fatalf("reloaded explicit false config = %+v, want configured false", loaded.Agents.Google)
 	}
 }
 
@@ -217,6 +255,9 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 			MaxLogSizeBytes: 32 << 20,
 		},
 		Agents: config.AgentConfig{
+			Google: config.GoogleAgentConfig{
+				ExclusiveAIMode: true,
+			},
 			ChatGPT: config.ChatGPTConfig{
 				Thinking:        "highest",
 				MinimumThinking: "extra-high",
@@ -267,6 +308,9 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 	}
 	if loaded.Artifacts.Retention != 240*time.Hour || loaded.Artifacts.MaxLogSizeBytes != 32<<20 {
 		t.Fatalf("loaded artifact config = %+v", loaded.Artifacts)
+	}
+	if !loaded.Agents.Google.ExclusiveAIMode {
+		t.Fatalf("loaded Google.ExclusiveAIMode = false, want true")
 	}
 	if loaded.Agents.ChatGPT.Thinking != "highest" ||
 		loaded.Agents.ChatGPT.MinimumThinking != "extra-high" ||

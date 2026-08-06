@@ -312,6 +312,24 @@ func TestDescribeWorkflowAgentIncludesSchemaExamples(t *testing.T) {
 	}
 }
 
+func TestWorkflowAgentHelpDocumentsGoogleAIPolicy(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"workflow", "agent", "--help"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("workflow agent help exit = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	for _, want := range []string{
+		"agents.google.exclusive_ai_mode",
+		"corporate/Zscaler",
+		"--google-ai auto|mode|off",
+		"exclusive Google AI Mode",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("workflow agent help missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestWebAgentSchemaCommands(t *testing.T) {
 	for _, name := range []string{
 		"webagent-operation",

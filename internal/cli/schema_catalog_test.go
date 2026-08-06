@@ -300,7 +300,7 @@ func TestSchemaCatalogWebResearchQueryContract(t *testing.T) {
 	if !catalogSchemaFieldContains(workflow, "queries", "array<web_research_query>", "query<TAB>", "applied only to Google", "cdr:1,cd_min:07/01/2026,cd_max:07/01/2026") {
 		t.Fatalf("workflow schema does not expose the custom-date query contract: %+v", workflow)
 	}
-	if !catalogSchemaFieldContains(workflow, "workflow", "workflow_summary", "navigation delay", "engine lane", "no delay before the first") {
+	if !catalogSchemaFieldContains(workflow, "workflow", "workflow_summary", "policy source", "exclusive-mode", "agents.google.exclusive_ai_mode", "navigation delay", "engine lane", "no delay before the first") {
 		t.Fatalf("workflow schema does not expose the navigation pacing contract: %+v", workflow)
 	}
 	if !catalogSchemaFieldContains(query, "query", "string", "non-empty") {

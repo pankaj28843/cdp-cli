@@ -283,6 +283,10 @@ func parseWebResearchSERPs(value string) ([]string, error) {
 }
 
 func webResearchSearchURL(serp, query, timeFilter string, page int) string {
+	return webResearchSearchURLWithGoogleAI(serp, query, timeFilter, page, webResearchGoogleAIDefault)
+}
+
+func webResearchSearchURLWithGoogleAI(serp, query, timeFilter string, page int, googleAIPolicy string) string {
 	if page < 1 {
 		page = 1
 	}
@@ -314,6 +318,10 @@ func webResearchSearchURL(serp, query, timeFilter string, page int) string {
 		values.Set("safe", "active")
 		if strings.TrimSpace(timeFilter) != "" {
 			values.Set("tbs", strings.TrimSpace(timeFilter))
+		}
+		if strings.TrimSpace(strings.ToLower(googleAIPolicy)) == webResearchGoogleAIMode {
+			values.Set("udm", "50")
+			values.Set("aep", "1")
 		}
 		if offset > 0 {
 			values.Set("start", strconv.Itoa(offset))
