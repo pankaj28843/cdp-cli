@@ -121,6 +121,33 @@ func thinkingRank(label string) int {
 	return -1
 }
 
+func thinkingSliderLabels(max int) []string {
+	if max < 0 {
+		return nil
+	}
+	// ChatGPT's current composer omits the legacy Instant position from its
+	// five-stop slider. Keep the canonical six-label list for any surface that
+	// still exposes all stops, while mapping the observed max=4 surface to the
+	// five labels it actually renders.
+	if max+1 == len(thinkingLabelsAscending)-1 {
+		return append([]string(nil), thinkingLabelsAscending[1:]...)
+	}
+	if max >= len(thinkingLabelsAscending) {
+		return nil
+	}
+	return append([]string(nil), thinkingLabelsAscending[:max+1]...)
+}
+
+func thinkingSliderTargetIndex(label string, max int) (int, bool) {
+	labels := thinkingSliderLabels(max)
+	for index, candidate := range labels {
+		if strings.EqualFold(strings.TrimSpace(label), candidate) {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
 func thinkingAtOrAbove(selected, minimum string) bool {
 	if minimum == "" {
 		return thinkingRank(selected) >= 0
@@ -934,7 +961,7 @@ func activateSelectionControl(
 		Count     int  `json:"count"`
 		Activated bool `json:"activated"`
 	}
-	expression := fmt.Sprintf(`(() => {
+	expression := fmt.Sprintf(`(async () => {
 	  const kind = %s;
 	  const expected = String(%s || '').trim().toLowerCase();
 	  const visible = element => {
@@ -1029,6 +1056,60 @@ func activateSelectionControl(
 	      enabled(element) &&
 	      label(element).toLowerCase() === expected
 	    );
+	    if (candidates.length === 0) {
+	      const sliders = Array.from(document.querySelectorAll(
+	        '[role="menu"] [data-model-reasoning-effort-slider] [role="slider"]'
+	      )).filter(element => {
+	        const menu = element.closest('[role="menu"]');
+	        return Boolean(menu) && visible(menu) &&
+	          visible(element.closest('[role="menuitem"]') || element);
+	      });
+	      if (sliders.length === 1) {
+	        const canonical = [
+	          'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
+	        ];
+	        const slider = sliders[0];
+	        const maximum = Number(slider.getAttribute('aria-valuemax'));
+	        const values = maximum + 1 === canonical.length - 1 ?
+	          canonical.slice(1) : canonical.slice(0, maximum + 1);
+	        const target = values.findIndex(value =>
+	          value.toLowerCase() === expected
+	        );
+	        let current = Number(slider.getAttribute('aria-valuenow'));
+	        if (target >= 0 && Number.isInteger(current) &&
+	            target <= maximum && current >= 0 && current <= maximum) {
+	          for (let step = 0; step < values.length && current !== target; step++) {
+	            const live = document.querySelector(
+	              '[role="menu"] [data-model-reasoning-effort-slider] [role="slider"]'
+	            );
+	            if (!live) break;
+	            live.focus();
+	            const key = target > current ? 'ArrowRight' : 'ArrowLeft';
+	            live.dispatchEvent(new KeyboardEvent('keydown', {
+	              key,
+	              code: key,
+	              bubbles: true,
+	              cancelable: true
+	            }));
+	            // ChatGPT replaces the slider node after each key press. Re-query
+	            // only after the replacement has had a render turn to commit.
+	            await new Promise(resolve => setTimeout(resolve, 50));
+	            const refreshed = document.querySelector(
+	              '[role="menu"] [data-model-reasoning-effort-slider] [role="slider"]'
+	            );
+	            current = refreshed ? Number(
+	              refreshed.getAttribute('aria-valuenow')
+	            ) : -1;
+	          }
+	          return {
+	            ok: current === target,
+	            count: 1,
+	            activated: current === target,
+	            slider: true
+	          };
+	        }
+	      }
+	    }
 	    break;
 	  }
 	  if (candidates.length !== 1) {
@@ -1337,12 +1418,17 @@ func observeSelectionSurface(
   const picker = pickers().length === 1 ? pickers()[0] : null;
   const selectedThinking = picker ? label(picker) : '';
   const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible);
-  const thinkingMenus = menus.filter(menu => directItems(
-    menu,
-    'menuitemradio'
-  ).some(option =>
-    thinkingKnown.some(item => item.toLowerCase() === label(option).toLowerCase())
-  ));
+  const thinkingMenus = menus.filter(menu => {
+    const legacyOptions = directItems(menu, 'menuitemradio').some(option =>
+      thinkingKnown.some(item =>
+        item.toLowerCase() === label(option).toLowerCase()
+      )
+    );
+    const slider = menu.querySelector(
+      '[data-model-reasoning-effort-slider] [role="slider"]'
+    );
+    return legacyOptions || Boolean(slider);
+  });
   const thinkingMenu = thinkingMenus.length === 1 ? thinkingMenus[0] : null;
   const modelMenus = menus.filter(menu =>
     menu !== thinkingMenu &&
@@ -1359,10 +1445,40 @@ func observeSelectionSurface(
       y: action.y
     };
   };
-  const thinkingOptions = directItems(
+  const legacyThinkingOptions = directItems(
     thinkingMenu,
     'menuitemradio'
   ).map(toOption);
+  const thinkingSlider = thinkingMenu?.querySelector(
+    '[data-model-reasoning-effort-slider] [role="slider"]'
+  );
+  const thinkingSliderMax = thinkingSlider ? Number(
+    thinkingSlider.getAttribute('aria-valuemax')
+  ) : -1;
+  const thinkingSliderValue = thinkingSlider ? Number(
+    thinkingSlider.getAttribute('aria-valuenow')
+  ) : -1;
+  const thinkingSliderLabels = thinkingSliderMax + 1 ===
+    thinkingKnown.length - 1 ? thinkingKnown.slice(1) :
+    thinkingKnown.slice(0, thinkingSliderMax + 1);
+  const thinkingSliderReady = Boolean(
+    thinkingSlider &&
+    Number.isInteger(thinkingSliderMax) &&
+    thinkingSliderMax >= 0 &&
+    Number.isInteger(thinkingSliderValue) &&
+    thinkingSliderValue >= 0 &&
+    thinkingSliderValue <= thinkingSliderMax &&
+    visible(thinkingSlider.closest('[role="menuitem"]') || thinkingSlider)
+  );
+  const thinkingOptions = legacyThinkingOptions.length > 0 ?
+    legacyThinkingOptions : thinkingSliderReady ?
+    thinkingSliderLabels.map((option, index) => ({
+      label: option,
+      checked: index === thinkingSliderValue,
+      ready: true,
+      x: -1,
+      y: -1
+    })) : [];
   const modelTriggers = directItems(thinkingMenu, 'menuitem');
   const modelOptions = directItems(modelMenu, 'menuitemradio').map(toOption);
   const selectedModels = modelOptions.filter(option => option.checked);

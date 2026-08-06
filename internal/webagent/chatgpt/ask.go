@@ -1317,7 +1317,8 @@ func observeComposerWithTool(
 	    )
 	  );
 	  const sends = Array.from(document.querySelectorAll(
-	    'button[data-testid="send-button"],button#composer-submit-button'
+	    'button[data-testid="send-button"],button#composer-submit-button,' +
+	    'button[aria-label="Send prompt"]'
 	  )).filter((button, index, values) =>
 	    values.indexOf(button) === index && visible(button)
 	  );

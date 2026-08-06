@@ -9,6 +9,50 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 )
 
+func TestObserveComposerRecognizesCurrentSemanticSendButton(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(`{
+			"route_ready":true,
+			"editor_ready":true,
+			"editor_count":1,
+			"prompt_matches":true,
+			"chat_count":1,
+			"work_count":1,
+			"chat_selected":true,
+			"intelligence_count":1,
+			"selected_intelligence":"Medium",
+			"send_count":1,
+			"send_ready":true,
+			"send_x":100,
+			"send_y":200,
+			"assistant_count":0,
+			"user_message_count":0,
+			"conversation_id":""
+		}`),
+	}
+	session := newSelectionActivationSession(t, client)
+	var observation composerObservation
+	if err := observeComposer(
+		context.Background(),
+		session,
+		"review the current screen",
+		"Medium",
+		&observation,
+	); err != nil {
+		t.Fatalf("observeComposer: %v", err)
+	}
+	if observation.SendCount != 1 || !observation.SendReady {
+		t.Fatalf("observation = %+v, want a current semantic Send control", observation)
+	}
+	if len(client.calls) != 1 ||
+		!strings.Contains(
+			string(client.calls[0].params),
+			`button[aria-label=\"Send prompt\"]`,
+		) {
+		t.Fatalf("evaluation = %+v, want current semantic Send selector", client.calls)
+	}
+}
+
 func TestSendDispatcherFailsClosedWhenAttachmentDropsBeforeSend(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluations: []json.RawMessage{

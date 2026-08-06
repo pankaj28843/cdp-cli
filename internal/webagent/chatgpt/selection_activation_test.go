@@ -101,6 +101,39 @@ func TestVerifySelectionAtSendAcceptsCurrentSliderWithoutOpeningMenu(t *testing.
 	}
 }
 
+func TestActivateSelectionControlSupportsReRenderedEffortSlider(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(
+			`{"ok":true,"count":1,"activated":true,"slider":true}`,
+		),
+	}
+	session := newSelectionActivationSession(t, client)
+
+	if err := activateSelectionControl(
+		context.Background(),
+		session,
+		"option",
+		"Medium",
+	); err != nil {
+		t.Fatalf("activateSelectionControl: %v", err)
+	}
+	if len(client.calls) != 1 || client.calls[0].method != "Runtime.evaluate" {
+		t.Fatalf("calls = %+v, want one exact slider evaluation", client.calls)
+	}
+	evaluation := string(client.calls[0].params)
+	for _, required := range []string{
+		"data-model-reasoning-effort-slider",
+		"aria-valuenow",
+		"ArrowRight",
+		"ArrowLeft",
+		"setTimeout(resolve, 50)",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("slider activation expression missing %q: %s", required, evaluation)
+		}
+	}
+}
+
 func TestActivateChatGPTToolUsesVisiblePlusMenuIdentity(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluation: json.RawMessage(

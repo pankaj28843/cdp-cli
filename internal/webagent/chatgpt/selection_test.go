@@ -1,6 +1,9 @@
 package chatgpt
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestNormalizeSelectionPolicyIsEntitlementNeutralByDefault(t *testing.T) {
 	got, err := NormalizeSelectionPolicy(SelectionPolicy{})
@@ -80,6 +83,30 @@ func TestThinkingRanksAreLogicalAscending(t *testing.T) {
 	}
 	if thinkingAtOrAbove("Future Ultra", "Extra High") {
 		t.Fatal("unknown thinking labels must fail a known floor closed")
+	}
+}
+
+func TestThinkingSliderLabelsMatchesCurrentFiveStopComposer(t *testing.T) {
+	got := thinkingSliderLabels(4)
+	want := []string{"Instant 5.5", "Medium", "High", "Extra High", "Pro"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thinkingSliderLabels(4) = %v, want %v", got, want)
+	}
+	if index, ok := thinkingSliderTargetIndex("Medium", 4); !ok || index != 1 {
+		t.Fatalf("Medium slider target = (%d, %v), want (1, true)", index, ok)
+	}
+}
+
+func TestThinkingSliderLabelsRetainsLegacySixStopSurface(t *testing.T) {
+	got := thinkingSliderLabels(5)
+	want := []string{
+		"Instant", "Instant 5.5", "Medium", "High", "Extra High", "Pro",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thinkingSliderLabels(5) = %v, want %v", got, want)
+	}
+	if _, ok := thinkingSliderTargetIndex("Instant", 4); ok {
+		t.Fatal("legacy Instant must not be selectable on current five-stop slider")
 	}
 }
 
