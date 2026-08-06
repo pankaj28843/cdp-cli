@@ -29,8 +29,15 @@ if [[ ! "$parallel" =~ ^[0-9]+$ ]] || ((parallel < 1 || parallel > 10)); then
   exit 2
 fi
 
-tmp_base="${TMPDIR:-/tmp}"
+tmp_base="${CDP_E2E_TMP_BASE:-${TMPDIR:-/tmp}}"
 tmp_base="${tmp_base%/}"
+# macOS limits Unix-domain socket paths to 104 bytes. Keep the isolated
+# runtime root short enough for state/headless/daemon.sock even when TMPDIR
+# is a long per-process directory.
+socket_template="$tmp_base/cdp-web-research-live.XXXXXX/state/headless/daemon.sock"
+if (( ${#socket_template} >= 100 )); then
+  tmp_base="/tmp"
+fi
 run_root="$(mktemp -d "$tmp_base/cdp-web-research-live.XXXXXX")"
 url_file="$run_root/urls.txt"
 expected_json="$run_root/expected-urls.json"

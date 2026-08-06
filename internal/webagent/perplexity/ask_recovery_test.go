@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/testsupport"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
@@ -125,6 +126,44 @@ func TestAskUsesLiveSearchAndRenderedFallbackAfterPreMutationRecovery(
 	if lastTraceIndex(trace, "Page.reload") >=
 		lastTraceIndex(trace, "Input.insertText") {
 		t.Fatalf("reload occurred after prompt mutation: %v", trace)
+	}
+}
+
+func TestObserveAskStateIncludesCurrentQueryHeadingSelector(t *testing.T) {
+	client := testsupport.NewBrowser("conversation-target")
+	var expression string
+	client.Evaluate = func(value string, _ *testsupport.Browser) (any, error) {
+		expression = value
+		return map[string]any{
+			"route_matches":   true,
+			"conversation_id": "perplexity-conversation",
+			"text":            "answer",
+			"prompt":          "prompt",
+			"is_streaming":    false,
+			"answer_count":    1,
+		}, nil
+	}
+	session, err := cdp.AttachToTargetWithClient(
+		context.Background(),
+		client,
+		"conversation-target",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("AttachToTargetWithClient: %v", err)
+	}
+	var observation askObservation
+	if err := observeAskState(context.Background(), session, &observation); err != nil {
+		t.Fatalf("observeAskState: %v", err)
+	}
+	for _, selector := range []string{
+		`(?:new\/)?`,
+		`[role="heading"][class*="query"]`,
+		`[class*="group/query"]`,
+	} {
+		if !strings.Contains(expression, selector) {
+			t.Fatalf("observeAskState expression missing selector %q: %s", selector, expression)
+		}
 	}
 }
 

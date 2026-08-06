@@ -465,7 +465,9 @@ func observeRenderedDetail(
 ) error {
 	expression := fmt.Sprintf(`(() => {
 	  const expected = %q;
-	  const match = location.pathname.match(/^\/search\/([A-Za-z0-9-]+)$/);
+	  const match = location.pathname.match(
+	    /^\/search\/(?:new\/)?([A-Za-z0-9-]+)$/
+	  );
 	  const unique = nodes => [...new Set(nodes)];
 	  const answers = unique(Array.from(document.querySelectorAll('main div.prose')));
 	  answers.sort((left, right) =>
@@ -473,7 +475,8 @@ func observeRenderedDetail(
 	    (left.innerText || left.textContent || '').trim().length
 	  );
 	  const prompts = unique(Array.from(document.querySelectorAll(
-	    '[data-testid="user-query"],[data-testid="query"]'
+	    '[data-testid="user-query"],[data-testid="query"],' +
+	    '[role="heading"][class*="query"],[class*="group/query"]'
 	  )));
 	  const answer = answers[0];
 	  const prompt = prompts.at(-1);
