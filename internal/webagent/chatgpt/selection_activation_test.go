@@ -74,6 +74,33 @@ func TestActivateSelectionControlDoesNotDispatchOnIdentityMiss(t *testing.T) {
 	}
 }
 
+func TestVerifySelectionAtSendAcceptsCurrentSliderWithoutOpeningMenu(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(`{
+			"picker_count": 1,
+			"picker": {"ready": true},
+			"selected_thinking": "Extra High",
+			"thinking_menu_open": false,
+			"model_menu_open": false
+		}`),
+	}
+	session := newSelectionActivationSession(t, client)
+
+	if err := verifySelectionAtSend(
+		context.Background(),
+		session,
+		"Extra High",
+		"",
+		time.Second,
+		time.Millisecond,
+	); err != nil {
+		t.Fatalf("verifySelectionAtSend: %v", err)
+	}
+	if len(client.calls) != 1 || client.calls[0].method != "Runtime.evaluate" {
+		t.Fatalf("calls = %+v, want one passive selection observation", client.calls)
+	}
+}
+
 func TestActivateChatGPTToolUsesVisiblePlusMenuIdentity(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluation: json.RawMessage(

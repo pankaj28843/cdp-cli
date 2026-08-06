@@ -487,6 +487,28 @@ func verifySelectionAtSend(
 ) error {
 	deadline := time.Now().Add(timeout)
 	var surface selectionSurface
+	// The current ChatGPT composer exposes the default/current effort as a
+	// slider inside the picker menu, not as the older menuitemradio list. The
+	// current-thinking/current-model path does not need to open that menu: the
+	// visible picker label is the authoritative selection proof, and opening
+	// it would make a valid fresh composer fail while looking for obsolete
+	// option nodes.
+	if strings.TrimSpace(expectedModel) == "" {
+		if err := observeSelectionSurface(ctx, session, &surface); err != nil {
+			return err
+		}
+		if surface.PickerCount != 1 || !strings.EqualFold(
+			strings.TrimSpace(surface.SelectedThinking),
+			strings.TrimSpace(expectedThinking),
+		) {
+			return fmt.Errorf(
+				"selected ChatGPT thinking changed from %q to %q",
+				expectedThinking,
+				surface.SelectedThinking,
+			)
+		}
+		return nil
+	}
 	if err := openThinkingMenu(
 		ctx,
 		session,
