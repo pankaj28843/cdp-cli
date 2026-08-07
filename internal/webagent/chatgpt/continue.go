@@ -91,13 +91,7 @@ func (d chatgptContinueDispatcher) Dispatch(
 			Dispatch: browserflow.DispatchNotPerformed,
 		}, fmt.Errorf("exact ChatGPT continuation Send control was not actionable")
 	}
-	outcome, clickErr := browserflow.ClickPoint(
-		ctx,
-		session,
-		observation.SendX,
-		observation.SendY,
-	)
-	return outcome, clickErr
+	return pressChatGPTComposerEnter(ctx, session)
 }
 
 func ContinueConversation(

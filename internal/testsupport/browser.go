@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,8 +117,11 @@ func (b *Browser) CallSession(
 	case "Runtime.evaluate":
 		value := any(map[string]any{})
 		var err error
-		if b.Evaluate != nil {
-			value, err = b.Evaluate(stringParam(params, "expression"), b)
+		expression := stringParam(params, "expression")
+		if strings.Contains(expression, "target_found") && strings.Contains(expression, "document.activeElement") {
+			value = map[string]any{"target_found": true, "focused": true}
+		} else if b.Evaluate != nil {
+			value, err = b.Evaluate(expression, b)
 			if err != nil {
 				return err
 			}

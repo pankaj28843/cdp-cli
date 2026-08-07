@@ -372,68 +372,72 @@ func actionabilityExpression(selector, action string) string {
   const disabled = disabledInfo(el);
   const readonly = readOnlyInfo(el, role);
   const first = rectSnapshot(el);
+  const readResult = (mid, liveRect) => {
+    const rect = { x: liveRect.x, y: liveRect.y, width: liveRect.width, height: liveRect.height };
+    const style = getComputedStyle(el);
+    const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
+    const visible = !hidden && rect.width > 0 && rect.height > 0;
+    const stable = sameRect(first, mid) && sameRect(mid, rect);
+    const inViewport = rect.width > 0 && rect.height > 0 && liveRect.bottom >= 0 && liveRect.right >= 0 && liveRect.top <= window.innerHeight && liveRect.left <= window.innerWidth;
+    const x = rect.x + rect.width / 2;
+    const y = rect.y + rect.height / 2;
+    const hit = inViewport ? document.elementFromPoint(Math.min(Math.max(x, 0), Math.max(window.innerWidth - 1, 0)), Math.min(Math.max(y, 0), Math.max(window.innerHeight - 1, 0))) : null;
+    const targetMatches = Boolean(hit && (hit === el || el.contains(hit)));
+    const editable = readonly.supportsEditing && !disabled && !readonly.readOnly;
+    const requiredChecks = requiredChecksFor();
+    const checks = {
+      attached: check(true, elements.length > 0, ""),
+      visible: check(requiredChecks.includes("visible"), visible, visible ? "" : "element has empty box or hidden/display-none/visibility-hidden state"),
+      stable: check(requiredChecks.includes("stable"), stable, stable ? "" : "bounding box changed across animation frames"),
+      receives_events: check(requiredChecks.includes("receives_events"), targetMatches, targetMatches ? "" : "center point is not the hit target"),
+      enabled: check(requiredChecks.includes("enabled"), !disabled, disabled ? "element is disabled" : ""),
+      editable: check(requiredChecks.includes("editable"), editable, editable ? "" : "element is disabled, read-only, or does not support editing"),
+      in_viewport: check(false, inViewport, inViewport ? "" : "element center is outside the viewport")
+    };
+    const actionable = requiredChecks.every((name) => checks[name] && checks[name].passed);
+    return {
+      url: location.href,
+      title: document.title,
+      selector,
+      action,
+      trial: false,
+      count: elements.length,
+      actionable,
+      required_checks: requiredChecks,
+      checks,
+      target: {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || "",
+        type: el.getAttribute("type") || "",
+        role,
+        name: accessibleName(el).slice(0, 240),
+        enabled: !disabled,
+        disabled,
+        editable,
+        read_only: readonly.readOnly,
+        supports_editing: readonly.supportsEditing,
+        content_editable: readonly.contentEditable
+      },
+      rect,
+      point: {
+        x,
+        y,
+        hit_tag: hit ? hit.tagName.toLowerCase() : "",
+        hit_id: hit ? hit.id || "" : "",
+        hit_role: hit ? roleOf(hit) : "",
+        target_matches: targetMatches
+      },
+      marker
+    };
+  };
+  // Key presses and file uploads only require attachment. They must work in
+  // background headed tabs too, where requestAnimationFrame is intentionally
+  // suspended and a stability wait would never resolve.
+  if (action === "press" || action === "file") return readResult(first, first);
   return new Promise((resolve) => {
     requestAnimationFrame(() => {
       const mid = rectSnapshot(el);
-      requestAnimationFrame(() => {
-        const liveRect = el.getBoundingClientRect();
-        const rect = { x: liveRect.x, y: liveRect.y, width: liveRect.width, height: liveRect.height };
-        const style = getComputedStyle(el);
-        const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
-        const visible = !hidden && rect.width > 0 && rect.height > 0;
-        const stable = sameRect(first, mid) && sameRect(mid, rect);
-        const inViewport = rect.width > 0 && rect.height > 0 && liveRect.bottom >= 0 && liveRect.right >= 0 && liveRect.top <= window.innerHeight && liveRect.left <= window.innerWidth;
-        const x = rect.x + rect.width / 2;
-        const y = rect.y + rect.height / 2;
-        const hit = inViewport ? document.elementFromPoint(Math.min(Math.max(x, 0), Math.max(window.innerWidth - 1, 0)), Math.min(Math.max(y, 0), Math.max(window.innerHeight - 1, 0))) : null;
-        const targetMatches = Boolean(hit && (hit === el || el.contains(hit)));
-        const editable = readonly.supportsEditing && !disabled && !readonly.readOnly;
-        const requiredChecks = requiredChecksFor();
-        const checks = {
-          attached: check(true, elements.length > 0, ""),
-          visible: check(requiredChecks.includes("visible"), visible, visible ? "" : "element has empty box or hidden/display-none/visibility-hidden state"),
-          stable: check(requiredChecks.includes("stable"), stable, stable ? "" : "bounding box changed across animation frames"),
-          receives_events: check(requiredChecks.includes("receives_events"), targetMatches, targetMatches ? "" : "center point is not the hit target"),
-          enabled: check(requiredChecks.includes("enabled"), !disabled, disabled ? "element is disabled" : ""),
-          editable: check(requiredChecks.includes("editable"), editable, editable ? "" : "element is disabled, read-only, or does not support editing"),
-          in_viewport: check(false, inViewport, inViewport ? "" : "element center is outside the viewport")
-        };
-        const actionable = requiredChecks.every((name) => checks[name] && checks[name].passed);
-        resolve({
-          url: location.href,
-          title: document.title,
-          selector,
-          action,
-          trial: false,
-          count: elements.length,
-          actionable,
-          required_checks: requiredChecks,
-          checks,
-          target: {
-            tag: el.tagName.toLowerCase(),
-            id: el.id || "",
-            type: el.getAttribute("type") || "",
-            role,
-            name: accessibleName(el).slice(0, 240),
-            enabled: !disabled,
-            disabled,
-            editable,
-            read_only: readonly.readOnly,
-            supports_editing: readonly.supportsEditing,
-            content_editable: readonly.contentEditable
-          },
-          rect,
-          point: {
-            x,
-            y,
-            hit_tag: hit ? hit.tagName.toLowerCase() : "",
-            hit_id: hit ? hit.id || "" : "",
-            hit_role: hit ? roleOf(hit) : "",
-            target_matches: targetMatches
-          },
-          marker
-        });
-      });
+      requestAnimationFrame(() => resolve(readResult(mid, el.getBoundingClientRect())));
     });
   });
 })()`, jsStringLiteral(selector), jsStringLiteral(action), accessibleNameHelpersJS())

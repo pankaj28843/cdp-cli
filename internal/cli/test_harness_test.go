@@ -691,6 +691,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Input.insertText" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "Input.dispatchKeyEvent" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Input.dispatchMouseEvent" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Storage.getUsageAndQuota" {
@@ -1204,6 +1206,17 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 	_ = json.Unmarshal(params, &req)
 	if strings.Contains(req.Expression, "window.scrollTo(0, document.body.scrollHeight)") {
 		scrolledSelectors.Store(sessionID+":x-profile", true)
+	}
+	if strings.Contains(req.Expression, "target_found") && strings.Contains(req.Expression, "document.activeElement") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"target_found": true,
+					"focused":      true,
+				},
+			},
+		}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_rendered_discussion_expand__") {
 		return map[string]any{

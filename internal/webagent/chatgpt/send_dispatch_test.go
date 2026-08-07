@@ -98,7 +98,7 @@ func TestSendDispatcherFailsClosedWhenAttachmentDropsBeforeSend(t *testing.T) {
 	}
 }
 
-func TestSendDispatcherAllowsProviderAttachmentTelemetryBeforeRawSend(t *testing.T) {
+func TestSendDispatcherUsesFocusedComposerEnterAfterAttachmentTelemetry(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluations: []json.RawMessage{
 			exactSelectionGuard("Pro", ""),
@@ -152,9 +152,9 @@ func TestSendDispatcherAllowsProviderAttachmentTelemetryBeforeRawSend(t *testing
 		"Runtime.evaluate",
 		"Runtime.evaluate",
 		"Runtime.evaluate",
-		"Input.dispatchMouseEvent",
-		"Input.dispatchMouseEvent",
-		"Input.dispatchMouseEvent",
+		"Runtime.evaluate",
+		"Input.dispatchKeyEvent",
+		"Input.dispatchKeyEvent",
 	}
 	if len(client.calls) != len(wantMethods) {
 		t.Fatalf("calls=%+v, want %v", client.calls, wantMethods)
@@ -169,14 +169,13 @@ func TestSendDispatcherAllowsProviderAttachmentTelemetryBeforeRawSend(t *testing
 			)
 		}
 	}
-	if !strings.Contains(
-		string(client.calls[3].params),
-		`"x":100`,
-	) || !strings.Contains(
-		string(client.calls[3].params),
-		`"y":200`,
-	) {
-		t.Fatalf("first raw Send event=%s", client.calls[3].params)
+	if !strings.Contains(string(client.calls[3].params), "#prompt-textarea") {
+		t.Fatalf("composer focus evaluation=%s", client.calls[3].params)
+	}
+	if !strings.Contains(string(client.calls[4].params), `"type":"rawKeyDown"`) ||
+		!strings.Contains(string(client.calls[4].params), `"key":"Enter"`) ||
+		!strings.Contains(string(client.calls[5].params), `"type":"keyUp"`) {
+		t.Fatalf("raw Enter events=%s %s", client.calls[4].params, client.calls[5].params)
 	}
 }
 

@@ -341,7 +341,9 @@ func (c *selectionActivationClient) CallSession(
 	})
 	if method == "Runtime.evaluate" {
 		evaluation := c.evaluation
-		if c.evaluationIndex < len(c.evaluations) {
+		if strings.Contains(string(raw), "target_found") {
+			evaluation = json.RawMessage(`{"target_found":true,"focused":true}`)
+		} else if c.evaluationIndex < len(c.evaluations) {
 			evaluation = c.evaluations[c.evaluationIndex]
 			c.evaluationIndex++
 		}

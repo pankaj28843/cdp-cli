@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
@@ -1943,26 +1944,55 @@ func (a *app) newPressCommand() *cobra.Command {
 			}
 
 			var result pressResult
-			if err := evaluateJSONValue(ctx, session, pressExpression(args[0], resolvedSelector), "press", &result); err != nil {
-				return err
-			}
-			if result.Error != nil {
-				return commandError(
-					"invalid_selector",
-					"usage",
-					fmt.Sprintf("press %q: %s", args[0], result.Error.Message),
-					ExitUsage,
-					[]string{"cdp press Enter --selector 'input[name=\"q\"]' --json"},
-				)
-			}
-			if !result.Dispatched {
-				return commandError(
-					"invalid_selector",
-					"usage",
-					fmt.Sprintf("no target found for keypress %q", args[0]),
-					ExitUsage,
-					[]string{"cdp press Enter --selector 'body' --json"},
-				)
+			if strings.EqualFold(strings.TrimSpace(args[0]), "Enter") {
+				var outcome browserflow.DispatchOutcome
+				if resolvedSelector != "" {
+					outcome, err = browserflow.PressEnterOnSelector(ctx, session, resolvedSelector)
+				} else {
+					outcome, err = browserflow.PressEnter(ctx, session)
+				}
+				if err != nil {
+					switch outcome.Dispatch {
+					case browserflow.DispatchPerformed:
+						return commandError("input_dispatch_performed", "completion", fmt.Sprintf("Enter was sent to target %s, but key-up confirmation failed: %v; do not retry blindly", target.TargetID, err), ExitCheckFailed, []string{"inspect the target state before retrying"})
+					case browserflow.DispatchUnknown:
+						return commandError("input_dispatch_unknown", "completion", fmt.Sprintf("Enter dispatch to target %s has an ambiguous outcome: %v; do not retry blindly", target.TargetID, err), ExitCheckFailed, []string{"inspect the target state before retrying"})
+					case browserflow.DispatchNotPerformed:
+						return commandError("input_target_not_focused", "check_failed", fmt.Sprintf("Enter was not dispatched because the target could not be focused on %s: %v", target.TargetID, err), ExitCheckFailed, []string{"cdp assert focused " + shellQuote(resolvedSelector) + " --json", "inspect the target state before retrying"})
+					default:
+						return commandError("input_dispatch_failed", "connection", fmt.Sprintf("dispatch Enter on target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --browser-mode headed --json"})
+					}
+				}
+				result = pressResult{
+					URL:        target.URL,
+					Title:      target.Title,
+					Selector:   resolvedSelector,
+					Key:        args[0],
+					Count:      1,
+					Dispatched: outcome.Dispatch == browserflow.DispatchPerformed,
+				}
+			} else {
+				if err := evaluateJSONValue(ctx, session, pressExpression(args[0], resolvedSelector), "press", &result); err != nil {
+					return err
+				}
+				if result.Error != nil {
+					return commandError(
+						"invalid_selector",
+						"usage",
+						fmt.Sprintf("press %q: %s", args[0], result.Error.Message),
+						ExitUsage,
+						[]string{"cdp press Enter --selector 'input[name=\"q\"]' --json"},
+					)
+				}
+				if !result.Dispatched {
+					return commandError(
+						"invalid_selector",
+						"usage",
+						fmt.Sprintf("no target found for keypress %q", args[0]),
+						ExitUsage,
+						[]string{"cdp press Enter --selector 'body' --json"},
+					)
+				}
 			}
 			verified := true
 			var verification *waitResult

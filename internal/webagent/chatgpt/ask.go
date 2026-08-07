@@ -159,6 +159,19 @@ type chatgptSendDispatcher struct {
 	attachment   *attachmentExpectation
 }
 
+const chatGPTComposerSelector = "#prompt-textarea"
+
+func pressChatGPTComposerEnter(
+	ctx context.Context,
+	session *cdp.PageSession,
+) (browserflow.DispatchOutcome, error) {
+	return browserflow.PressEnterOnSelector(
+		ctx,
+		session,
+		chatGPTComposerSelector,
+	)
+}
+
 func (d chatgptSendDispatcher) Dispatch(
 	ctx context.Context,
 	session *cdp.PageSession,
@@ -190,9 +203,11 @@ func (d chatgptSendDispatcher) Dispatch(
 				"exact ChatGPT attachment was not retained and ready at Send",
 			)
 	}
-	// Keep the coordinate-bearing composer observation last. No browser
-	// operation may occur between this passive observation and the one raw
-	// Send click, otherwise attachment-driven layout could stale the point.
+	// Keep the composer observation immediately before the one raw Send input.
+	// ChatGPT's current composer is a ProseMirror textbox whose Enter handler
+	// submits the form. Focus the exact editor and send one trusted CDP Enter;
+	// do not synthesize DOM KeyboardEvents or click a potentially re-rendered
+	// coordinate.
 	var observation composerObservation
 	observeErr := observeComposer(
 		ctx,
@@ -237,13 +252,7 @@ func (d chatgptSendDispatcher) Dispatch(
 			Dispatch: browserflow.DispatchNotPerformed,
 		}, fmt.Errorf("exact ChatGPT Send control was not actionable")
 	}
-	outcome, clickErr := browserflow.ClickPoint(
-		ctx,
-		session,
-		observation.SendX,
-		observation.SendY,
-	)
-	return outcome, clickErr
+	return pressChatGPTComposerEnter(ctx, session)
 }
 
 func Ask(
