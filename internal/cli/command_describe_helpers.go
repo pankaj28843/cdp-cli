@@ -543,6 +543,10 @@ func commandExamples(path string) []string {
 		"cdp storage cookies delete": {
 			"cdp storage cookies delete --url 'https://example.com' --name feature_flag --json",
 		},
+		"cdp workflow youtube cookies": {
+			"cdp --browser-mode headed workflow youtube cookies --out ~/.local/state/yt-dlp/cookies.txt --json",
+			"cdp --browser-mode headed workflow youtube cookies --settle 5s --json",
+		},
 		"cdp storage indexeddb": {
 			"cdp storage indexeddb list --url-contains localhost --json",
 			"cdp storage indexeddb dump app records --limit 100 --json",

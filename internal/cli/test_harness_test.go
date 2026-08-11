@@ -677,14 +677,21 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["error"] = map[string]any{"code": -32000, "message": "No resource with given identifier found"}
 				}
 			} else if req.Method == "Network.getCookies" {
-				resp["result"] = map[string]any{"cookies": []map[string]any{{
+				cookies := []map[string]any{{
 					"name":     "session",
 					"value":    "secret",
 					"domain":   "example.test",
 					"path":     "/",
 					"httpOnly": true,
 					"secure":   true,
-				}}}
+				}}
+				if strings.Contains(string(req.Params), "youtube.com") {
+					cookies = []map[string]any{{
+						"name": "SAPISID", "value": "synthetic-youtube-auth", "domain": ".youtube.com",
+						"path": "/", "expires": 2_000_000_000, "httpOnly": true, "secure": true,
+					}}
+				}
+				resp["result"] = map[string]any{"cookies": cookies}
 			} else if req.Method == "Network.setCookie" {
 				resp["result"] = map[string]any{"success": true}
 			} else if req.Method == "Network.deleteCookies" {

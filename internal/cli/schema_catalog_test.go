@@ -111,6 +111,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"workflow-hacker-news-collect",
 		"workflow-arxiv-collect",
 		"workflow-pdf-to-markdown",
+		"workflow-youtube-cookies",
 		"source-collection-coverage",
 		"workflow-submit-search",
 		"workflow-web-research-serp",

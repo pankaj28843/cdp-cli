@@ -2119,6 +2119,19 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "cleanup", Type: "object", Required: true, Description: "Exact workflow-owned target close result."},
 			},
 		},
+		"workflow-youtube-cookies": {
+			Name:        "workflow-youtube-cookies",
+			Description: "Headed-Chrome YouTube cookie harvest with owner-only atomic output and exact workflow-tab cleanup.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when current signed-in YouTube cookies were written and the workflow tab closed."},
+				{Name: "url", Type: "string", Required: true, Description: "Validated HTTPS YouTube URL refreshed before cookie collection."},
+				{Name: "cookie_file", Type: "string", Required: true, Description: "Local owner-only Netscape cookie file path."},
+				{Name: "cookie_count", Type: "number", Required: true, Description: "Number of current YouTube-domain cookies written without exposing their values."},
+				{Name: "auth_cookie_names", Type: "array<string>", Required: true, Description: "Recognized YouTube sign-in cookie names present in the output."},
+				{Name: "security", Type: "object", Required: true, Description: "Required owner-only directory and file modes."},
+				{Name: "cleanup", Type: "object", Required: true, Description: "Exact workflow-owned target close result."},
+			},
+		},
 		"workflow-console-errors": {
 			Name:        "workflow-console-errors",
 			Description: "Focused console error and warning summary.",
