@@ -48,6 +48,7 @@ const (
 	OperationConversationsAwait    Operation = "conversations.await"
 	OperationConversationsDelete   Operation = "conversations.delete"
 	OperationArtifactDownload      Operation = "conversations.download_artifact"
+	OperationAttachmentsDownload   Operation = "conversations.download_attachments"
 	OperationResearch              Operation = "research"
 	OperationResearchExport        Operation = "conversations.export_research"
 )
@@ -136,6 +137,7 @@ type CleanupEvidence struct {
 	Required           bool         `json:"required"`
 	State              CleanupState `json:"state"`
 	TargetID           string       `json:"target_id,omitempty"`
+	IdentityOmitted    bool         `json:"identity_omitted,omitempty"`
 	TargetClosed       bool         `json:"target_closed,omitempty"`
 	CloseAttemptCount  int          `json:"close_attempt_count,omitempty"`
 	CloseSent          bool         `json:"close_sent,omitempty"`

@@ -234,19 +234,31 @@ func (c CleanupEvidence) Validate() error {
 	}
 	switch c.State {
 	case CleanupNotRequired:
-		if c.Required {
+		if c.Required || c.IdentityOmitted {
 			return fmt.Errorf("cleanup not_required requires required=false")
 		}
 	case CleanupPending, CleanupFailed:
-		if !c.Required || c.TargetID == "" {
-			return fmt.Errorf("cleanup %s requires required=true and target_id", c.State)
+		if !c.Required || (c.TargetID == "" && !c.IdentityOmitted) {
+			return fmt.Errorf(
+				"cleanup %s requires required=true and target identity evidence",
+				c.State,
+			)
 		}
 	case CleanupClosed:
-		if !c.Required || c.TargetID == "" || !c.TargetClosed {
-			return fmt.Errorf("cleanup closed requires required=true, target_id, and target_closed=true")
+		if !c.Required ||
+			(c.TargetID == "" && !c.IdentityOmitted) ||
+			!c.TargetClosed {
+			return fmt.Errorf(
+				"cleanup closed requires required=true, target identity evidence, and target_closed=true",
+			)
 		}
 	default:
 		return fmt.Errorf("invalid cleanup state %q", c.State)
+	}
+	if c.IdentityOmitted && c.TargetID != "" {
+		return fmt.Errorf(
+			"cleanup identity_omitted cannot accompany target_id",
+		)
 	}
 	for name, value := range map[string]string{
 		"cleanup.target_id":     c.TargetID,
@@ -283,6 +295,7 @@ func validOperation(operation Operation) bool {
 		OperationConversationsContinue, OperationConversationsDetail,
 		OperationConversationsAwait,
 		OperationConversationsDelete, OperationArtifactDownload,
+		OperationAttachmentsDownload,
 		OperationResearch, OperationResearchExport:
 		return true
 	default:

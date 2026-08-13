@@ -187,6 +187,42 @@ func TestWorkflowAgentClaudeAuthRefreshRejectsHeadlessBeforeBrowserAccess(t *tes
 	}
 }
 
+func TestWorkflowAgentChatGPTAskRejectsHeadlessBeforeBrowserAccess(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(
+		context.Background(),
+		[]string{
+			"--browser-mode", "headless",
+			"workflow", "agent", "chatgpt", "ask", "test prompt", "--json",
+		},
+		&out,
+		&errOut,
+		cli.BuildInfo{Commit: "test-commit"},
+	)
+	if code != cli.ExitUsage {
+		t.Fatalf(
+			"headless ChatGPT ask exit=%d stdout=%s stderr=%s",
+			code,
+			out.String(),
+			errOut.String(),
+		)
+	}
+	var result webagent.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode headless ChatGPT ask: %v", err)
+	}
+	if result.OK ||
+		result.Operation != webagent.OperationAsk ||
+		result.Error == nil ||
+		result.Error.Code != "chatgpt_headed_browser_required" ||
+		result.Cleanup.State != webagent.CleanupNotRequired {
+		t.Fatalf("headless ChatGPT ask = %+v", result)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("headless ChatGPT ask validation: %v", err)
+	}
+}
+
 func TestWorkflowAgentGeminiCapabilitiesAndDoctorNeedNoBrowser(t *testing.T) {
 	stateDir := t.TempDir()
 	store, err := gemini.NewStore(stateDir)
@@ -327,6 +363,32 @@ func TestWorkflowAgentHelpDocumentsGoogleAIPolicy(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("workflow agent help missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestWorkflowAgentHelpHidesBrowserModeSelectors(t *testing.T) {
+	for _, args := range [][]string{
+		{"workflow", "agent", "chatgpt", "ask", "--help"},
+		{"workflow", "agent", "chatgpt", "conversations", "download-attachments", "--help"},
+	} {
+		var out, errOut bytes.Buffer
+		code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+		if code != cli.ExitOK {
+			t.Fatalf("workflow agent help exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+		}
+		if strings.Contains(out.String(), "--browser-mode") ||
+			strings.Contains(out.String(), "--browserMode") {
+			t.Fatalf("workflow agent help exposed browser mode selectors for %q:\n%s", args, out.String())
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"pages", "--help"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages help exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "--browser-mode") {
+		t.Fatalf("direct cdp pages help lost browser-mode diagnostics:\n%s", out.String())
 	}
 }
 

@@ -86,6 +86,7 @@ func TestChatGPTAdvertisesOnlyLiveProvenMutationSurface(t *testing.T) {
 		OperationConversationsAwait:    true,
 		OperationConversationsDelete:   true,
 		OperationArtifactDownload:      true,
+		OperationAttachmentsDownload:   true,
 	}
 	for _, capability := range capabilities.Operations {
 		if wantImplemented[capability.Operation] {
@@ -555,5 +556,17 @@ func TestResultValidationLinksOwnedTargetAndCleanup(t *testing.T) {
 	result.Cleanup.TargetID = "target-owned"
 	if err := result.Validate(); err != nil {
 		t.Fatalf("closed owned target validation: %v", err)
+	}
+
+	result.Evidence.Target = nil
+	result.Cleanup.TargetID = ""
+	result.Cleanup.IdentityOmitted = true
+	if err := result.Validate(); err != nil {
+		t.Fatalf("privacy-omitted cleanup identity validation: %v", err)
+	}
+	result.Cleanup.TargetID = "target-owned"
+	if err := result.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "cannot accompany target_id") {
+		t.Fatalf("mixed cleanup identity validation = %v", err)
 	}
 }

@@ -115,6 +115,9 @@ type ConversationAttachment struct {
 	Width              int    `json:"width,omitempty"`
 	Height             int    `json:"height,omitempty"`
 	sourceIdentityHash string
+	sourceLocator      string
+	sandboxLocator     string
+	messageID          string
 }
 
 type readFailure struct {
@@ -174,6 +177,8 @@ func UnavailableRead(
 	schema := ConversationDetailSchemaVersion
 	if operation == webagent.OperationConversationsList {
 		schema = ConversationListSchemaVersion
+	} else if operation == webagent.OperationAttachmentsDownload {
+		schema = AttachmentBatchSchemaVersion
 	}
 	return readFailureResult(
 		webagent.NewRunID(),
@@ -1083,7 +1088,11 @@ func extractConversationText(payload map[string]any) extractedConversation {
 	}
 	current, _ := payload["current_node"].(string)
 	seen := map[string]bool{}
-	nodes := make([]map[string]any, 0)
+	type pathNode struct {
+		id  string
+		raw map[string]any
+	}
+	nodes := make([]pathNode, 0)
 	prompt := ""
 	for current != "" && !seen[current] {
 		seen[current] = true
@@ -1097,20 +1106,25 @@ func extractConversationText(payload map[string]any) extractedConversation {
 			prompt = messageText(message, false)
 			break
 		}
-		nodes = append(nodes, raw)
+		nodes = append(nodes, pathNode{id: current, raw: raw})
 		current, _ = raw["parent"].(string)
 	}
 	if strings.TrimSpace(prompt) != "" {
 		result.metadata["prompt_fingerprint"] = fingerprintPrompt(prompt)
 	}
 	for index, node := range nodes {
-		message, _ := node["message"].(map[string]any)
+		message, _ := node.raw["message"].(map[string]any)
 		role := messageRole(message)
 		if role != "assistant" && role != "tool" {
 			continue
 		}
 		text := strings.TrimSpace(messageText(message, true))
 		attachments, attachmentsTruncated := conversationAttachments(message)
+		if conversationIDPattern.MatchString(node.id) {
+			for attachmentIndex := range attachments {
+				attachments[attachmentIndex].messageID = node.id
+			}
+		}
 		if index == 0 &&
 			terminalNoAnswerPayloadCandidate(
 				text,
@@ -1468,6 +1482,13 @@ func conversationAttachmentFromRaw(
 		Width:              int(width),
 		Height:             int(height),
 		sourceIdentityHash: sourceIdentityHash,
+		sourceLocator:      privateAttachmentSourceLocator(sourceRaw, source),
+		sandboxLocator: privateAttachmentSandboxLocator(
+			raw,
+			metadata,
+			sourceRaw,
+			source,
+		),
 	}
 	if attachment.Source == "sandbox_artifact" &&
 		attachment.FileName == "" {
@@ -1477,6 +1498,48 @@ func conversationAttachmentFromRaw(
 		}
 	}
 	return attachment, conversationAttachmentUsable(attachment)
+}
+
+func privateAttachmentSourceLocator(raw string, publicSource string) string {
+	if publicSource == "" {
+		return ""
+	}
+	raw = boundedAttachmentString(raw, maxAttachmentSourceRunes)
+	if raw == "" {
+		return ""
+	}
+	if publicSource != "sandbox_artifact" {
+		return raw
+	}
+	return normalizedPrivateSandboxLocator(raw)
+}
+
+func privateAttachmentSandboxLocator(
+	raw map[string]any,
+	metadata map[string]any,
+	sourceRaw string,
+	publicSource string,
+) string {
+	for _, values := range []map[string]any{raw, metadata} {
+		value, _ := values["sandbox_path"].(string)
+		if locator := normalizedPrivateSandboxLocator(value); locator != "" {
+			return locator
+		}
+	}
+	if publicSource == "sandbox_artifact" {
+		return normalizedPrivateSandboxLocator(sourceRaw)
+	}
+	return ""
+}
+
+func normalizedPrivateSandboxLocator(raw string) string {
+	raw = boundedAttachmentString(raw, maxAttachmentSourceRunes)
+	raw = strings.TrimPrefix(raw, "sandbox:")
+	normalized, ok := normalizeSandboxPath(raw)
+	if !ok {
+		return ""
+	}
+	return "sandbox:" + normalized
 }
 
 func normalizedAttachmentKind(
@@ -1730,9 +1793,11 @@ func sandboxAttachments(text string) []ConversationAttachment {
 			}
 			seen[normalized] = true
 			attachments = append(attachments, ConversationAttachment{
-				Kind:     "file",
-				Source:   "sandbox_artifact",
-				FileName: path.Base(normalized),
+				Kind:           "file",
+				Source:         "sandbox_artifact",
+				FileName:       path.Base(normalized),
+				sourceLocator:  "sandbox:" + normalized,
+				sandboxLocator: "sandbox:" + normalized,
 			})
 		}
 	}
@@ -1854,6 +1919,11 @@ func conversationAttachmentLess(
 	if first.sourceIdentityHash != second.sourceIdentityHash {
 		return first.sourceIdentityHash < second.sourceIdentityHash
 	}
+	firstSandbox := comparableAttachmentSandboxLocator(first)
+	secondSandbox := comparableAttachmentSandboxLocator(second)
+	if firstSandbox != secondSandbox {
+		return firstSandbox < secondSandbox
+	}
 	if first.FileName != second.FileName {
 		return first.FileName < second.FileName
 	}
@@ -1888,14 +1958,23 @@ func conversationAttachmentsMatch(
 		}
 		fileIDMatches = true
 	}
+	currentSandbox := comparableAttachmentSandboxLocator(current)
+	candidateSandbox := comparableAttachmentSandboxLocator(candidate)
+	sandboxMatches := false
+	if currentSandbox != "" && candidateSandbox != "" {
+		if currentSandbox != candidateSandbox {
+			return false
+		}
+		sandboxMatches = true
+	}
 	currentSource := comparableAttachmentSource(current)
 	candidateSource := comparableAttachmentSource(candidate)
 	sourceMatches := false
 	if currentSource != "" && candidateSource != "" {
-		if currentSource != candidateSource {
+		if currentSource != candidateSource && !sandboxMatches {
 			return false
 		}
-		sourceMatches = true
+		sourceMatches = currentSource == candidateSource
 	}
 	fileNameMatches := false
 	if current.FileName != "" && candidate.FileName != "" {
@@ -1904,7 +1983,19 @@ func conversationAttachmentsMatch(
 			candidate.FileName,
 		)
 	}
-	return fileIDMatches || sourceMatches || fileNameMatches
+	return fileIDMatches || sandboxMatches || sourceMatches || fileNameMatches
+}
+
+func comparableAttachmentSandboxLocator(
+	attachment ConversationAttachment,
+) string {
+	if attachment.sandboxLocator != "" {
+		return attachment.sandboxLocator
+	}
+	if strings.HasPrefix(attachment.sourceLocator, "sandbox:") {
+		return attachment.sourceLocator
+	}
+	return ""
 }
 
 func comparableAttachmentSource(attachment ConversationAttachment) string {
@@ -1912,7 +2003,13 @@ func comparableAttachmentSource(attachment ConversationAttachment) string {
 		return "query:" + attachment.sourceIdentityHash
 	}
 	source := attachment.Source
-	if source == "" || source == "sandbox_artifact" {
+	if source == "sandbox_artifact" {
+		if strings.HasPrefix(attachment.sourceLocator, "sandbox:") {
+			return attachment.sourceLocator
+		}
+		return ""
+	}
+	if source == "" {
 		return ""
 	}
 	parsed, err := url.Parse(source)
@@ -1926,6 +2023,7 @@ func mergeConversationAttachment(
 	current ConversationAttachment,
 	candidate ConversationAttachment,
 ) ConversationAttachment {
+	currentSource := current.Source
 	current.Alt = preferredAttachmentString(current.Alt, candidate.Alt)
 	current.Source = preferredAttachmentSource(current.Source, candidate.Source)
 	current.FileID = preferredAttachmentString(current.FileID, candidate.FileID)
@@ -1947,6 +2045,22 @@ func mergeConversationAttachment(
 	current.sourceIdentityHash = preferredAttachmentString(
 		current.sourceIdentityHash,
 		candidate.sourceIdentityHash,
+	)
+	current.sandboxLocator = preferredAttachmentString(
+		current.sandboxLocator,
+		candidate.sandboxLocator,
+	)
+	if current.Source == candidate.Source && current.Source != currentSource {
+		current.sourceLocator = candidate.sourceLocator
+	} else {
+		current.sourceLocator = preferredAttachmentString(
+			current.sourceLocator,
+			candidate.sourceLocator,
+		)
+	}
+	current.messageID = preferredAttachmentString(
+		current.messageID,
+		candidate.messageID,
 	)
 	return current
 }

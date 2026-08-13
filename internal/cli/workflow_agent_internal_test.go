@@ -5,11 +5,28 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 )
+
+func TestChatGPTAttachmentBatchCommandIsDiscoverable(t *testing.T) {
+	root := (&app{out: &bytes.Buffer{}, err: &bytes.Buffer{}}).newRoot()
+	command, _, err := root.Find([]string{
+		"workflow", "agent", "chatgpt", "conversations",
+		"download-attachments",
+	})
+	if err != nil || command == nil {
+		t.Fatalf("download-attachments command not found: %v", err)
+	}
+	if command.Flag("output-dir") == nil ||
+		!strings.Contains(command.Use, "CONVERSATION_ID") ||
+		!strings.Contains(command.Long, "never overwritten") {
+		t.Fatalf("attachment batch command = %+v", command)
+	}
+}
 
 func TestSelectHeadedProviderRuntimeOverridesAmbientDefaultOnly(t *testing.T) {
 	t.Run("ambient default", func(t *testing.T) {

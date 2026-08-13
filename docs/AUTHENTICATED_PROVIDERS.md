@@ -2,6 +2,10 @@
 
 `cdp workflow agent` exposes authenticated provider operations through the
 signed-in headed Chrome session selected by `--browser-mode headed`.
+Provider `ask` operations reject an explicit headless mode before browser
+access and force ambient/config defaults to the headed runtime.
+Workflow-agent help omits the browser-mode selectors; direct low-level cdp
+commands retain them for explicit diagnostics and maintenance.
 
 ```bash
 cdp --browser-mode headed pages --json
@@ -138,7 +142,20 @@ cdp workflow agent chatgpt conversations list --limit 30 --json
 cdp workflow agent chatgpt conversations detail <conversation-id> --json
 cdp workflow agent chatgpt conversations await <conversation-id> \
   --wait 40m --timeout 40m30s --json
+cdp workflow agent chatgpt conversations download-attachments \
+  <conversation-id> --output-dir ./designs --json
 ```
+
+`download-attachments` exports every attachment owned by the canonical terminal
+answer as bounded original provider bytes. It writes owner-only files and a
+deterministic `chatgpt-attachments-manifest.json`, never overwrites an existing
+path, and reports independent failures as `data.status=partial`. The public
+result and manifest omit provider file/conversation identifiers, signed URLs,
+prompts, answers, auth data, and browser target identities. A direct stable read
+opens no tab; an eligible auth/transport failure may lazily use one fresh exact
+headed target and exact-close it. Privacy-safe fallback results omit the target
+identity while retaining truthful required/closed/failed cleanup state through
+`cleanup.identity_omitted`.
 
 Provider-specific `capabilities` output is the executable source of truth for
 which read, continue, delete, and auth operations are installed.

@@ -124,7 +124,60 @@ func (a *app) newWorkflowAgentChatGPTConversationsCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsAwaitCommand())
 	cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsDeleteCommand())
 	cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsDownloadArtifactCommand())
+	cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsDownloadAttachmentsCommand())
 	cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsExportResearchCommand())
+	return cmd
+}
+
+func (a *app) newWorkflowAgentChatGPTConversationsDownloadAttachmentsCommand() *cobra.Command {
+	var outputDir string
+	cmd := &cobra.Command{
+		Use:   "download-attachments CONVERSATION_ID",
+		Short: "Export every attachment from one terminal ChatGPT answer",
+		Long: "Read one exact hydrated terminal answer, resolve only admitted ChatGPT attachment sources, and export bounded original provider bytes plus a deterministic owner-only manifest. " +
+			"Existing paths are never overwritten; independent item failures produce an explicit partial batch.",
+		Example: "  cdp workflow agent chatgpt conversations download-attachments CONVERSATION_ID --output-dir ./designs --json",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 5*time.Minute)
+			defer cancel()
+			readConfig, unavailable := a.chatgptReadConfig(
+				ctx,
+				webagent.OperationAttachmentsDownload,
+			)
+			if unavailable != nil {
+				return a.renderWebAgentResult(
+					ctx,
+					"chatgpt attachment export: unavailable",
+					*unavailable,
+				)
+			}
+			result := chatgpt.DownloadAttachments(
+				ctx,
+				chatgpt.AttachmentBatchConfig{
+					ReadConfig: readConfig,
+					OutputDir:  outputDir,
+				},
+				args[0],
+			)
+			human := fmt.Sprintf(
+				"chatgpt attachment export: %v",
+				result.State,
+			)
+			if data, ok := result.Data.(chatgpt.AttachmentBatchData); ok &&
+				data.ManifestPath != "" && result.OK {
+				human = data.ManifestPath
+			}
+			return a.renderWebAgentResult(ctx, human, result)
+		},
+	}
+	cmd.Flags().StringVar(
+		&outputDir,
+		"output-dir",
+		"",
+		"explicit local directory for attachments and the deterministic manifest",
+	)
+	_ = cmd.MarkFlagRequired("output-dir")
 	return cmd
 }
 

@@ -144,7 +144,15 @@ printf '%s' 'Turn the six Agent Skills review checks into a small, readable visu
     --model 'GPT-5.6 Sol' --json --timeout 40m
 cdp workflow agent chatgpt conversations await <conversation-id> \
   --wait 40m --timeout 40m30s --json
+cdp workflow agent chatgpt conversations download-attachments \
+  <conversation-id> --output-dir ./designs --json
 ```
+
+The attachment batch writes original provider bytes plus a deterministic
+owner-only manifest. Existing paths are never replaced; `partial` preserves
+successful files while making every failed or bounded item explicit. Provider
+IDs, signed URLs, prompts, answers, auth state, and target IDs are excluded from
+its public JSON and manifest.
 
 `Instant` is for instant ideas, `Medium` is the practical daily setting, and
 `Pro` is the deepest setting and takes the most time. Web search, GitHub, and
@@ -202,6 +210,8 @@ submits the exact prompt with one raw Send, reads the answer, preserves the
 observed conversation ID, and closes only that tab. A failed process or missing
 tab does not block a later ask; the later invocation starts with another fresh
 tab.
+An explicit headless mode is rejected before provider browser access, and an
+ambient headless default is overridden for these operations.
 
 Attached ChatGPT files must retain the exact requested basename before Send.
 The final Send guard rechecks the resolved thinking/model, exact prompt, route,

@@ -1,6 +1,7 @@
 package chatgpt
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1009,6 +1010,22 @@ func TestConversationAttachmentsExposeSafeFileMetadata(t *testing.T) {
 		strings.Contains(metadata.Source, "private-test-value") ||
 		strings.Contains(metadata.Source, "/mnt/data/") {
 		t.Fatalf("metadata=%+v", metadata)
+	}
+	if metadata.sandboxLocator !=
+		"sandbox:/mnt/data/synthetic-report.csv" {
+		t.Fatalf("private sandbox alias=%q", metadata.sandboxLocator)
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"/mnt/data/", "private-test-value", "sandboxLocator",
+		"sandbox_locator",
+	} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("public metadata leaked %q: %s", forbidden, encoded)
+		}
 	}
 }
 

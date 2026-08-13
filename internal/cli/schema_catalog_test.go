@@ -50,6 +50,8 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"webagent-operation",
 		"webagent-capabilities",
 		"webagent-provider-catalog",
+		"chatgpt-attachment-batch",
+		"chatgpt-attachment-manifest",
 		"webagent-operation-capability",
 		"webagent-action",
 		"webagent-error",
@@ -198,6 +200,7 @@ func TestSchemaCatalogWebAgentContracts(t *testing.T) {
 	}
 	cleanup := catalog["webagent-cleanup"]
 	if !catalogSchemaFieldContains(cleanup, "target_id", "string", "Exact workflow-owned target") ||
+		!catalogSchemaFieldContains(cleanup, "identity_omitted", "boolean", "privacy-safe", "lifecycle state") ||
 		!catalogSchemaFieldContains(cleanup, "target_closed", "boolean", "exact target") {
 		t.Fatalf("webagent-cleanup exact-target semantics are incomplete: %+v", cleanup)
 	}

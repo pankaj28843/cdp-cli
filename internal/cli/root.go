@@ -18,6 +18,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/output"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type BuildInfo struct {
@@ -104,6 +105,33 @@ func (a *app) newRoot() *cobra.Command {
 			"JSON output, jq-friendly filtering, high-level browser debugging workflows, and\n" +
 			"cleanup routines such as `cdp page cleanup --json` for cron-safe tab hygiene.",
 	}
+	defaultHelp := root.HelpFunc()
+	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if !isWorkflowAgentCommand(cmd) {
+			defaultHelp(cmd, args)
+			return
+		}
+		modeFlags := []*pflag.Flag{
+			root.PersistentFlags().Lookup("browser-mode"),
+			root.PersistentFlags().Lookup("browserMode"),
+		}
+		previousHidden := make([]bool, len(modeFlags))
+		for index, flag := range modeFlags {
+			if flag == nil {
+				continue
+			}
+			previousHidden[index] = flag.Hidden
+			flag.Hidden = true
+		}
+		defer func() {
+			for index, flag := range modeFlags {
+				if flag != nil {
+					flag.Hidden = previousHidden[index]
+				}
+			}
+		}()
+		defaultHelp(cmd, args)
+	})
 	a.root = root
 
 	root.PersistentFlags().BoolVar(&a.opts.json, "json", false, "emit JSON on stdout")
@@ -185,6 +213,17 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newWorkflowCommand())
 
 	return root
+}
+
+func isWorkflowAgentCommand(cmd *cobra.Command) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current.Name() == "agent" &&
+			current.Parent() != nil &&
+			current.Parent().Name() == "workflow" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) resolveBrowserMode(cmd *cobra.Command) (browserModeState, error) {

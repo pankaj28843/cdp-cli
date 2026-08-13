@@ -421,7 +421,17 @@ func (r RuntimeCapabilities) Validate() error {
 }
 
 func isReadAuthPath(path string) bool {
-	return path == ConversationListPath || path == RoomsSummaryPath
+	if path == ConversationListPath || path == RoomsSummaryPath {
+		return true
+	}
+	const detailPrefix = "/backend-api/conversation/"
+	if !strings.HasPrefix(path, detailPrefix) {
+		return false
+	}
+	conversationID, err := url.PathUnescape(
+		strings.TrimPrefix(path, detailPrefix),
+	)
+	return err == nil && conversationIDPattern.MatchString(conversationID)
 }
 
 func authStatusFromCapturedAt(

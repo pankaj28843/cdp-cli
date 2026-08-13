@@ -91,9 +91,14 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 agent_help="$("$binary" workflow agent --help)"
 grep -q 'agents.google.exclusive_ai_mode' <<<"$agent_help"
 grep -q -- '--google-ai auto|mode|off' <<<"$agent_help"
+chatgpt_attachment_help="$("$binary" workflow agent chatgpt conversations download-attachments --help)"
+grep -q 'download-attachments CONVERSATION_ID' <<<"$chatgpt_attachment_help"
+grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" describe --command "workflow agent" --json | jq -e '.ok == true and .commands.name == "agent" and (.commands.examples | any(contains("workflow agent claude capabilities"))) and (.commands.examples | any(contains("workflow agent gemini capabilities refresh"))) and (.commands.examples | any(contains("agents.google.exclusive_ai_mode"))) and (.commands.examples | any(contains("--google-ai auto")))' >/dev/null
+"$binary" describe --command "workflow agent chatgpt conversations download-attachments" --json | jq -e '.ok == true and .commands.name == "download-attachments" and (.commands.use | contains("download-attachments CONVERSATION_ID")) and (.commands.flags[] | select(.name == "output-dir" and .type == "string"))' >/dev/null
 "$binary" describe --command "workflow youtube cookies" --json | jq -e '.ok == true and .commands.name == "cookies" and (.commands.examples | any(contains("--browser-mode headed") and contains("workflow youtube cookies"))) and (.commands.flags[] | select(.name == "url")) and (.commands.flags[] | select(.name == "out")) and (.commands.flags[] | select(.name == "settle"))' >/dev/null
 "$binary" --state-dir "$state_dir" workflow agent providers --json | jq -e '.ok == true and .schema_version == "webagent-operation/v1" and .data.schema_version == "webagent-capabilities/v1" and (.data.providers | length == 7) and ([.data.providers[] | select(.provider == "claude" or .provider == "gemini") | .operations[] | select(.supported)] | length == 16)' >/dev/null
+"$binary" --state-dir "$state_dir" workflow agent chatgpt capabilities --json | jq -e '.ok == true and .provider == "chatgpt" and (.data.operations[] | select(.operation == "conversations.download_attachments" and .supported == true and .status == "implemented" and .side_effect == "local_file_write" and .browser == "provider_defined" and (.command | endswith("conversations download-attachments"))))' >/dev/null
 "$binary" --state-dir "$state_dir" workflow agent gemini capabilities --json | jq -e '.ok == true and .provider == "gemini" and .operation == "capabilities" and .data.runtime.state == "missing" and ([.data.operations[] | select(.supported)] | length == 8)' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
@@ -115,6 +120,9 @@ grep -q -- '--google-ai auto|mode|off' <<<"$agent_help"
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
 "$binary" schema webagent-operation --json | jq -e '.ok == true and .schema.name == "webagent-operation" and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("evidence"))' >/dev/null
 "$binary" schema webagent-capabilities --json | jq -e '.ok == true and .schema.name == "webagent-capabilities" and (.schema.fields | map(.name) | index("operations"))' >/dev/null
+"$binary" schema webagent-cleanup --json | jq -e '.ok == true and .schema.name == "webagent-cleanup" and (.schema.fields[] | select(.name == "identity_omitted" and .type == "boolean" and (.description | contains("privacy-safe") and contains("lifecycle state"))))' >/dev/null
+"$binary" schema chatgpt-attachment-batch --json | jq -e '.ok == true and .schema.name == "chatgpt-attachment-batch" and (.schema.fields | map(.name) | index("manifest_path")) and (.schema.fields | map(.name) | index("items")) and (.schema.fields[] | select(.name == "status").description | contains("complete or partial"))' >/dev/null
+"$binary" schema chatgpt-attachment-manifest --json | jq -e '.ok == true and .schema.name == "chatgpt-attachment-manifest" and (.schema.fields | map(.name) | index("total_bytes")) and (.schema.fields | map(.name) | index("items"))' >/dev/null
 "$binary" schema describe --json | jq -e '.ok == true and .schema.name == "describe" and (.schema.fields | map(.name) | index("commands"))' >/dev/null
 "$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities")) and (.schema.fields | map(.name) | index("bootstrap_path"))' >/dev/null

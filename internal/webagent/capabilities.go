@@ -196,6 +196,14 @@ var operationSpecs = []operationSpec{
 		providers:  []Provider{ProviderChatGPT},
 	},
 	{
+		operation:  OperationAttachmentsDownload,
+		path:       "conversations download-attachments",
+		sideEffect: "local_file_write",
+		browser:    "provider_defined",
+		summary:    "Export every attachment from one exact terminal ChatGPT answer as bounded original bytes and a deterministic owner-only manifest.",
+		providers:  []Provider{ProviderChatGPT},
+	},
+	{
 		operation:  OperationResearch,
 		path:       "research",
 		sideEffect: "conversation",
@@ -326,7 +334,7 @@ func providerOperationImplemented(
 		return provider != ProviderAlex
 	case OperationConversationsContinue:
 		return provider == ProviderChatGPT
-	case OperationArtifactDownload:
+	case OperationArtifactDownload, OperationAttachmentsDownload:
 		return provider == ProviderChatGPT
 	case OperationAsk:
 		return true
