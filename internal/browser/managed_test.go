@@ -22,6 +22,18 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 )
 
+func TestManagedProfileSeedPolicyDefaultsToCleanManagedProfile(t *testing.T) {
+	if got := browser.NormalizeProfileSeedStrategy(""); got != browser.ProfileSeedStrategyManaged {
+		t.Fatalf("NormalizeProfileSeedStrategy(\"\") = %q, want managed", got)
+	}
+	if !browser.SupportedProfileSeedStrategy(browser.ProfileSeedStrategyManaged) {
+		t.Fatal("managed profile seed strategy is not supported")
+	}
+	if !browser.SupportedProfileSeedStrategy(browser.ProfileSeedStrategyCopyDefault) {
+		t.Fatal("copy-default profile seed strategy is not supported")
+	}
+}
+
 func TestManagedProfilePaths(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	if got := browser.ManagedProfileDir(stateDir); got != filepath.Join(stateDir, "browser", "headless-profile") {

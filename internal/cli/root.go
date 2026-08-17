@@ -32,24 +32,25 @@ type BuildInfo struct {
 }
 
 type options struct {
-	json             bool
-	compact          bool
-	jq               string
-	debug            bool
-	timeout          time.Duration
-	profile          string
-	config           string
-	browserURL       string
-	autoConnect      bool
-	channel          string
-	userDataDir      string
-	stateDir         string
-	browserMode      string
-	activeProbe      bool
-	connection       string
-	allowOverBudget  bool
-	maxTabs          int
-	noHeadlessRepair bool
+	json                 bool
+	compact              bool
+	jq                   string
+	debug                bool
+	timeout              time.Duration
+	profile              string
+	config               string
+	browserURL           string
+	autoConnect          bool
+	channel              string
+	userDataDir          string
+	stateDir             string
+	browserMode          string
+	activeProbe          bool
+	connection           string
+	allowOverBudget      bool
+	maxTabs              int
+	maxRendererProcesses int
+	noHeadlessRepair     bool
 }
 
 type app struct {
@@ -94,8 +95,8 @@ func (a *app) newRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if a.opts.maxTabs < 0 {
-				return commandError("invalid_resource_budget", "usage", "--max-tabs must be non-negative", ExitUsage, []string{"cdp --max-tabs 25 pages --json"})
+			if a.opts.maxTabs < 0 || a.opts.maxRendererProcesses < 0 {
+				return commandError("invalid_resource_budget", "usage", "--max-tabs and --max-renderer-processes must be non-negative", ExitUsage, []string{"cdp --max-tabs 25 --max-renderer-processes 12 pages --json"})
 			}
 			_, err := a.resolveBrowserMode(cmd)
 			return err
@@ -154,6 +155,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.PersistentFlags().StringVar(&a.opts.connection, "connection", os.Getenv("CDP_CONNECTION"), "advanced named browser endpoint override from local state")
 	root.PersistentFlags().BoolVar(&a.opts.allowOverBudget, "allow-over-budget", envBool("CDP_ALLOW_OVER_BUDGET"), "human override: allow creating browser tabs even when the selected profile is over the cdp resource budget")
 	root.PersistentFlags().IntVar(&a.opts.maxTabs, "max-tabs", envInt("CDP_MAX_TABS", 0), "maximum page-tab resource budget for the selected browser mode; 0 uses the mode default")
+	root.PersistentFlags().IntVar(&a.opts.maxRendererProcesses, "max-renderer-processes", envInt("CDP_MAX_RENDERER_PROCESSES", 0), "maximum renderer-process resource budget; 0 disables the renderer guard and leaves attribution diagnostics enabled")
 
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())

@@ -294,7 +294,7 @@ func (a *app) runBrowserPreflight(ctx context.Context, opts browserPreflightOpti
 	if healthOverBudget(health) && !a.opts.allowOverBudget {
 		report["state"] = "over_budget"
 		report["next_commands"] = uniqueCommands(toStringSlice(report["next_commands"]), []string{modeScopedCommand(browserMode, "browser preflight --cleanup --json"), modeScopedCommand(browserMode, "page cleanup --json")})
-		return fail("browser_resource_budget_exceeded", "resource_budget", "browser preflight failed: tab or window budget is over limit", ExitCheckFailed)
+		return fail("browser_resource_budget_exceeded", "resource_budget", "browser preflight failed: tab, window, or renderer-process budget is over limit", ExitCheckFailed)
 	}
 	if healthOverBudget(health) {
 		addWarning("browser resource budget is over limit but --allow-over-budget is set")
@@ -486,7 +486,10 @@ func applyPreflightBudget(report map[string]any, health map[string]any) {
 func healthOverBudget(health map[string]any) bool {
 	tabs, _ := health["tabs_over_budget"].(bool)
 	windows, _ := health["windows_over_budget"].(bool)
-	return tabs || windows
+	renderers, _ := health["renderer_processes_over_budget"].(bool)
+	rendererCountKnown, _ := health["renderer_count_known"].(bool)
+	maxRenderers := intFromAny(health["max_renderer_processes"])
+	return tabs || windows || renderers || (maxRenderers > 0 && !rendererCountKnown)
 }
 
 func browserPreflightHeavyWorkRequested(opts browserPreflightOptions) bool {

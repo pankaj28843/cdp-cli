@@ -92,6 +92,25 @@ func TestEvaluateResourcePreflightDecisions(t *testing.T) {
 			t.Fatalf("resource preflight = %+v, want blocked browser budget", got)
 		}
 	})
+
+	t.Run("skip unknown renderer budget", func(t *testing.T) {
+		got := evaluateResourcePreflight(policy, "headless", passHost, healthyManaged, map[string]any{
+			"resource_budget":        true,
+			"tab_count":              2,
+			"max_tabs":               25,
+			"window_count":           1,
+			"max_windows":            5,
+			"window_count_known":     true,
+			"max_renderer_processes": 4,
+			"renderer_count_known":   false,
+		})
+		if got.Status != "skip" || got.State != "blocked" || got.HeavyWorkAllowed {
+			t.Fatalf("resource preflight = %+v, want blocked unknown renderer budget", got)
+		}
+		if len(got.Reasons) == 0 || got.Reasons[0] != "browser_budget_skip" {
+			t.Fatalf("resource preflight reasons = %+v, want browser budget skip classification", got.Reasons)
+		}
+	})
 }
 
 func TestBrowserProfileSeedCopyDefaultSkipsWhenResourcePreflightBlocked(t *testing.T) {

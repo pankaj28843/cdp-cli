@@ -870,20 +870,24 @@ func TestPagesIncludeBrowserBudgetJSON(t *testing.T) {
 	var got struct {
 		OK     bool `json:"ok"`
 		Budget struct {
-			TabCount          int            `json:"tab_count"`
-			MaxTabs           int            `json:"max_tabs"`
-			MaxTabsSource     string         `json:"max_tabs_source"`
-			BrowserMode       string         `json:"browser_mode"`
-			WindowCount       int            `json:"window_count"`
-			WindowCountKnown  bool           `json:"window_count_known"`
-			AttachedPageCount int            `json:"attached_page_count"`
-			TargetTypeCounts  map[string]int `json:"target_type_counts"`
+			TabCount                  int            `json:"tab_count"`
+			MaxTabs                   int            `json:"max_tabs"`
+			MaxTabsSource             string         `json:"max_tabs_source"`
+			BrowserMode               string         `json:"browser_mode"`
+			WindowCount               int            `json:"window_count"`
+			WindowCountKnown          bool           `json:"window_count_known"`
+			AttachedPageCount         int            `json:"attached_page_count"`
+			TargetTypeCounts          map[string]int `json:"target_type_counts"`
+			TargetResourceAttribution struct {
+				State  string `json:"state"`
+				Reason string `json:"reason"`
+			} `json:"target_resource_attribution"`
 		} `json:"budget"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("pages output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Budget.TabCount != 2 || got.Budget.MaxTabs != cdp.DefaultHeadedMaxTabs || got.Budget.MaxTabsSource != "mode_default" || got.Budget.BrowserMode != "headed" || got.Budget.WindowCount != 2 || !got.Budget.WindowCountKnown || got.Budget.AttachedPageCount != 1 || got.Budget.TargetTypeCounts["service_worker"] != 1 {
+	if !got.OK || got.Budget.TabCount != 2 || got.Budget.MaxTabs != cdp.DefaultHeadedMaxTabs || got.Budget.MaxTabsSource != "mode_default" || got.Budget.BrowserMode != "headed" || got.Budget.WindowCount != 2 || !got.Budget.WindowCountKnown || got.Budget.AttachedPageCount != 1 || got.Budget.TargetTypeCounts["service_worker"] != 1 || got.Budget.TargetResourceAttribution.State != "unavailable" || got.Budget.TargetResourceAttribution.Reason == "" {
 		t.Fatalf("pages budget = %+v, want tab/window budget summary", got.Budget)
 	}
 }
@@ -976,6 +980,40 @@ func TestPagesBudgetConfigOverrideJSON(t *testing.T) {
 	}
 	if got.Budget.MaxTabs != 33 || got.Budget.MaxTabsSource != "config" {
 		t.Fatalf("pages config override budget = %+v, want config max-tabs", got.Budget)
+	}
+}
+
+func TestOpenRefusesConfiguredRendererBudgetJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"browser":{"resource_budget":{"max_renderer_processes":1}}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "open", "https://example.test/new", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitConnection {
+		t.Fatalf("open exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitConnection, out.String(), errOut.String())
+	}
+	var got struct {
+		OK             bool   `json:"ok"`
+		Code           string `json:"code"`
+		ResourceBudget struct {
+			RendererProcessCount        int  `json:"renderer_process_count"`
+			MaxRendererProcesses        int  `json:"max_renderer_processes"`
+			RendererCountKnown          bool `json:"renderer_count_known"`
+			RendererProcessesOverBudget bool `json:"renderer_processes_over_budget"`
+		} `json:"resource_budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open renderer budget output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "browser_resource_budget_exceeded" || !got.ResourceBudget.RendererCountKnown || got.ResourceBudget.RendererProcessCount != 1 || got.ResourceBudget.MaxRendererProcesses != 1 || !got.ResourceBudget.RendererProcessesOverBudget {
+		t.Fatalf("open renderer budget error = %+v, want renderer budget refusal", got)
 	}
 }
 
