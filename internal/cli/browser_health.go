@@ -147,10 +147,18 @@ func (a *app) enforceBrowserBudgetForNewPage(ctx context.Context, client cdp.Com
 		)
 	}
 	if budget.OverBudgetForNewPage() && !a.opts.allowOverBudget {
+		message := fmt.Sprintf("browser resource budget exceeded: %d/%d tabs, %d/%d windows", budget.TabCount, budget.MaxTabs, budget.WindowCount, budget.MaxWindows)
+		if budget.MaxRendererProcesses > 0 {
+			rendererCount := "unknown"
+			if budget.RendererCountKnown {
+				rendererCount = fmt.Sprint(budget.RendererProcessCount)
+			}
+			message += fmt.Sprintf(", %s/%d renderer processes", rendererCount, budget.MaxRendererProcesses)
+		}
 		return budget, commandErrorWithData(
 			"browser_resource_budget_exceeded",
 			"resource_budget",
-			fmt.Sprintf("browser resource budget exceeded: %d/%d tabs, %d/%d windows, %d/%d renderer processes", budget.TabCount, budget.MaxTabs, budget.WindowCount, budget.MaxWindows, budget.RendererProcessCount, budget.MaxRendererProcesses),
+			message,
 			ExitConnection,
 			[]string{"cdp pages --json", "cdp page cleanup --workflow-created --close --json", "cdp doctor --check browser-budget --json"},
 			map[string]any{"resource_budget": budget},

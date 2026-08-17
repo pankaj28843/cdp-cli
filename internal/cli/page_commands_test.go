@@ -1002,6 +1002,7 @@ func TestOpenRefusesConfiguredRendererBudgetJSON(t *testing.T) {
 	var got struct {
 		OK             bool   `json:"ok"`
 		Code           string `json:"code"`
+		Message        string `json:"message"`
 		ResourceBudget struct {
 			RendererProcessCount        int  `json:"renderer_process_count"`
 			MaxRendererProcesses        int  `json:"max_renderer_processes"`
@@ -1012,7 +1013,7 @@ func TestOpenRefusesConfiguredRendererBudgetJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("open renderer budget output is invalid JSON: %v", err)
 	}
-	if got.OK || got.Code != "browser_resource_budget_exceeded" || !got.ResourceBudget.RendererCountKnown || got.ResourceBudget.RendererProcessCount != 1 || got.ResourceBudget.MaxRendererProcesses != 1 || !got.ResourceBudget.RendererProcessesOverBudget {
+	if got.OK || got.Code != "browser_resource_budget_exceeded" || !strings.Contains(got.Message, "1/1 renderer processes") || !got.ResourceBudget.RendererCountKnown || got.ResourceBudget.RendererProcessCount != 1 || got.ResourceBudget.MaxRendererProcesses != 1 || !got.ResourceBudget.RendererProcessesOverBudget {
 		t.Fatalf("open renderer budget error = %+v, want renderer budget refusal", got)
 	}
 }
