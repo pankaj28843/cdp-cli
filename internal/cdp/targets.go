@@ -11,6 +11,30 @@ type TargetInfo struct {
 	BrowserContextID string `json:"browserContextId,omitempty"`
 }
 
+// TargetLifecycleController is implemented by daemon-backed clients that can
+// classify a created target for invocation-lease recovery. Direct CDP clients
+// intentionally do not implement it, so lifecycle policy remains daemon-owned.
+type TargetLifecycleController interface {
+	MarkTargetDisposable(context.Context, string) error
+	MarkTargetPersistent(context.Context, string) error
+}
+
+func MarkTargetDisposable(ctx context.Context, client CommandClient, targetID string) error {
+	controller, ok := client.(TargetLifecycleController)
+	if !ok {
+		return nil
+	}
+	return controller.MarkTargetDisposable(ctx, targetID)
+}
+
+func MarkTargetPersistent(ctx context.Context, client CommandClient, targetID string) error {
+	controller, ok := client.(TargetLifecycleController)
+	if !ok {
+		return nil
+	}
+	return controller.MarkTargetPersistent(ctx, targetID)
+}
+
 func ListTargets(ctx context.Context, endpoint string) ([]TargetInfo, error) {
 	client, err := Dial(ctx, endpoint)
 	if err != nil {
