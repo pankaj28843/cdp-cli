@@ -4,15 +4,96 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
+
+type pageSessionFakeClient struct {
+	mu        sync.Mutex
+	calls     []string
+	responses map[string]error
+}
+
+func (c *pageSessionFakeClient) Call(_ context.Context, method string, _ any, result any) error {
+	if method == "Target.attachToTarget" && result != nil {
+		value := reflect.ValueOf(result)
+		if value.Kind() == reflect.Pointer && !value.IsNil() {
+			field := value.Elem().FieldByName("SessionID")
+			if field.IsValid() && field.CanSet() && field.Kind() == reflect.String {
+				field.SetString("session-1")
+			}
+		}
+	}
+	return c.call(method)
+}
+
+func (c *pageSessionFakeClient) CallSession(_ context.Context, _, method string, _ any, _ any) error {
+	return c.call(method)
+}
+
+func (c *pageSessionFakeClient) call(method string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, method)
+	return c.responses[method]
+}
+
+func (c *pageSessionFakeClient) callCount(method string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for _, call := range c.calls {
+		if call == method {
+			count++
+		}
+	}
+	return count
+}
+
+func TestPageSessionCloseIsIdempotentAndPreservesCleanupErrors(t *testing.T) {
+	detachErr := errors.New("synthetic detach failure")
+	closeErr := errors.New("synthetic transport close failure")
+	client := &pageSessionFakeClient{responses: map[string]error{
+		"Target.detachFromTarget": detachErr,
+	}}
+	callbackCalls := 0
+	session, err := cdp.AttachToTargetWithClient(
+		context.Background(),
+		client,
+		"target-1",
+		func(context.Context) error {
+			callbackCalls++
+			return closeErr
+		},
+	)
+	if err != nil {
+		t.Fatalf("AttachToTargetWithClient returned error: %v", err)
+	}
+
+	firstErr := session.Close(context.Background())
+	secondErr := session.Close(context.Background())
+	if !errors.Is(firstErr, detachErr) || !errors.Is(firstErr, closeErr) {
+		t.Fatalf("first Close error = %v, want detach and transport errors", firstErr)
+	}
+	if !errors.Is(secondErr, detachErr) || !errors.Is(secondErr, closeErr) {
+		t.Fatalf("second Close error = %v, want the same joined errors", secondErr)
+	}
+	if got := client.callCount("Target.detachFromTarget"); got != 1 {
+		t.Fatalf("detach call count = %d, want one", got)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("close callback count = %d, want one", callbackCalls)
+	}
+}
 
 func TestCreateTargetAttachAndEvaluate(t *testing.T) {
 	mux := http.NewServeMux()
