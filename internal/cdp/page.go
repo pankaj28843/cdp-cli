@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"nhooyr.io/websocket"
 )
@@ -13,6 +15,8 @@ import (
 type PageSession struct {
 	client    CommandClient
 	close     func(context.Context) error
+	closeOnce sync.Once
+	closeErr  error
 	TargetID  string `json:"target_id"`
 	SessionID string `json:"session_id"`
 }
@@ -155,13 +159,21 @@ func (s *PageSession) Close(ctx context.Context) error {
 	if s == nil || s.client == nil {
 		return nil
 	}
-	if s.SessionID != "" {
-		_ = s.client.Call(ctx, "Target.detachFromTarget", map[string]any{"sessionId": s.SessionID}, nil)
-	}
-	if s.close != nil {
-		return s.close(ctx)
-	}
-	return nil
+	s.closeOnce.Do(func() {
+		var errs []error
+		if s.SessionID != "" {
+			if err := s.client.Call(ctx, "Target.detachFromTarget", map[string]any{"sessionId": s.SessionID}, nil); err != nil {
+				errs = append(errs, fmt.Errorf("detach target session %s: %w", s.SessionID, err))
+			}
+		}
+		if s.close != nil {
+			if err := s.close(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("close page session %s: %w", s.TargetID, err))
+			}
+		}
+		s.closeErr = errors.Join(errs...)
+	})
+	return s.closeErr
 }
 
 func (s *PageSession) Navigate(ctx context.Context, rawURL string) (string, error) {
