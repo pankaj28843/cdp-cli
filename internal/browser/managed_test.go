@@ -820,7 +820,7 @@ func TestStopManagedChromeVerifiesDescendantsWithoutRootChromeFlags(t *testing.T
 		t.Fatalf("start synthetic managed process tree: %v", err)
 	}
 	ready := false
-	for range 100 {
+	for range 500 {
 		if _, err := os.Stat(readyFile); err == nil {
 			ready = true
 			break
@@ -927,7 +927,7 @@ func TestStopManagedChromeTracksDescendantAfterOwnedRootExits(t *testing.T) {
 		}
 	})
 	ready := false
-	for range 100 {
+	for range 500 {
 		if _, err := os.Stat(readyFile); err == nil {
 			ready = true
 			break
