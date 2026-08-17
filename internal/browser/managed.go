@@ -1602,6 +1602,9 @@ func waitForManagedChromeStopped(ctx context.Context, metadata ManagedMetadata, 
 			lastPIDs = uniqueSortedPIDs(pids)
 		}
 		if err != nil {
+			if ctx.Err() == nil && checkCtx.Err() != nil {
+				return lastPIDs, false, nil
+			}
 			return lastPIDs, false, fmt.Errorf("list managed Chrome processes during shutdown: %w", err)
 		}
 		endpointLive := false
@@ -1609,6 +1612,9 @@ func waitForManagedChromeStopped(ctx context.Context, metadata ManagedMetadata, 
 			endpointLive = endpointReachable(checkCtx, managedEndpointURL(metadata.DebuggingPort))
 		}
 		if err := checkCtx.Err(); err != nil {
+			if ctx.Err() == nil {
+				return lastPIDs, endpointLive, nil
+			}
 			return lastPIDs, endpointLive, err
 		}
 		if len(pids) == 0 && !endpointLive {
@@ -1616,7 +1622,10 @@ func waitForManagedChromeStopped(ctx context.Context, metadata ManagedMetadata, 
 		}
 		select {
 		case <-checkCtx.Done():
-			return uniqueSortedPIDs(pids), endpointLive, nil
+			if ctx.Err() != nil {
+				return lastPIDs, endpointLive, ctx.Err()
+			}
+			return lastPIDs, endpointLive, nil
 		case <-time.After(pollInterval):
 		}
 	}
