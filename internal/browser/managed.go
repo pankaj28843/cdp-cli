@@ -85,14 +85,19 @@ type ManagedStopResult struct {
 	Force           bool                     `json:"force,omitempty"`
 	Reason          string                   `json:"reason,omitempty"`
 	PIDs            []int                    `json:"pids,omitempty"`
+	RemainingPIDs   []int                    `json:"remaining_pids,omitempty"`
 	SafetyChecks    []string                 `json:"safety_checks,omitempty"`
 	ProcessEvidence []ManagedProcessEvidence `json:"process_evidence,omitempty"`
 	Browser         ManagedStatus            `json:"browser,omitempty"`
 }
 
 type ManagedStopOptions struct {
-	Force  bool
-	Signal func(int) error
+	Force                    bool
+	Signal                   func(int) error
+	ProcessLister            func(context.Context, string) ([]int, error)
+	EndpointReachable        func(context.Context, string) bool
+	VerificationTimeout      time.Duration
+	VerificationPollInterval time.Duration
 }
 
 type ManagedProcessRegistry struct {
@@ -1505,11 +1510,94 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 	if err := opts.Signal(metadata.ChromePID); err != nil {
 		return result, err
 	}
-	result.Stopped = true
 	result.PIDs = []int{metadata.ChromePID}
 	result.SafetyChecks = []string{"managed_metadata_complete", "browser_mode=headless", "ownership_marker_present", "start_time_present"}
+	remaining, endpointLive, verifyErr := waitForManagedChromeStopped(ctx, metadata, opts)
+	result.PIDs = uniqueSortedPIDs(append(result.PIDs, remaining...))
+	result.RemainingPIDs = remaining
+	result.SafetyChecks = append(result.SafetyChecks, "shutdown_verification_started")
+	if verifyErr != nil {
+		result.Reason = "managed shutdown verification failed"
+		return result, verifyErr
+	}
+	if len(remaining) > 0 {
+		result.SafetyChecks = append(result.SafetyChecks, "remaining_process_tree_detected")
+		for _, pid := range remaining {
+			if pid == metadata.ChromePID {
+				continue
+			}
+			if err := opts.Signal(pid); err != nil {
+				result.Reason = "managed descendant cleanup failed"
+				return result, err
+			}
+		}
+		remaining, endpointLive, verifyErr = waitForManagedChromeStopped(ctx, metadata, opts)
+		result.PIDs = uniqueSortedPIDs(append(result.PIDs, remaining...))
+		result.RemainingPIDs = remaining
+	}
+	if verifyErr != nil {
+		result.Reason = "managed shutdown verification failed"
+		return result, verifyErr
+	}
+	if len(remaining) > 0 || endpointLive {
+		result.Reason = "managed Chrome process tree or debugging endpoint remains"
+		return result, nil
+	}
+	result.SafetyChecks = append(result.SafetyChecks, "shutdown_process_tree_verified", "debugging_endpoint_unreachable")
+	result.Stopped = true
 	markManagedProcessesStopped(stateDir, result.PIDs, "stopped", "owned managed headless cleanup")
 	return result, nil
+}
+
+func waitForManagedChromeStopped(ctx context.Context, metadata ManagedMetadata, opts ManagedStopOptions) ([]int, bool, error) {
+	processLister := opts.ProcessLister
+	if processLister == nil {
+		processLister = managedChromeProcesses
+	}
+	endpointReachable := opts.EndpointReachable
+	if endpointReachable == nil {
+		endpointReachable = managedEndpointReachable
+	}
+	timeout := opts.VerificationTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	pollInterval := opts.VerificationPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 100 * time.Millisecond
+	}
+	profile := strings.TrimSpace(metadata.UserDataDir)
+	if profile == "" {
+		return nil, false, fmt.Errorf("managed shutdown verification requires a profile path")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		pids, err := processLister(checkCtx, profile)
+		if err != nil {
+			return pids, false, fmt.Errorf("list managed Chrome processes during shutdown: %w", err)
+		}
+		endpointLive := false
+		if strings.TrimSpace(metadata.DebuggingPort) != "" {
+			endpointLive = endpointReachable(checkCtx, managedEndpointURL(metadata.DebuggingPort))
+		}
+		if len(pids) == 0 && !endpointLive {
+			return nil, false, nil
+		}
+		select {
+		case <-checkCtx.Done():
+			return uniqueSortedPIDs(pids), endpointLive, nil
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+func managedEndpointURL(port string) string {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return ""
+	}
+	return "ws://" + net.JoinHostPort("127.0.0.1", port) + "/json/version"
 }
 
 func forceManagedStopCandidates(ctx context.Context, stateDir string, metadata ManagedMetadata) ([]int, []string, []ManagedProcessEvidence, error) {

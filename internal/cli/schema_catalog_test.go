@@ -400,7 +400,7 @@ func TestSchemaCatalogBrowserModeContracts(t *testing.T) {
 		"profile-seed-status":        {"schema_version", "browser_mode", "status", "state", "seed_strategy", "seed_action", "checked_at", "fresh", "resource_preflight", "maintenance"},
 		"profile-seed-maintenance":   {"was_running", "managed_process_sweep", "managed_stop", "healed", "managed_browser"},
 		"managed-browser":            {"browser_mode", "user_data_dir", "profile_seed_strategy", "debugging_port", "default_profile_copied", "copied_file_count"},
-		"managed-stop":               {"checked", "stopped", "skipped", "process_evidence", "safety_checks"},
+		"managed-stop":               {"checked", "stopped", "skipped", "process_evidence", "remaining_pids", "safety_checks"},
 		"managed-process-evidence":   {"pid", "root_pid", "role", "profile_matched", "debugging_port_match"},
 		"managed-ownership":          {"checked", "owned", "safety_checks", "reasons"},
 		"managed-recovery-state":     {"connections_removed", "stale_locks", "runtime_artifacts_cleared"},

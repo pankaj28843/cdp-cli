@@ -742,6 +742,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "force", Type: "boolean", Required: false, Description: "True when force-managed cleanup was allowed."},
 				{Name: "reason", Type: "string", Required: false, Description: "Reason stop was skipped or failed."},
 				{Name: "pids", Type: "array<number>", Required: false, Description: "Process IDs targeted by stop logic."},
+				{Name: "remaining_pids", Type: "array<number>", Required: false, Description: "Owned process IDs still present after shutdown verification."},
 				{Name: "safety_checks", Type: "array<string>", Required: false, Description: "Safety checks applied before signaling processes."},
 				{Name: "process_evidence", Type: "array<managed_process_evidence>", Required: false, Description: "Profile, debugging-port, and process-tree evidence used to identify force-stop candidates."},
 				{Name: "browser", Type: "managed_browser", Required: false, Description: "Managed browser metadata used by stop logic."},

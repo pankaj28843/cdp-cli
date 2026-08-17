@@ -750,6 +750,45 @@ func TestStopOwnedManagedChromeSignalsOwnedProcess(t *testing.T) {
 	}
 }
 
+func TestStopManagedChromeDoesNotClaimSuccessWhileOwnedTreeRemains(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           123,
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+		OwnedMarker:         "owned-token",
+		ProcessStartTime:    "2026-05-21T12:00:00Z",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	var signaled []int
+	result, err := browser.StopManagedChrome(context.Background(), stateDir, browser.ManagedStopOptions{
+		Signal: func(pid int) error {
+			signaled = append(signaled, pid)
+			return nil
+		},
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return []int{123, 456}, nil
+		},
+		EndpointReachable:        func(context.Context, string) bool { return true },
+		VerificationTimeout:      10 * time.Millisecond,
+		VerificationPollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StopManagedChrome returned error: %v", err)
+	}
+	if result.Stopped || result.Reason == "" || len(result.RemainingPIDs) != 2 {
+		t.Fatalf("StopManagedChrome = %+v, want stopped=false with remaining PIDs", result)
+	}
+	if len(signaled) != 2 || signaled[0] != 123 || signaled[1] != 456 {
+		t.Fatalf("signaled PIDs = %+v, want root and remaining descendant", signaled)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
