@@ -638,7 +638,7 @@ func (c RuntimeClient) markTargetPolicy(ctx context.Context, method, targetID st
 }
 
 func (c RuntimeClient) DrainEvents(ctx context.Context) ([]cdp.Event, error) {
-	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodDrainEvents, nil)
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodDrainEvents, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -653,7 +653,7 @@ func (c RuntimeClient) DrainEvents(ctx context.Context) ([]cdp.Event, error) {
 }
 
 func (c RuntimeClient) ReadEvent(ctx context.Context) (cdp.Event, error) {
-	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodReadEvent, nil)
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodReadEvent, nil)
 	if err != nil {
 		return cdp.Event{}, err
 	}
@@ -665,7 +665,7 @@ func (c RuntimeClient) ReadEvent(ctx context.Context) (cdp.Event, error) {
 }
 
 func (c RuntimeClient) FetchProtocol(ctx context.Context) (cdp.Protocol, error) {
-	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodFetchProtocol, nil)
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodFetchProtocol, nil)
 	if err != nil {
 		return cdp.Protocol{}, err
 	}
@@ -1014,9 +1014,21 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 		writeRPCResult(conn, map[string]any{"target_id": params.TargetID, "disposable": disposable})
 		return
 	case RPCMethodDrainEvents:
+		if ownerID != "" {
+			if err := leases.Touch(context.Background(), ownerID); err != nil {
+				_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_touch_failed", "lifecycle", err))
+				return
+			}
+		}
 		writeRPCResult(conn, client.DrainEvents())
 		return
 	case RPCMethodReadEvent:
+		if ownerID != "" {
+			if err := leases.Touch(context.Background(), ownerID); err != nil {
+				_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_touch_failed", "lifecycle", err))
+				return
+			}
+		}
 		event, err := client.ReadEvent(callCtx)
 		if err != nil {
 			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("rpc_read_event_failed", "connection", err))
@@ -1025,6 +1037,12 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 		writeRPCResult(conn, event)
 		return
 	case RPCMethodFetchProtocol:
+		if ownerID != "" {
+			if err := leases.Touch(context.Background(), ownerID); err != nil {
+				_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_touch_failed", "lifecycle", err))
+				return
+			}
+		}
 		protocolURL, err := protocolURLFromEndpoint(client.Endpoint())
 		if err != nil {
 			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("protocol_endpoint_invalid", "connection", err))

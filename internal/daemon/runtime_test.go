@@ -507,6 +507,39 @@ func TestRuntimeClientInvocationLeaseLifecycle(t *testing.T) {
 	if err := leased.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
 		t.Fatalf("leased Call: %v", err)
 	}
+	beforeDrain, err := readInvocationLeaseExpiry(t, stateDir, info.LeaseID)
+	if err != nil {
+		t.Fatalf("read lease expiry before DrainEvents: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	events, err := leased.DrainEvents(ctx)
+	if err != nil {
+		t.Fatalf("leased DrainEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Method != "Runtime.consoleAPICalled" {
+		t.Fatalf("leased DrainEvents = %+v, want the daemon event", events)
+	}
+	afterDrain, err := readInvocationLeaseExpiry(t, stateDir, info.LeaseID)
+	if err != nil {
+		t.Fatalf("read lease expiry after DrainEvents: %v", err)
+	}
+	if !afterDrain.After(beforeDrain) {
+		t.Fatalf("DrainEvents expiry = %s, want renewal after %s", afterDrain, beforeDrain)
+	}
+	time.Sleep(20 * time.Millisecond)
+	readCtx, readCancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	if _, err := leased.ReadEvent(readCtx); !errors.Is(err, context.DeadlineExceeded) {
+		readCancel()
+		t.Fatalf("leased ReadEvent error = %v, want deadline exceeded", err)
+	}
+	readCancel()
+	afterRead, err := readInvocationLeaseExpiry(t, stateDir, info.LeaseID)
+	if err != nil {
+		t.Fatalf("read lease expiry after ReadEvent: %v", err)
+	}
+	if !afterRead.After(afterDrain) {
+		t.Fatalf("ReadEvent expiry = %s, want renewal after %s", afterRead, afterDrain)
+	}
 	renewed, err := leased.RenewLease(ctx, 45*time.Second)
 	if err != nil {
 		t.Fatalf("RenewLease: %v", err)
@@ -520,6 +553,29 @@ func TestRuntimeClientInvocationLeaseLifecycle(t *testing.T) {
 	if _, err := leased.RenewLease(ctx, time.Second); err == nil {
 		t.Fatal("RenewLease after EndLease returned nil")
 	}
+}
+
+func readInvocationLeaseExpiry(t *testing.T, stateDir, leaseID string) (time.Time, error) {
+	t.Helper()
+	b, err := os.ReadFile(daemon.InvocationLeasePathForMode(stateDir, "headed"))
+	if err != nil {
+		return time.Time{}, err
+	}
+	var state struct {
+		Leases []struct {
+			LeaseID   string `json:"lease_id"`
+			ExpiresAt string `json:"expires_at"`
+		} `json:"leases"`
+	}
+	if err := json.Unmarshal(b, &state); err != nil {
+		return time.Time{}, err
+	}
+	for _, lease := range state.Leases {
+		if lease.LeaseID == leaseID {
+			return time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+		}
+	}
+	return time.Time{}, errors.New("invocation lease not found")
 }
 
 func TestRuntimeClientReadsVeryLargeCDPResponsesAndStaysRunning(t *testing.T) {
