@@ -2514,6 +2514,106 @@ func TestEvalJSON(t *testing.T) {
 	}
 }
 
+func TestEvalTimeoutIsClassifiedAndSharedDaemonRemainsUsable(t *testing.T) {
+	target := map[string]any{
+		"targetId": "page-1",
+		"type":     "page",
+		"title":    "Example App",
+		"url":      "https://example.test/app",
+	}
+	var server *httptest.Server
+	var delayed atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"Browser":              "Chrome/144.0",
+			"Protocol-Version":     "1.3",
+			"webSocketDebuggerUrl": fakeWebSocketEndpoint(t, server.URL),
+		})
+	})
+	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		for {
+			var req struct {
+				ID        int64           `json:"id"`
+				SessionID string          `json:"sessionId"`
+				Method    string          `json:"method"`
+				Params    json.RawMessage `json:"params"`
+			}
+			if err := wsjson.Read(r.Context(), conn, &req); err != nil {
+				return
+			}
+			resp := map[string]any{"id": req.ID}
+			if req.SessionID != "" {
+				resp["sessionId"] = req.SessionID
+			}
+			switch req.Method {
+			case "Target.getTargets":
+				resp["result"] = map[string]any{"targetInfos": []map[string]any{target}}
+			case "Target.attachToTarget":
+				resp["result"] = map[string]any{"sessionId": "session-page-1"}
+			case "Target.detachFromTarget":
+				resp["result"] = map[string]any{}
+			case "Runtime.evaluate":
+				if delayed.CompareAndSwap(false, true) {
+					time.Sleep(500 * time.Millisecond)
+				}
+				resp["result"] = map[string]any{
+					"result": map[string]any{"type": "string", "value": "Example App"},
+				}
+			default:
+				resp["result"] = map[string]any{}
+			}
+			if err := wsjson.Write(r.Context(), conn, resp); err != nil {
+				return
+			}
+		}
+	})
+	server = httptest.NewServer(mux)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var timeoutOut, timeoutErrOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--timeout", "50ms", "eval", "document.title", "--json"}, &timeoutOut, &timeoutErrOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("timed eval exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, timeoutOut.String(), timeoutErrOut.String())
+	}
+	var timeoutResult struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Class   string `json:"err_class"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(timeoutOut.Bytes(), &timeoutResult); err != nil {
+		t.Fatalf("timed eval output is invalid JSON: %v", err)
+	}
+	if timeoutResult.OK || timeoutResult.Code != "timeout" || timeoutResult.Class != "timeout" || !strings.Contains(timeoutResult.Message, "deadline") {
+		t.Fatalf("timed eval result = %+v, want a classified timeout", timeoutResult)
+	}
+
+	var followupOut, followupErrOut bytes.Buffer
+	code = cli.Execute(context.Background(), []string{"eval", "document.title", "--json"}, &followupOut, &followupErrOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("follow-up eval exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, followupOut.String(), followupErrOut.String())
+	}
+	var followupResult struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(followupOut.Bytes(), &followupResult); err != nil {
+		t.Fatalf("follow-up eval output is invalid JSON: %v", err)
+	}
+	if !followupResult.OK || followupResult.Result.Value != "Example App" {
+		t.Fatalf("follow-up eval result = %+v, want the shared daemon transport to remain usable", followupResult)
+	}
+}
+
 func TestEvalRetriesAttachRaceJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "fakeAttachErrorOnce": true},

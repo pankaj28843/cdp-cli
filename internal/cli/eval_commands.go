@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -33,6 +34,19 @@ func (a *app) newEvalCommand() *cobra.Command {
 
 				result, err := session.Evaluate(attemptCtx, args[0], awaitPromise)
 				if err != nil {
+					if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+						timeoutErr := attemptCtx.Err()
+						if timeoutErr == nil {
+							timeoutErr = err
+						}
+						return commandRetryResult{Target: &target}, commandError(
+							"timeout",
+							"timeout",
+							fmt.Sprintf("evaluate target %s: %v", target.TargetID, timeoutErr),
+							ExitTimeout,
+							[]string{"cdp eval 'document.title' --timeout 15s --json", "cdp pages --json"},
+						)
+					}
 					return commandRetryResult{Target: &target}, commandError(
 						"connection_failed",
 						"connection",

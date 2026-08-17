@@ -22,6 +22,7 @@ app_pid=""
 chrome_pid=""
 app_url=""
 managed_state=""
+managed_stop_verification_state=""
 
 require_artifact() {
   local path=$1
@@ -54,6 +55,9 @@ extract_demo_url() {
 cleanup() {
 	if [[ -n "$managed_state" ]]; then
 		"$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_state" --json >/dev/null 2>&1 || true
+	fi
+	if [[ -n "$managed_stop_verification_state" ]]; then
+		"$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_stop_verification_state" --json >/dev/null 2>&1 || true
 	fi
   if [[ -n "$chrome_pid" ]]; then
     "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
@@ -90,6 +94,19 @@ if [[ -z "$app_url" ]]; then
   sed -n '1,80p' "$app_log" >&2
   exit 1
 fi
+
+managed_stop_verification_state="$state_dir/stop-check"
+"$binary" --browser-mode headless daemon keepalive --repair --force --chrome-command "$chrome" --state-dir "$managed_stop_verification_state" --json \
+  | jq -e '.ok == true and (.state == "started" or .state == "repaired" or .state == "healthy")' >/dev/null
+managed_stop_verification_output="$("$binary" --browser-mode headless daemon stop --state-dir "$managed_stop_verification_state" --json)"
+jq -e '
+  .ok == true and
+  .managed_browser_stopped == true and
+  .managed_browser.stopped == true and
+  ((.managed_browser.remaining_pids // []) | length == 0) and
+  (.managed_browser.safety_checks | index("shutdown_process_tree_verified")) and
+  (.managed_browser.safety_checks | index("debugging_endpoint_unreachable"))
+' <<<"$managed_stop_verification_output" >/dev/null
 
 managed_state="$state_dir/managed-cdp-state"
 for _ in {1..10}; do
@@ -153,6 +170,20 @@ fi
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" pages --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
+set +e
+eval_timeout_output="$("$binary" eval 'new Promise(resolve => setTimeout(() => resolve(document.title), 1500))' --await-promise --timeout 150ms --state-dir "$state_dir/cdp-state" --json)"
+eval_timeout_code=$?
+set -e
+if [[ "$eval_timeout_code" -ne 5 ]]; then
+  echo "installed eval timeout exit code: $eval_timeout_code" >&2
+  printf '%s\n' "$eval_timeout_output" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "timeout" and .err_class == "timeout"' <<<"$eval_timeout_output" >/dev/null
+"$binary" eval 'document.title' --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .result.value == "cdp-cli demo app"' >/dev/null
+"$binary" pages --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
 collector_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' | head -n 1)"
