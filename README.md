@@ -21,6 +21,13 @@ no-turn auth refresh, fresh-conversation ask, list/detail/await/delete, and
 exact-target cleanup verticals are live-proven; all other provider operations remain
 explicitly planned until their installed vertical is proven.
 
+The provider-neutral VoxInput transcription service is available through
+`cdp transcription serve`. It exposes OpenAI/Whisper-compatible file and
+translation endpoints, completed-file SSE, an OpenAI-shaped realtime
+WebSocket, durable audio/result records, recurring online-auth refresh, and
+local/ChatGPT/Microsoft 365 provider routing. See
+[docs/TRANSCRIPTION_API.md](docs/TRANSCRIPTION_API.md).
+
 ## Intended Shape
 
 ```bash
@@ -64,6 +71,8 @@ cdp workflow agent gemini capabilities --json
 cdp workflow agent gemini capabilities refresh --json
 cdp workflow agent grok capabilities --json
 cdp workflow agent grok capabilities refresh --json
+cdp transcription serve --token local-development-token --default-provider chatgpt-web
+cdp transcription spec > openapi.json
 cdp schema webagent-operation --json
 cdp protocol search screenshot --json
 cdp protocol examples Page.captureScreenshot --json

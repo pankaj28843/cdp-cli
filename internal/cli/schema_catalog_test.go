@@ -59,6 +59,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"webagent-target",
 		"webagent-evidence",
 		"webagent-cleanup",
+		"transcription-server",
 		"error-envelope",
 		"cron",
 		"cron-profile-seed",

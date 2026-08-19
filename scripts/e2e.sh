@@ -40,6 +40,10 @@ cleanup() {
 trap cleanup EXIT
 
 "$binary" --help >/tmp/cdp-cli-help.txt
+transcription_help="$("$binary" transcription --help)"
+grep -Fq 'local REST, SSE, and realtime WebSocket boundary' <<<"$transcription_help"
+"$binary" transcription spec | jq -e '.openapi == "3.1.0" and (.paths["/v1/audio/transcriptions"].post != null) and (.paths["/v1/realtime"].get != null)' >/dev/null
+"$binary" schema transcription-server --json | jq -e '.ok == true and .schema.name == "transcription-server" and (.schema.fields | map(.name) | index("providers"))' >/dev/null
 source_head="$(git rev-parse HEAD)"
 source_dirty=false
 if test -n "$(git status --porcelain --untracked-files=normal)"; then

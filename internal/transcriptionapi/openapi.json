@@ -1,0 +1,154 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "VoxInput Local Transcription API",
+    "version": "1.0.0",
+    "description": "Provider-neutral OpenAI/Whisper-compatible transcription with completed-file SSE and realtime WebSocket sessions."
+  },
+  "servers": [
+    { "url": "http://localhost:8765", "description": "Local loopback default" }
+  ],
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "security": [],
+        "summary": "Read liveness and safe provider readiness",
+        "responses": {
+          "200": { "description": "Service is alive", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "summary": "List configured models and provider capabilities",
+        "responses": {
+          "200": { "description": "Capability catalog", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ModelList" } } } }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "summary": "Transcribe an audio file",
+        "description": "OpenAI Whisper-compatible multipart request. The compatibility default is 25 MB and ten minutes. Set stream=true for SSE transcript events on providers that support completed-file streaming.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "model"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary", "description": "mp3, mp4, mpeg, mpga, m4a, wav, or webm" },
+                  "model": { "type": "string", "example": "whisper-1" },
+                  "duration_ms": { "type": "integer", "minimum": 0, "description": "Optional VoxInput extension used by browser-backed adapters when duration is known at capture time." },
+                  "language": { "type": "string", "example": "en" },
+                  "prompt": { "type": "string" },
+                  "response_format": { "type": "string", "enum": ["json", "text", "verbose_json", "srt", "vtt"], "default": "json" },
+                  "temperature": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+                  "stream": { "type": "boolean", "default": false },
+                  "timestamp_granularities[]": { "type": "array", "items": { "type": "string", "enum": ["segment", "word"] } },
+                  "include[]": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription result or SSE stream",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/TranscriptionResult" } },
+              "text/plain": { "schema": { "type": "string" } },
+              "text/event-stream": { "schema": { "$ref": "#/components/schemas/TranscriptSSEEvent" } },
+              "text/vtt": { "schema": { "type": "string" } },
+              "application/x-subrip": { "schema": { "type": "string" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "413": { "$ref": "#/components/responses/PayloadTooLarge" },
+          "422": { "$ref": "#/components/responses/ProviderFailure" }
+        }
+      }
+    },
+    "/v1/audio/translations": {
+      "post": {
+        "summary": "Translate an audio file into English",
+        "description": "Whisper translation-compatible multipart request. The first implementation supports model=whisper-1.",
+        "requestBody": { "$ref": "#/paths/~1v1~1audio~1transcriptions/post/requestBody" },
+        "responses": {
+          "200": { "description": "Translation result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TranscriptionResult" } }, "text/plain": { "schema": { "type": "string" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "413": { "$ref": "#/components/responses/PayloadTooLarge" },
+          "422": { "$ref": "#/components/responses/ProviderFailure" }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "security": [],
+        "summary": "Read the OpenAPI contract",
+        "responses": {
+          "200": { "description": "OpenAPI 3.1 JSON document", "content": { "application/vnd.oai.openapi+json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
+    "/v1/realtime": {
+      "get": {
+        "summary": "Open an OpenAI-shaped realtime transcription WebSocket",
+        "description": "Use the WebSocket upgrade with intent=transcription or the OpenAI-compatible model query. Send session.update, input_audio_buffer.append with base64 24 kHz mono signed 16-bit PCM, then input_audio_buffer.commit.",
+        "parameters": [{ "name": "intent", "in": "query", "required": false, "schema": { "type": "string", "enum": ["transcription"] } }, { "name": "model", "in": "query", "required": false, "schema": { "type": "string", "default": "whisper-1" } }],
+        "x-websocket": {
+          "client_events": ["session.update", "input_audio_buffer.append", "input_audio_buffer.commit"],
+          "server_events": ["session.created", "session.updated", "input_audio_buffer.committed", "conversation.item.input_audio_transcription.delta", "conversation.item.input_audio_transcription.completed", "conversation.item.input_audio_transcription.failed", "error"],
+          "audio_format": { "type": "audio/pcm", "rate": 24000 }
+        },
+        "responses": { "101": { "description": "WebSocket protocol switch" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "local-token" }
+    },
+    "responses": {
+      "BadRequest": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Unauthorized": { "description": "Local authentication failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "PayloadTooLarge": { "description": "Configured upload/session limit exceeded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "ProviderFailure": { "description": "Provider unavailable or returned an unrecognized shape", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["type", "message"],
+        "properties": { "type": { "type": "string" }, "code": { "type": "string" }, "message": { "type": "string" }, "param": { "type": "string" }, "event_id": { "type": "string" } }
+      },
+      "ErrorEnvelope": { "type": "object", "required": ["error"], "properties": { "error": { "$ref": "#/components/schemas/Error" } } },
+      "Word": { "type": "object", "required": ["word", "start", "end"], "properties": { "word": { "type": "string" }, "start": { "type": "number" }, "end": { "type": "number" } } },
+      "Segment": { "type": "object", "required": ["id", "start", "end", "text"], "properties": { "id": { "type": "integer" }, "start": { "type": "number" }, "end": { "type": "number" }, "text": { "type": "string" } } },
+      "TranscriptionResult": {
+        "type": "object",
+        "required": ["text"],
+        "properties": { "task": { "type": "string", "enum": ["transcribe", "translate"] }, "language": { "type": "string" }, "duration": { "type": "number" }, "text": { "type": "string" }, "words": { "type": "array", "items": { "$ref": "#/components/schemas/Word" } }, "segments": { "type": "array", "items": { "$ref": "#/components/schemas/Segment" } } }
+      },
+      "TranscriptSSEEvent": {
+        "oneOf": [
+          { "type": "object", "required": ["type", "delta"], "properties": { "type": { "const": "transcript.text.delta" }, "delta": { "type": "string" } } },
+          { "type": "object", "required": ["type", "text"], "properties": { "type": { "const": "transcript.text.done" }, "text": { "type": "string" } } }
+        ]
+      },
+      "ProviderCapability": {
+        "type": "object",
+        "required": ["provider", "models", "file", "translation", "streaming", "realtime", "ready"],
+        "properties": { "provider": { "type": "string" }, "models": { "type": "array", "items": { "type": "string" } }, "file": { "type": "boolean" }, "translation": { "type": "boolean" }, "streaming": { "type": "boolean" }, "realtime": { "type": "boolean" }, "ready": { "type": "boolean" }, "evidence_age_seconds": { "type": "integer" }, "reason": { "type": "string" } }
+      },
+      "Model": { "type": "object", "required": ["id", "object", "owned_by", "ready"], "properties": { "id": { "type": "string" }, "object": { "const": "model" }, "owned_by": { "type": "string" }, "provider": { "type": "string" }, "ready": { "type": "boolean" } } },
+      "ModelList": { "type": "object", "required": ["object", "data"], "properties": { "object": { "const": "list" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Model" } } } },
+      "Health": { "type": "object", "required": ["status", "contract_version", "providers"], "properties": { "status": { "type": "string", "enum": ["ok", "degraded"] }, "contract_version": { "type": "string" }, "providers": { "type": "array", "items": { "$ref": "#/components/schemas/ProviderCapability" } } } },
+      "RealtimeClientEvent": { "type": "object", "required": ["type"], "properties": { "type": { "type": "string", "enum": ["session.update", "input_audio_buffer.append", "input_audio_buffer.commit"] }, "event_id": { "type": "string" }, "session": { "type": "object" }, "audio": { "type": "string", "contentEncoding": "base64" } } },
+      "RealtimeServerEvent": { "type": "object", "required": ["type"], "properties": { "type": { "type": "string" }, "event_id": { "type": "string" }, "session": { "type": "object" }, "item_id": { "type": "string" }, "content_index": { "type": "integer" }, "delta": { "type": "string" }, "transcript": { "type": "string" }, "error": { "$ref": "#/components/schemas/Error" } } }
+    }
+  }
+}

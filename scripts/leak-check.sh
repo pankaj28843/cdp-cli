@@ -19,6 +19,7 @@ args=(
   -g '!bin/**'
   -g '!cdp'
   -g '!scripts/leak-check.sh'
+  -g '!scripts/e2e_openai_compat.sh'
   -g '!tmp/**'
 )
 

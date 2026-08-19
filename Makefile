@@ -1,4 +1,4 @@
-.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-public-sources-installed e2e-web-research-live-installed fmt fmt-check install leak-check test verify vet
+.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-openai-compat e2e-public-sources-installed e2e-web-research-live-installed fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
 PREFIX ?= $(HOME)/.local
@@ -52,6 +52,9 @@ e2e-installed:
 		exit 2; \
 	fi; \
 	bash scripts/e2e.sh "$$cdp_bin"
+
+e2e-openai-compat: build
+	bash scripts/e2e_openai_compat.sh ./$(BINARY)
 
 e2e-demo-installed:
 	@cdp_bin="$$(command -v cdp)"; \

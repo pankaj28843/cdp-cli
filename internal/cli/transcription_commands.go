@@ -1,0 +1,452 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/augloop"
+	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
+	"github.com/pankaj28843/cdp-cli/internal/webagent"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
+	"github.com/spf13/cobra"
+)
+
+func (a *app) newTranscriptionCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "transcription",
+		Short: "Run the provider-neutral OpenAI-compatible transcription service",
+		Long: "Expose one local REST, SSE, and realtime WebSocket boundary for VoxInput. " +
+			"Audio is persisted under the cdp-cli state directory before any provider call; " +
+			"provider-specific auth refresh remains inside the cdp workflow adapter.",
+		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
+			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1\n" +
+			"  cdp transcription spec > openapi.json",
+	}
+	cmd.AddCommand(a.newTranscriptionServeCommand())
+	cmd.AddCommand(a.newTranscriptionSpecCommand())
+	return cmd
+}
+
+func (a *app) newTranscriptionSpecCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:     "spec",
+		Short:   "Print the OpenAPI 3.1 transcription contract",
+		Example: "  cdp transcription spec > openapi.json",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := transcriptionapi.ValidateOpenAPISpec(); err != nil {
+				return err
+			}
+			_, err := a.out.Write(transcriptionapi.OpenAPISpec())
+			return err
+		},
+	}
+}
+
+func (a *app) newTranscriptionServeCommand() *cobra.Command {
+	var address string
+	var token string
+	var defaultProvider string
+	var localBaseURL string
+	var localRealtimeBaseURL string
+	var localAPIKey string
+	var maxAudioBytes int64
+	var authRefreshInterval time.Duration
+	var printReady bool
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve REST, SSE, and realtime transcription locally",
+		Long: "Start the deployable provider-neutral transcription API. The server binds to loopback by " +
+			"default, requires a bearer token when --token is set, and retains audio plus result records " +
+			"under <state-dir>/transcription. Configure a local OpenAI-compatible backend with " +
+			"--local-base-url or select an authenticated cdp-cli provider as the default.",
+		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
+			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1 --print-ready",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if maxAudioBytes <= 0 {
+				return commandError("transcription_cache_limit_invalid", "usage", "--max-audio-bytes must be positive", ExitUsage, nil)
+			}
+			if authRefreshInterval <= 0 {
+				return commandError("transcription_auth_refresh_interval_invalid", "usage", "--auth-refresh-interval must be positive", ExitUsage, nil)
+			}
+			stateStore, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			store, err := transcriptionapi.NewStore(filepath.Join(stateStore.Dir, "transcription"), maxAudioBytes)
+			if err != nil {
+				return err
+			}
+			registry, err := a.transcriptionRegistry(cmd.Context(), localBaseURL, localRealtimeBaseURL, localAPIKey)
+			if err != nil {
+				return err
+			}
+			authCoordinator := transcriptionapi.NewAuthRefreshCoordinator(registry, authRefreshInterval)
+			server, err := transcriptionapi.NewServer(transcriptionapi.ServerConfig{
+				Registry:        registry,
+				Store:           store,
+				DefaultProvider: transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
+				BearerToken:     strings.TrimSpace(token),
+				Address:         strings.TrimSpace(address),
+				AuthCoordinator: authCoordinator,
+			})
+			if err != nil {
+				return err
+			}
+			if printReady {
+				ready := map[string]any{
+					"ok":                    true,
+					"address":               address,
+					"contract_version":      transcriptionapi.ContractVersion,
+					"state_dir":             store.Root(),
+					"auth_refresh_interval": authRefreshInterval.String(),
+					"providers":             registry.Capabilities(cmd.Context()),
+				}
+				if err := a.render(cmd.Context(), "transcription API ready", ready); err != nil {
+					return err
+				}
+			}
+			err = server.ListenAndServe(cmd.Context())
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "listen address; loopback is the safe default")
+	cmd.Flags().StringVar(&token, "token", os.Getenv("CDP_TRANSCRIPTION_API_TOKEN"), "local bearer token; set this before exposing the service beyond a trusted loopback")
+	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
+	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
+	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
+	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
+	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes; transcript records are retained independently")
+	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers")
+	cmd.Flags().BoolVar(&printReady, "print-ready", false, "print one readiness JSON object before serving")
+	return cmd
+}
+
+func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string) (*transcriptionapi.Registry, error) {
+	providers := make([]transcriptionapi.Provider, 0, 3)
+	if strings.TrimSpace(localBaseURL) != "" {
+		localProvider, err := transcriptionapi.NewOpenAIHTTPProvider(
+			transcriptionapi.ProviderLocal,
+			localBaseURL,
+			localAPIKey,
+		)
+		if err != nil {
+			return nil, err
+		}
+		localProvider.RealtimeBaseURL = strings.TrimRight(strings.TrimSpace(localRealtimeBaseURL), "/")
+		providers = append(providers, localProvider)
+	}
+	stateStore, err := a.stateStore()
+	if err != nil {
+		return transcriptionapi.NewRegistry(providers...), nil
+	}
+	chatStore, chatErr := chatgpt.NewStore(stateStore.Dir)
+	if chatErr == nil {
+		providers = append(providers, &chatGPTTranscriptionProvider{app: a, store: chatStore})
+	}
+	m365Store, m365Err := m365.NewStore(stateStore.Dir)
+	if m365Err == nil {
+		providers = append(providers, &m365TranscriptionProvider{app: a, store: m365Store})
+	}
+	return transcriptionapi.NewRegistry(providers...), nil
+}
+
+type chatGPTTranscriptionProvider struct {
+	app    *app
+	store  *chatgpt.Store
+	authMu sync.Mutex
+}
+
+func (p *chatGPTTranscriptionProvider) ID() transcriptionapi.ProviderID {
+	return transcriptionapi.ProviderChatGPT
+}
+
+func (p *chatGPTTranscriptionProvider) Capabilities(ctx context.Context) transcriptionapi.ProviderCapability {
+	status := p.store.AuthStatus(ctx, time.Now(), chatgpt.DefaultAuthTTL)
+	return transcriptionapi.ProviderCapability{
+		Provider:    p.ID(),
+		Models:      []string{transcriptionapi.DefaultModel},
+		File:        true,
+		Translation: false,
+		Streaming:   true,
+		Realtime:    false,
+		Ready:       status.Ready,
+		Reason:      status.Reason,
+	}
+}
+
+func (p *chatGPTTranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
+	now := time.Now()
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	status := p.store.AuthStatus(ctx, now, chatgpt.DefaultAuthTTL)
+	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
+		return nil
+	}
+	if err := p.refreshAuthLocked(ctx); err != nil {
+		var providerErr *transcriptionapi.ProviderError
+		if errors.As(err, &providerErr) {
+			return err
+		}
+		return transcriptionProviderError(401, "authentication_error", "auth_refresh_failed", err.Error(), false)
+	}
+	return nil
+}
+
+func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
+	if request.Task == transcriptionapi.TaskTranslate {
+		return transcriptionapi.Result{}, transcriptionProviderError(501, "unsupported", "translation_unsupported", "ChatGPT web transcription adapter does not expose Whisper translation", false)
+	}
+	duration, err := providerAudioDuration(ctx, request)
+	if err != nil {
+		return transcriptionapi.Result{}, err
+	}
+	result := chatgpt.Transcribe(ctx, chatgpt.TranscribeConfig{
+		Store:       p.store,
+		BuildCommit: p.app.build.Commit,
+		RefreshAuth: p.refreshAuth,
+	}, request.Audio.PersistedPath, duration)
+	if !result.OK {
+		return transcriptionapi.Result{}, webAgentProviderError(result)
+	}
+	data, ok := result.Data.(chatgpt.TranscriptionData)
+	if !ok {
+		return transcriptionapi.Result{}, transcriptionProviderError(502, "provider", "response_changed", "ChatGPT transcription result shape changed", true)
+	}
+	return transcriptionapi.Result{Task: request.Task, Text: data.Transcript}, nil
+}
+
+func (p *chatGPTTranscriptionProvider) NewRealtime(context.Context, transcriptionapi.RealtimeSessionConfig) (transcriptionapi.RealtimeSession, error) {
+	return nil, transcriptionProviderError(501, "unsupported", "realtime_unsupported", "ChatGPT web transcription currently accepts completed WebM files", false)
+}
+
+func (p *chatGPTTranscriptionProvider) refreshAuth(ctx context.Context) error {
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	return p.refreshAuthLocked(ctx)
+}
+
+func (p *chatGPTTranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if !p.app.selectHeadedProviderRuntime() {
+		return fmt.Errorf("ChatGPT headed browser runtime is unavailable for auth repair")
+	}
+	browserConfig, refreshedStore, unavailable := p.app.chatgptBrowserOperationConfig(ctx, webagent.OperationTranscribe)
+	if unavailable != nil {
+		if unavailable.Error != nil {
+			return fmt.Errorf("%s", unavailable.Error.Message)
+		}
+		return fmt.Errorf("ChatGPT headed browser auth repair is unavailable")
+	}
+	result := chatgpt.RefreshAuth(ctx, chatgpt.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
+	if !result.OK {
+		return webAgentProviderError(result)
+	}
+	return nil
+}
+
+type m365TranscriptionProvider struct {
+	app    *app
+	store  *m365.Store
+	authMu sync.Mutex
+}
+
+func (p *m365TranscriptionProvider) ID() transcriptionapi.ProviderID {
+	return transcriptionapi.ProviderM365
+}
+
+func (p *m365TranscriptionProvider) Capabilities(ctx context.Context) transcriptionapi.ProviderCapability {
+	auth := p.store.AuthStatus(ctx, time.Now(), m365.DefaultAuthTTL)
+	runtime := p.store.RuntimeStatus(ctx, time.Now(), m365.DefaultCapabilitiesTTL)
+	ready := auth.Ready && runtime.Ready
+	reason := auth.Reason
+	if reason == "" {
+		reason = runtime.Reason
+	}
+	return transcriptionapi.ProviderCapability{
+		Provider:    p.ID(),
+		Models:      []string{transcriptionapi.DefaultModel},
+		File:        true,
+		Translation: false,
+		Streaming:   true,
+		Realtime:    true,
+		Ready:       ready,
+		Reason:      reason,
+	}
+}
+
+func (p *m365TranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
+	now := time.Now()
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	status := p.store.AuthStatus(ctx, now, m365.DefaultAuthTTL)
+	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
+		return nil
+	}
+	if err := p.refreshAuthLocked(ctx); err != nil {
+		var providerErr *transcriptionapi.ProviderError
+		if errors.As(err, &providerErr) {
+			return err
+		}
+		return transcriptionProviderError(401, "authentication_error", "auth_refresh_failed", err.Error(), false)
+	}
+	return nil
+}
+
+func (p *m365TranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
+	if request.Task == transcriptionapi.TaskTranslate {
+		return transcriptionapi.Result{}, transcriptionProviderError(501, "unsupported", "translation_unsupported", "Microsoft 365 dictation adapter does not expose translation", false)
+	}
+	duration, err := providerAudioDuration(ctx, request)
+	if err != nil {
+		return transcriptionapi.Result{}, err
+	}
+	result := m365.Transcribe(ctx, m365.TranscribeConfig{
+		Store:       p.store,
+		BuildCommit: p.app.build.Commit,
+		RefreshAuth: p.refreshAuth,
+		Dial:        augloop.Dial,
+	}, request.Audio.PersistedPath, duration)
+	if !result.OK {
+		return transcriptionapi.Result{}, webAgentProviderError(result)
+	}
+	data, ok := result.Data.(m365.TranscriptionData)
+	if !ok {
+		return transcriptionapi.Result{}, transcriptionProviderError(502, "provider", "response_changed", "Microsoft 365 transcription result shape changed", true)
+	}
+	return transcriptionapi.Result{Task: request.Task, Text: data.Transcript}, nil
+}
+
+func (p *m365TranscriptionProvider) NewRealtime(ctx context.Context, config transcriptionapi.RealtimeSessionConfig) (transcriptionapi.RealtimeSession, error) {
+	if config.Model == "" {
+		config.Model = transcriptionapi.DefaultModel
+	}
+	if config.InputFormat.Type == "" {
+		config.InputFormat = transcriptionapi.RealtimeAudioFormat{Type: "audio/pcm", Rate: 24_000}
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return newM365RealtimeSession(ctx, p, config)
+}
+
+func (p *m365TranscriptionProvider) refreshAuth(ctx context.Context) error {
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	return p.refreshAuthLocked(ctx)
+}
+
+func (p *m365TranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if !p.app.selectHeadedProviderRuntime() {
+		return fmt.Errorf("Microsoft 365 headed browser runtime is unavailable for auth repair")
+	}
+	browserConfig, refreshedStore, unavailable := p.app.m365BrowserOperationConfig(ctx, webagent.OperationTranscribe)
+	if unavailable != nil {
+		if unavailable.Error != nil {
+			return fmt.Errorf("%s", unavailable.Error.Message)
+		}
+		return fmt.Errorf("Microsoft 365 headed browser auth repair is unavailable")
+	}
+	result := m365.RefreshAuth(ctx, m365.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
+	if !result.OK {
+		return webAgentProviderError(result)
+	}
+	return nil
+}
+
+func providerAudioDuration(ctx context.Context, request transcriptionapi.FileRequest) (int64, error) {
+	if request.Audio.DurationMS > 0 {
+		return request.Audio.DurationMS, nil
+	}
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return 0, transcriptionProviderError(422, "usage", "duration_required", "ChatGPT and Microsoft 365 adapters need audio duration_ms or ffprobe on PATH", false)
+	}
+	output, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", request.Audio.PersistedPath).Output()
+	if err != nil {
+		return 0, transcriptionProviderError(422, "usage", "duration_probe_failed", "audio duration could not be determined", false)
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	if err != nil || seconds <= 0 {
+		return 0, transcriptionProviderError(422, "usage", "duration_probe_failed", "audio duration could not be determined", false)
+	}
+	duration := int64(seconds * 1000)
+	if duration <= 0 {
+		duration = 1
+	}
+	return duration, nil
+}
+
+func webAgentProviderError(result webagent.Result) error {
+	if result.Error == nil {
+		return transcriptionProviderError(502, "provider", "provider_failed", "provider transcription failed", false)
+	}
+	status := 502
+	switch result.Error.ErrClass {
+	case "auth":
+		status = 401
+	case "usage":
+		status = 422
+	case "timeout":
+		status = 504
+	case "connection":
+		status = 503
+	}
+	return transcriptionProviderError(status, "provider", result.Error.Code, result.Error.Message, false)
+}
+
+func transcriptionProviderError(status int, kind, code, message string, retryable bool) error {
+	return &transcriptionapi.ProviderError{
+		Status:    status,
+		Retryable: retryable,
+		APIError: transcriptionapi.APIError{
+			Type:    kind,
+			Code:    code,
+			Message: message,
+		},
+	}
+}
+
+func envInt64(name string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envDuration(name string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func authEvidenceExpiringSoon(expiresAt string, now time.Time) bool {
+	expires, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(expiresAt))
+	if err != nil {
+		return true
+	}
+	return !now.UTC().Add(15 * time.Minute).Before(expires.UTC())
+}

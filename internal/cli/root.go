@@ -210,6 +210,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newEventsCommand())
 	root.AddCommand(a.newStorageCommand())
 	root.AddCommand(a.newCDPCommand())
+	root.AddCommand(a.newTranscriptionCommand())
 	root.AddCommand(a.newWorkflowCommand())
 
 	return root
