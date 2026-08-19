@@ -70,6 +70,28 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "providers", Type: "array<webagent_capabilities>", Required: true, Description: "Concrete provider capability contracts in deterministic order."},
 			},
 		},
+		"webagent-aggregate-refresh": {
+			Name:        "webagent-aggregate-refresh",
+			Description: "Provider-neutral refresh report that preserves independent auth or capability outcomes for every requested provider.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Stable aggregate refresh data version, currently webagent-aggregate-refresh/v1."},
+				{Name: "operation", Type: "string", Required: true, Description: "The provider refresh operation, auth.refresh or capabilities."},
+				{Name: "requested", Type: "array<string>", Required: true, Description: "Providers requested for this aggregate run."},
+				{Name: "results", Type: "array<webagent-aggregate-refresh-result>", Required: true, Description: "One isolated outcome per requested provider; deferred and failed providers never erase other results."},
+				{Name: "refresh_interval", Type: "string", Required: true, Description: "Recommended minimum maintenance interval for the shared refresh loop."},
+				{Name: "completed_at", Type: "string", Required: true, Description: "RFC3339 completion timestamp."},
+			},
+		},
+		"webagent-aggregate-refresh-result": {
+			Name:        "webagent-aggregate-refresh-result",
+			Description: "One provider-specific outcome inside an aggregate auth or capability refresh.",
+			Fields: []schemaField{
+				{Name: "provider", Type: "string", Required: true, Description: "Provider attempted or explicitly deferred."},
+				{Name: "status", Type: "string", Required: true, Description: "ready, failed, or deferred."},
+				{Name: "reason", Type: "string", Required: false, Description: "Sanitized reason when a provider is deferred."},
+				{Name: "result", Type: "webagent-operation", Required: false, Description: "The complete child provider result when that provider was attempted."},
+			},
+		},
 		"chatgpt-attachment-batch": {
 			Name:        "chatgpt-attachment-batch",
 			Description: "Privacy-safe result for exporting all attachments from one exact terminal ChatGPT answer.",

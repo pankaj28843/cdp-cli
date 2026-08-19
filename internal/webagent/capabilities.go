@@ -45,6 +45,7 @@ type providerSpec struct {
 var providerSpecs = []providerSpec{
 	{provider: ProviderAlex, displayName: "Ask Alex"},
 	{provider: ProviderChatGPT, displayName: "ChatGPT"},
+	{provider: ProviderM365, displayName: "Microsoft 365 Copilot"},
 	{provider: ProviderClaude, displayName: "Claude"},
 	{provider: ProviderGemini, displayName: "Gemini"},
 	{provider: ProviderGrok, displayName: "Grok"},
@@ -99,6 +100,14 @@ var operationSpecs = []operationSpec{
 		sideEffect: "auth_observation",
 		browser:    "headed",
 		summary:    "Observe and refresh local auth evidence without creating a conversation.",
+	},
+	{
+		operation:  OperationTranscribe,
+		path:       "transcribe",
+		sideEffect: "provider_request",
+		browser:    "none",
+		summary:    "Send one persisted WebM audio file through an observed provider transcription transport; headed auth repair is bounded and lazy.",
+		providers:  []Provider{ProviderChatGPT, ProviderM365},
 	},
 	{
 		operation:  OperationAsk,
@@ -312,6 +321,7 @@ func providerOperationImplemented(
 ) bool {
 	if provider != ProviderAlex &&
 		provider != ProviderChatGPT &&
+		provider != ProviderM365 &&
 		provider != ProviderClaude &&
 		provider != ProviderGemini &&
 		provider != ProviderGrok &&
@@ -323,11 +333,14 @@ func providerOperationImplemented(
 	case OperationDoctor, OperationAuthRefresh:
 		return provider == ProviderAlex ||
 			provider == ProviderChatGPT ||
+			provider == ProviderM365 ||
 			provider == ProviderClaude ||
 			provider == ProviderGemini ||
 			provider == ProviderGrok ||
 			provider == ProviderPerplexity ||
 			provider == ProviderTripadvisor
+	case OperationTranscribe:
+		return provider == ProviderChatGPT || provider == ProviderM365
 	case OperationConversationsList,
 		OperationConversationsDetail,
 		OperationConversationsAwait:

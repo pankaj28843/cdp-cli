@@ -110,6 +110,101 @@ func (a *app) newWorkflowAgentChatGPTAuthCommand() *cobra.Command {
 	return cmd
 }
 
+func (a *app) newWorkflowAgentChatGPTTranscribeCommand() *cobra.Command {
+	var filePath string
+	var durationMilliseconds int64
+	cmd := &cobra.Command{
+		Use:   "transcribe",
+		Short: "Transcribe one local WebM file through direct ChatGPT HTTP",
+		Long: "Read the owner-only ChatGPT request template and send one persisted WebM audio file " +
+			"to the observed /backend-api/transcribe endpoint over direct HTTP. The normal path does not " +
+			"open Chrome; a headed auth refresh is lazy and bounded to repair stale evidence.",
+		Example: "  cdp workflow agent chatgpt transcribe --file ~/.cache/whisper.webm --duration-ms 4200 --json",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.commandContextWithDefault(cmd, 2*time.Minute)
+			defer cancel()
+			if filePath == "" {
+				return commandError(
+					"chatgpt_transcription_file_required",
+					"usage",
+					"ChatGPT transcription requires --file",
+					ExitUsage,
+					[]string{"cdp workflow agent chatgpt transcribe --file /path/to/whisper.webm --duration-ms 1000 --json"},
+				)
+			}
+			stateStore, err := a.stateStore()
+			if err != nil {
+				result := chatgpt.UnavailableOperation(
+					a.build.Commit,
+					webagent.OperationTranscribe,
+					"chatgpt_state_unavailable",
+					"internal",
+					"ChatGPT owner-only state is unavailable",
+				)
+				return a.renderWebAgentResult(ctx, "chatgpt transcribe: unavailable", result)
+			}
+			store, err := chatgpt.NewStore(stateStore.Dir)
+			if err != nil {
+				result := chatgpt.UnavailableOperation(
+					a.build.Commit,
+					webagent.OperationTranscribe,
+					"chatgpt_state_unavailable",
+					"internal",
+					"ChatGPT owner-only state is unavailable",
+				)
+				return a.renderWebAgentResult(ctx, "chatgpt transcribe: unavailable", result)
+			}
+
+			refreshAuth := func(refreshCtx context.Context) error {
+				if !a.selectHeadedProviderRuntime() {
+					return fmt.Errorf("ChatGPT headed browser runtime is unavailable for auth repair")
+				}
+				browserConfig, refreshedStore, unavailable := a.chatgptBrowserOperationConfig(
+					refreshCtx,
+					webagent.OperationTranscribe,
+				)
+				if unavailable != nil {
+					if unavailable.Error != nil {
+						return fmt.Errorf("%s", unavailable.Error.Message)
+					}
+					return fmt.Errorf("ChatGPT headed browser auth repair is unavailable")
+				}
+				result := chatgpt.RefreshAuth(refreshCtx, chatgpt.AuthRefreshConfig{
+					BrowserConfig: browserConfig,
+					Store:         refreshedStore,
+				})
+				if !result.OK {
+					if result.Error != nil {
+						return fmt.Errorf("%s", result.Error.Message)
+					}
+					return fmt.Errorf("ChatGPT auth repair failed")
+				}
+				return nil
+			}
+
+			result := chatgpt.Transcribe(
+				ctx,
+				chatgpt.TranscribeConfig{
+					Store:       store,
+					BuildCommit: a.build.Commit,
+					RefreshAuth: refreshAuth,
+				},
+				filePath,
+				durationMilliseconds,
+			)
+			human := fmt.Sprintf("chatgpt transcribe: %v", result.State)
+			if data, ok := result.Data.(chatgpt.TranscriptionData); ok && result.OK {
+				human = data.Transcript
+			}
+			return a.renderWebAgentResult(ctx, human, result)
+		},
+	}
+	cmd.Flags().StringVar(&filePath, "file", "", "local WebM/Opus file to transcribe")
+	cmd.Flags().Int64Var(&durationMilliseconds, "duration-ms", 0, "recorded audio duration in milliseconds")
+	return cmd
+}
+
 func (a *app) newWorkflowAgentChatGPTConversationsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "conversations",
