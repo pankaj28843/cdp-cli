@@ -79,11 +79,43 @@ func (a *app) browserResourceBudgetOptions() cdp.BrowserResourceBudgetOptions {
 	browserMode := a.browserModeName()
 	maxTabs, source := a.maxTabsBudget(browserMode)
 	return cdp.BrowserResourceBudgetOptions{
-		MaxTabs:        maxTabs,
-		MaxTabsSource:  source,
-		BrowserMode:    browserMode,
-		ConnectionMode: a.connectionMode(),
+		MaxTabs:                    maxTabs,
+		MaxTabsSource:              source,
+		MaxRendererProcesses:       a.maxRendererProcessesBudget(browserMode),
+		MaxRendererProcessesSource: a.maxRendererProcessesBudgetSource(browserMode),
+		BrowserMode:                browserMode,
+		ConnectionMode:             a.connectionMode(),
 	}
+}
+
+func (a *app) maxRendererProcessesBudget(browserMode string) int {
+	if a.root != nil {
+		flags := a.root.PersistentFlags()
+		if flags.Changed("max-renderer-processes") {
+			return a.opts.maxRendererProcesses
+		}
+	}
+	if strings.TrimSpace(os.Getenv("CDP_MAX_RENDERER_PROCESSES")) != "" {
+		return a.opts.maxRendererProcesses
+	}
+	cfg, err := config.Load(a.opts.config)
+	if err == nil && cfg.Browser.ResourceBudget.MaxRendererProcesses > 0 {
+		return cfg.Browser.ResourceBudget.MaxRendererProcesses
+	}
+	return 0
+}
+
+func (a *app) maxRendererProcessesBudgetSource(browserMode string) string {
+	if a.root != nil && a.root.PersistentFlags().Changed("max-renderer-processes") {
+		return "flag"
+	}
+	if strings.TrimSpace(os.Getenv("CDP_MAX_RENDERER_PROCESSES")) != "" {
+		return "env"
+	}
+	if cfg, err := config.Load(a.opts.config); err == nil && cfg.Browser.ResourceBudget.MaxRendererProcesses > 0 {
+		return "config"
+	}
+	return "disabled"
 }
 
 func (a *app) maxTabsBudget(browserMode string) (int, string) {
@@ -115,10 +147,18 @@ func (a *app) enforceBrowserBudgetForNewPage(ctx context.Context, client cdp.Com
 		)
 	}
 	if budget.OverBudgetForNewPage() && !a.opts.allowOverBudget {
+		message := fmt.Sprintf("browser resource budget exceeded: %d/%d tabs, %d/%d windows", budget.TabCount, budget.MaxTabs, budget.WindowCount, budget.MaxWindows)
+		if budget.MaxRendererProcesses > 0 {
+			rendererCount := "unknown"
+			if budget.RendererCountKnown {
+				rendererCount = fmt.Sprint(budget.RendererProcessCount)
+			}
+			message += fmt.Sprintf(", %s/%d renderer processes", rendererCount, budget.MaxRendererProcesses)
+		}
 		return budget, commandErrorWithData(
 			"browser_resource_budget_exceeded",
 			"resource_budget",
-			fmt.Sprintf("browser resource budget exceeded: %d/%d tabs, %d/%d windows", budget.TabCount, budget.MaxTabs, budget.WindowCount, budget.MaxWindows),
+			message,
 			ExitConnection,
 			[]string{"cdp pages --json", "cdp page cleanup --workflow-created --close --json", "cdp doctor --check browser-budget --json"},
 			map[string]any{"resource_budget": budget},
@@ -129,19 +169,20 @@ func (a *app) enforceBrowserBudgetForNewPage(ctx context.Context, client cdp.Com
 
 func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, includeProcessInfo bool) map[string]any {
 	health := map[string]any{
-		"state":                      daemonHealthState(status),
-		"usable":                     false,
-		"reasons":                    []string{},
-		"degraded_reasons":           []string{},
-		"browser_mode":               status.BrowserMode,
-		"connection_mode":            status.ConnectionMode,
-		"browser_endpoint_reachable": status.BrowserProbe.State == "cdp_available",
-		"daemon_process_running":     status.ProcessRunning,
-		"daemon_rpc_ready":           false,
-		"managed_chrome_owned":       false,
-		"recent_crashes":             []map[string]any{},
-		"crash_capture":              "not_enabled",
-		"next_commands":              status.NextCommands,
+		"state":                       daemonHealthState(status),
+		"usable":                      false,
+		"reasons":                     []string{},
+		"degraded_reasons":            []string{},
+		"browser_mode":                status.BrowserMode,
+		"connection_mode":             status.ConnectionMode,
+		"browser_endpoint_reachable":  status.BrowserProbe.State == "cdp_available",
+		"daemon_process_running":      status.ProcessRunning,
+		"daemon_rpc_ready":            false,
+		"managed_chrome_owned":        false,
+		"recent_crashes":              []map[string]any{},
+		"crash_capture":               "not_enabled",
+		"target_resource_attribution": cdp.UnavailableTargetResourceAttribution(),
+		"next_commands":               status.NextCommands,
 	}
 	health["daemon_processes_by_mode"] = a.daemonProcessesByMode(ctx)
 	if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
@@ -197,7 +238,7 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 	applyBudgetToHealth(health, budget)
 	a.applyManagedBrowserHealth(ctx, health, status.Runtime)
 	if includeProcessInfo {
-		processInfo, err := collectProcessInfo(ctx, client)
+		processInfo, err := cdp.CollectProcessInfo(ctx, client)
 		if err != nil {
 			health["process_info_error"] = err.Error()
 		} else {
@@ -371,7 +412,7 @@ func (a *app) daemonProcessesByMode(ctx context.Context) map[string]any {
 			out[mode] = summary
 			continue
 		}
-		processInfo, err := collectProcessInfo(ctx, daemon.RuntimeClient{Runtime: runtime})
+		processInfo, err := cdp.CollectProcessInfo(ctx, daemon.RuntimeClient{Runtime: runtime})
 		if err != nil {
 			summary["process_info_error"] = err.Error()
 			out[mode] = summary
@@ -551,6 +592,12 @@ func applyBudgetToHealth(health map[string]any, budget cdp.BrowserResourceBudget
 	health["window_count_known"] = budget.WindowCountKnown
 	health["target_type_counts"] = budget.TargetTypeCounts
 	health["attached_page_count"] = budget.AttachedPageCount
+	health["renderer_process_count"] = budget.RendererProcessCount
+	health["max_renderer_processes"] = budget.MaxRendererProcesses
+	health["max_renderer_processes_source"] = budget.MaxRendererProcessesSource
+	health["renderer_count_known"] = budget.RendererCountKnown
+	health["renderer_processes_over_budget"] = budget.RendererProcessesOverBudget
+	health["target_resource_attribution"] = budget.TargetResourceAttribution
 	health["resource_budget"] = budget
 	health["reasons"] = appendStringReasons(health["reasons"], budget.Reasons()...)
 }
@@ -580,37 +627,6 @@ func finalizeBrowserHealth(browserMode string, health map[string]any) map[string
 		}
 	}
 	return health
-}
-
-type browserProcessRow struct {
-	Type    string  `json:"type"`
-	ID      int     `json:"id"`
-	CPUTime float64 `json:"cpu_time"`
-}
-
-type browserProcessInfo struct {
-	ProcessCount int                 `json:"process_count"`
-	TypeCounts   map[string]int      `json:"type_counts"`
-	Processes    []browserProcessRow `json:"processes"`
-}
-
-func collectProcessInfo(ctx context.Context, client cdp.CommandClient) (browserProcessInfo, error) {
-	var result struct {
-		ProcessInfo []struct {
-			Type    string  `json:"type"`
-			ID      int     `json:"id"`
-			CPUTime float64 `json:"cpuTime"`
-		} `json:"processInfo"`
-	}
-	if err := client.Call(ctx, "SystemInfo.getProcessInfo", map[string]any{}, &result); err != nil {
-		return browserProcessInfo{}, err
-	}
-	info := browserProcessInfo{ProcessCount: len(result.ProcessInfo), TypeCounts: map[string]int{}, Processes: make([]browserProcessRow, 0, len(result.ProcessInfo))}
-	for _, process := range result.ProcessInfo {
-		info.TypeCounts[process.Type]++
-		info.Processes = append(info.Processes, browserProcessRow{Type: process.Type, ID: process.ID, CPUTime: process.CPUTime})
-	}
-	return info, nil
 }
 
 func appendStringReasons(value any, reasons ...string) []string {

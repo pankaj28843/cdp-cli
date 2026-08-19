@@ -123,6 +123,73 @@ func TestBrowserPreflightOverBudgetFailsJSON(t *testing.T) {
 	}
 }
 
+func TestBrowserPreflightRendererBudgetFailsJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--max-renderer-processes", "1", "browser", "preflight", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("browser preflight renderer-budget exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+	var got struct {
+		OK    bool   `json:"ok"`
+		Code  string `json:"code"`
+		State string `json:"state"`
+		Data  struct {
+			State  string `json:"state"`
+			Budget struct {
+				RendererProcessCount        int  `json:"renderer_process_count"`
+				MaxRendererProcesses        int  `json:"max_renderer_processes"`
+				RendererCountKnown          bool `json:"renderer_count_known"`
+				RendererProcessesOverBudget bool `json:"renderer_processes_over_budget"`
+			} `json:"budget"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("browser preflight renderer-budget output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "browser_resource_budget_exceeded" || got.State != "over_budget" || got.Data.State != "over_budget" || got.Data.Budget.RendererProcessCount != 1 || got.Data.Budget.MaxRendererProcesses != 1 || !got.Data.Budget.RendererCountKnown || !got.Data.Budget.RendererProcessesOverBudget {
+		t.Fatalf("browser preflight renderer-budget = %+v, want renderer budget failure envelope", got)
+	}
+}
+
+func TestBrowserPreflightUnknownRendererBudgetFailsClosedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "fakeProcessInfoError": true},
+	})
+	defer server.Close()
+	stateDir := startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--max-renderer-processes", "4", "browser", "preflight", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("browser preflight unknown-renderer exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+	var got struct {
+		OK    bool   `json:"ok"`
+		Code  string `json:"code"`
+		State string `json:"state"`
+		Data  struct {
+			State  string `json:"state"`
+			Budget struct {
+				MaxRendererProcesses int    `json:"max_renderer_processes"`
+				RendererCountKnown   bool   `json:"renderer_count_known"`
+				ProcessInfoError     string `json:"process_info_error"`
+			} `json:"budget"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("browser preflight unknown-renderer output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "browser_resource_budget_exceeded" || got.State != "over_budget" || got.Data.State != "over_budget" || got.Data.Budget.MaxRendererProcesses != 4 || got.Data.Budget.RendererCountKnown || got.Data.Budget.ProcessInfoError == "" {
+		t.Fatalf("browser preflight unknown-renderer = %+v, want fail-closed renderer budget envelope", got)
+	}
+}
+
 func TestBrowserPreflightPermissionPendingJSON(t *testing.T) {
 	stateDir := shortCLIStateDir(t)
 	userDataDir := filepath.Join(t.TempDir(), "chrome-profile")

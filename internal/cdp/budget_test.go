@@ -13,6 +13,8 @@ type budgetFakeClient struct {
 	targets     []cdp.TargetInfo
 	windows     map[string]int
 	failWindows bool
+	processes   []map[string]any
+	failProcess bool
 }
 
 func (f budgetFakeClient) Call(ctx context.Context, method string, params any, result any) error {
@@ -34,9 +36,62 @@ func (f budgetFakeClient) Call(ctx context.Context, method string, params any, r
 			return fmt.Errorf("no window for target %s", p.TargetID)
 		}
 		return remarshal(map[string]any{"windowId": windowID}, result)
+	case "SystemInfo.getProcessInfo":
+		if f.failProcess {
+			return fmt.Errorf("method not found")
+		}
+		return remarshal(map[string]any{"processInfo": f.processes}, result)
 	default:
 		return fmt.Errorf("unexpected method %s", method)
 	}
+}
+
+func TestBrowserBudgetEnforcesConfiguredRendererLimit(t *testing.T) {
+	client := budgetFakeClient{
+		targets:   []cdp.TargetInfo{{TargetID: "page-1", Type: "page"}},
+		windows:   map[string]int{"page-1": 1},
+		processes: []map[string]any{{"type": "browser", "id": 100}, {"type": "renderer", "id": 101}, {"type": "renderer", "id": 102}},
+	}
+	got, err := cdp.BrowserBudget(context.Background(), client, cdp.BrowserResourceBudgetOptions{MaxRendererProcesses: 2, MaxRendererProcessesSource: "config"})
+	if err != nil {
+		t.Fatalf("BrowserBudget returned error: %v", err)
+	}
+	if !got.RendererCountKnown || got.RendererProcessCount != 2 || got.MaxRendererProcesses != 2 || got.MaxRendererProcessesSource != "config" || !got.RendererProcessesOverBudget || !got.OverBudgetForNewPage() {
+		t.Fatalf("BrowserBudget = %+v, want renderer budget exceeded", got)
+	}
+	if got.TargetResourceAttribution.State != "unavailable" {
+		t.Fatalf("target resource attribution = %+v, want explicit unavailable state", got.TargetResourceAttribution)
+	}
+	if !containsString(got.Reasons(), "renderer_processes_over_budget") {
+		t.Fatalf("budget reasons = %+v, want renderer_processes_over_budget", got.Reasons())
+	}
+}
+
+func TestBrowserBudgetFailsClosedWhenRendererCountUnavailable(t *testing.T) {
+	client := budgetFakeClient{
+		targets:     []cdp.TargetInfo{{TargetID: "page-1", Type: "page"}},
+		windows:     map[string]int{"page-1": 1},
+		failProcess: true,
+	}
+	got, err := cdp.BrowserBudget(context.Background(), client, cdp.BrowserResourceBudgetOptions{MaxRendererProcesses: 4})
+	if err != nil {
+		t.Fatalf("BrowserBudget returned error: %v", err)
+	}
+	if got.RendererCountKnown || got.ProcessInfoError == "" || !got.OverBudgetForNewPage() {
+		t.Fatalf("BrowserBudget = %+v, want unknown renderer count to block new pages", got)
+	}
+	if !containsString(got.Reasons(), "renderer_process_count_unknown") {
+		t.Fatalf("budget reasons = %+v, want renderer_process_count_unknown", got.Reasons())
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (f budgetFakeClient) CallSession(ctx context.Context, sessionID, method string, params any, result any) error {

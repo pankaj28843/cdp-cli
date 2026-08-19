@@ -890,7 +890,11 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Browser.getVersion" {
 				resp["result"] = map[string]any{"product": "Chrome/Test", "protocolVersion": "1.3"}
 			} else if req.Method == "SystemInfo.getProcessInfo" {
-				resp["result"] = map[string]any{"processInfo": []map[string]any{{"type": "browser", "id": 100, "cpuTime": 1.5}, {"type": "renderer", "id": 101, "cpuTime": 0.25}}}
+				if fakeAnyTargetBool(targetInfos, "fakeProcessInfoError") {
+					resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
+				} else {
+					resp["result"] = map[string]any{"processInfo": []map[string]any{{"type": "browser", "id": 100, "cpuTime": 1.5}, {"type": "renderer", "id": 101, "cpuTime": 0.25}}}
+				}
 			} else {
 				resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
 			}

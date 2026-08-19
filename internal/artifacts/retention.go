@@ -261,7 +261,7 @@ func scanTopLevel(ctx context.Context, report *RetentionReport, root string, cut
 	}
 	protected := map[string]bool{
 		"artifact-prune": true, "browser": true, "connections.json": true, "daemon.json": true,
-		"daemon.sock": true, "headless": true, "locks": true, "page-cleanup.json": true,
+		"daemon-leases.json": true, "daemon.sock": true, "headless": true, "locks": true, "page-cleanup.json": true,
 		"profile-seed": true, "headed-heal": true,
 	}
 	activeLogs := map[string]bool{"keepalive-headed.log": true, "headless-maintenance.log": true}

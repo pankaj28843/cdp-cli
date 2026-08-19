@@ -54,10 +54,11 @@ type BrowserConfig struct {
 type HeadedConfig struct{}
 
 type ResourceBudgetConfig struct {
-	MaxTabs         int     `json:"max_tabs,omitempty"`
-	MinFreeMemoryMB int     `json:"min_free_memory_mb,omitempty"`
-	MinFreeDiskMB   int     `json:"min_free_disk_mb,omitempty"`
-	MaxLoadPerCPU   float64 `json:"max_load_per_cpu,omitempty"`
+	MaxTabs              int     `json:"max_tabs,omitempty"`
+	MaxRendererProcesses int     `json:"max_renderer_processes,omitempty"`
+	MinFreeMemoryMB      int     `json:"min_free_memory_mb,omitempty"`
+	MinFreeDiskMB        int     `json:"min_free_disk_mb,omitempty"`
+	MaxLoadPerCPU        float64 `json:"max_load_per_cpu,omitempty"`
 }
 
 type HeadlessConfig struct {
@@ -256,10 +257,11 @@ type fileHeadlessConfig struct {
 }
 
 type fileResourceBudgetConfig struct {
-	MaxTabs         int     `json:"max_tabs,omitempty"`
-	MinFreeMemoryMB int     `json:"min_free_memory_mb,omitempty"`
-	MinFreeDiskMB   int     `json:"min_free_disk_mb,omitempty"`
-	MaxLoadPerCPU   float64 `json:"max_load_per_cpu,omitempty"`
+	MaxTabs              int     `json:"max_tabs,omitempty"`
+	MaxRendererProcesses int     `json:"max_renderer_processes,omitempty"`
+	MinFreeMemoryMB      int     `json:"min_free_memory_mb,omitempty"`
+	MinFreeDiskMB        int     `json:"min_free_disk_mb,omitempty"`
+	MaxLoadPerCPU        float64 `json:"max_load_per_cpu,omitempty"`
 }
 
 func decode(data []byte) (Config, error) {
@@ -307,6 +309,9 @@ func decode(data []byte) (Config, error) {
 			if raw.Browser.ResourceBudget.MaxTabs < 0 {
 				return Config{}, fmt.Errorf("browser.resource_budget.max_tabs must be non-negative")
 			}
+			if raw.Browser.ResourceBudget.MaxRendererProcesses < 0 {
+				return Config{}, fmt.Errorf("browser.resource_budget.max_renderer_processes must be non-negative")
+			}
 			if raw.Browser.ResourceBudget.MinFreeMemoryMB < 0 {
 				return Config{}, fmt.Errorf("browser.resource_budget.min_free_memory_mb must be non-negative")
 			}
@@ -317,6 +322,7 @@ func decode(data []byte) (Config, error) {
 				return Config{}, fmt.Errorf("browser.resource_budget.max_load_per_cpu must be non-negative")
 			}
 			cfg.Browser.ResourceBudget.MaxTabs = raw.Browser.ResourceBudget.MaxTabs
+			cfg.Browser.ResourceBudget.MaxRendererProcesses = raw.Browser.ResourceBudget.MaxRendererProcesses
 			cfg.Browser.ResourceBudget.MinFreeMemoryMB = raw.Browser.ResourceBudget.MinFreeMemoryMB
 			cfg.Browser.ResourceBudget.MinFreeDiskMB = raw.Browser.ResourceBudget.MinFreeDiskMB
 			cfg.Browser.ResourceBudget.MaxLoadPerCPU = raw.Browser.ResourceBudget.MaxLoadPerCPU
@@ -370,6 +376,9 @@ func encode(cfg Config) ([]byte, error) {
 	if cfg.Browser.ResourceBudget.MaxTabs < 0 {
 		return nil, fmt.Errorf("browser.resource_budget.max_tabs must be non-negative")
 	}
+	if cfg.Browser.ResourceBudget.MaxRendererProcesses < 0 {
+		return nil, fmt.Errorf("browser.resource_budget.max_renderer_processes must be non-negative")
+	}
 	if cfg.Browser.ResourceBudget.MinFreeMemoryMB < 0 {
 		return nil, fmt.Errorf("browser.resource_budget.min_free_memory_mb must be non-negative")
 	}
@@ -379,7 +388,7 @@ func encode(cfg Config) ([]byte, error) {
 	if cfg.Browser.ResourceBudget.MaxLoadPerCPU < 0 {
 		return nil, fmt.Errorf("browser.resource_budget.max_load_per_cpu must be non-negative")
 	}
-	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
+	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MaxRendererProcesses > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
 		raw.Browser = &fileBrowserConfig{}
 		if cfg.Browser.Mode != "" {
 			if !cfg.Browser.Mode.Valid() {
@@ -399,12 +408,13 @@ func encode(cfg Config) ([]byte, error) {
 				raw.Browser.Headless.ProfileRefreshAfter = cfg.Browser.Headless.ProfileRefreshAfter.String()
 			}
 		}
-		if cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
+		if cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MaxRendererProcesses > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
 			raw.Browser.ResourceBudget = &fileResourceBudgetConfig{
-				MaxTabs:         cfg.Browser.ResourceBudget.MaxTabs,
-				MinFreeMemoryMB: cfg.Browser.ResourceBudget.MinFreeMemoryMB,
-				MinFreeDiskMB:   cfg.Browser.ResourceBudget.MinFreeDiskMB,
-				MaxLoadPerCPU:   cfg.Browser.ResourceBudget.MaxLoadPerCPU,
+				MaxTabs:              cfg.Browser.ResourceBudget.MaxTabs,
+				MaxRendererProcesses: cfg.Browser.ResourceBudget.MaxRendererProcesses,
+				MinFreeMemoryMB:      cfg.Browser.ResourceBudget.MinFreeMemoryMB,
+				MinFreeDiskMB:        cfg.Browser.ResourceBudget.MinFreeDiskMB,
+				MaxLoadPerCPU:        cfg.Browser.ResourceBudget.MaxLoadPerCPU,
 			}
 		}
 	}

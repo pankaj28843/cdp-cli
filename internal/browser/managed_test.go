@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,6 +22,18 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 )
+
+func TestManagedProfileSeedPolicyDefaultsToCleanManagedProfile(t *testing.T) {
+	if got := browser.NormalizeProfileSeedStrategy(""); got != browser.ProfileSeedStrategyManaged {
+		t.Fatalf("NormalizeProfileSeedStrategy(\"\") = %q, want managed", got)
+	}
+	if !browser.SupportedProfileSeedStrategy(browser.ProfileSeedStrategyManaged) {
+		t.Fatal("managed profile seed strategy is not supported")
+	}
+	if !browser.SupportedProfileSeedStrategy(browser.ProfileSeedStrategyCopyDefault) {
+		t.Fatal("copy-default profile seed strategy is not supported")
+	}
+}
 
 func TestManagedProfilePaths(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
@@ -747,6 +760,229 @@ func TestStopOwnedManagedChromeSignalsOwnedProcess(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "owned-token") || strings.Contains(string(encoded), "process_start_time") {
 		t.Fatalf("ManagedStopResult leaked internal ownership fields: %s", string(encoded))
+	}
+}
+
+func TestStopManagedChromeDoesNotClaimSuccessWhileOwnedTreeRemains(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	metadata := browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           123,
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+		OwnedMarker:         "owned-token",
+		ProcessStartTime:    "2026-05-21T12:00:00Z",
+	}
+	if err := browser.SaveManagedMetadata(stateDir, metadata); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	var signaled []int
+	result, err := browser.StopManagedChrome(context.Background(), stateDir, browser.ManagedStopOptions{
+		Signal: func(pid int) error {
+			signaled = append(signaled, pid)
+			return nil
+		},
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return []int{123, 456}, nil
+		},
+		EndpointReachable:        func(context.Context, string) bool { return true },
+		VerificationTimeout:      10 * time.Millisecond,
+		VerificationPollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StopManagedChrome returned error: %v", err)
+	}
+	if result.Stopped || result.Reason == "" || len(result.RemainingPIDs) != 2 {
+		t.Fatalf("StopManagedChrome = %+v, want stopped=false with remaining PIDs", result)
+	}
+	if len(signaled) != 2 || signaled[0] != 123 || signaled[1] != 456 {
+		t.Fatalf("signaled PIDs = %+v, want root and remaining descendant", signaled)
+	}
+}
+
+func TestStopManagedChromeVerifiesDescendantsWithoutRootChromeFlags(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll profile returned error: %v", err)
+	}
+	readyFile := filepath.Join(t.TempDir(), "child-ready")
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := "#!/usr/bin/env sh\n/bin/sleep 30 &\necho $! > \"$CDP_TEST_READY\"\nwait\n"
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write synthetic managed process: %v", err)
+	}
+	cmd := exec.Command(chromePath, "--headless", "--remote-debugging-port=9222", "--user-data-dir="+profileDir)
+	cmd.Env = append(os.Environ(), "CDP_TEST_READY="+readyFile)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start synthetic managed process tree: %v", err)
+	}
+	ready := false
+	for range 500 {
+		if _, err := os.Stat(readyFile); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatalf("synthetic managed process did not report its descendant ready")
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	if err := browser.SaveManagedMetadata(stateDir, browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           cmd.Process.Pid,
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         profileDir,
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+		OwnedMarker:         "owned-token",
+		ProcessStartTime:    "2026-05-21T12:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	var signaled []int
+	result, err := browser.StopManagedChrome(context.Background(), stateDir, browser.ManagedStopOptions{
+		Signal: func(pid int) error {
+			signaled = append(signaled, pid)
+			return nil
+		},
+		EndpointReachable:        func(context.Context, string) bool { return false },
+		VerificationTimeout:      500 * time.Millisecond,
+		VerificationPollInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("StopManagedChrome returned error: %v", err)
+	}
+	if result.Stopped || len(result.RemainingPIDs) < 2 {
+		t.Fatalf("StopManagedChrome = %+v, want an unproven shutdown with root and descendant remaining", result)
+	}
+	if len(signaled) < 2 || !containsInt(signaled, cmd.Process.Pid) || len(signaled) == 1 {
+		t.Fatalf("signaled PIDs = %+v, want root and descendant", signaled)
+	}
+}
+
+func TestStopManagedChromeFailsClosedWhenVerificationContextIsCancelled(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := browser.SaveManagedMetadata(stateDir, browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           123,
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         browser.ManagedProfileDir(stateDir),
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+		OwnedMarker:         "owned-token",
+		ProcessStartTime:    "2026-05-21T12:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := browser.StopManagedChrome(ctx, stateDir, browser.ManagedStopOptions{
+		Signal: func(int) error { return nil },
+		ProcessLister: func(context.Context, string) ([]int, error) {
+			return nil, nil
+		},
+		EndpointReachable: func(context.Context, string) bool { return false },
+	})
+	if err == nil || result.Stopped {
+		t.Fatalf("StopManagedChrome = %+v, err=%v; want cancellation error without a success claim", result, err)
+	}
+}
+
+func TestStopManagedChromeTracksDescendantAfterOwnedRootExits(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("process tree verification is only implemented on Unix")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	profileDir := browser.ManagedProfileDir(stateDir)
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll profile returned error: %v", err)
+	}
+	readyFile := filepath.Join(t.TempDir(), "child-ready")
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := "#!/usr/bin/env sh\n/bin/sleep 30 &\necho $! > \"$CDP_TEST_READY\"\nwait\n"
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write synthetic managed process: %v", err)
+	}
+	cmd := exec.Command(chromePath, "--headless", "--remote-debugging-port=9222", "--user-data-dir="+profileDir)
+	cmd.Env = append(os.Environ(), "CDP_TEST_READY="+readyFile)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start synthetic managed process tree: %v", err)
+	}
+	childPID := 0
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if childPID > 0 {
+			if child, err := os.FindProcess(childPID); err == nil {
+				_ = child.Kill()
+			}
+		}
+	})
+	ready := false
+	for range 500 {
+		if _, err := os.Stat(readyFile); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatalf("synthetic managed process did not report its descendant ready")
+	}
+	contents, err := os.ReadFile(readyFile)
+	if err != nil {
+		t.Fatalf("read child PID: %v", err)
+	}
+	childPID, err = strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil || childPID <= 0 {
+		t.Fatalf("child PID = %q, want a positive PID", strings.TrimSpace(string(contents)))
+	}
+
+	if err := browser.SaveManagedMetadata(stateDir, browser.ManagedMetadata{
+		BrowserMode:         "headless",
+		ChromePID:           cmd.Process.Pid,
+		StartedAt:           "2026-05-21T12:00:00Z",
+		UserDataDir:         profileDir,
+		DebuggingPort:       "9222",
+		ProfileSeedStrategy: browser.ProfileSeedStrategyManaged,
+		OwnedMarker:         "owned-token",
+		ProcessStartTime:    "2026-05-21T12:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveManagedMetadata returned error: %v", err)
+	}
+	rootPID := cmd.Process.Pid
+	var signaled []int
+	result, err := browser.StopManagedChrome(context.Background(), stateDir, browser.ManagedStopOptions{
+		Signal: func(pid int) error {
+			signaled = append(signaled, pid)
+			if pid == rootPID {
+				if err := cmd.Process.Kill(); err != nil {
+					t.Fatalf("kill synthetic managed root: %v", err)
+				}
+				_ = cmd.Wait()
+			}
+			return nil
+		},
+		EndpointReachable:        func(context.Context, string) bool { return false },
+		VerificationTimeout:      500 * time.Millisecond,
+		VerificationPollInterval: 10 * time.Millisecond,
+	})
+	if err != nil && !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("StopManagedChrome returned unexpected error: %v", err)
+	}
+	if result.Stopped || !containsInt(result.RemainingPIDs, childPID) {
+		t.Fatalf("StopManagedChrome = %+v, want the surviving orphaned descendant to block success", result)
+	}
+	if !containsInt(signaled, rootPID) || !containsInt(signaled, childPID) {
+		t.Fatalf("signaled PIDs = %+v, want root %d and descendant %d", signaled, rootPID, childPID)
 	}
 }
 

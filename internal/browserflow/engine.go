@@ -263,6 +263,14 @@ func (e *Engine) Acquire(ctx context.Context, request AcquireRequest) (*Lease, e
 		)
 	}
 	record.TargetID = targetID
+	if err := cdp.MarkTargetDisposable(ctx, e.client, targetID); err != nil {
+		_, cleanupErr := e.settleExactCleanup(&record, nil)
+		return nil, errors.Join(
+			fmt.Errorf("mark exact target %s disposable: %w", targetID, err),
+			cleanupErr,
+			releaseInput(),
+		)
+	}
 	record.Cleanup = CleanupPending
 	record.Phase = PhaseTargetOwned
 	if err := e.save(ctx, &record); err != nil {

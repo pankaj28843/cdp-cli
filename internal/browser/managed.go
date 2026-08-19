@@ -85,14 +85,19 @@ type ManagedStopResult struct {
 	Force           bool                     `json:"force,omitempty"`
 	Reason          string                   `json:"reason,omitempty"`
 	PIDs            []int                    `json:"pids,omitempty"`
+	RemainingPIDs   []int                    `json:"remaining_pids,omitempty"`
 	SafetyChecks    []string                 `json:"safety_checks,omitempty"`
 	ProcessEvidence []ManagedProcessEvidence `json:"process_evidence,omitempty"`
 	Browser         ManagedStatus            `json:"browser,omitempty"`
 }
 
 type ManagedStopOptions struct {
-	Force  bool
-	Signal func(int) error
+	Force                    bool
+	Signal                   func(int) error
+	ProcessLister            func(context.Context, string) ([]int, error)
+	EndpointReachable        func(context.Context, string) bool
+	VerificationTimeout      time.Duration
+	VerificationPollInterval time.Duration
 }
 
 type ManagedProcessRegistry struct {
@@ -1502,14 +1507,136 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 	if opts.Signal == nil {
 		opts.Signal = signalProcess
 	}
+	trackedPIDs := []int{metadata.ChromePID}
+	if opts.ProcessLister == nil {
+		profile := strings.TrimSpace(metadata.UserDataDir)
+		knownPort := strings.TrimSpace(metadata.DebuggingPort)
+		pids, _, err := managedChromeProcessTreeEvidence(ctx, profile, knownPort)
+		if err != nil {
+			return result, fmt.Errorf("capture managed Chrome process tree before shutdown: %w", err)
+		}
+		trackedPIDs = uniqueSortedPIDs(append(trackedPIDs, pids...))
+	}
 	if err := opts.Signal(metadata.ChromePID); err != nil {
 		return result, err
 	}
-	result.Stopped = true
-	result.PIDs = []int{metadata.ChromePID}
+	result.PIDs = trackedPIDs
 	result.SafetyChecks = []string{"managed_metadata_complete", "browser_mode=headless", "ownership_marker_present", "start_time_present"}
+	for _, pid := range trackedPIDs {
+		if pid == metadata.ChromePID {
+			continue
+		}
+		if err := opts.Signal(pid); err != nil {
+			result.Reason = "managed descendant cleanup failed"
+			return result, err
+		}
+	}
+	remaining, endpointLive, verifyErr := waitForManagedChromeStopped(ctx, metadata, opts, trackedPIDs)
+	result.PIDs = uniqueSortedPIDs(append(result.PIDs, remaining...))
+	result.RemainingPIDs = remaining
+	result.SafetyChecks = append(result.SafetyChecks, "shutdown_verification_started")
+	if verifyErr != nil {
+		result.Reason = "managed shutdown verification failed"
+		return result, verifyErr
+	}
+	if len(remaining) > 0 {
+		result.SafetyChecks = append(result.SafetyChecks, "remaining_process_tree_detected")
+		for _, pid := range remaining {
+			if pid == metadata.ChromePID {
+				continue
+			}
+			if err := opts.Signal(pid); err != nil {
+				result.Reason = "managed descendant cleanup failed"
+				return result, err
+			}
+		}
+		remaining, endpointLive, verifyErr = waitForManagedChromeStopped(ctx, metadata, opts, trackedPIDs)
+		result.PIDs = uniqueSortedPIDs(append(result.PIDs, remaining...))
+		result.RemainingPIDs = remaining
+	}
+	if verifyErr != nil {
+		result.Reason = "managed shutdown verification failed"
+		return result, verifyErr
+	}
+	if len(remaining) > 0 || endpointLive {
+		result.Reason = "managed Chrome process tree or debugging endpoint remains"
+		return result, nil
+	}
+	result.SafetyChecks = append(result.SafetyChecks, "shutdown_process_tree_verified", "debugging_endpoint_unreachable")
+	result.Stopped = true
 	markManagedProcessesStopped(stateDir, result.PIDs, "stopped", "owned managed headless cleanup")
 	return result, nil
+}
+
+func waitForManagedChromeStopped(ctx context.Context, metadata ManagedMetadata, opts ManagedStopOptions, trackedPIDs []int) ([]int, bool, error) {
+	processLister := opts.ProcessLister
+	if processLister == nil {
+		knownPort := strings.TrimSpace(metadata.DebuggingPort)
+		processLister = func(ctx context.Context, profile string) ([]int, error) {
+			pids, _, err := managedChromeProcessTreeEvidence(ctx, profile, knownPort, trackedPIDs)
+			return pids, err
+		}
+	}
+	endpointReachable := opts.EndpointReachable
+	if endpointReachable == nil {
+		endpointReachable = managedEndpointReachable
+	}
+	timeout := opts.VerificationTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	pollInterval := opts.VerificationPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 100 * time.Millisecond
+	}
+	profile := strings.TrimSpace(metadata.UserDataDir)
+	if profile == "" {
+		return nil, false, fmt.Errorf("managed shutdown verification requires a profile path")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var lastPIDs []int
+	for {
+		pids, err := processLister(checkCtx, profile)
+		if len(pids) > 0 {
+			lastPIDs = uniqueSortedPIDs(pids)
+		}
+		if err != nil {
+			if ctx.Err() == nil && checkCtx.Err() != nil {
+				return lastPIDs, false, nil
+			}
+			return lastPIDs, false, fmt.Errorf("list managed Chrome processes during shutdown: %w", err)
+		}
+		endpointLive := false
+		if strings.TrimSpace(metadata.DebuggingPort) != "" {
+			endpointLive = endpointReachable(checkCtx, managedEndpointURL(metadata.DebuggingPort))
+		}
+		if err := checkCtx.Err(); err != nil {
+			if ctx.Err() == nil {
+				return lastPIDs, endpointLive, nil
+			}
+			return lastPIDs, endpointLive, err
+		}
+		if len(pids) == 0 && !endpointLive {
+			return nil, false, nil
+		}
+		select {
+		case <-checkCtx.Done():
+			if ctx.Err() != nil {
+				return lastPIDs, endpointLive, ctx.Err()
+			}
+			return lastPIDs, endpointLive, nil
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+func managedEndpointURL(port string) string {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return ""
+	}
+	return "ws://" + net.JoinHostPort("127.0.0.1", port) + "/json/version"
 }
 
 func forceManagedStopCandidates(ctx context.Context, stateDir string, metadata ManagedMetadata) ([]int, []string, []ManagedProcessEvidence, error) {
@@ -1558,15 +1685,25 @@ type managedProcessSnapshot struct {
 	CommandLine string
 }
 
-func managedChromeProcessTreeEvidence(ctx context.Context, managedProfile, knownPort string) ([]int, []ManagedProcessEvidence, error) {
+func managedChromeProcessTreeEvidence(ctx context.Context, managedProfile, knownPort string, trackedPIDSets ...[]int) ([]int, []ManagedProcessEvidence, error) {
 	snapshots, err := managedProcessSnapshots(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	children := map[int][]managedProcessSnapshot{}
 	var roots []managedProcessSnapshot
+	trackedPIDs := map[int]bool{}
+	for _, pids := range trackedPIDSets {
+		for _, pid := range pids {
+			if pid > 0 {
+				trackedPIDs[pid] = true
+			}
+		}
+	}
+	snapshotsByPID := make(map[int]managedProcessSnapshot, len(snapshots))
 	for _, snapshot := range snapshots {
 		children[snapshot.ParentPID] = append(children[snapshot.ParentPID], snapshot)
+		snapshotsByPID[snapshot.PID] = snapshot
 		matched, portMatch, _ := managedChromeCommandLineEvidence(snapshot.CommandLine, managedProfile, knownPort)
 		if matched && portMatch {
 			roots = append(roots, snapshot)
@@ -1602,6 +1739,11 @@ func managedChromeProcessTreeEvidence(ctx context.Context, managedProfile, known
 	for _, root := range roots {
 		visit(root, root.PID, "root")
 	}
+	for pid := range trackedPIDs {
+		if snapshot, ok := snapshotsByPID[pid]; ok {
+			visit(snapshot, pid, "descendant")
+		}
+	}
 	pids := make([]int, 0, len(evidence))
 	for _, item := range evidence {
 		pids = append(pids, item.PID)
@@ -1616,6 +1758,9 @@ func managedProcessSnapshots(ctx context.Context) ([]managedProcessSnapshot, err
 	cmd := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,command=")
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, nil
 	}
 	var snapshots []managedProcessSnapshot

@@ -116,7 +116,15 @@ func (c *Client) CallSession(ctx context.Context, sessionID, method string, para
 		Params:    params,
 	}
 	c.writeMu.Lock()
-	if err := wsjson.Write(ctx, c.conn, req); err != nil {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		c.writeMu.Unlock()
+		c.removePending(id)
+		return fmt.Errorf("write cdp command %s: %w", method, ctxErr)
+	}
+	// A canceled command must not cancel the shared websocket write. nhooyr
+	// closes a connection when a write context expires, which would tear down
+	// the daemon's browser transport for every other invocation.
+	if err := wsjson.Write(context.WithoutCancel(ctx), c.conn, req); err != nil {
 		c.writeMu.Unlock()
 		c.removePending(id)
 		return fmt.Errorf("write cdp command %s: %w", method, err)

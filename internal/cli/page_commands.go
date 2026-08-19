@@ -1465,7 +1465,11 @@ func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(con
 	if err != nil {
 		return nil, nil, err
 	}
-	return client, func(context.Context) error { return nil }, nil
+	leased, _, err := client.BeginLease(ctx, daemon.DefaultInvocationLeaseTTL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return leased, leased.EndLease, nil
 }
 
 func (a *app) browserEventCDPClient(ctx context.Context) (browserEventClient, func(context.Context) error, error) {
@@ -1473,7 +1477,11 @@ func (a *app) browserEventCDPClient(ctx context.Context) (browserEventClient, fu
 	if err != nil {
 		return nil, nil, err
 	}
-	return client, func(context.Context) error { return nil }, nil
+	leased, _, err := client.BeginLease(ctx, daemon.DefaultInvocationLeaseTTL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return leased, leased.EndLease, nil
 }
 
 func (a *app) daemonRuntimeClient(ctx context.Context) (daemon.RuntimeClient, error) {
@@ -1806,6 +1814,32 @@ func (a *app) createPageTargetWithOwnership(ctx context.Context, client cdp.Comm
 				},
 			)
 		}
+	}
+	markDisposable := strings.TrimSpace(ownership.Workflow) != ""
+	var policyErr error
+	if markDisposable {
+		policyErr = cdp.MarkTargetDisposable(ctx, client, targetID)
+	} else {
+		policyErr = cdp.MarkTargetPersistent(ctx, client, targetID)
+	}
+	if policyErr != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), pageCloseDefaultTimeout(a.browserModeName(), defaultPageCloseMaxAttempts))
+		closeReport := closePageTargetSettled(closeCtx, client, cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}, pageCloseOptions{
+			WaitGone:     true,
+			MaxAttempts:  defaultPageCloseMaxAttempts,
+			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+			PollInterval: defaultPageClosePollInterval,
+			RetryBackoff: defaultPageCloseRetryBackoff,
+		})
+		cancel()
+		return targetID, commandErrorWithData(
+			"lease_target_policy_failed",
+			"lifecycle",
+			fmt.Sprintf("mark page %s %s: %v", targetID, map[bool]string{true: "disposable", false: "persistent"}[markDisposable], policyErr),
+			ExitConnection,
+			[]string{"cdp daemon status --json", "cdp page cleanup --target " + targetID + " --close --json"},
+			map[string]any{"target_id": targetID, "close": closeReport},
+		)
 	}
 	return targetID, nil
 }

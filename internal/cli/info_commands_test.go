@@ -1,6 +1,40 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestDoctorBudgetStatusIncludesRendererBudget(t *testing.T) {
+	if got := doctorStatusFromBudgetHealth(map[string]any{
+		"resource_budget":                map[string]any{},
+		"renderer_processes_over_budget": true,
+		"renderer_count_known":           true,
+		"max_renderer_processes":         2,
+	}); got != "warn" {
+		t.Fatalf("doctorStatusFromBudgetHealth(over budget) = %q, want warn", got)
+	}
+	if got := doctorStatusFromBudgetHealth(map[string]any{
+		"resource_budget":        map[string]any{},
+		"renderer_count_known":   false,
+		"max_renderer_processes": 2,
+	}); got != "warn" {
+		t.Fatalf("doctorStatusFromBudgetHealth(unknown) = %q, want warn", got)
+	}
+	message := browserBudgetMessage(map[string]any{
+		"resource_budget":        map[string]any{},
+		"tab_count":              1,
+		"max_tabs":               25,
+		"window_count":           1,
+		"max_windows":            5,
+		"renderer_process_count": 2,
+		"max_renderer_processes": 4,
+		"renderer_count_known":   true,
+	})
+	if !strings.Contains(message, "2/4 renderer processes") {
+		t.Fatalf("browserBudgetMessage = %q, want renderer budget detail", message)
+	}
+}
 
 func TestSummarizeCrontabDetectsUserLevelCDPTasks(t *testing.T) {
 	crontab := `

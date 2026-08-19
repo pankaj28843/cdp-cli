@@ -904,7 +904,10 @@ func doctorStatusFromBudgetHealth(health map[string]any) string {
 	if health["resource_budget"] == nil {
 		return "pending"
 	}
-	if health["tabs_over_budget"] == true || health["windows_over_budget"] == true {
+	if health["tabs_over_budget"] == true || health["windows_over_budget"] == true || health["renderer_processes_over_budget"] == true {
+		return "warn"
+	}
+	if intFromAny(health["max_renderer_processes"]) > 0 && health["renderer_count_known"] != true {
 		return "warn"
 	}
 	return "pass"
@@ -923,7 +926,16 @@ func browserBudgetMessage(health map[string]any) string {
 	if health["resource_budget"] == nil {
 		return "browser budget is unavailable until a daemon runtime is running"
 	}
-	return fmt.Sprintf("browser budget: %v/%v tabs, %v/%v windows", health["tab_count"], health["max_tabs"], health["window_count"], health["max_windows"])
+	message := fmt.Sprintf("browser budget: %v/%v tabs, %v/%v windows", health["tab_count"], health["max_tabs"], health["window_count"], health["max_windows"])
+	maxRenderers := intFromAny(health["max_renderer_processes"])
+	if maxRenderers > 0 {
+		rendererCount := "unknown"
+		if health["renderer_count_known"] == true {
+			rendererCount = fmt.Sprint(health["renderer_process_count"])
+		}
+		message += fmt.Sprintf(", %s/%d renderer processes", rendererCount, maxRenderers)
+	}
+	return message
 }
 
 func checksOK(checks []map[string]any) bool {

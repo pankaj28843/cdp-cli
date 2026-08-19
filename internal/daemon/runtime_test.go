@@ -472,6 +472,56 @@ func TestRuntimeClientEventAndProtocolRPC(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientInvocationLeaseLifecycle(t *testing.T) {
+	server := newRuntimeRPCFakeServer(t)
+	defer server.Close()
+
+	stateDir := shortStateDir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	runtime := waitForRuntime(t, ctx, stateDir)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	client := daemon.RuntimeClient{Runtime: runtime}
+	leased, info, err := client.BeginLease(ctx, 30*time.Second)
+	if err != nil {
+		t.Fatalf("BeginLease: %v", err)
+	}
+	if info.LeaseID == "" || leased.LeaseID != info.LeaseID || info.TTLMillis != 30000 {
+		t.Fatalf("lease info = %+v leased=%+v", info, leased)
+	}
+	if err := leased.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
+		t.Fatalf("leased Call: %v", err)
+	}
+	renewed, err := leased.RenewLease(ctx, 45*time.Second)
+	if err != nil {
+		t.Fatalf("RenewLease: %v", err)
+	}
+	if renewed.LeaseID != info.LeaseID || renewed.TTLMillis != 45000 {
+		t.Fatalf("renewed lease = %+v, want same id and 45-second TTL", renewed)
+	}
+	if err := leased.EndLease(ctx); err != nil {
+		t.Fatalf("EndLease: %v", err)
+	}
+	if _, err := leased.RenewLease(ctx, time.Second); err == nil {
+		t.Fatal("RenewLease after EndLease returned nil")
+	}
+}
+
 func TestRuntimeClientReadsVeryLargeCDPResponsesAndStaysRunning(t *testing.T) {
 	server := newRuntimeRPCLargeFakeServer(t)
 	defer server.Close()

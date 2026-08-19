@@ -25,9 +25,14 @@ const RuntimeSocketFileName = "daemon.sock"
 const RuntimeLogFileName = "daemon.log"
 
 const (
-	RPCMethodDrainEvents   = "Daemon.drainEvents"
-	RPCMethodReadEvent     = "Daemon.readEvent"
-	RPCMethodFetchProtocol = "Daemon.fetchProtocol"
+	RPCMethodDrainEvents          = "Daemon.drainEvents"
+	RPCMethodReadEvent            = "Daemon.readEvent"
+	RPCMethodFetchProtocol        = "Daemon.fetchProtocol"
+	RPCMethodBeginInvocationLease = "Daemon.beginInvocationLease"
+	RPCMethodRenewInvocationLease = "Daemon.renewInvocationLease"
+	RPCMethodEndInvocationLease   = "Daemon.endInvocationLease"
+	RPCMethodMarkTargetDisposable = "Daemon.markTargetDisposable"
+	RPCMethodMarkTargetPersistent = "Daemon.markTargetPersistent"
 )
 
 type Runtime struct {
@@ -84,6 +89,7 @@ type LogEntry struct {
 type RPCRequest struct {
 	Method        string          `json:"method"`
 	SessionID     string          `json:"session_id,omitempty"`
+	OwnerID       string          `json:"owner_id,omitempty"`
 	Params        json.RawMessage `json:"params,omitempty"`
 	TimeoutMillis int64           `json:"timeout_ms,omitempty"`
 }
@@ -119,6 +125,7 @@ func (e *RPCError) Error() string {
 
 type RuntimeClient struct {
 	Runtime Runtime
+	LeaseID string
 }
 
 type holdOptions struct {
@@ -541,7 +548,7 @@ func (c RuntimeClient) Call(ctx context.Context, method string, params any, resu
 }
 
 func (c RuntimeClient) CallSession(ctx context.Context, sessionID, method string, params any, result any) error {
-	raw, err := CallRuntime(ctx, c.Runtime, sessionID, method, params)
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, sessionID, method, params)
 	if err != nil {
 		return err
 	}
@@ -555,6 +562,79 @@ func (c RuntimeClient) CallSession(ctx context.Context, sessionID, method string
 		return fmt.Errorf("decode daemon rpc response %s: %w", method, err)
 	}
 	return nil
+}
+
+func (c RuntimeClient) BeginLease(ctx context.Context, ttl time.Duration) (RuntimeClient, LeaseInfo, error) {
+	params := map[string]any{}
+	if ttl > 0 {
+		params["ttl_ms"] = ttl.Milliseconds()
+	}
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, "", "", RPCMethodBeginInvocationLease, params)
+	if err != nil {
+		return RuntimeClient{}, LeaseInfo{}, err
+	}
+	var info LeaseInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return RuntimeClient{}, LeaseInfo{}, fmt.Errorf("decode daemon invocation lease: %w", err)
+	}
+	if strings.TrimSpace(info.LeaseID) == "" {
+		return RuntimeClient{}, LeaseInfo{}, fmt.Errorf("daemon returned an empty invocation lease id")
+	}
+	return RuntimeClient{Runtime: c.Runtime, LeaseID: info.LeaseID}, info, nil
+}
+
+func (c RuntimeClient) RenewLease(ctx context.Context, ttl time.Duration) (LeaseInfo, error) {
+	if strings.TrimSpace(c.LeaseID) == "" {
+		return LeaseInfo{}, fmt.Errorf("runtime client has no invocation lease")
+	}
+	params := map[string]any{}
+	if ttl > 0 {
+		params["ttl_ms"] = ttl.Milliseconds()
+	}
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodRenewInvocationLease, params)
+	if err != nil {
+		return LeaseInfo{}, err
+	}
+	var info LeaseInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return LeaseInfo{}, fmt.Errorf("decode renewed daemon invocation lease: %w", err)
+	}
+	return info, nil
+}
+
+func (c RuntimeClient) EndLease(ctx context.Context) error {
+	if strings.TrimSpace(c.LeaseID) == "" {
+		return nil
+	}
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodEndInvocationLease, nil)
+	if err != nil {
+		return err
+	}
+	var result LeaseEndResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("decode ended daemon invocation lease: %w", err)
+	}
+	return result.Error()
+}
+
+func (c RuntimeClient) MarkTargetDisposable(ctx context.Context, targetID string) error {
+	return c.markTargetPolicy(ctx, RPCMethodMarkTargetDisposable, targetID)
+}
+
+func (c RuntimeClient) MarkTargetPersistent(ctx context.Context, targetID string) error {
+	return c.markTargetPolicy(ctx, RPCMethodMarkTargetPersistent, targetID)
+}
+
+func (c RuntimeClient) markTargetPolicy(ctx context.Context, method, targetID string) error {
+	if strings.TrimSpace(c.LeaseID) == "" {
+		return nil
+	}
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return fmt.Errorf("target id is required")
+	}
+	_, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", method, map[string]any{"target_id": targetID})
+	return err
 }
 
 func (c RuntimeClient) DrainEvents(ctx context.Context) ([]cdp.Event, error) {
@@ -597,6 +677,10 @@ func (c RuntimeClient) FetchProtocol(ctx context.Context) (cdp.Protocol, error) 
 }
 
 func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string, params any) (json.RawMessage, error) {
+	return CallRuntimeWithOwner(ctx, runtime, "", sessionID, method, params)
+}
+
+func CallRuntimeWithOwner(ctx context.Context, runtime Runtime, ownerID, sessionID, method string, params any) (json.RawMessage, error) {
 	if strings.TrimSpace(runtime.SocketPath) == "" {
 		return nil, fmt.Errorf("daemon runtime does not expose an rpc socket; restart the daemon")
 	}
@@ -616,6 +700,7 @@ func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string,
 	req := RPCRequest{
 		Method:        method,
 		SessionID:     sessionID,
+		OwnerID:       strings.TrimSpace(ownerID),
 		Params:        rawParams,
 		TimeoutMillis: timeoutMillis(ctx),
 	}
@@ -731,6 +816,17 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 	}
 	defer listener.Close()
 	defer os.Remove(socketPath)
+	leases, err := NewLeaseManager(context.Background(), stateDir, browserMode)
+	if err != nil {
+		_ = client.Close(websocket.StatusInternalError, "lease state read failed")
+		appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "error", Event: "lease_state_read_failed", Message: err.Error(), PID: pid})
+		return err
+	}
+	if result, reconcileErr := leases.ReconcileExpired(context.Background(), client); reconcileErr != nil {
+		appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "lease_reconcile_failed", Message: reconcileErr.Error(), PID: pid})
+	} else if result.ExpiredLeaseCount > 0 || result.ClosedTargetCount > 0 || len(result.PendingTargetIDs) > 0 {
+		appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "lease_reconciled", Message: fmt.Sprintf("expired_leases=%d closed_targets=%d pending_targets=%d", result.ExpiredLeaseCount, result.ClosedTargetCount, len(result.PendingTargetIDs)), PID: pid})
+	}
 	appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "rpc_listening", Message: "daemon rpc socket ready", PID: pid})
 
 	runtime := Runtime{
@@ -758,7 +854,16 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 
 	cycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go serveRPC(cycleCtx, listener, client, opts)
+	go leases.Run(cycleCtx, client, func(result LeaseReconcileResult, reconcileErr error) {
+		if reconcileErr != nil {
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "lease_reconcile_failed", Message: reconcileErr.Error(), PID: pid})
+			return
+		}
+		if result.ExpiredLeaseCount > 0 || result.ClosedTargetCount > 0 || len(result.PendingTargetIDs) > 0 {
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "lease_reconciled", Message: fmt.Sprintf("expired_leases=%d closed_targets=%d pending_targets=%d", result.ExpiredLeaseCount, result.ClosedTargetCount, len(result.PendingTargetIDs)), PID: pid})
+		}
+	})
+	go serveRPC(cycleCtx, listener, client, opts, leases)
 	return keepAlive(cycleCtx, client, reconnect)
 }
 
@@ -798,7 +903,7 @@ func listenRuntimeSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, opts holdOptions) {
+func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, opts holdOptions, leases *LeaseManager) {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -808,11 +913,11 @@ func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, op
 		if err != nil {
 			return
 		}
-		go handleRPC(ctx, conn, client, opts)
+		go handleRPC(ctx, conn, client, opts, leases)
 	}
 }
 
-func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts holdOptions) {
+func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts holdOptions, leases *LeaseManager) {
 	defer conn.Close()
 	var req RPCRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
@@ -824,14 +929,90 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 		_ = json.NewEncoder(conn).Encode(rpcErrorResponse("rpc_method_required", "usage", "daemon rpc method is required"))
 		return
 	}
-	callCtx := ctx
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	defer cancelRequest()
+	go cancelWhenRPCClientDisconnects(conn, cancelRequest)
+	callCtx := requestCtx
 	cancel := func() {}
 	if req.TimeoutMillis > 0 {
-		callCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
+		callCtx, cancel = context.WithTimeout(requestCtx, time.Duration(req.TimeoutMillis)*time.Millisecond)
 	}
 	defer cancel()
+	ownerID := strings.TrimSpace(req.OwnerID)
 
 	switch req.Method {
+	case RPCMethodBeginInvocationLease:
+		var params struct {
+			TTLMillis int64 `json:"ttl_ms"`
+		}
+		if len(req.Params) > 0 {
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_params_invalid", "usage", err.Error()))
+				return
+			}
+		}
+		info, err := leases.Begin(callCtx, time.Duration(params.TTLMillis)*time.Millisecond)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_begin_failed", "lifecycle", err))
+			return
+		}
+		writeRPCResult(conn, info)
+		return
+	case RPCMethodRenewInvocationLease:
+		if ownerID == "" {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
+			return
+		}
+		var params struct {
+			TTLMillis int64 `json:"ttl_ms"`
+		}
+		if len(req.Params) > 0 {
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_params_invalid", "usage", err.Error()))
+				return
+			}
+		}
+		info, err := leases.Renew(callCtx, ownerID, time.Duration(params.TTLMillis)*time.Millisecond)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_renew_failed", "lifecycle", err))
+			return
+		}
+		writeRPCResult(conn, info)
+		return
+	case RPCMethodEndInvocationLease:
+		if ownerID == "" {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
+			return
+		}
+		result, err := leases.End(context.Background(), client, ownerID)
+		if err != nil && result.LeaseID == "" {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_end_failed", "lifecycle", err))
+			return
+		}
+		if err != nil {
+			result.LastError = err.Error()
+		}
+		writeRPCResult(conn, result)
+		return
+	case RPCMethodMarkTargetDisposable, RPCMethodMarkTargetPersistent:
+		if ownerID == "" {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
+			return
+		}
+		var params struct {
+			TargetID string `json:"target_id"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil || strings.TrimSpace(params.TargetID) == "" {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("target_id_required", "usage", "target id is required"))
+			return
+		}
+		disposable := req.Method == RPCMethodMarkTargetDisposable
+		if err := leases.SetTargetDisposable(callCtx, ownerID, params.TargetID, disposable); err != nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_target_policy_failed", "lifecycle", err))
+			return
+		}
+		writeRPCResult(conn, map[string]any{"target_id": params.TargetID, "disposable": disposable})
+		return
 	case RPCMethodDrainEvents:
 		writeRPCResult(conn, client.DrainEvents())
 		return
@@ -875,12 +1056,54 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 	if len(req.Params) == 0 {
 		params = map[string]any{}
 	}
+	if ownerID != "" {
+		if err := leases.Touch(context.Background(), ownerID); err != nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_touch_failed", "lifecycle", err))
+			return
+		}
+	}
 	err := client.CallSession(callCtx, req.SessionID, req.Method, params, &result)
 	if err != nil {
-		_ = json.NewEncoder(conn).Encode(RPCResponse{OK: false, Error: err.Error()})
+		if ownerID != "" && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			if _, cleanupErr := leases.End(context.Background(), client, ownerID); cleanupErr != nil {
+				appendLogForMode(context.Background(), os.Getenv("CDP_DAEMON_STATE_DIR"), runtimeModeName(os.Getenv("CDP_DAEMON_BROWSER_MODE")), LogEntry{Level: "warn", Event: "lease_cleanup_failed", Message: cleanupErr.Error(), PID: os.Getpid()})
+			}
+		}
+		_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("rpc_call_failed", "connection", err))
 		return
 	}
+	if ownerID != "" && req.Method == "Target.createTarget" {
+		var created struct {
+			TargetID string `json:"targetId"`
+		}
+		if err := json.Unmarshal(result, &created); err != nil || strings.TrimSpace(created.TargetID) == "" {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_target_registration_failed", "lifecycle", "Target.createTarget returned no target id for lease registration"))
+			return
+		}
+		if err := leases.RegisterTarget(context.Background(), ownerID, LeaseTarget{TargetID: created.TargetID, TargetType: "page", Disposable: true}); err != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), defaultLeaseCleanupTimeout)
+			_ = closeOwnedTarget(cleanupCtx, client, created.TargetID)
+			cleanupCancel()
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_target_registration_failed", "lifecycle", err))
+			return
+		}
+	}
+	if ownerID != "" && req.Method == "Target.closeTarget" {
+		var params struct {
+			TargetID string `json:"targetId"`
+		}
+		if json.Unmarshal(req.Params, &params) == nil {
+			_ = leases.UnregisterTarget(context.Background(), ownerID, params.TargetID)
+		}
+	}
 	_ = json.NewEncoder(conn).Encode(RPCResponse{OK: true, Result: result})
+}
+
+func cancelWhenRPCClientDisconnects(conn net.Conn, cancel context.CancelFunc) {
+	var probe [1]byte
+	if _, err := conn.Read(probe[:]); err != nil {
+		cancel()
+	}
 }
 
 func writeRPCResult(conn net.Conn, value any) {

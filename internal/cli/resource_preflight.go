@@ -48,6 +48,9 @@ type resourcePreflightCheck struct {
 	WindowCount   int     `json:"window_count,omitempty"`
 	MaxWindows    int     `json:"max_windows,omitempty"`
 	WindowKnown   bool    `json:"window_count_known,omitempty"`
+	RendererCount int     `json:"renderer_process_count,omitempty"`
+	MaxRenderers  int     `json:"max_renderer_processes,omitempty"`
+	RendererKnown bool    `json:"renderer_count_known,omitempty"`
 	Retryable     bool    `json:"retryable"`
 	NextCommand   string  `json:"next_command,omitempty"`
 }
@@ -439,9 +442,19 @@ func browserBudgetResourceCheck(health map[string]any) (resourcePreflightCheck, 
 		Retryable:   true,
 		NextCommand: "cdp page cleanup --json",
 	}
-	if tabsOver || windowsOver {
+	renderersOver, _ := health["renderer_processes_over_budget"].(bool)
+	rendererCountKnown, _ := health["renderer_count_known"].(bool)
+	maxRenderers := intFromAny(health["max_renderer_processes"])
+	rendererCount := intFromAny(health["renderer_process_count"])
+	check.RendererCount = rendererCount
+	check.MaxRenderers = maxRenderers
+	check.RendererKnown = rendererCountKnown
+	if tabsOver || windowsOver || renderersOver {
 		check.Status = "skip"
 		check.Reason = "browser_budget_exceeded"
+	} else if maxRenderers > 0 && !rendererCountKnown {
+		check.Status = "skip"
+		check.Reason = "renderer_process_count_unknown"
 	}
 	return check, true
 }
