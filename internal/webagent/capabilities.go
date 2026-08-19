@@ -101,6 +101,14 @@ var operationSpecs = []operationSpec{
 		summary:    "Observe and refresh local auth evidence without creating a conversation.",
 	},
 	{
+		operation:  OperationTranscribe,
+		path:       "transcribe",
+		sideEffect: "provider_request",
+		browser:    "none",
+		summary:    "Send one persisted WebM audio file to ChatGPT's observed transcription endpoint over direct authenticated HTTP; headed auth repair is bounded and lazy.",
+		providers:  []Provider{ProviderChatGPT},
+	},
+	{
 		operation:  OperationAsk,
 		path:       "ask",
 		sideEffect: "conversation",
@@ -328,6 +336,8 @@ func providerOperationImplemented(
 			provider == ProviderGrok ||
 			provider == ProviderPerplexity ||
 			provider == ProviderTripadvisor
+	case OperationTranscribe:
+		return provider == ProviderChatGPT
 	case OperationConversationsList,
 		OperationConversationsDetail,
 		OperationConversationsAwait:

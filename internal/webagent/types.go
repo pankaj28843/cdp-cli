@@ -36,6 +36,7 @@ const (
 	OperationCapabilities          Operation = "capabilities"
 	OperationDoctor                Operation = "doctor"
 	OperationAuthRefresh           Operation = "auth.refresh"
+	OperationTranscribe            Operation = "transcribe"
 	OperationCatalogStatus         Operation = "catalog.status"
 	OperationCatalogRefresh        Operation = "catalog.refresh"
 	OperationCoursesList           Operation = "courses.list"

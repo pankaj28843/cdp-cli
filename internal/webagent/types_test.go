@@ -79,6 +79,7 @@ func TestChatGPTAdvertisesOnlyLiveProvenMutationSurface(t *testing.T) {
 		OperationCapabilities:          true,
 		OperationDoctor:                true,
 		OperationAuthRefresh:           true,
+		OperationTranscribe:            true,
 		OperationAsk:                   true,
 		OperationConversationsList:     true,
 		OperationConversationsContinue: true,

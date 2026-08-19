@@ -139,9 +139,11 @@ printf '%s' 'Please check whether the OpenAI Platform connector is available her
     --stdin --tool openai-platform --thinking Medium \
     --model 'GPT-5.6 Sol' --json --timeout 8m
 printf '%s' 'Turn the six Agent Skills review checks into a small, readable visual.' |
-  cdp workflow agent chatgpt ask \
+cdp workflow agent chatgpt ask \
     --stdin --tool visualize --thinking Pro \
     --model 'GPT-5.6 Sol' --json --timeout 40m
+cdp workflow agent chatgpt transcribe \
+    --file /path/to/whisper.webm --duration-ms 4200 --json
 cdp workflow agent chatgpt conversations await <conversation-id> \
   --wait 40m --timeout 40m30s --json
 cdp workflow agent chatgpt conversations download-attachments \

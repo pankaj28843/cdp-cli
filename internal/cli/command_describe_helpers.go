@@ -743,6 +743,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow agent": {
 			"cdp workflow agent providers --json",
+			"cdp workflow agent chatgpt transcribe --file /path/to/whisper.webm --duration-ms 4200 --json",
 			"cdp workflow agent claude capabilities --json",
 			"cdp workflow agent claude doctor --json",
 			"cdp workflow agent claude auth refresh --json",

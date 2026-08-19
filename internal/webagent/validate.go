@@ -288,7 +288,7 @@ func validResultProvider(provider Provider, operation Operation) bool {
 func validOperation(operation Operation) bool {
 	switch operation {
 	case OperationProviders, OperationCapabilities, OperationDoctor,
-		OperationAuthRefresh, OperationCatalogStatus,
+		OperationAuthRefresh, OperationTranscribe, OperationCatalogStatus,
 		OperationCatalogRefresh, OperationCoursesList,
 		OperationChaptersList, OperationContentFetch,
 		OperationAsk, OperationConversationsList,
