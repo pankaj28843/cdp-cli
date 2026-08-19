@@ -191,7 +191,14 @@ func (a *app) newWorkflowAgentM365TranscribeCommand() *cobra.Command {
 		Example: "  cdp workflow agent m365 transcribe --file ~/.cache/whisper.webm --duration-ms 4200 --json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, 2*time.Minute)
+			defaultTimeout := 2 * time.Minute
+			if !stream && durationMilliseconds > 0 {
+				defaultTimeout = maxDuration(
+					defaultTimeout,
+					time.Duration(durationMilliseconds)*time.Millisecond+30*time.Second,
+				)
+			}
+			ctx, cancel := a.commandContextWithDefault(cmd, defaultTimeout)
 			defer cancel()
 			if !stream && filePath == "" {
 				return commandError(
@@ -276,6 +283,13 @@ func (a *app) newWorkflowAgentM365TranscribeCommand() *cobra.Command {
 	cmd.Flags().Int64Var(&durationMilliseconds, "duration-ms", 0, "recorded audio duration in milliseconds")
 	cmd.Flags().BoolVar(&stream, "stream", false, "read JSON-lines 16 kHz PCM from stdin and emit live partial results")
 	return cmd
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if right > left {
+		return right
+	}
+	return left
 }
 
 func (a *app) m365BrowserOperationConfig(

@@ -33,6 +33,10 @@ func TestRunSessionSendsObservedVoiceTileProtocolAndReturnsFinal(t *testing.T) {
 			"AugLoop_Voice_SpeechToTextFinalResult",
 			map[string]any{"text": "Hello from Microsoft 365."},
 		)),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechSessionEvent",
+			map[string]any{"eventId": "SpeechRecognitionStopped"},
+		)),
 	)
 	pcm := bytes.Repeat([]byte{0x01, 0x02}, pcmBytesPerTile)
 	transcript, tiles, failure := runSession(
@@ -68,6 +72,62 @@ func TestRunSessionSendsObservedVoiceTileProtocolAndReturnsFinal(t *testing.T) {
 	require.True(t, voiceTileIsEnd(t, binaryFrames[3]))
 }
 
+func TestStitchTranscriptSegmentsPreservesAllFinalSegments(t *testing.T) {
+	got := stitchTranscriptSegments([]string{
+		"So even though I switched to Microsoft 365 as the online transcription provider.",
+		"It is like streaming.",
+		"So it is ASR audio streaming response.",
+	})
+
+	require.Equal(t,
+		"So even though I switched to Microsoft 365 as the online transcription provider. It is like streaming. So it is ASR audio streaming response.",
+		got,
+	)
+}
+
+func TestStitchTranscriptSegmentsCollapsesCumulativeAndBoundaryOverlap(t *testing.T) {
+	got := stitchTranscriptSegments([]string{
+		"hello world",
+		"hello world again",
+		"again and welcome",
+	})
+
+	require.Equal(t, "hello world again and welcome", got)
+}
+
+func TestRunSessionReturnsAllFinalSegmentsAfterSpeechStops(t *testing.T) {
+	fake := newFakeSocket(
+		textFrame(sessionInitResponsePayload()),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechSessionEvent",
+			map[string]any{"eventId": "SpeechRecognitionStarted"},
+		)),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechToTextFinalResult",
+			map[string]any{"text": "first sentence."},
+		)),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechToTextFinalResult",
+			map[string]any{"text": "second sentence."},
+		)),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechSessionEvent",
+			map[string]any{"eventId": "SpeechRecognitionStopped"},
+		)),
+	)
+	transcript, _, failure := runSession(
+		context.Background(),
+		testAuthTemplate(t),
+		bytes.Repeat([]byte{0x01, 0x02}, 2_000),
+		TranscribeConfig{Dial: func(context.Context, string, string) (socket, error) {
+			return fake, nil
+		}},
+	)
+
+	require.Nil(t, failure)
+	require.Equal(t, "first sentence. second sentence.", transcript)
+}
+
 func TestStreamTranscribeEmitsReadyPartialAndFinalEvents(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)
@@ -86,6 +146,10 @@ func TestStreamTranscribeEmitsReadyPartialAndFinalEvents(t *testing.T) {
 		textFrame(annotationResultsPayload(
 			"AugLoop_Voice_SpeechToTextFinalResult",
 			map[string]any{"text": "Final words."},
+		)),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechSessionEvent",
+			map[string]any{"eventId": "SpeechRecognitionStopped"},
 		)),
 	)
 	input := strings.NewReader(

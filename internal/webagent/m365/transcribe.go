@@ -23,6 +23,7 @@ const (
 	maxTranscriptionDurationMS = 10 * 60 * 1000
 	maxPCMBytes                = pcmSampleRate * 2 * 10 * 60
 	defaultSessionTimeout      = 90 * time.Second
+	finalResultSettleTimeout   = 10 * time.Second
 )
 
 type TranscribeConfig struct {
@@ -34,6 +35,8 @@ type TranscribeConfig struct {
 	Now         func() time.Time
 	DecodePCM   func(context.Context, string) ([]byte, error)
 	Dial        socketDialer
+	PaceTiles   bool
+	Sleep       func(context.Context, time.Duration) error
 }
 
 type TranscriptionData struct {
@@ -125,6 +128,10 @@ func Transcribe(
 		})
 	}
 	data.PCMBytes = int64(len(pcm))
+	// AugLoop speech recognition expects VoiceTiles to arrive at approximately
+	// capture rate. The app normally uses StreamTranscribe while recording; the
+	// saved-file command must pace its replay for a complete fallback result.
+	config.PaceTiles = true
 
 	attempt, report, runErr := resilience.Run(
 		ctx,
@@ -212,6 +219,7 @@ func runSession(
 type liveEvent struct {
 	partial string
 	final   string
+	stopped bool
 	failure *transcribeFailure
 }
 
@@ -227,6 +235,12 @@ type liveSession struct {
 	readerContext     context.Context
 	readerCancel      context.CancelFunc
 	closeOnce         sync.Once
+	transcriptMu      sync.Mutex
+	finalSegments     []string
+	partialText       string
+	speechStopped     bool
+	paceTiles         bool
+	sleep             func(context.Context, time.Duration) error
 }
 
 func openLiveSession(
@@ -256,7 +270,11 @@ func openLiveSession(
 			retryable: true,
 		}
 	}
-	session := &liveSession{socket: socket}
+	session := &liveSession{
+		socket:    socket,
+		paceTiles: config.PaceTiles,
+		sleep:     config.Sleep,
+	}
 	writeText := func(payload []byte) error {
 		return session.write(ctx, augloop.MessageText, payload)
 	}
@@ -381,13 +399,18 @@ func (s *liveSession) startReader(ctx context.Context) {
 			}
 			text := annotationText(message)
 			switch message.AnnotationType {
+			case "AugLoop_Voice_SpeechSessionEvent":
+				if speechSessionEventID(message) == "SpeechRecognitionStopped" {
+					s.markSpeechStopped()
+					s.emit(liveEvent{stopped: true})
+				}
 			case "AugLoop_Voice_SpeechToTextPartialResult":
 				if text != "" {
-					s.emit(liveEvent{partial: text})
+					s.emit(liveEvent{partial: s.recordPartial(text)})
 				}
 			case "AugLoop_Voice_SpeechToTextFinalResult":
 				if text != "" {
-					s.emit(liveEvent{final: text})
+					s.emit(liveEvent{final: s.recordFinal(text)})
 				}
 			}
 		}
@@ -401,6 +424,43 @@ func (s *liveSession) emit(event liveEvent) {
 	}
 }
 
+func (s *liveSession) recordPartial(text string) string {
+	s.transcriptMu.Lock()
+	defer s.transcriptMu.Unlock()
+	s.partialText = text
+	return stitchTranscriptSegments(append(append([]string{}, s.finalSegments...), s.partialText))
+}
+
+func (s *liveSession) recordFinal(text string) string {
+	s.transcriptMu.Lock()
+	defer s.transcriptMu.Unlock()
+	s.finalSegments = append(s.finalSegments, text)
+	s.partialText = ""
+	return stitchTranscriptSegments(s.finalSegments)
+}
+
+func (s *liveSession) finalTranscript() string {
+	s.transcriptMu.Lock()
+	defer s.transcriptMu.Unlock()
+	segments := append([]string{}, s.finalSegments...)
+	if s.partialText != "" {
+		segments = append(segments, s.partialText)
+	}
+	return stitchTranscriptSegments(segments)
+}
+
+func (s *liveSession) markSpeechStopped() {
+	s.transcriptMu.Lock()
+	s.speechStopped = true
+	s.transcriptMu.Unlock()
+}
+
+func (s *liveSession) hasSpeechStopped() bool {
+	s.transcriptMu.Lock()
+	defer s.transcriptMu.Unlock()
+	return s.speechStopped
+}
+
 func (s *liveSession) appendPCM(ctx context.Context, pcm []byte) *transcribeFailure {
 	if len(pcm) == 0 {
 		return nil
@@ -411,6 +471,36 @@ func (s *liveSession) appendPCM(ctx context.Context, pcm []byte) *transcribeFail
 			return failure
 		}
 		s.pendingPCM = s.pendingPCM[pcmBytesPerTile:]
+		if failure := s.pace(ctx); failure != nil {
+			return failure
+		}
+	}
+	return nil
+}
+
+func (s *liveSession) pace(ctx context.Context) *transcribeFailure {
+	if !s.paceTiles {
+		return nil
+	}
+	sleep := s.sleep
+	if sleep == nil {
+		sleep = func(ctx context.Context, duration time.Duration) error {
+			timer := time.NewTimer(duration)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+				return nil
+			}
+		}
+	}
+	if err := sleep(ctx, time.Duration(float64(pcmBytesPerTile/2)/pcmSampleRate*float64(time.Second))); err != nil {
+		return &transcribeFailure{
+			code:     "m365_audio_send_cancelled",
+			errClass: "cancelled",
+			message:  "Microsoft 365 audio replay was cancelled",
+		}
 	}
 	return nil
 }
@@ -444,11 +534,19 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 		failure.message = "Microsoft 365 voice session could not be ended safely"
 		return "", failure
 	}
-	deadline, cancel := context.WithTimeout(ctx, defaultSessionTimeout)
+	if s.hasSpeechStopped() {
+		if transcript := s.finalTranscript(); transcript != "" {
+			return transcript, nil
+		}
+	}
+	deadline, cancel := context.WithTimeout(ctx, finalResultSettleTimeout)
 	defer cancel()
 	for {
 		select {
 		case <-deadline.Done():
+			if transcript := s.finalTranscript(); transcript != "" {
+				return transcript, nil
+			}
 			return "", &transcribeFailure{
 				code:      "m365_final_result_timeout",
 				errClass:  "timeout",
@@ -457,13 +555,18 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 			}
 		case event, ok := <-s.events:
 			if !ok {
+				if transcript := s.finalTranscript(); transcript != "" {
+					return transcript, nil
+				}
 				return "", socketFailure(nil)
 			}
 			if event.failure != nil {
 				return "", event.failure
 			}
-			if event.final != "" {
-				return event.final, nil
+			if event.stopped {
+				if transcript := s.finalTranscript(); transcript != "" {
+					return transcript, nil
+				}
 			}
 		}
 	}
@@ -491,6 +594,17 @@ func annotationText(message annotationMessage) string {
 		for _, item := range operation.Items {
 			if text := findString(item.Body, "text", "transcript", "transcription"); strings.TrimSpace(text) != "" {
 				return strings.TrimSpace(text)
+			}
+		}
+	}
+	return ""
+}
+
+func speechSessionEventID(message annotationMessage) string {
+	for _, operation := range message.Ops {
+		for _, item := range operation.Items {
+			if eventID := findString(item.Body, "eventId"); eventID != "" {
+				return eventID
 			}
 		}
 	}
