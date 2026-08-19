@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/resilience"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -54,6 +55,17 @@ type transcribeFailure struct {
 	status    int
 	retryable bool
 	auth      bool
+}
+
+func (f *transcribeFailure) Error() string {
+	if f == nil {
+		return "ChatGPT transcription failed"
+	}
+	return f.message
+}
+
+type transcriptionAttempt struct {
+	transcript string
 }
 
 func Transcribe(
@@ -99,128 +111,77 @@ func Transcribe(
 	}
 	data.AudioBytes = int64(len(audio))
 
-	maxAttempts := config.MaxAttempts
-	if maxAttempts < 1 {
-		maxAttempts = 3
-	}
-	if maxAttempts > 3 {
-		maxAttempts = 3
-	}
-	backoff := config.Backoff
-	if len(backoff) == 0 {
-		backoff = []time.Duration{time.Second, 2 * time.Second}
-	}
-
-	var authRefreshed bool
-	var lastFailure = transcribeFailure{
-		code:      "chatgpt_transcription_http_unavailable",
-		errClass:  "connection",
-		message:   "ChatGPT transcription request was not completed",
-		retryable: true,
-	}
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		data.Attempts = attempt
-		if attempt > 1 {
-			if err := waitTranscriptionBackoff(ctx, backoff, attempt); err != nil {
-				lastFailure = transcribeFailure{
-					code:     "chatgpt_transcription_canceled",
-					errClass: "timeout",
-					message:  "ChatGPT transcription retry was canceled",
+	attempt, report, runErr := resilience.Run(
+		ctx,
+		resilience.Policy{MaxAttempts: config.MaxAttempts, Backoff: config.Backoff},
+		resilience.Hooks[transcriptionAttempt]{
+			Attempt: func(attemptContext context.Context, _ int) (transcriptionAttempt, error) {
+				template, templateFailure := loadTranscriptionTemplate(attemptContext, config)
+				if templateFailure != nil {
+					return transcriptionAttempt{}, templateFailure
 				}
-				break
-			}
-		}
-
-		template, templateFailure := loadTranscriptionTemplate(ctx, config)
-		if templateFailure != nil {
-			lastFailure = *templateFailure
-			if templateFailure.auth && !authRefreshed && config.RefreshAuth != nil {
-				authRefreshed = true
-				if err := config.RefreshAuth(ctx); err != nil {
-					lastFailure = transcribeFailure{
-						code:     "chatgpt_auth_refresh_failed",
-						errClass: "auth",
-						message:  "ChatGPT auth refresh could not complete",
+				request, requestErr := newTranscriptionRequest(
+					attemptContext,
+					template,
+					audio,
+					durationMilliseconds,
+				)
+				if requestErr != nil {
+					return transcriptionAttempt{}, &transcribeFailure{
+						code:     "chatgpt_transcription_request_invalid",
+						errClass: "internal",
+						message:  "ChatGPT transcription request could not be prepared",
 					}
-					break
 				}
-				if refreshedTemplate, refreshedFailure := loadTranscriptionTemplate(ctx, config); refreshedFailure == nil {
-					template = refreshedTemplate
-				} else {
-					lastFailure = *refreshedFailure
-					break
+				response, requestFailure := doTranscriptionRequest(config.HTTPClient, request)
+				if requestFailure != nil {
+					return transcriptionAttempt{}, requestFailure
 				}
-			} else {
-				break
-			}
-		}
-
-		request, requestErr := newTranscriptionRequest(
-			ctx,
-			template,
-			audio,
-			durationMilliseconds,
-		)
-		if requestErr != nil {
-			lastFailure = transcribeFailure{
-				code:     "chatgpt_transcription_request_invalid",
-				errClass: "internal",
-				message:  "ChatGPT transcription request could not be prepared",
-			}
-			break
-		}
-
-		response, requestFailure := doTranscriptionRequest(config.HTTPClient, request)
-		if requestFailure != nil {
-			lastFailure = *requestFailure
-		} else {
-			data.StatusCode = response.statusCode
-			if response.statusCode >= 200 && response.statusCode < 300 {
+				data.StatusCode = response.statusCode
+				if response.statusCode < 200 || response.statusCode >= 300 {
+					failure := transcriptionHTTPFailure(response.statusCode)
+					return transcriptionAttempt{}, &failure
+				}
 				transcript, parseErr := parseTranscriptionBody(response.body)
-				if parseErr == nil {
-					data.Transcript = transcript
-					return operationSuccess(
-						runID,
-						config.BuildCommit,
-						webagent.OperationTranscribe,
-						webagent.StageObserveTerminal,
-						"direct_http",
-						nil,
-						webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
-						data,
-						[]string{
-							"cdp workflow agent chatgpt doctor --json",
-							"cdp workflow agent chatgpt capabilities --json",
-						},
-					)
+				if parseErr != nil {
+					return transcriptionAttempt{}, &transcribeFailure{
+						code:     "chatgpt_transcription_response_changed",
+						errClass: "provider",
+						message:  "ChatGPT transcription returned an empty or unrecognized response",
+					}
 				}
-				lastFailure = transcribeFailure{
-					code:     "chatgpt_transcription_response_changed",
-					errClass: "provider",
-					message:  "ChatGPT transcription returned an empty or unrecognized response",
-				}
-			} else {
-				lastFailure = transcriptionHTTPFailure(response.statusCode)
-			}
-		}
-
-		if !lastFailure.retryable || attempt == maxAttempts {
-			break
-		}
-		if lastFailure.auth && !authRefreshed && config.RefreshAuth != nil {
-			authRefreshed = true
-			if err := config.RefreshAuth(ctx); err != nil {
-				lastFailure = transcribeFailure{
+				return transcriptionAttempt{transcript: transcript}, nil
+			},
+			Classify:    classifyTranscriptionFailure,
+			RefreshAuth: config.RefreshAuth,
+			OnRefreshFailure: func(error) error {
+				return &transcribeFailure{
 					code:     "chatgpt_auth_refresh_failed",
 					errClass: "auth",
 					message:  "ChatGPT auth refresh could not complete",
 				}
-				break
-			}
-		}
+			},
+		},
+	)
+	data.Attempts = report.Attempts
+	if runErr == nil {
+		data.Transcript = attempt.transcript
+		return operationSuccess(
+			runID,
+			config.BuildCommit,
+			webagent.OperationTranscribe,
+			webagent.StageObserveTerminal,
+			"direct_http",
+			nil,
+			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+			data,
+			[]string{
+				"cdp workflow agent chatgpt doctor --json",
+				"cdp workflow agent chatgpt capabilities --json",
+			},
+		)
 	}
-
-	return transcriptionFailureResult(runID, config, data, lastFailure)
+	return transcriptionFailureResult(runID, config, data, transcriptionFailureFromError(runErr))
 }
 
 type transcriptionHTTPResponse struct {
@@ -472,22 +433,34 @@ func transcriptionHTTPFailure(status int) transcribeFailure {
 	}
 }
 
-func waitTranscriptionBackoff(
-	ctx context.Context,
-	backoff []time.Duration,
-	attempt int,
-) error {
-	index := attempt - 2
-	if index < 0 || index >= len(backoff) || backoff[index] <= 0 {
-		return nil
+func classifyTranscriptionFailure(err error) resilience.Decision {
+	var failure *transcribeFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return resilience.Decision{}
 	}
-	timer := time.NewTimer(backoff[index])
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+	return resilience.Decision{
+		Retry:       failure.retryable,
+		RefreshAuth: failure.auth,
+	}
+}
+
+func transcriptionFailureFromError(err error) transcribeFailure {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return transcribeFailure{
+			code:     "chatgpt_transcription_canceled",
+			errClass: "timeout",
+			message:  "ChatGPT transcription retry was canceled",
+		}
+	}
+	var failure *transcribeFailure
+	if errors.As(err, &failure) && failure != nil {
+		return *failure
+	}
+	return transcribeFailure{
+		code:      "chatgpt_transcription_http_unavailable",
+		errClass:  "connection",
+		message:   "ChatGPT transcription request was not completed",
+		retryable: true,
 	}
 }
 

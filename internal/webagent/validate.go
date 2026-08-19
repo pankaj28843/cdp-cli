@@ -279,7 +279,7 @@ func validResultProvider(provider Provider, operation Operation) bool {
 		return provider == ProviderCatalog
 	}
 	if provider == ProviderCatalog {
-		return false
+		return operation == OperationAuthRefresh || operation == OperationCapabilities
 	}
 	_, ok := ParseProvider(string(provider))
 	return ok

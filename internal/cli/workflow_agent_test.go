@@ -48,7 +48,7 @@ func TestWorkflowAgentProvidersJSONNeedsNoBrowser(t *testing.T) {
 	if err := json.Unmarshal(encodedData, &catalog); err != nil {
 		t.Fatalf("decode providers data: %v", err)
 	}
-	if catalog.SchemaVersion != webagent.CapabilitySchemaVersion || len(catalog.Providers) != 7 {
+	if catalog.SchemaVersion != webagent.CapabilitySchemaVersion || len(catalog.Providers) != 8 {
 		t.Fatalf("providers catalog = %+v", catalog)
 	}
 }
@@ -334,6 +334,8 @@ func TestDescribeWorkflowAgentIncludesSchemaExamples(t *testing.T) {
 	}
 	for _, want := range []string{
 		"workflow agent providers",
+		"workflow agent auth refresh",
+		"workflow agent capabilities refresh",
 		"workflow agent claude capabilities",
 		"workflow agent claude doctor",
 		"workflow agent claude auth",
@@ -397,6 +399,8 @@ func TestWebAgentSchemaCommands(t *testing.T) {
 		"webagent-operation",
 		"webagent-capabilities",
 		"webagent-provider-catalog",
+		"webagent-aggregate-refresh",
+		"webagent-aggregate-refresh-result",
 		"webagent-operation-capability",
 		"webagent-action",
 		"webagent-error",

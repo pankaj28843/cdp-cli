@@ -33,6 +33,8 @@ func (a *app) newWorkflowAgentCommand() *cobra.Command {
 			"  cdp schema webagent-operation --json",
 	}
 	cmd.AddCommand(a.newWorkflowAgentProvidersCommand())
+	cmd.AddCommand(a.newWorkflowAgentAggregateAuthCommand())
+	cmd.AddCommand(a.newWorkflowAgentAggregateCapabilitiesCommand())
 	for _, provider := range webagent.Providers() {
 		cmd.AddCommand(a.newWorkflowAgentProviderCommand(provider))
 	}
@@ -96,6 +98,11 @@ func (a *app) newWorkflowAgentProviderCommand(provider webagent.Provider) *cobra
 		cmd.AddCommand(a.newWorkflowAgentChatGPTAskCommand())
 		cmd.AddCommand(a.newWorkflowAgentChatGPTResearchCommand())
 		cmd.AddCommand(a.newWorkflowAgentChatGPTConversationsCommand())
+	}
+	if provider == webagent.ProviderM365 {
+		cmd.AddCommand(a.newWorkflowAgentM365DoctorCommand())
+		cmd.AddCommand(a.newWorkflowAgentM365AuthCommand())
+		cmd.AddCommand(a.newWorkflowAgentM365TranscribeCommand())
 	}
 	if provider == webagent.ProviderClaude {
 		cmd.AddCommand(a.newWorkflowAgentClaudeDoctorCommand())
@@ -714,6 +721,9 @@ func (a *app) newWorkflowAgentCapabilitiesCommand(provider webagent.Provider) *c
 	if provider == webagent.ProviderChatGPT {
 		cmd.AddCommand(a.newWorkflowAgentChatGPTCapabilitiesRefreshCommand())
 	}
+	if provider == webagent.ProviderM365 {
+		cmd.AddCommand(a.newWorkflowAgentM365CapabilitiesRefreshCommand())
+	}
 	if provider == webagent.ProviderGrok {
 		cmd.AddCommand(a.newWorkflowAgentGrokCapabilitiesRefreshCommand())
 	}
@@ -733,6 +743,9 @@ func (a *app) workflowAgentCapabilitiesData(
 	}
 	if provider == webagent.ProviderChatGPT {
 		return a.chatgptCapabilitiesData(ctx, capabilities)
+	}
+	if provider == webagent.ProviderM365 {
+		return a.m365CapabilitiesData(ctx, capabilities)
 	}
 	if provider == webagent.ProviderGrok {
 		return a.grokCapabilitiesData(ctx, capabilities)

@@ -22,6 +22,7 @@ const (
 	ProviderCatalog     Provider = "catalog"
 	ProviderAlex        Provider = "alex"
 	ProviderChatGPT     Provider = "chatgpt"
+	ProviderM365        Provider = "m365"
 	ProviderClaude      Provider = "claude"
 	ProviderGemini      Provider = "gemini"
 	ProviderGrok        Provider = "grok"
