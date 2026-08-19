@@ -2547,7 +2547,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the CDP method completed."},
 				{Name: "scope", Type: "string", Required: true, Description: "Either browser or target."},
 				{Name: "method", Type: "string", Required: true, Description: "Executed CDP method."},
-				{Name: "target", Type: "page", Required: false, Description: "Selected page target for target-scoped execution."},
+				{Name: "target", Type: "target", Required: false, Description: "Selected CDP target for target-scoped execution, including page, worker, and service_worker targets."},
 				{Name: "session_id", Type: "string", Required: false, Description: "Temporary CDP session id used for target-scoped execution."},
 				{Name: "result", Type: "object", Required: true, Description: "Raw CDP result payload."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "Artifact metadata when --save writes a base64 data field to disk."},

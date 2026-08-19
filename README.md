@@ -69,6 +69,7 @@ cdp protocol search screenshot --json
 cdp protocol examples Page.captureScreenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
+cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains chrome-extension:// --params '{"expression":"Object.keys(globalThis).slice(0,50)","returnByValue":true}' --json
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
 ```
 

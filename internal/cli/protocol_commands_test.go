@@ -304,6 +304,44 @@ func TestProtocolExecTargetScopedJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExecServiceWorkerTargetScopedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+		{"targetId": "worker-1", "type": "service_worker", "title": "Service Worker", "url": "chrome-extension://example/background.js", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"protocol", "exec", "Runtime.evaluate",
+		"--target", "worker",
+		"--target-type", "service_worker",
+		"--params", `{"expression":"Object.keys(globalThis).slice(0,3)","returnByValue":true}`,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol exec service worker exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Scope  string `json:"scope"`
+		Target struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		} `json:"target"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol exec service worker output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Scope != "target" || got.Target.ID != "worker-1" || got.Target.Type != "service_worker" || got.Target.URL != "chrome-extension://example/background.js" || got.SessionID != "session-worker-1" {
+		t.Fatalf("protocol exec service worker = %+v, want service_worker target evidence", got)
+	}
+}
+
 func TestProtocolExecSaveArtifactJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
