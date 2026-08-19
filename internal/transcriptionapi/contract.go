@@ -58,6 +58,7 @@ type AudioAsset struct {
 	Bytes         int64  `json:"bytes"`
 	DurationMS    int64  `json:"duration_ms,omitempty"`
 	PersistedPath string `json:"persisted_path,omitempty"`
+	Ephemeral     bool   `json:"ephemeral,omitempty"`
 }
 
 type FileRequest struct {

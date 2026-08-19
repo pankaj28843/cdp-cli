@@ -3,6 +3,7 @@
 `cdp transcription` exposes one provider-neutral local service for VoxInput.
 The public contract is compatible with the OpenAI Whisper file API and adds
 completed-file SSE plus an OpenAI-shaped realtime transcription WebSocket.
+The root page is a self-contained human dogfood app at `/demo.html` (also `/`).
 
 ## Start the service
 
@@ -15,6 +16,43 @@ cdp transcription serve \
   --default-provider chatgpt-web \
   --print-ready
 ```
+
+For a private LAN dogfood session, the embedded demo can run without a token:
+
+```bash
+cdp transcription service install \
+  --address 0.0.0.0:8765 \
+  --default-provider chatgpt-web
+```
+
+Open `http://<this-machine-LAN-IP>:8765/demo.html` from a desktop or mobile
+browser and allow microphone access. The service is supervised by a macOS
+user-level LaunchAgent or a Linux `systemd --user` unit. Inspect or control it
+with:
+
+```bash
+cdp transcription service status
+cdp transcription service restart
+cdp transcription service stop
+```
+
+Desktop browsers generally allow microphone access on `localhost`. Mobile
+browsers require a secure origin for a LAN address; provide a certificate and
+key to serve HTTPS, using a certificate trusted by the phone:
+
+```bash
+cdp transcription service install \
+  --address 0.0.0.0:8765 \
+  --tls-cert /path/to/lan-cert.pem \
+  --tls-key /path/to/lan-key.pem
+```
+
+The demo automatically switches its WebSocket transport to `wss://` when it is
+opened over HTTPS.
+
+The API retains JSON request/result records but uses ephemeral transaction
+media by default. Use `--persist-audio` only when the API itself must retain
+audio for a later retry; VoxInput may still keep its own local retry copy.
 
 To use an OpenAI-compatible local ASR server instead:
 
@@ -73,6 +111,15 @@ print(result.text)
 `transcript.text.delta` and `transcript.text.done`; it does not pretend that a
 whole-file provider produced token-level partials.
 
+The demo keeps the primary journey deliberately small: choose a provider, press
+**Start talking**, then stop to finalize. Whole-file providers show one final
+transcript after the upload; realtime providers show a short live preview while
+bounded PCM chunks are sent and then replace it with the committed result. A
+collapsed **Advanced API controls** section exposes multipart
+transcription/translation, SSE, OpenAPI, and realtime controls for testing the
+full contract. The browser keeps recent results in local storage; the server
+does not need to retain uploaded media.
+
 ## Realtime API
 
 The WebSocket endpoint is `GET /v1/realtime`. OpenAI-shaped clients may use
@@ -109,10 +156,11 @@ without a provider-specific cron job. The shared retry policy is bounded at
 three total attempts with 1-second and 2-second waits; its 4-second slot is
 retained for policies with a larger future attempt budget.
 
-Audio is persisted before dispatch under the cdp-cli state directory. The
-configured `--max-audio-bytes` budget prunes old audio while retaining JSON
-request/result records. Failed requests therefore remain searchable and can
-be retried by a caller that still has the recorded audio path.
+Audio is copied to a bounded transaction file before dispatch. By default that
+file is removed when the request or WebSocket ends; JSON request/result records
+remain searchable. Add `--persist-audio` for the explicit durable-cache mode,
+where the configured `--max-audio-bytes` budget prunes old audio independently
+from records.
 
 ## Linux deployment
 

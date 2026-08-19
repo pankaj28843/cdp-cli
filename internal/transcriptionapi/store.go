@@ -20,16 +20,29 @@ const DefaultMaxAudioBytes int64 = 512 * 1024 * 1024
 
 var ErrAudioTooLarge = errors.New("audio exceeds the configured storage limit")
 
-// Store preserves the original audio and a compact JSON record. Audio is
-// prunable independently from the record, so a failed transcription remains
-// searchable and retryable while the cache budget is respected.
+// Store preserves compact JSON records and optionally retains audio. The API
+// service uses ephemeral transaction media by default; NewStore is available
+// for callers that explicitly want a retryable on-disk audio cache.
 type Store struct {
 	root          string
+	audioRoot     string
+	retainAudio   bool
 	maxAudioBytes int64
 	mu            sync.Mutex
 }
 
 func NewStore(root string, maxAudioBytes int64) (*Store, error) {
+	return newStore(root, maxAudioBytes, true)
+}
+
+// NewEphemeralStore keeps request/result JSON under root but places provider
+// input audio in a temporary transaction directory. Callers should invoke
+// RemoveAudio when the request finishes; the server does this at its boundary.
+func NewEphemeralStore(root string, maxAudioBytes int64) (*Store, error) {
+	return newStore(root, maxAudioBytes, false)
+}
+
+func newStore(root string, maxAudioBytes int64, retainAudio bool) (*Store, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return nil, fmt.Errorf("transcription state directory is required")
@@ -40,7 +53,15 @@ func NewStore(root string, maxAudioBytes int64) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(root, "requests"), 0o700); err != nil {
 		return nil, fmt.Errorf("create transcription state directory: %w", err)
 	}
-	return &Store{root: root, maxAudioBytes: maxAudioBytes}, nil
+	audioRoot := root
+	if !retainAudio {
+		var err error
+		audioRoot, err = os.MkdirTemp("", "cdp-transcription-audio-*")
+		if err != nil {
+			return nil, fmt.Errorf("create ephemeral transcription audio directory: %w", err)
+		}
+	}
+	return &Store{root: root, audioRoot: audioRoot, retainAudio: retainAudio, maxAudioBytes: maxAudioBytes}, nil
 }
 
 func (s *Store) Root() string {
@@ -86,7 +107,7 @@ func (s *Store) PersistAudio(
 		return AudioAsset{}, fmt.Errorf("audio source is required")
 	}
 	ext := safeAudioExtension(fileName)
-	directory := filepath.Join(s.root, "requests", requestID)
+	directory := s.audioDirectory(requestID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return AudioAsset{}, fmt.Errorf("create request directory: %w", err)
 	}
@@ -127,16 +148,58 @@ func (s *Store) PersistAudio(
 		MIMEType:      strings.TrimSpace(mimeType),
 		Bytes:         bytesWritten,
 		PersistedPath: path,
+		Ephemeral:     !s.retainAudio,
 	}
-	if err := s.PruneAudioExcept(ctx, path); err != nil {
-		return AudioAsset{}, err
+	if s.retainAudio {
+		if err := s.PruneAudioExcept(ctx, path); err != nil {
+			return AudioAsset{}, err
+		}
 	}
 	return asset, nil
 }
 
+// RemoveAudio removes transaction media while preserving its JSON record. It
+// is a no-op for the explicit durable-cache store.
+func (s *Store) RemoveAudio(ctx context.Context, requestID string) error {
+	if s == nil || s.retainAudio {
+		return nil
+	}
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return fmt.Errorf("request id is required")
+	}
+	if err := os.RemoveAll(s.audioDirectory(requestID)); err != nil {
+		return fmt.Errorf("remove ephemeral transcription audio: %w", err)
+	}
+	return nil
+}
+
+// Close removes the temporary audio root used by an ephemeral store. Durable
+// stores are intentionally left untouched because their records and cache are
+// user-owned state.
+func (s *Store) Close() error {
+	if s == nil || s.retainAudio || strings.TrimSpace(s.audioRoot) == "" {
+		return nil
+	}
+	if err := os.RemoveAll(s.audioRoot); err != nil {
+		return fmt.Errorf("remove ephemeral transcription audio root: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) audioDirectory(requestID string) string {
+	if s.retainAudio {
+		return filepath.Join(s.root, "requests", filepath.Base(strings.TrimSpace(requestID)))
+	}
+	return filepath.Join(s.audioRoot, filepath.Base(strings.TrimSpace(requestID)))
+}
+
 // AppendAudio persists a realtime PCM stream incrementally. It uses the same
-// request directory and record lifecycle as completed-file uploads, so a
-// dropped WebSocket still leaves recoverable audio on disk.
+// transaction directory and record lifecycle as completed-file uploads. The
+// default API store removes that media when the WebSocket ends.
 func (s *Store) AppendAudio(
 	ctx context.Context,
 	requestID string,
@@ -157,7 +220,7 @@ func (s *Store) AppendAudio(
 	if requestID == "" {
 		return AudioAsset{}, fmt.Errorf("request id is required")
 	}
-	directory := filepath.Join(s.root, "requests", requestID)
+	directory := s.audioDirectory(requestID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return AudioAsset{}, fmt.Errorf("create realtime request directory: %w", err)
 	}
@@ -198,10 +261,13 @@ func (s *Store) AppendAudio(
 		MIMEType:      strings.TrimSpace(mimeType),
 		Bytes:         info.Size() + int64(len(chunk)),
 		PersistedPath: path,
+		Ephemeral:     !s.retainAudio,
 	}
 	s.mu.Unlock()
-	if err := s.PruneAudioExcept(ctx, path); err != nil {
-		return AudioAsset{}, err
+	if s.retainAudio {
+		if err := s.PruneAudioExcept(ctx, path); err != nil {
+			return AudioAsset{}, err
+		}
 	}
 	return asset, nil
 }

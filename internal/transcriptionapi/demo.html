@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c111a">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%2369a9ff'/%3E%3Cpath d='M24 18a8 8 0 0 1 16 0v14a8 8 0 0 1-16 0zM16 31a16 16 0 0 0 32 0M32 47v9M24 56h16' fill='none' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <title>VoxInput · cdp transcription API</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #0b1018;
+      --surface: #131a25;
+      --surface-strong: #192332;
+      --surface-soft: #101722;
+      --line: #2a3749;
+      --line-strong: #3c4d65;
+      --text: #f4f7fb;
+      --muted: #a9b7c9;
+      --quiet: #77889e;
+      --accent: #69a9ff;
+      --accent-strong: #8b7dff;
+      --good: #78dda1;
+      --bad: #ff9a9a;
+      --warning: #ffd27d;
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--bg); }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 50% -12rem, #223657 0, transparent 34rem),
+        var(--bg);
+    }
+    button, input, select, textarea { font: inherit; }
+    button { min-height: 44px; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--accent) 75%, white);
+      outline-offset: 3px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .52; }
+
+    .app-shell { width: min(720px, calc(100% - 32px)); margin: 0 auto; padding: 34px 0 64px; }
+    .hero { text-align: center; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      margin: 0 auto 18px;
+      color: #fff;
+      background: linear-gradient(145deg, var(--accent), var(--accent-strong));
+      border-radius: 20px;
+      box-shadow: 0 14px 34px #426db84d;
+    }
+    .brand-mark svg { width: 29px; height: 29px; }
+    .eyebrow, .section-kicker {
+      margin: 0;
+      color: var(--accent);
+      font-size: .73rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, p { margin-top: 0; }
+    h1 { margin-bottom: 10px; font-size: clamp(2.35rem, 8vw, 4.2rem); line-height: 1.02; letter-spacing: -.055em; }
+    .lede { max-width: 43ch; margin: 0 auto; color: var(--muted); font-size: 1.06rem; }
+
+    .talk-surface, .transcript-surface {
+      border: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 96%, transparent);
+      box-shadow: 0 22px 60px #0000002e;
+    }
+    .talk-surface { margin-top: 30px; padding: 24px; border-radius: 28px; }
+    .provider-row { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; }
+    .field { display: grid; gap: 7px; }
+    .field-label { color: var(--muted); font-size: .84rem; font-weight: 650; }
+    select, input, textarea {
+      width: 100%;
+      color: var(--text);
+      background: var(--surface-soft);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      padding: 11px 12px;
+    }
+    select { min-height: 47px; }
+    .mode-note {
+      align-self: center;
+      padding: 6px 10px;
+      color: var(--muted);
+      background: #ffffff08;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: .76rem;
+      white-space: nowrap;
+    }
+    .talk-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      min-height: 76px;
+      margin-top: 24px;
+      color: #07111f;
+      background: linear-gradient(135deg, #6eb1ff, #8b7dff);
+      border: 0;
+      border-radius: 22px;
+      cursor: pointer;
+      font-size: 1.18rem;
+      font-weight: 800;
+      letter-spacing: -.015em;
+      box-shadow: 0 14px 30px #527ec74d;
+      transition: transform .16s ease, filter .16s ease, background .16s ease;
+    }
+    .talk-button:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+    .talk-button:active:not(:disabled) { transform: translateY(1px); }
+    .talk-button.is-listening { color: #fff; background: linear-gradient(135deg, #e56f78, #c85c9e); box-shadow: 0 14px 30px #c85c9e4d; }
+    .talk-button.is-finalizing { color: var(--text); background: var(--surface-strong); box-shadow: none; }
+    .talk-button svg { width: 26px; height: 26px; flex: 0 0 auto; }
+    .talk-button.is-listening svg { animation: mic-pulse 1.35s ease-in-out infinite; }
+    .talk-meta { min-height: 54px; padding-top: 14px; text-align: center; }
+    .talk-status { margin: 0; color: var(--muted); }
+    .talk-status.good { color: var(--good); }
+    .talk-status.bad { color: var(--bad); }
+    .talk-status.warning { color: var(--warning); }
+    .activity { display: flex; justify-content: center; align-items: center; gap: 4px; height: 18px; margin-top: 8px; opacity: 0; transition: opacity .15s ease; }
+    .activity.visible { opacity: 1; }
+    .activity span { width: 4px; height: 7px; background: var(--accent); border-radius: 99px; }
+    .activity.visible span:nth-child(1), .activity.visible span:nth-child(5) { animation: wave .9s ease-in-out infinite; }
+    .activity.visible span:nth-child(2), .activity.visible span:nth-child(4) { animation: wave 1.1s .1s ease-in-out infinite; }
+    .activity.visible span:nth-child(3) { animation: wave .8s .2s ease-in-out infinite; }
+    .secure-hint { margin: 12px 0 0; color: var(--warning); font-size: .82rem; text-align: center; }
+
+    .transcript-surface { min-height: 250px; margin-top: 18px; padding: 24px; border-radius: 24px; }
+    .surface-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h2 { margin-bottom: 0; font-size: 1.1rem; letter-spacing: -.01em; }
+    .transcript-body { display: grid; align-content: start; min-height: 155px; margin-top: 18px; }
+    .transcript-placeholder { margin: 0; color: var(--quiet); font-size: 1.12rem; }
+    .transcript-text { margin: 0; white-space: pre-wrap; font-size: clamp(1.15rem, 3vw, 1.5rem); line-height: 1.55; letter-spacing: -.015em; }
+    .transcript-text.live { color: #dceaff; }
+    .transcript-text.final { color: var(--text); }
+    .transcript-actions { display: flex; gap: 8px; margin-top: 18px; }
+    .transcript-actions[hidden], .secure-hint[hidden] { display: none; }
+    .button-secondary, .button-quiet {
+      color: var(--text);
+      background: #ffffff0a;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      padding: 9px 13px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .button-secondary:hover, .button-quiet:hover { background: #ffffff14; }
+    .button-quiet { color: var(--muted); border-color: transparent; background: transparent; }
+
+    details { margin-top: 18px; border: 1px solid var(--line); background: #ffffff03; border-radius: 18px; }
+    summary { padding: 16px 18px; color: var(--muted); cursor: pointer; font-weight: 750; }
+    details[open] summary { border-bottom: 1px solid var(--line); color: var(--text); }
+    .details-body { padding: 18px; }
+    .history-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .count { color: var(--quiet); font-size: .8rem; font-weight: 500; }
+    .history-item { padding: 14px 0; border-top: 1px solid var(--line); }
+    .history-item:first-child { padding-top: 0; border-top: 0; }
+    .history-meta { margin-bottom: 5px; color: var(--quiet); font-size: .76rem; }
+    .history-text { color: var(--text); white-space: pre-wrap; }
+    .empty-history { margin: 0; color: var(--quiet); }
+    .advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .advanced-grid .full { grid-column: 1 / -1; }
+    .advanced-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    textarea { min-height: 82px; resize: vertical; }
+    pre { max-height: 260px; margin: 14px 0 0; padding: 12px; overflow: auto; color: #dbe7f7; background: #080c12; border: 1px solid var(--line); border-radius: 12px; white-space: pre-wrap; font-size: .78rem; }
+    audio { width: 100%; margin-top: 12px; }
+    .advanced-status { margin: 12px 0 0; color: var(--muted); font-size: .86rem; }
+    .check { display: flex; align-items: center; gap: 8px; color: var(--muted); margin-top: 12px; font-size: .86rem; }
+    .check input { width: auto; }
+    .footer-note { margin: 22px 0 0; color: var(--quiet); font-size: .78rem; text-align: center; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    hr { margin: 24px 0; border: 0; border-top: 1px solid var(--line); }
+
+    @keyframes wave { 0%, 100% { height: 7px; } 50% { height: 18px; } }
+    @keyframes mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+    }
+    @media (max-width: 560px) {
+      .app-shell { width: min(100% - 20px, 720px); padding-top: 22px; }
+      .talk-surface, .transcript-surface { padding: 18px; border-radius: 20px; }
+      .provider-row { grid-template-columns: 1fr; gap: 8px; }
+      .mode-note { justify-self: start; }
+      .talk-button { min-height: 70px; }
+      .advanced-grid { grid-template-columns: 1fr; }
+      .advanced-grid .full { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+<main class="app-shell">
+  <header class="hero">
+    <div class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="8" y="3" width="8" height="12" rx="4"></rect>
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"></path>
+      </svg>
+    </div>
+    <p class="eyebrow">cdp transcription API</p>
+    <h1>Speak. Keep the words.</h1>
+    <p class="lede">Choose where your voice goes, press once, and get a transcript you can keep.</p>
+  </header>
+
+  <section class="talk-surface" aria-labelledby="talkHeading">
+    <h2 id="talkHeading" class="sr-only">Start a transcription</h2>
+    <div class="provider-row">
+      <label class="field" for="provider">
+        <span class="field-label">Transcribe with</span>
+        <select id="provider">
+          <option value="">Server default</option>
+          <option value="chatgpt-web">ChatGPT</option>
+          <option value="microsoft-365-web">Microsoft 365</option>
+          <option value="local">Local model</option>
+        </select>
+      </label>
+      <span id="modeNote" class="mode-note">final transcript at stop</span>
+    </div>
+    <button id="talkButton" class="talk-button" type="button">
+      <svg id="talkIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="8" y="3" width="8" height="12" rx="4"></rect>
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"></path>
+      </svg>
+      <span id="talkLabel">Start talking</span>
+    </button>
+    <div class="talk-meta">
+      <p id="primaryStatus" class="talk-status" role="status" aria-live="polite">Ready when you are.</p>
+      <div id="activity" class="activity" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+    </div>
+    <p id="secureHint" class="secure-hint" hidden>Phone mic needs HTTPS. Localhost works on this Mac.</p>
+  </section>
+
+  <section class="transcript-surface" aria-labelledby="transcriptHeading">
+    <div class="surface-heading">
+      <div>
+        <p class="section-kicker">Output</p>
+        <h2 id="transcriptHeading">Transcript</h2>
+      </div>
+      <button id="copyTranscript" class="button-secondary" type="button" disabled>Copy</button>
+    </div>
+    <div class="transcript-body" aria-live="polite">
+      <p id="transcriptPlaceholder" class="transcript-placeholder">Your words will appear here.</p>
+      <p id="liveTranscript" class="transcript-text live" hidden></p>
+      <p id="finalTranscript" class="transcript-text final" hidden></p>
+    </div>
+    <div id="transcriptActions" class="transcript-actions" hidden>
+      <button id="retryButton" class="button-secondary" type="button">Try again</button>
+      <button id="clearTranscript" class="button-quiet" type="button">Clear</button>
+    </div>
+  </section>
+
+  <details id="historyDetails">
+    <summary class="history-summary"><span>Past transcripts</span><span id="historyCount" class="count">0 saved</span></summary>
+    <div class="details-body">
+      <div id="history"><p class="empty-history">Nothing transcribed yet.</p></div>
+      <button id="clearHistory" class="button-quiet" type="button">Clear history</button>
+    </div>
+  </details>
+
+  <details id="advancedDetails">
+    <summary>Advanced API controls</summary>
+    <div class="details-body">
+      <div class="advanced-grid">
+        <label class="field full" for="baseUrl"><span class="field-label">API base URL</span><input id="baseUrl" autocomplete="off"></label>
+        <label class="field full" for="token"><span class="field-label">Bearer token (optional for a private demo)</span><input id="token" type="password" autocomplete="off" placeholder="leave blank when the server has no token"></label>
+      </div>
+      <div class="advanced-actions">
+        <button id="health" class="button-secondary" type="button">Check health</button>
+        <button id="models" class="button-secondary" type="button">List models</button>
+        <button id="openapi" class="button-secondary" type="button">Fetch OpenAPI</button>
+      </div>
+      <p id="connectionStatus" class="advanced-status">Connection is checked when this page opens.</p>
+      <pre id="connectionOutput" hidden>Responses appear here.</pre>
+
+      <hr>
+      <p class="section-kicker">Whole-file API</p>
+      <p class="advanced-status">Use an existing WebM or audio file, or retry the last recording through the same endpoint.</p>
+      <div class="advanced-grid">
+        <label class="field" for="advancedProvider"><span class="field-label">Provider override</span><select id="advancedProvider"><option value="">Use selection above</option><option value="chatgpt-web">ChatGPT</option><option value="microsoft-365-web">Microsoft 365</option><option value="local">Local model</option></select></label>
+        <label class="field" for="fileModel"><span class="field-label">Model</span><input id="fileModel" value="whisper-1"></label>
+        <label class="field" for="audioFile"><span class="field-label">Audio file</span><input id="audioFile" type="file" accept="audio/*,.webm,.wav,.mp3,.m4a"></label>
+        <label class="field" for="task"><span class="field-label">Task</span><select id="task"><option value="transcribe">transcribe</option><option value="translate">translate</option></select></label>
+        <label class="field" for="responseFormat"><span class="field-label">Response format</span><select id="responseFormat"><option>json</option><option>text</option><option>verbose_json</option><option>srt</option><option>vtt</option></select></label>
+        <label class="field" for="language"><span class="field-label">Language (optional)</span><input id="language" placeholder="en"></label>
+        <label class="field full" for="prompt"><span class="field-label">Prompt (optional)</span><textarea id="prompt" placeholder="Context or vocabulary hint"></textarea></label>
+      </div>
+      <label class="check"><input id="fileStream" type="checkbox"> Request completed-file SSE (`stream=true`)</label>
+      <div class="advanced-actions"><button id="sendFile" class="button-secondary" type="button">Send selected file</button><button id="clearAdvancedOutput" class="button-quiet" type="button">Clear response</button></div>
+      <audio id="audioPreview" controls hidden></audio>
+      <p id="fileStatus" class="advanced-status">No file selected.</p>
+      <pre id="fileOutput" hidden>The transcription response appears here.</pre>
+      <details>
+        <summary>Realtime event log</summary>
+        <div class="details-body"><pre id="realtimeOutput">Realtime events appear here.</pre></div>
+      </details>
+    </div>
+  </details>
+
+  <p class="footer-note">Private dogfood page · the service keeps request records, not transaction audio, unless configured otherwise.</p>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const state = {
+    recorder: null,
+    recorderChunks: [],
+    recorderPurpose: "",
+    recordedBlob: null,
+    selectedFile: null,
+    microphone: null,
+    realtimeSocket: null,
+    realtimeContext: null,
+    realtimeSource: null,
+    realtimeProcessor: null,
+    realtimeSink: null,
+    realtimeText: "",
+    realtimeCommitted: false,
+    active: false,
+    pending: false,
+    mode: "file",
+    finalText: "",
+    capabilities: {},
+  };
+  const historyKey = "cdp-transcription-demo-history-v2";
+
+  $("baseUrl").value = window.location.origin;
+
+  function apiBase() {
+    const raw = $("baseUrl").value.trim() || window.location.origin;
+    return raw.replace(/\/+$/, "");
+  }
+
+  function headers(extra = {}) {
+    const result = { ...extra };
+    const token = $("token").value.trim();
+    if (token) result.Authorization = `Bearer ${token}`;
+    return result;
+  }
+
+  function show(element, value) {
+    element.hidden = false;
+    element.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+
+  function setTalkStatus(message, tone = "") {
+    $("primaryStatus").textContent = message;
+    $("primaryStatus").className = `talk-status ${tone}`;
+  }
+
+  function setTalkButton(label, visualState = "") {
+    $("talkLabel").textContent = label;
+    $("talkButton").className = `talk-button ${visualState}`;
+    $("activity").classList.toggle("visible", visualState === "is-listening");
+  }
+
+  function providerName(value) {
+    return ({ "chatgpt-web": "ChatGPT", "microsoft-365-web": "Microsoft 365", local: "Local model" })[value] || "server default";
+  }
+
+  function capabilityFor(value) {
+    const capability = state.capabilities[value];
+    if (capability) return capability;
+    if (value === "microsoft-365-web" || value === "local") return { realtime: true, ready: true };
+    return { realtime: false, ready: true };
+  }
+
+  function updateProviderPresentation() {
+    const provider = $("provider").value;
+    const capability = capabilityFor(provider);
+    state.mode = capability.realtime ? "realtime" : "file";
+    $("modeNote").textContent = capability.realtime ? "live preview" : "final transcript at stop";
+    if (!state.active && !state.pending) {
+      setTalkButton("Start talking");
+      setTalkStatus(capability.ready === false ? `${providerName(provider)} is not ready yet.` : "Ready when you are.", capability.ready === false ? "warning" : "");
+    }
+  }
+
+  function readHistory() {
+    try {
+      const value = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      return Array.isArray(value) ? value : [];
+    } catch (_) { return []; }
+  }
+
+  function renderHistory() {
+    const container = $("history");
+    const items = readHistory();
+    $("historyCount").textContent = `${items.length} saved`;
+    container.textContent = "";
+    if (!items.length) { container.innerHTML = "<p class=\"empty-history\">Nothing transcribed yet.</p>"; return; }
+    items.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "history-item";
+      const meta = document.createElement("div");
+      meta.className = "history-meta";
+      meta.textContent = `${new Date(item.createdAt).toLocaleString()} · ${item.mode} · ${providerName(item.provider)} · ${item.model || "whisper-1"}`;
+      const text = document.createElement("div");
+      text.className = "history-text";
+      text.textContent = item.text || "(empty transcript)";
+      row.append(meta, text);
+      container.append(row);
+    });
+  }
+
+  function remember(text, mode, provider, model) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    const items = readHistory();
+    items.unshift({ createdAt: new Date().toISOString(), text: value, mode, provider, model });
+    try { localStorage.setItem(historyKey, JSON.stringify(items.slice(0, 50))); } catch (_) {}
+    renderHistory();
+  }
+
+  function resetTranscript(message = "Your words will appear here.") {
+    state.finalText = "";
+    $("transcriptPlaceholder").textContent = message;
+    $("transcriptPlaceholder").hidden = false;
+    $("liveTranscript").hidden = true;
+    $("finalTranscript").hidden = true;
+    $("liveTranscript").textContent = "";
+    $("finalTranscript").textContent = "";
+    $("copyTranscript").disabled = true;
+    $("transcriptActions").hidden = true;
+  }
+
+  function showLive(text) {
+    $("transcriptPlaceholder").hidden = true;
+    $("finalTranscript").hidden = true;
+    $("liveTranscript").hidden = false;
+    $("liveTranscript").textContent = text || "Listening…";
+  }
+
+  function finishTranscript(text, mode, provider, model) {
+    const value = String(text || "").trim();
+    state.finalText = value;
+    $("transcriptPlaceholder").hidden = true;
+    $("liveTranscript").hidden = true;
+    $("finalTranscript").hidden = false;
+    $("finalTranscript").textContent = value || "No words came back. Try again.";
+    $("copyTranscript").disabled = !value;
+    $("transcriptActions").hidden = false;
+    if (value) {
+      remember(value, mode, provider, model);
+      setTalkStatus(`Done · ${value.split(/\s+/).length} words`, "good");
+    } else {
+      setTalkStatus("No words came back. Try again.", "bad");
+    }
+  }
+
+  function showFailure(message) {
+    $("transcriptPlaceholder").hidden = true;
+    $("liveTranscript").hidden = true;
+    $("finalTranscript").hidden = false;
+    $("finalTranscript").textContent = message;
+    $("copyTranscript").disabled = true;
+    $("transcriptActions").hidden = !state.recordedBlob;
+    setTalkStatus(message, "bad");
+  }
+
+  function secureOriginHint() {
+    const localHost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+    if (!window.isSecureContext && !localHost) $("secureHint").hidden = false;
+  }
+
+  async function fetchValue(path, options = {}) {
+    const response = await fetch(`${apiBase()}${path}`, { ...options, headers: headers(options.headers || {}) });
+    const text = await response.text();
+    let value = text;
+    try { value = text ? JSON.parse(text) : null; } catch (_) {}
+    if (!response.ok) {
+      const message = typeof value === "string" ? value : JSON.stringify(value);
+      throw new Error(`${response.status} ${response.statusText}: ${message}`);
+    }
+    return value;
+  }
+
+  async function refreshHealth(showResult = false) {
+    try {
+      const value = await fetchValue("/healthz");
+      state.capabilities = Object.fromEntries((value.providers || []).map((item) => [item.provider, item]));
+      if (showResult) show($("connectionOutput"), value);
+      $("connectionStatus").textContent = `Service ${value.status} · ${Object.keys(state.capabilities).length} provider(s)`;
+      updateProviderPresentation();
+      return value;
+    } catch (error) {
+      $("connectionStatus").textContent = "Service check failed. Open Advanced API controls for details.";
+      if (showResult) show($("connectionOutput"), String(error));
+      return null;
+    }
+  }
+
+  $("provider").onchange = updateProviderPresentation;
+  $("clearHistory").onclick = () => { try { localStorage.removeItem(historyKey); } catch (_) {} renderHistory(); };
+  $("clearTranscript").onclick = () => { resetTranscript(); setTalkStatus("Ready when you are."); };
+  $("copyTranscript").onclick = async () => {
+    if (!state.finalText) return;
+    try {
+      await navigator.clipboard.writeText(state.finalText);
+      setTalkStatus("Copied to clipboard.", "good");
+    } catch (_) { setTalkStatus("Copy failed; select the transcript manually.", "bad"); }
+  };
+  $("clearAdvancedOutput").onclick = () => { $("connectionOutput").hidden = true; $("fileOutput").hidden = true; $("realtimeOutput").textContent = "Realtime events appear here."; };
+  $("health").onclick = async () => { try { await refreshHealth(true); } catch (_) {} };
+  $("models").onclick = async () => {
+    try { show($("connectionOutput"), await fetchValue("/v1/models")); $("connectionStatus").textContent = "Models loaded."; }
+    catch (error) { show($("connectionOutput"), String(error)); $("connectionStatus").textContent = "Models request failed."; }
+  };
+  $("openapi").onclick = async () => {
+    try { show($("connectionOutput"), await fetchValue("/openapi.json")); $("connectionStatus").textContent = "OpenAPI loaded."; }
+    catch (error) { show($("connectionOutput"), String(error)); $("connectionStatus").textContent = "OpenAPI request failed."; }
+  };
+
+  async function microphone() {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser does not expose microphone capture.");
+    if (!state.microphone) state.microphone = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    return state.microphone;
+  }
+
+  function recorderMimeType() {
+    for (const type of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"]) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
+    }
+    return "";
+  }
+
+  function beginRecorder(stream, purpose, onDone) {
+    if (!window.MediaRecorder) throw new Error("This browser does not support audio recording.");
+    const mimeType = recorderMimeType();
+    state.recorderChunks = [];
+    state.recorderPurpose = purpose;
+    state.recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    state.recorder.ondataavailable = (event) => { if (event.data.size) state.recorderChunks.push(event.data); };
+    state.recorder.onstop = () => {
+      state.recordedBlob = new Blob(state.recorderChunks, { type: state.recorder.mimeType || "audio/webm" });
+      const url = URL.createObjectURL(state.recordedBlob);
+      $("audioPreview").src = url;
+      $("audioPreview").hidden = false;
+      onDone?.(state.recordedBlob);
+    };
+    state.recorder.start(250);
+  }
+
+  function stopRecorder() {
+    if (state.recorder && state.recorder.state !== "inactive") state.recorder.stop();
+  }
+
+  function appendFormValue(form, name, value) { if (String(value || "").trim()) form.append(name, String(value).trim()); }
+
+  async function readSSE(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let deltas = "";
+    let finalText = "";
+    const events = [];
+    const consume = (block) => {
+      if (!block.trim()) return;
+      const event = (block.match(/^event:\s*(.*)$/m) || [])[1] || "message";
+      const data = (block.match(/^data:\s*(.*)$/m) || [])[1] || "";
+      let value = data;
+      try { value = JSON.parse(data); } catch (_) {}
+      events.push({ event, data: value });
+      if (event === "transcript.text.delta" && value && typeof value.text === "string") deltas += value.text;
+      if (event === "transcript.text.done" && value && typeof value.text === "string") finalText = value.text;
+    };
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      const blocks = buffer.split(/\n\n/);
+      buffer = blocks.pop();
+      blocks.forEach(consume);
+      if (chunk.done) break;
+    }
+    consume(buffer);
+    return { events, transcript: finalText || deltas };
+  }
+
+  async function submitWholeFile(blob, name = "microphone.webm") {
+    if (!blob) throw new Error("record or choose an audio file first");
+    state.pending = true;
+    setTalkButton("Finalizing…", "is-finalizing");
+    $("talkButton").disabled = true;
+    setTalkStatus("Sending the complete recording…");
+    const form = new FormData();
+    form.append("file", blob, name);
+    form.append("model", $("fileModel").value.trim() || "whisper-1");
+    appendFormValue(form, "provider", $("advancedProvider").value || $("provider").value);
+    appendFormValue(form, "language", $("language").value);
+    appendFormValue(form, "prompt", $("prompt").value);
+    form.append("response_format", $("responseFormat").value);
+    form.append("task", $("task").value);
+    if ($("fileStream").checked) form.append("stream", "true");
+    try {
+      const response = await fetch(`${apiBase()}${$("task").value === "translate" ? "/v1/audio/translations" : "/v1/audio/transcriptions"}`, { method: "POST", headers: headers(), body: form });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
+      let text;
+      if ($("fileStream").checked) {
+        const value = await readSSE(response);
+        text = value.transcript;
+        show($("fileOutput"), value);
+      } else {
+        const raw = await response.text();
+        try { const value = JSON.parse(raw); text = value.text || ""; show($("fileOutput"), value); }
+        catch (_) { text = raw; show($("fileOutput"), raw); }
+      }
+      finishTranscript(text, "whole file", $("advancedProvider").value || $("provider").value, $("fileModel").value);
+    } catch (error) {
+      show($("fileOutput"), String(error));
+      showFailure(`Transcription failed. ${error.message || error}`);
+    } finally {
+      state.pending = false;
+      $("talkButton").disabled = false;
+      setTalkButton("Start talking");
+    }
+  }
+
+  function resample(samples, fromRate, toRate) {
+    if (fromRate === toRate) return samples;
+    const length = Math.max(1, Math.round(samples.length * toRate / fromRate));
+    const result = new Float32Array(length);
+    const ratio = fromRate / toRate;
+    for (let i = 0; i < length; i++) {
+      const position = i * ratio;
+      const left = Math.min(Math.floor(position), samples.length - 1);
+      const right = Math.min(left + 1, samples.length - 1);
+      const fraction = position - left;
+      result[i] = samples[left] * (1 - fraction) + samples[right] * fraction;
+    }
+    return result;
+  }
+
+  function pcm16Base64(samples) {
+    const bytes = new Uint8Array(samples.length * 2);
+    const view = new DataView(bytes.buffer);
+    for (let i = 0; i < samples.length; i++) {
+      const value = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(i * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+    }
+    let binary = "";
+    const step = 0x8000;
+    for (let i = 0; i < bytes.length; i += step) binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + step, bytes.length)));
+    return btoa(binary);
+  }
+
+  function realtimeURL() {
+    const url = new URL(`${apiBase()}/v1/realtime`);
+    url.searchParams.set("intent", "transcription");
+    url.searchParams.set("model", $("fileModel").value.trim() || "whisper-1");
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
+  }
+
+  function realtimeSend(value) {
+    if (state.realtimeSocket?.readyState === WebSocket.OPEN) state.realtimeSocket.send(JSON.stringify(value));
+  }
+
+  function showRealtime(value) {
+    const line = typeof value === "string" ? value : JSON.stringify(value);
+    const output = $("realtimeOutput");
+    output.textContent += `${output.textContent && !output.textContent.endsWith("\n") ? "\n" : ""}${line}`;
+    output.scrollTop = output.scrollHeight;
+  }
+
+  function handleRealtimeMessage(event) {
+    let value;
+    try { value = JSON.parse(event.data); } catch (_) { value = event.data; }
+    showRealtime(value);
+    if (!value || typeof value !== "object") return;
+    if (value.type === "conversation.item.input_audio_transcription.delta") {
+      state.realtimeText += value.delta || "";
+      showLive(state.realtimeText);
+    }
+    if (value.type === "conversation.item.input_audio_transcription.completed") {
+      state.realtimeText = value.transcript || state.realtimeText;
+      state.realtimeCommitted = true;
+      finishTranscript(state.realtimeText, "live", $("provider").value, $("fileModel").value);
+      state.pending = false;
+      state.active = false;
+      $("talkButton").disabled = false;
+      setTalkButton("Start talking");
+      setTimeout(() => state.realtimeSocket?.close(), 250);
+    }
+    if (value.type === "error") showFailure(value.error?.message || "Realtime transcription failed.");
+  }
+
+  async function stopRealtimeAudio() {
+    state.realtimeProcessor?.disconnect();
+    state.realtimeSource?.disconnect();
+    state.realtimeSink?.disconnect();
+    state.realtimeProcessor = null;
+    state.realtimeSource = null;
+    state.realtimeSink = null;
+    if (state.realtimeContext) { await state.realtimeContext.close(); state.realtimeContext = null; }
+  }
+
+  async function startRealtime() {
+    const stream = await microphone();
+    state.realtimeText = "";
+    state.realtimeCommitted = false;
+    state.active = false;
+    state.pending = false;
+    resetTranscript("Listening…");
+    showLive("Listening…");
+    $("realtimeOutput").textContent = "";
+    const ws = new WebSocket(realtimeURL());
+    state.realtimeSocket = ws;
+    ws.onopen = async () => {
+      realtimeSend({ type: "session.update", session: {
+        type: "transcription",
+        model: $("fileModel").value.trim() || "whisper-1",
+        provider: $("provider").value,
+        language: $("language").value.trim(),
+        prompt: $("prompt").value,
+        audio: { input: { format: { type: "audio/pcm", rate: 24000 } } },
+      }});
+      beginRecorder(stream, "realtime");
+      state.realtimeContext = new AudioContext({ sampleRate: 24000 });
+      await state.realtimeContext.resume();
+      state.realtimeSource = state.realtimeContext.createMediaStreamSource(stream);
+      state.realtimeProcessor = state.realtimeContext.createScriptProcessor(4096, 1, 1);
+      state.realtimeSink = state.realtimeContext.createGain();
+      state.realtimeSink.gain.value = 0;
+      const context = state.realtimeContext;
+      state.realtimeProcessor.onaudioprocess = (audioEvent) => {
+        if (!context || state.realtimeSocket?.readyState !== WebSocket.OPEN) return;
+        const input = audioEvent.inputBuffer.getChannelData(0);
+        realtimeSend({ type: "input_audio_buffer.append", audio: pcm16Base64(resample(input, context.sampleRate, 24000)) });
+      };
+      state.realtimeSource.connect(state.realtimeProcessor);
+      state.realtimeProcessor.connect(state.realtimeSink);
+      state.realtimeSink.connect(context.destination);
+      state.active = true;
+      setTalkButton("Stop and finish", "is-listening");
+      setTalkStatus("Listening… your transcript will grow here.");
+    };
+    ws.onmessage = handleRealtimeMessage;
+    ws.onerror = () => showFailure("Realtime connection failed. Try again or open Advanced API controls.");
+    ws.onclose = async () => {
+      await stopRealtimeAudio();
+      state.active = false;
+      if (!state.realtimeCommitted && !state.pending) {
+        $("talkButton").disabled = false;
+        setTalkButton("Start talking");
+        setTalkStatus("Realtime session closed.", "bad");
+      }
+    };
+  }
+
+  async function stopRealtime() {
+    state.active = false;
+    state.pending = true;
+    $("talkButton").disabled = true;
+    setTalkButton("Finalizing…", "is-finalizing");
+    setTalkStatus("Finishing the last words…");
+    stopRecorder();
+    await stopRealtimeAudio();
+    realtimeSend({ type: "input_audio_buffer.commit" });
+  }
+
+  async function startFileRecording() {
+    const stream = await microphone();
+    resetTranscript("Your final transcript will appear here.");
+    beginRecorder(stream, "file", (blob) => { void submitWholeFile(blob, "microphone.webm"); });
+    state.active = true;
+    setTalkButton("Stop and transcribe", "is-listening");
+    setTalkStatus("Listening… press stop when you’re done.");
+  }
+
+  $("talkButton").onclick = async () => {
+    if (state.pending) return;
+    try {
+      if (state.active) {
+        if (state.mode === "realtime") await stopRealtime();
+        else { state.active = false; state.pending = true; setTalkButton("Finalizing…", "is-finalizing"); setTalkStatus("Preparing your recording…"); stopRecorder(); }
+        return;
+      }
+      if (state.mode === "realtime") await startRealtime();
+      else await startFileRecording();
+    } catch (error) {
+      state.active = false;
+      state.pending = false;
+      $("talkButton").disabled = false;
+      setTalkButton("Start talking");
+      showFailure(`Microphone failed. ${error.message || error}`);
+    }
+  };
+
+  $("retryButton").onclick = async () => {
+    if (!state.recordedBlob) { setTalkStatus("There is no saved recording to retry.", "bad"); return; }
+    resetTranscript("Retrying…");
+    await submitWholeFile(state.recordedBlob, "retry.webm");
+  };
+
+  $("audioFile").onchange = () => {
+    state.selectedFile = $("audioFile").files[0] || null;
+    if (state.selectedFile) $("fileStatus").textContent = `${state.selectedFile.name} · ${(state.selectedFile.size / 1024).toFixed(1)} KiB ready.`;
+  };
+  $("sendFile").onclick = async () => {
+    try {
+      const file = state.selectedFile || state.recordedBlob;
+      if (!file) throw new Error("choose an audio file first");
+      $("fileStatus").textContent = "Uploading selected audio…";
+      await submitWholeFile(file, state.selectedFile?.name || "recording.webm");
+      $("fileStatus").textContent = "File transcription completed.";
+    } catch (error) { $("fileStatus").textContent = `File transcription failed: ${error.message || error}`; }
+  };
+
+  window.addEventListener("beforeunload", () => {
+    state.microphone?.getTracks().forEach((track) => track.stop());
+    state.realtimeSocket?.close();
+  });
+
+  renderHistory();
+  secureOriginHint();
+  updateProviderPresentation();
+  void refreshHealth();
+})();
+</script>
+</body>
+</html>

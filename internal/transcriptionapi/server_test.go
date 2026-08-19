@@ -108,6 +108,51 @@ func newTestServer(t *testing.T, provider Provider, token string) (*Server, *Sto
 	return server, store
 }
 
+func TestDemoPageIsServedWithoutAuthentication(t *testing.T) {
+	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: "demo"}}
+	server, _ := newTestServer(t, provider, "secret")
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	for _, path := range []string{"/", "/demo.html"} {
+		request, err := http.NewRequest(http.MethodGet, httpServer.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, response.StatusCode, http.StatusOK)
+		}
+		if got := response.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+			t.Fatalf("GET %s content type = %q, want text/html", path, got)
+		}
+		if !strings.Contains(string(body), "cdp transcription API") || !strings.Contains(string(body), "getUserMedia") {
+			t.Fatalf("GET %s did not return the microphone demo", path)
+		}
+	}
+}
+
+func TestServerRequiresCompleteTLSConfiguration(t *testing.T) {
+	store, err := NewStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewServer(ServerConfig{Store: store, TLSCertFile: "cert.pem"}); err == nil {
+		t.Fatal("NewServer accepted a TLS certificate without a key")
+	}
+}
+
 func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testing.T) {
 	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: "hello from the provider"}}
 	server, store := newTestServer(t, provider, "secret")
@@ -155,6 +200,39 @@ func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testin
 	}
 	if record.Phase != PhaseCompleted || record.Text != result.Text || record.Attempts != 1 {
 		t.Fatalf("record = %+v", record)
+	}
+}
+
+func TestServerEphemeralMediaIsRemovedAfterFileTransaction(t *testing.T) {
+	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: "ephemeral result"}}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{Registry: NewRegistry(provider), Store: store, DefaultProvider: ProviderLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "ephemeral-http-1", "speech.webm", []byte("fake-webm"), map[string]string{"model": DefaultModel})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	provider.requestMu.Lock()
+	path := provider.lastRequest.Audio.PersistedPath
+	provider.requestMu.Unlock()
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("transaction audio err = %v, want not exist after response", err)
+	}
+	if _, err := store.LoadRecord(context.Background(), "ephemeral-http-1"); err != nil {
+		t.Fatalf("result record was not retained: %v", err)
 	}
 }
 
@@ -319,6 +397,29 @@ func TestStorePrunesOldAudioButKeepsRecord(t *testing.T) {
 	}
 	if _, err := os.Stat(second.PersistedPath); err != nil {
 		t.Fatalf("current audio was pruned: %v", err)
+	}
+}
+
+func TestEphemeralStoreRemovesMediaWithoutRemovingRecords(t *testing.T) {
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset, err := store.PersistAudio(context.Background(), "ephemeral-1", "speech.webm", "audio/webm", strings.NewReader("audio"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(asset.PersistedPath); err != nil {
+		t.Fatalf("ephemeral media was not available during the transaction: %v", err)
+	}
+	if !asset.Ephemeral {
+		t.Fatal("ephemeral store returned a non-ephemeral asset")
+	}
+	if err := store.RemoveAudio(context.Background(), "ephemeral-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(asset.PersistedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral media err = %v, want not exist", err)
 	}
 }
 

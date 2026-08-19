@@ -25,7 +25,7 @@ func (a *app) newTranscriptionCommand() *cobra.Command {
 		Use:   "transcription",
 		Short: "Run the provider-neutral OpenAI-compatible transcription service",
 		Long: "Expose one local REST, SSE, and realtime WebSocket boundary for VoxInput. " +
-			"Audio is persisted under the cdp-cli state directory before any provider call; " +
+			"Audio is ephemeral transaction media by default and can be explicitly retained with --persist-audio; " +
 			"provider-specific auth refresh remains inside the cdp workflow adapter.",
 		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1\n" +
@@ -33,6 +33,7 @@ func (a *app) newTranscriptionCommand() *cobra.Command {
 	}
 	cmd.AddCommand(a.newTranscriptionServeCommand())
 	cmd.AddCommand(a.newTranscriptionSpecCommand())
+	cmd.AddCommand(a.newTranscriptionServiceCommand())
 	return cmd
 }
 
@@ -61,13 +62,17 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var localAPIKey string
 	var maxAudioBytes int64
 	var authRefreshInterval time.Duration
+	var persistAudio bool
+	var tlsCertFile string
+	var tlsKeyFile string
 	var printReady bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve REST, SSE, and realtime transcription locally",
 		Long: "Start the deployable provider-neutral transcription API. The server binds to loopback by " +
-			"default, requires a bearer token when --token is set, and retains audio plus result records " +
-			"under <state-dir>/transcription. Configure a local OpenAI-compatible backend with " +
+			"default, requires a bearer token when --token is set, and retains result records under " +
+			"<state-dir>/transcription; uploaded media is ephemeral unless --persist-audio is set. " +
+			"Configure a local OpenAI-compatible backend with " +
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
 		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1 --print-ready",
@@ -83,7 +88,13 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			store, err := transcriptionapi.NewStore(filepath.Join(stateStore.Dir, "transcription"), maxAudioBytes)
+			storeRoot := filepath.Join(stateStore.Dir, "transcription")
+			var store *transcriptionapi.Store
+			if persistAudio {
+				store, err = transcriptionapi.NewStore(storeRoot, maxAudioBytes)
+			} else {
+				store, err = transcriptionapi.NewEphemeralStore(storeRoot, maxAudioBytes)
+			}
 			if err != nil {
 				return err
 			}
@@ -98,6 +109,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				DefaultProvider: transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
 				BearerToken:     strings.TrimSpace(token),
 				Address:         strings.TrimSpace(address),
+				TLSCertFile:     strings.TrimSpace(tlsCertFile),
+				TLSKeyFile:      strings.TrimSpace(tlsKeyFile),
 				AuthCoordinator: authCoordinator,
 			})
 			if err != nil {
@@ -110,6 +123,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 					"contract_version":      transcriptionapi.ContractVersion,
 					"state_dir":             store.Root(),
 					"auth_refresh_interval": authRefreshInterval.String(),
+					"audio_persisted":       persistAudio,
+					"tls_enabled":           strings.TrimSpace(tlsCertFile) != "",
 					"providers":             registry.Capabilities(cmd.Context()),
 				}
 				if err := a.render(cmd.Context(), "transcription API ready", ready); err != nil {
@@ -131,6 +146,9 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes; transcript records are retained independently")
 	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers")
+	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
+	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", os.Getenv("CDP_TRANSCRIPTION_TLS_CERT"), "TLS certificate file; provide with --tls-key for HTTPS microphone access over LAN")
+	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", os.Getenv("CDP_TRANSCRIPTION_TLS_KEY"), "TLS private key file; provide with --tls-cert")
 	cmd.Flags().BoolVar(&printReady, "print-ready", false, "print one readiness JSON object before serving")
 	return cmd
 }

@@ -24,8 +24,11 @@ explicitly planned until their installed vertical is proven.
 The provider-neutral VoxInput transcription service is available through
 `cdp transcription serve`. It exposes OpenAI/Whisper-compatible file and
 translation endpoints, completed-file SSE, an OpenAI-shaped realtime
-WebSocket, durable audio/result records, recurring online-auth refresh, and
-local/ChatGPT/Microsoft 365 provider routing. See
+WebSocket, a self-contained `/demo.html` dogfood app, ephemeral transaction
+media with durable result records, recurring online-auth refresh, and
+local/ChatGPT/Microsoft 365 provider routing. User-level service installation
+is available through `cdp transcription service install` on macOS and Linux.
+See
 [docs/TRANSCRIPTION_API.md](docs/TRANSCRIPTION_API.md).
 
 ## Intended Shape

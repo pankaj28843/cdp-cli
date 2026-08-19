@@ -3,6 +3,7 @@ package transcriptionapi
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,8 @@ type ServerConfig struct {
 	DefaultProvider ProviderID
 	BearerToken     string
 	Address         string
+	TLSCertFile     string
+	TLSKeyFile      string
 	AuthCoordinator *AuthRefreshCoordinator
 }
 
@@ -47,6 +50,9 @@ func NewServer(config ServerConfig) (*Server, error) {
 	if strings.TrimSpace(config.Address) == "" {
 		config.Address = DefaultListenAddress
 	}
+	if (strings.TrimSpace(config.TLSCertFile) == "") != (strings.TrimSpace(config.TLSKeyFile) == "") {
+		return nil, fmt.Errorf("transcription TLS certificate and key must be provided together")
+	}
 	server := &Server{config: config}
 	server.httpServer = &http.Server{
 		Addr:              config.Address,
@@ -62,6 +68,8 @@ func NewServer(config ServerConfig) (*Server, error) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleDemo)
+	mux.HandleFunc("/demo.html", s.handleDemo)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/v1/models", s.withAuth(s.handleModels))
@@ -75,19 +83,46 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+func (s *Server) handleDemo(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" && r.URL.Path != "/demo.html" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, APIError{Type: "invalid_request_error", Message: "method not allowed"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(DemoHTML())
+}
+
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s == nil || s.httpServer == nil {
 		return fmt.Errorf("transcription server is not configured")
 	}
+	defer func() { _ = s.config.Store.Close() }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if s.config.AuthCoordinator != nil {
 		s.config.AuthCoordinator.Start(ctx)
 	}
-	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	rawListener, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
 		return fmt.Errorf("listen for transcription API on %s: %w", s.httpServer.Addr, err)
+	}
+	listener := rawListener
+	if strings.TrimSpace(s.config.TLSCertFile) != "" {
+		certificate, err := tls.LoadX509KeyPair(s.config.TLSCertFile, s.config.TLSKeyFile)
+		if err != nil {
+			_ = rawListener.Close()
+			return fmt.Errorf("load transcription TLS certificate: %w", err)
+		}
+		listener = tls.NewListener(rawListener, &tls.Config{
+			Certificates: []tls.Certificate{certificate},
+			MinVersion:   tls.VersionTLS12,
+		})
 	}
 	serveErr := make(chan error, 1)
 	go func() {
@@ -216,6 +251,9 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	if requestID == "" {
 		requestID = NewRequestID()
 	}
+	defer func() {
+		_ = s.config.Store.RemoveAudio(context.Background(), requestID)
+	}()
 	request := FileRequest{
 		RequestID:              requestID,
 		Task:                   task,
@@ -437,6 +475,7 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 		if client.session != nil {
 			_ = client.session.Close()
 		}
+		_ = s.config.Store.RemoveAudio(context.Background(), client.requestID)
 		if client.audioBytes > 0 && client.record.Phase != PhaseCompleted && client.record.Phase != PhaseFailed {
 			client.record.Phase = PhaseCancelled
 			client.record.UpdatedAt = time.Now().UTC()

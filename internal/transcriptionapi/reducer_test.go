@@ -81,13 +81,16 @@ func TestSessionReducerAppendsDeltasAndIgnoresStaleEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for sequence, text := range map[int64]string{1: "one ", 2: "two"} {
+	for _, event := range []ProviderEvent{
+		{SessionID: "sess-1", ItemID: "item-1", Sequence: 1, Kind: EventHypothesis, Text: "one "},
+		{SessionID: "sess-1", ItemID: "item-1", Sequence: 2, Kind: EventHypothesis, Text: "two"},
+	} {
 		if _, err := session.Apply(ProviderEvent{
-			SessionID: "sess-1",
-			ItemID:    "item-1",
-			Sequence:  sequence,
-			Kind:      EventHypothesis,
-			Text:      text,
+			SessionID: event.SessionID,
+			ItemID:    event.ItemID,
+			Sequence:  event.Sequence,
+			Kind:      event.Kind,
+			Text:      event.Text,
 		}); err != nil {
 			t.Fatal(err)
 		}

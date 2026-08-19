@@ -9,9 +9,17 @@ import (
 //go:embed openapi.json
 var openAPISpec []byte
 
+//go:embed demo.html
+var demoPage []byte
+
 // OpenAPISpec returns a copy of the checked-in OpenAPI document.
 func OpenAPISpec() []byte {
 	return append([]byte(nil), openAPISpec...)
+}
+
+// DemoHTML returns a copy of the human-facing API dogfood page.
+func DemoHTML() []byte {
+	return append([]byte(nil), demoPage...)
 }
 
 // ValidateOpenAPISpec performs the structural checks that must hold before
