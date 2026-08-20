@@ -460,6 +460,13 @@ func TestServerRealtimeUsesOpenAIShapedEventsAndPersistsPCM(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("realtime request entries = %d err=%v", len(entries), err)
 	}
+	record, err := store.LoadRecord(context.Background(), entries[0].Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Audio.Bytes != 4 {
+		t.Fatalf("realtime record audio bytes = %d, want final chunk count 4", record.Audio.Bytes)
+	}
 	var trace []byte
 	for attempt := 0; attempt < 20; attempt++ {
 		trace, err = os.ReadFile(store.TracePath())

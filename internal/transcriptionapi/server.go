@@ -628,7 +628,6 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 			}
 		case "input_audio_buffer.commit":
 			if err := client.commit(r.Context(), connection); err != nil {
-				client.trace("realtime.commit_failed", PhaseFailed, err)
 				client.sendError(r.Context(), connection, apiErrorFrom(err))
 				return
 			}
@@ -781,12 +780,17 @@ func (c *realtimeConnection) append(ctx context.Context, connection *websocket.C
 
 func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.Conn) error {
 	if !c.initialized || c.session == nil {
-		return fmt.Errorf("realtime session.update is required before commit")
+		err := fmt.Errorf("realtime session.update is required before commit")
+		c.trace("realtime.commit_failed", PhaseFailed, err)
+		return err
 	}
 	if c.audioBytes == 0 {
-		return fmt.Errorf("at least one audio chunk is required before commit")
+		err := fmt.Errorf("at least one audio chunk is required before commit")
+		c.trace("realtime.commit_failed", PhaseFailed, err)
+		return err
 	}
 	c.trace("realtime.commit_started", PhaseCommitting, nil)
+	c.record.Audio = c.request.Audio
 	c.record.Phase = PhaseCommitting
 	c.record.UpdatedAt = time.Now().UTC()
 	_ = c.server.config.Store.SaveRecord(ctx, c.record)
@@ -795,6 +799,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		"event_id": NewRequestID(),
 		"item_id":  c.itemID,
 	})); err != nil {
+		c.trace("realtime.commit_write_failed", PhaseFailed, err)
 		return err
 	}
 	events, err := c.session.Commit(ctx)
