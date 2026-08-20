@@ -39,6 +39,15 @@ The repair loop is intentionally bounded and narrow:
 The helper never clicks arbitrary dialogs, buttons, or page content. It also
 does not approve prompts for other applications.
 
+On Ubuntu/Linux, the adapter is an embedded, bounded AT-SPI helper. It
+whitelists the Google Chrome channel application name, scans the complete
+application accessibility tree, and activates only a button named or
+described exactly `Allow` under a surface titled exactly `Allow remote
+debugging?`. The helper waits at most 12 seconds for the first prompt and
+drains at most 20 queued prompts. The Ubuntu package `python3-pyatspi` must be
+installed; missing desktop accessibility support returns a structured failed
+repair rather than an unverified success.
+
 The scheduled healthy path is deliberately cheaper: when the selected headed
 runtime already has a ready RPC socket and a successful target probe, cron
 returns `healthy/action=none` without opening Chrome, changing the preference,
@@ -98,9 +107,9 @@ The queue-drain and verification contract is shared across platforms.
 | Platform | Adapter | Current behavior | Next implementation |
 | --- | --- | --- | --- |
 | macOS | `Local State` preference path plus native ApplicationServices/Quartz fallback | Implemented; enables the preference before a new default-profile launch, otherwise activates headed Chrome, finds the exact checkbox through AX, posts one Quartz session click, scans all Chrome windows, and drains exact approval sheets. | Keep the CDP probe verification as the gate |
-| Ubuntu/Linux | Placeholder | Reports unsupported without pretending to self-heal | Add an AT-SPI (or selected desktop accessibility) adapter with the same exact-title/action checks |
+| Ubuntu/Linux | Embedded AT-SPI helper | Scans all whitelisted Chrome application windows, drains only the exact approval sheet within bounded wait/pass limits, then relies on the real CDP probe for success | Keep the installed `python3-pyatspi` prerequisite and rerun live approval/transport proof on each supported Ubuntu desktop image |
 | Other desktop platforms | Placeholder | Reports unsupported with a structured remediation result | Add the platform accessibility adapter, then reuse the same shared contract |
 
 This keeps provider and browser transport logic independent from desktop UI
-automation. A future Linux adapter should only replace the approval-drain
-boundary; it should not duplicate daemon lifecycle or CDP verification code.
+automation. The Linux helper only implements the approval-drain boundary; it
+does not duplicate daemon lifecycle or CDP verification code.

@@ -2,17 +2,139 @@
 
 package browser
 
-import "context"
+import (
+	"bytes"
+	"context"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
 
-// Linux/Ubuntu deliberately reports a capability placeholder until a desktop
-// accessibility adapter is selected and implemented. The shared CLI contract
-// is already usable: an adapter only needs to drain the exact Chrome approval
-// action and return a verified active probe.
-func drainRemoteDebuggingApprovalQueue(_ context.Context, channel string) (RemoteDebuggingApprovalResult, error) {
-	result := unsupportedRemoteDebuggingApproval(channel)
-	result.Platform = "linux"
-	result.Adapter = "linux-desktop-accessibility-placeholder"
-	result.NextImplementation = "choose AT-SPI or an equivalent desktop accessibility adapter, then implement all-window exact-title approval draining"
-	result.Message = "automatic Chrome remote-debugging approval is not implemented for Linux/Ubuntu yet"
+// linuxRemoteDebuggingApprovalScript is embedded so an installed cdp binary
+// does not depend on a companion file whose path can drift between desktops.
+// The helper is deliberately narrow: it can inspect only the whitelisted
+// Chrome application and can activate only an exact native "Allow" action.
+//
+//go:embed linux_remote_debugging_approval.py
+var linuxRemoteDebuggingApprovalScript []byte
+
+type linuxRemoteDebuggingApprovalReport struct {
+	WindowsScanned    int `json:"windows_scanned"`
+	PromptCountBefore int `json:"prompt_count_before"`
+	ApprovedCount     int `json:"approved_count"`
+	PromptCountAfter  int `json:"prompt_count_after"`
+}
+
+const linuxRemoteDebuggingApprovalLease = 15 * time.Second
+
+// drainRemoteDebuggingApprovalQueue uses a bounded system Python AT-SPI
+// helper. Chrome's Linux approval sheet is a native accessibility surface,
+// not a DOM element, so a browser-page selector cannot safely approve it.
+func drainRemoteDebuggingApprovalQueue(ctx context.Context, channel string) (RemoteDebuggingApprovalResult, error) {
+	processName, ok := chromeApplicationName(channel)
+	if !ok {
+		return unsupportedRemoteDebuggingApproval(channel), nil
+	}
+
+	result := RemoteDebuggingApprovalResult{
+		Supported:          true,
+		Platform:           "linux",
+		Adapter:            "linux-atspi",
+		BrowserApplication: processName,
+		ApprovalURL:        RemoteDebuggingApprovalURL,
+		Action:             "scan",
+		Message:            "scanning all Chrome windows for queued remote-debugging approvals",
+	}
+	report, err := runLinuxRemoteDebuggingApprovalHelper(ctx, processName)
+	if err != nil {
+		result.Action = "failed"
+		result.Message = "could not inspect Chrome's remote-debugging approval queue"
+		result.Detail = err.Error()
+		return result, nil
+	}
+	result.WindowsScanned = report.WindowsScanned
+	result.PromptCountBefore = report.PromptCountBefore
+	result.ApprovedCount = report.ApprovedCount
+	result.PromptCountAfter = report.PromptCountAfter
+	if report.PromptCountAfter == 0 {
+		result.QueueDrained = true
+		if report.ApprovedCount > 0 {
+			result.Action = "approved"
+			result.Message = "drained Chrome remote-debugging approvals across all scanned windows"
+		} else {
+			result.Action = "already_clear"
+			result.Message = "no Chrome remote-debugging approval sheets were queued"
+		}
+	} else {
+		result.Action = "queue_remaining"
+		result.Message = "Chrome still has remote-debugging approval sheets after the bounded drain"
+	}
 	return result, nil
+}
+
+func runLinuxRemoteDebuggingApprovalHelper(ctx context.Context, processName string) (linuxRemoteDebuggingApprovalReport, error) {
+	python, err := linuxSystemPython()
+	if err != nil {
+		return linuxRemoteDebuggingApprovalReport{}, err
+	}
+
+	helperCtx, cancel := context.WithTimeout(ctx, linuxRemoteDebuggingApprovalLease)
+	defer cancel()
+	cmd := exec.CommandContext(
+		helperCtx,
+		python,
+		"-c",
+		string(linuxRemoteDebuggingApprovalScript),
+		"--process-name",
+		processName,
+		"--press",
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		if helperCtx.Err() != nil {
+			return linuxRemoteDebuggingApprovalReport{}, fmt.Errorf("Linux AT-SPI helper timed out")
+		}
+		return linuxRemoteDebuggingApprovalReport{}, fmt.Errorf("Linux AT-SPI helper failed: %w", err)
+	}
+
+	var report linuxRemoteDebuggingApprovalReport
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	if err := decoder.Decode(&report); err != nil {
+		return linuxRemoteDebuggingApprovalReport{}, fmt.Errorf("parse Linux AT-SPI helper report: %w", err)
+	}
+	if report.WindowsScanned < 0 || report.PromptCountBefore < 0 || report.ApprovedCount < 0 || report.PromptCountAfter < 0 {
+		return linuxRemoteDebuggingApprovalReport{}, fmt.Errorf("Linux AT-SPI helper returned negative counters")
+	}
+	return report, nil
+}
+
+func linuxSystemPython() (string, error) {
+	const systemPython = "/usr/bin/python3"
+	if info, err := os.Stat(systemPython); err == nil && !info.IsDir() {
+		return systemPython, nil
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		return "", fmt.Errorf("find system Python 3 for Linux AT-SPI: %w", err)
+	}
+	return python, nil
+}
+
+func chromeApplicationName(channel string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(channel)) {
+	case "", "stable":
+		return "Google Chrome", true
+	case "beta":
+		return "Google Chrome Beta", true
+	case "canary":
+		return "Google Chrome Canary", true
+	case "dev":
+		return "Google Chrome Dev", true
+	default:
+		return "", false
+	}
 }

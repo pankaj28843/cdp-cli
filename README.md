@@ -504,9 +504,10 @@ macOS, `--macos-self-heal-approval`: it keeps at least one visible Chrome window
 open, starts or reuses the real daemon transport, and drains only Chrome's exact
 `Allow remote debugging?` sheet across all windows. The daemon becoming ready is
 the transport proof; the accessibility click alone is never treated as success.
-Linux currently reports the approval adapter as an explicit placeholder for a
-future AT-SPI implementation. Headless keepalive remains fully unattended and
-starts or reuses the managed headless Chrome runtime.
+On Ubuntu/Linux the same bounded exact-title/action contract uses the embedded
+AT-SPI helper and requires the distro `python3-pyatspi` package. Headless
+keepalive remains fully unattended and starts or reuses the managed headless
+Chrome runtime.
 
 The managed path is available through first-class cron commands:
 
