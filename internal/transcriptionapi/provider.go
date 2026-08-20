@@ -22,6 +22,14 @@ type Provider interface {
 	NewRealtime(context.Context, RealtimeSessionConfig) (RealtimeSession, error)
 }
 
+// CapabilityRefresher is an optional provider lifecycle hook. Browser-backed
+// providers implement it to refresh the capability evidence used by health and
+// model selection. It is deliberately separate from auth freshness because a
+// valid session can outlive the provider's visible runtime contract.
+type CapabilityRefresher interface {
+	EnsureCapabilitiesFresh(context.Context) error
+}
+
 // RealtimeSession receives normalized PCM chunks and returns provider events.
 // Adapters own wire details; the server owns protocol framing, persistence,
 // ordering, and reduction.
@@ -148,4 +156,40 @@ func (r *Registry) AuthRefreshers() []AuthRefresher {
 		result = append(result, r.providers[id].(AuthRefresher))
 	}
 	return result
+}
+
+type providerRefreshTarget struct {
+	id           ProviderID
+	auth         AuthRefresher
+	capabilities CapabilityRefresher
+}
+
+func (r *Registry) refreshTargets() []providerRefreshTarget {
+	if r == nil {
+		return []providerRefreshTarget{}
+	}
+	ids := make([]ProviderID, 0, len(r.providers))
+	for id := range r.providers {
+		ids = append(ids, id)
+	}
+	for i := 1; i < len(ids); i++ {
+		for j := i; j > 0 && ids[j] < ids[j-1]; j-- {
+			ids[j], ids[j-1] = ids[j-1], ids[j]
+		}
+	}
+	targets := make([]providerRefreshTarget, 0, len(ids))
+	for _, id := range ids {
+		provider := r.providers[id]
+		target := providerRefreshTarget{id: id}
+		if refresher, ok := provider.(AuthRefresher); ok {
+			target.auth = refresher
+		}
+		if refresher, ok := provider.(CapabilityRefresher); ok {
+			target.capabilities = refresher
+		}
+		if target.auth != nil || target.capabilities != nil {
+			targets = append(targets, target)
+		}
+	}
+	return targets
 }

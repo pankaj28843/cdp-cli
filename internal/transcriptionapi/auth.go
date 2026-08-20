@@ -19,12 +19,12 @@ type AuthRefresher interface {
 	EnsureAuthFresh(context.Context) error
 }
 
-// AuthRefreshCoordinator owns the one service-level refresh schedule. It is
-// deliberately provider-neutral: a stale or broken provider cannot prevent
-// other providers from being refreshed, and adding a provider does not add a
-// process-level cron job.
+// AuthRefreshCoordinator owns the one service-level auth and capability
+// freshness schedule. It is deliberately provider-neutral: a stale or broken
+// provider cannot prevent other providers from being refreshed, and adding a
+// provider does not add a process-level cron job.
 type AuthRefreshCoordinator struct {
-	providers []AuthRefresher
+	targets   []providerRefreshTarget
 	interval  time.Duration
 	timeout   time.Duration
 	startOnce sync.Once
@@ -35,14 +35,14 @@ func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *Auth
 	if interval < 0 {
 		interval = DefaultAuthRefreshInterval
 	}
-	providers := []AuthRefresher(nil)
+	targets := []providerRefreshTarget(nil)
 	if registry != nil {
-		providers = registry.AuthRefreshers()
+		targets = registry.refreshTargets()
 	}
 	return &AuthRefreshCoordinator{
-		providers: providers,
-		interval:  interval,
-		timeout:   DefaultAuthRefreshTimeout,
+		targets:  targets,
+		interval: interval,
+		timeout:  DefaultAuthRefreshTimeout,
 	}
 }
 
@@ -51,7 +51,7 @@ func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *Auth
 // remains the authoritative failure path and each provider is isolated from
 // its siblings.
 func (c *AuthRefreshCoordinator) Start(ctx context.Context) {
-	if c == nil || c.interval <= 0 || len(c.providers) == 0 {
+	if c == nil || c.interval <= 0 || len(c.targets) == 0 {
 		return
 	}
 	if ctx == nil {
@@ -74,11 +74,13 @@ func (c *AuthRefreshCoordinator) Start(ctx context.Context) {
 	})
 }
 
-// RefreshAll refreshes every configured online provider independently. The
+// RefreshAll refreshes auth and capability evidence for every configured online
+// provider independently. Auth runs before capabilities for each provider so
+// a capability observation never races a provider's own auth repair. The
 // method is exported for deterministic service tests and explicit maintenance
 // commands; normal serving uses Start.
 func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
-	if c == nil || len(c.providers) == 0 {
+	if c == nil || len(c.targets) == 0 {
 		return
 	}
 	if ctx == nil {
@@ -89,8 +91,8 @@ func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
 	}
 	defer c.runMu.Unlock()
 	var wait sync.WaitGroup
-	for _, provider := range c.providers {
-		provider := provider
+	for _, target := range c.targets {
+		target := target
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
@@ -100,7 +102,12 @@ func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
 				refreshContext, cancel = context.WithTimeout(ctx, c.timeout)
 			}
 			defer cancel()
-			_ = provider.EnsureAuthFresh(refreshContext)
+			if target.auth != nil {
+				_ = target.auth.EnsureAuthFresh(refreshContext)
+			}
+			if target.capabilities != nil {
+				_ = target.capabilities.EnsureCapabilitiesFresh(refreshContext)
+			}
 		}()
 	}
 	wait.Wait()

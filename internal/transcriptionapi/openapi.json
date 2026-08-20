@@ -133,8 +133,8 @@
       },
       "ProviderCapability": {
         "type": "object",
-        "required": ["provider", "models", "file", "translation", "streaming", "realtime", "ready"],
-        "properties": { "provider": { "type": "string" }, "models": { "type": "array", "items": { "type": "string" } }, "file": { "type": "boolean" }, "translation": { "type": "boolean" }, "streaming": { "type": "boolean" }, "realtime": { "type": "boolean" }, "ready": { "type": "boolean" }, "evidence_age_seconds": { "type": "integer" }, "reason": { "type": "string" } }
+        "required": ["provider", "models", "file", "translation", "streaming", "realtime", "ready", "probe_ready"],
+        "properties": { "provider": { "type": "string" }, "models": { "type": "array", "items": { "type": "string" } }, "file": { "type": "boolean" }, "translation": { "type": "boolean" }, "streaming": { "type": "boolean" }, "realtime": { "type": "boolean" }, "ready": { "type": "boolean" }, "evidence_age_seconds": { "type": "integer" }, "probe_ready": { "type": "boolean" }, "probe_age_seconds": { "type": "integer" }, "last_probe_at": { "type": "string", "format": "date-time" }, "probe_reason": { "type": "string" }, "reason": { "type": "string" } }
       },
       "Model": { "type": "object", "required": ["id", "object", "owned_by", "ready"], "properties": { "id": { "type": "string" }, "object": { "const": "model" }, "owned_by": { "type": "string" }, "provider": { "type": "string" }, "ready": { "type": "boolean" } } },
       "ModelList": { "type": "object", "required": ["object", "data"], "properties": { "object": { "const": "list" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Model" } } } },

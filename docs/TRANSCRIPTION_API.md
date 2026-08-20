@@ -43,7 +43,9 @@ cdp transcription service install \
   --address 0.0.0.0:28765 \
   --http-address 0.0.0.0:28766 \
   --default-provider chatgpt-web \
-  --providers chatgpt-web \
+  --providers chatgpt-web,microsoft-365-web \
+  --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
+  --probe-interval 5m \
   --tls-self-signed \
   --tls-host <this-machine-LAN-IP> \
   --tls-host localhost
@@ -70,6 +72,13 @@ in the rendered provider selector. VoxKey itself remains ChatGPT-only in v1.
 The service also persists the selected browser mode and display session so
 headed Linux services can use the same authenticated browser owned by cdp.
 
+Native service installation requires the checked-in WebM corpus through
+`--fixture-dir`. The corpus must contain exactly 100 validated WebM files. The
+installed service selects one fixture from the least-recently-used weighted
+pool and exercises every configured provider every five minutes by default.
+`--probe-interval` can be changed for a deployment; setting it to zero uses the
+five-minute default rather than disabling the safety gate.
+
 Desktop browsers generally allow microphone access on `localhost`. Mobile
 browsers require a secure origin for a LAN address. For private-LAN dogfooding,
 the CLI can generate and reuse a self-signed certificate in one command:
@@ -79,6 +88,8 @@ cdp transcription service install \
   --address 0.0.0.0:28765 \
   --http-address 0.0.0.0:28766 \
   --default-provider chatgpt-web \
+  --providers chatgpt-web,microsoft-365-web \
+  --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
   --tls-self-signed \
   --tls-host 192.168.5.249 \
   --tls-host localhost
@@ -159,6 +170,16 @@ guessing:
 
 Health is intentionally unauthenticated and contains capability/readiness
 metadata only; it never includes bearer tokens or provider session material.
+When synthetic probes are enabled, `status: "ok"` means every configured
+provider has recently completed a real fixture transcription successfully. The
+freshness window is fifteen minutes by default, so startup and any failed or
+stale provider are reported as `status: "degraded"`; this is not a cached
+“service process is alive” signal. Each provider entry exposes `probe_ready`,
+`last_probe_at`, `probe_age_seconds`, and a redacted `probe_reason`.
+
+Probe state is owner-only metadata at `<state-dir>/probe-state.json`. It stores
+fixture IDs, timestamps, and redacted result codes only—never fixture audio,
+transcript text, request headers, cookies, or tokens.
 
 To use an OpenAI-compatible local ASR server instead:
 
@@ -255,10 +276,13 @@ proactively at startup and every ten minutes (configurable with
 `--auth-refresh-interval`), in parallel and with independent time bounds. A
 request also calls the same provider's freshness hook before dispatch or the
 first realtime chunk. ChatGPT and Microsoft 365 keep their existing
-provider-specific refresh owner, so an expired session has a self-healing path
-without a provider-specific cron job. The shared retry policy is bounded at
-three total attempts with 1-second and 2-second waits; its 4-second slot is
-retained for policies with a larger future attempt budget.
+provider-specific refresh owner, so an expiring session has a self-healing path
+without a provider-specific cron job. If the browser-free ChatGPT replay is
+rejected with a typed authentication/authorization response, the adapter makes
+one lazy headed-browser repair/retry; ordinary successful requests never open a
+browser. The shared retry policy is bounded at three total attempts with
+1-second and 2-second waits; its 4-second slot is retained for policies with a
+larger future attempt budget.
 
 Audio is copied to a bounded transaction file before dispatch. By default that
 file is removed when the request or WebSocket ends; JSON request/result records

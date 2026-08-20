@@ -219,6 +219,10 @@ type ProviderCapability struct {
 	Realtime       bool       `json:"realtime"`
 	Ready          bool       `json:"ready"`
 	EvidenceAgeSec int64      `json:"evidence_age_seconds,omitempty"`
+	ProbeReady     bool       `json:"probe_ready"`
+	ProbeAgeSec    int64      `json:"probe_age_seconds,omitempty"`
+	LastProbeAt    string     `json:"last_probe_at,omitempty"`
+	ProbeReason    string     `json:"probe_reason,omitempty"`
 	Reason         string     `json:"reason,omitempty"`
 }
 

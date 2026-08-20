@@ -128,6 +128,35 @@ func TestRunSessionReturnsAllFinalSegmentsAfterSpeechStops(t *testing.T) {
 	require.Equal(t, "first sentence. second sentence.", transcript)
 }
 
+func TestRunSessionReturnsWhenFinalArrivesWithoutSpeechStopped(t *testing.T) {
+	fake := newFakeSocket(
+		textFrame(sessionInitResponsePayload()),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechSessionEvent",
+			map[string]any{"eventId": "SpeechRecognitionStarted"},
+		)),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechToTextFinalResult",
+			map[string]any{"text": "Final before stopped."},
+		)),
+	)
+	started := time.Now()
+	transcript, _, failure := runSession(
+		context.Background(),
+		testAuthTemplate(t),
+		bytes.Repeat([]byte{0x01, 0x02}, 2_000),
+		TranscribeConfig{Dial: func(context.Context, string, string) (socket, error) {
+			return fake, nil
+		}},
+	)
+
+	require.Nil(t, failure)
+	require.Equal(t, "Final before stopped.", transcript)
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("final result took %s; it should not wait for the settle timeout", elapsed)
+	}
+}
+
 func TestStreamTranscribeEmitsReadyPartialAndFinalEvents(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)

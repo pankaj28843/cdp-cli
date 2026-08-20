@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -28,14 +29,21 @@ const (
 )
 
 type TranscribeConfig struct {
-	Store       *Store
-	Browser     *BrowserConfig
-	BuildCommit string
-	HTTPClient  *http.Client
-	RefreshAuth func(context.Context) error
-	MaxAttempts int
-	Backoff     []time.Duration
-	Now         func() time.Time
+	Store   *Store
+	Browser *BrowserConfig
+	// BrowserFallback is used only after direct HTTP transcription has
+	// exhausted its bounded retry and auth-repair path. Keeping this callback
+	// lazy preserves the no-browser hot path while allowing a provider adapter
+	// to recover when the web origin rejects a non-browser replay.
+	BrowserFallback func(context.Context, TranscribeConfig, string, int64) webagent.Result
+	BuildCommit     string
+	HTTPClient      *http.Client
+	RefreshAuth     func(context.Context) error
+	AudioFileName   string
+	AudioMIMEType   string
+	MaxAttempts     int
+	Backoff         []time.Duration
+	Now             func() time.Time
 }
 
 type TranscriptionData struct {
@@ -149,6 +157,8 @@ func Transcribe(
 					template,
 					audio,
 					durationMilliseconds,
+					config.AudioFileName,
+					config.AudioMIMEType,
 				)
 				if requestErr != nil {
 					return transcriptionAttempt{}, &transcribeFailure{
@@ -212,8 +222,17 @@ func Transcribe(
 			},
 		)
 	}
+	failure := transcriptionFailureFromError(runErr)
+	if config.Browser == nil && config.BrowserFallback != nil && shouldUseBrowserFallback(failure) {
+		fallbackConfig := config
+		fallbackConfig.Browser = nil
+		fallbackConfig.BrowserFallback = nil
+		fallbackResult := config.BrowserFallback(ctx, fallbackConfig, filePath, durationMilliseconds)
+		if fallbackResult.SchemaVersion != "" {
+			return fallbackResult
+		}
+	}
 	if config.Browser != nil && lastBrowserResult.SchemaVersion != "" {
-		failure := transcriptionFailureFromError(runErr)
 		if browserData, ok := lastBrowserResult.Data.(TranscriptionData); ok {
 			data.StatusCode = browserData.StatusCode
 		}
@@ -228,7 +247,12 @@ func Transcribe(
 		lastBrowserResult.State = webagent.StateFailed
 		return lastBrowserResult
 	}
-	return transcriptionFailureResult(runID, config, data, transcriptionFailureFromError(runErr))
+	return transcriptionFailureResult(runID, config, data, failure)
+}
+
+func shouldUseBrowserFallback(failure transcribeFailure) bool {
+	return failure.auth || failure.status == http.StatusUnauthorized ||
+		failure.status == http.StatusForbidden || failure.errClass == "auth"
 }
 
 type transcriptionHTTPResponse struct {
@@ -297,12 +321,15 @@ func newTranscriptionRequest(
 	template RequestTemplate,
 	audio []byte,
 	durationMilliseconds int64,
+	fileName string,
+	mimeType string,
 ) (*http.Request, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
+	fileName, mimeType = normalizeTranscriptionAudioMetadata(fileName, mimeType)
 	part, err := writer.CreatePart(textproto.MIMEHeader{
-		"Content-Disposition": []string{`form-data; name="file"; filename="whisper.webm"`},
-		"Content-Type":        []string{"audio/webm;codecs=opus"},
+		"Content-Disposition": []string{fmt.Sprintf(`form-data; name="file"; filename="%s"`, fileName)},
+		"Content-Type":        []string{mimeType},
 	})
 	if err != nil {
 		return nil, err
@@ -355,6 +382,22 @@ func newTranscriptionRequest(
 	request.Header.Set("X-OpenAI-Target-Route", "/backend-api/transcribe")
 	request.Header.Set("Cookie", transcriptionCookieHeader(template))
 	return request, nil
+}
+
+func normalizeTranscriptionAudioMetadata(fileName, mimeType string) (string, string) {
+	fileName = filepath.Base(strings.TrimSpace(fileName))
+	fileName = strings.NewReplacer("\r", "_", "\n", "_", "\"", "_").Replace(fileName)
+	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
+		fileName = "whisper.webm"
+	}
+	parsedMIME, _, err := mime.ParseMediaType(strings.TrimSpace(mimeType))
+	if err != nil || !strings.HasPrefix(parsedMIME, "audio/") {
+		parsedMIME = "audio/webm"
+	}
+	if parsedMIME == "audio/webm" {
+		return fileName, "audio/webm;codecs=opus"
+	}
+	return fileName, parsedMIME
 }
 
 // transcriptionCookieHeader mirrors the browser's path-scoped cookie selection

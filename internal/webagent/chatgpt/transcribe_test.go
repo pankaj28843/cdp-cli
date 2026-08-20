@@ -104,6 +104,77 @@ func TestTranscribeRefreshesAuthOnceAndRetries(t *testing.T) {
 	}
 }
 
+func TestTranscribeUsesLazyBrowserFallbackAfterDirectAuthFailure(t *testing.T) {
+	store := testTranscriptionStore(t)
+	filePath := testTranscriptionFile(t, []byte("synthetic-webm"))
+	directRequests := 0
+	fallbackCalls := 0
+	client := &http.Client{Transport: transcriptionRoundTripper(func(request *http.Request) (*http.Response, error) {
+		directRequests++
+		return makeTranscriptionHTTPResponse(http.StatusUnauthorized, `{"error":{"message":"rejected"}}`), nil
+	})}
+	result := Transcribe(context.Background(), TranscribeConfig{
+		Store:       store,
+		BuildCommit: "test",
+		HTTPClient:  client,
+		MaxAttempts: 1,
+		BrowserFallback: func(
+			_ context.Context,
+			config TranscribeConfig,
+			_ string,
+			_ int64,
+		) webagent.Result {
+			fallbackCalls++
+			if config.Browser != nil || config.BrowserFallback != nil {
+				t.Fatalf("fallback config should remain lazy and non-recursive: %+v", config)
+			}
+			return webagent.NewMetadataResult(
+				webagent.ProviderChatGPT,
+				webagent.OperationTranscribe,
+				TranscriptionData{Transcript: "browser fallback"},
+				"test",
+				nil,
+			)
+		},
+	}, filePath, 500)
+	if !result.OK || directRequests != 1 || fallbackCalls != 1 {
+		t.Fatalf("result=%+v directRequests=%d fallbackCalls=%d", result, directRequests, fallbackCalls)
+	}
+}
+
+func TestTranscribePreservesIncomingAudioMetadata(t *testing.T) {
+	store := testTranscriptionStore(t)
+	filePath := testTranscriptionFile(t, []byte("synthetic-wav"))
+	client := &http.Client{Transport: transcriptionRoundTripper(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		for _, want := range []string{
+			`name="file"; filename="recording.wav"`,
+			"audio/wav",
+			"synthetic-wav",
+		} {
+			if !bytes.Contains(body, []byte(want)) {
+				t.Fatalf("multipart body missing %q", want)
+			}
+		}
+		return makeTranscriptionHTTPResponse(http.StatusOK, `{"text":"wav works"}`), nil
+	})}
+
+	result := Transcribe(context.Background(), TranscribeConfig{
+		Store:         store,
+		BuildCommit:   "test",
+		HTTPClient:    client,
+		AudioFileName: "recording.wav",
+		AudioMIMEType: "audio/wav",
+		MaxAttempts:   1,
+	}, filePath, 1234)
+	if !result.OK {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 type transcriptionRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f transcriptionRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {

@@ -29,14 +29,16 @@ const (
 )
 
 type ServerConfig struct {
-	Registry        *Registry
-	Store           *Store
-	DefaultProvider ProviderID
-	Address         string
-	HTTPAddress     string
-	TLSCertFile     string
-	TLSKeyFile      string
-	AuthCoordinator *AuthRefreshCoordinator
+	Registry         *Registry
+	Store            *Store
+	DefaultProvider  ProviderID
+	Address          string
+	HTTPAddress      string
+	TLSCertFile      string
+	TLSKeyFile       string
+	AuthCoordinator  *AuthRefreshCoordinator
+	ProbeHealth      *ProbeHealth
+	ProbeCoordinator *SyntheticProbeCoordinator
 }
 
 type Server struct {
@@ -110,12 +112,20 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s == nil || s.httpServer == nil {
 		return fmt.Errorf("transcription server is not configured")
 	}
-	defer func() { _ = s.config.Store.Close() }()
+	defer func() {
+		if s.config.ProbeCoordinator != nil {
+			s.config.ProbeCoordinator.Wait()
+		}
+		_ = s.config.Store.Close()
+	}()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if s.config.AuthCoordinator != nil {
 		s.config.AuthCoordinator.Start(ctx)
+	}
+	if s.config.ProbeCoordinator != nil {
+		s.config.ProbeCoordinator.Start(ctx)
 	}
 	rawListener, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
@@ -183,11 +193,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, APIError{Type: "invalid_request_error", Message: "method not allowed"})
 		return
 	}
-	capabilities := s.config.Registry.Capabilities(r.Context())
-	status := "degraded"
+	capabilities := s.capabilities(r.Context())
+	status := "ok"
+	if len(capabilities) == 0 {
+		status = "degraded"
+	}
 	for _, capability := range capabilities {
-		if capability.Ready {
-			status = "ok"
+		if !capability.Ready {
+			status = "degraded"
 			break
 		}
 	}
@@ -246,7 +259,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	models := make([]Model, 0)
-	for _, capability := range s.config.Registry.Capabilities(r.Context()) {
+	for _, capability := range s.capabilities(r.Context()) {
 		for _, model := range capability.Models {
 			models = append(models, Model{
 				ID:       model,
@@ -258,6 +271,20 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, ModelList{Object: "list", Data: models})
+}
+
+func (s *Server) capabilities(ctx context.Context) []ProviderCapability {
+	if s == nil || s.config.Registry == nil {
+		return []ProviderCapability{}
+	}
+	capabilities := s.config.Registry.Capabilities(ctx)
+	if s.config.ProbeHealth == nil {
+		return capabilities
+	}
+	for index := range capabilities {
+		capabilities[index] = s.config.ProbeHealth.Apply(capabilities[index], time.Now().UTC())
+	}
+	return capabilities
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {

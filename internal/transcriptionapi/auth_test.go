@@ -8,9 +8,11 @@ import (
 )
 
 type authRefreshTestProvider struct {
-	id    ProviderID
-	calls atomic.Int32
-	err   error
+	id              ProviderID
+	calls           atomic.Int32
+	capabilityCalls atomic.Int32
+	err             error
+	capabilityErr   error
 }
 
 func (p *authRefreshTestProvider) ID() ProviderID { return p.id }
@@ -32,6 +34,11 @@ func (p *authRefreshTestProvider) EnsureAuthFresh(context.Context) error {
 	return p.err
 }
 
+func (p *authRefreshTestProvider) EnsureCapabilitiesFresh(context.Context) error {
+	p.capabilityCalls.Add(1)
+	return p.capabilityErr
+}
+
 func TestAuthRefreshCoordinatorRefreshesAllProvidersIndependently(t *testing.T) {
 	first := &authRefreshTestProvider{id: ProviderChatGPT}
 	second := &authRefreshTestProvider{id: ProviderM365, err: context.Canceled}
@@ -48,6 +55,29 @@ func TestAuthRefreshCoordinatorRefreshesAllProvidersIndependently(t *testing.T) 
 	coordinator.RefreshAll(context.Background())
 	if first.calls.Load() != 1 || second.calls.Load() != 1 {
 		t.Fatalf("calls = %d/%d, want one attempt per provider", first.calls.Load(), second.calls.Load())
+	}
+}
+
+func TestAuthRefreshCoordinatorRefreshesAuthAndCapabilitiesPerProvider(t *testing.T) {
+	first := &authRefreshTestProvider{
+		id:            ProviderChatGPT,
+		capabilityErr: context.Canceled,
+	}
+	second := &authRefreshTestProvider{
+		id:  ProviderM365,
+		err: context.Canceled,
+	}
+	coordinator := NewAuthRefreshCoordinator(NewRegistry(second, first), 0)
+
+	coordinator.RefreshAll(context.Background())
+
+	for _, provider := range []*authRefreshTestProvider{first, second} {
+		if provider.calls.Load() != 1 {
+			t.Fatalf("provider %s auth calls = %d, want one", provider.id, provider.calls.Load())
+		}
+		if provider.capabilityCalls.Load() != 1 {
+			t.Fatalf("provider %s capability calls = %d, want one", provider.id, provider.capabilityCalls.Load())
+		}
 	}
 }
 
@@ -69,9 +99,16 @@ func TestAuthRefreshCoordinatorRunsOneSharedRecurringSchedule(t *testing.T) {
 		}
 	}
 	calls := provider.calls.Load()
+	capabilityCalls := provider.capabilityCalls.Load()
 	cancel()
 	time.Sleep(20 * time.Millisecond)
 	if provider.calls.Load() > calls+1 {
 		t.Fatalf("coordinator started duplicate schedules: calls grew from %d to %d", calls, provider.calls.Load())
+	}
+	if capabilityCalls < 2 {
+		t.Fatalf("capability calls = %d, want startup plus one scheduled refresh", capabilityCalls)
+	}
+	if provider.capabilityCalls.Load() > capabilityCalls+1 {
+		t.Fatalf("coordinator started duplicate capability schedules: calls grew from %d to %d", capabilityCalls, provider.capabilityCalls.Load())
 	}
 }

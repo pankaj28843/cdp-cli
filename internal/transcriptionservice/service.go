@@ -42,6 +42,8 @@ type Config struct {
 	LocalAPIKey          string
 	MaxAudioBytes        int64
 	AuthRefreshInterval  time.Duration
+	FixtureDir           string
+	ProbeInterval        time.Duration
 	PersistAudio         bool
 	TLSCertFile          string
 	TLSKeyFile           string
@@ -111,6 +113,9 @@ func (c Config) Validate() error {
 	if c.AuthRefreshInterval < 0 {
 		return fmt.Errorf("transcription service auth refresh interval must be zero or positive")
 	}
+	if c.ProbeInterval < 0 {
+		return fmt.Errorf("transcription service probe interval must be zero or positive")
+	}
 	if (strings.TrimSpace(c.TLSCertFile) == "") != (strings.TrimSpace(c.TLSKeyFile) == "") {
 		return fmt.Errorf("transcription service TLS certificate and key must be provided together")
 	}
@@ -131,6 +136,8 @@ func (c Config) Environment() map[string]string {
 		"CDP_TRANSCRIPTION_LOCAL_API_KEY":           c.LocalAPIKey,
 		"CDP_TRANSCRIPTION_MAX_AUDIO_BYTES":         strconv.FormatInt(c.MaxAudioBytes, 10),
 		"CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL":   c.AuthRefreshInterval.String(),
+		"CDP_TRANSCRIPTION_FIXTURE_DIR":             c.FixtureDir,
+		"CDP_TRANSCRIPTION_PROBE_INTERVAL":          c.ProbeInterval.String(),
 		"CDP_TRANSCRIPTION_PERSIST_AUDIO":           strconv.FormatBool(c.PersistAudio),
 		"CDP_TRANSCRIPTION_TLS_CERT":                c.TLSCertFile,
 		"CDP_TRANSCRIPTION_TLS_KEY":                 c.TLSKeyFile,

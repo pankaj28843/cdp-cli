@@ -563,6 +563,14 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 			if event.failure != nil {
 				return "", event.failure
 			}
+			// A final transcription is sufficient completion evidence. The
+			// provider may emit it before the separate speech-stopped lifecycle
+			// event; waiting for both needlessly burns the settle timeout.
+			if event.final != "" {
+				if transcript := s.finalTranscript(); transcript != "" {
+					return transcript, nil
+				}
+			}
 			if event.stopped {
 				if transcript := s.finalTranscript(); transcript != "" {
 					return transcript, nil

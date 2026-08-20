@@ -45,6 +45,8 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	var localAPIKey string
 	var maxAudioBytes int64
 	var authRefreshInterval time.Duration
+	var fixtureDir string
+	var probeInterval time.Duration
 	var persistAudio bool
 	var tlsCertFile string
 	var tlsKeyFile string
@@ -62,7 +64,16 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			"  cdp transcription service install --address 0.0.0.0:28765 --http-address 0.0.0.0:28766 --tls-self-signed --tls-host 192.168.5.249",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, paths, config, err := a.transcriptionServiceConfig(binaryPath, address, httpAddress, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, persistAudio, tlsCertFile, tlsKeyFile)
+			if strings.TrimSpace(fixtureDir) == "" {
+				return fmt.Errorf("transcription service installation requires --fixture-dir pointing to the checked-in WebM corpus")
+			}
+			if _, err := transcriptionapi.LoadFixtureCatalog(fixtureDir); err != nil {
+				return fmt.Errorf("validate transcription service fixture corpus: %w", err)
+			}
+			if probeInterval == 0 {
+				probeInterval = transcriptionapi.DefaultProbeInterval
+			}
+			platform, paths, config, err := a.transcriptionServiceConfig(binaryPath, address, httpAddress, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, fixtureDir, probeInterval, persistAudio, tlsCertFile, tlsKeyFile)
 			if err != nil {
 				return err
 			}
@@ -94,6 +105,8 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 				"address":         config.Address,
 				"http_address":    config.HTTPAddress,
 				"provider":        config.Provider,
+				"probe_interval":  config.ProbeInterval.String(),
+				"fixture_count":   transcriptionapi.DefaultFixtureCount,
 				"audio_persisted": config.PersistAudio,
 				"tls_enabled":     strings.TrimSpace(config.TLSCertFile) != "",
 				"tls_cert_file":   tlsFiles.CertFile,
@@ -114,6 +127,8 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes")
 	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for online providers")
+	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", envDefault("CDP_TRANSCRIPTION_FIXTURE_DIR", defaultTranscriptionFixtureDir()), "checked-in WebM corpus used by the bounded provider health probe")
+	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
 	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", os.Getenv("CDP_TRANSCRIPTION_TLS_CERT"), "TLS certificate file; provide with --tls-key for HTTPS microphone access over LAN")
 	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", os.Getenv("CDP_TRANSCRIPTION_TLS_KEY"), "TLS private key file; provide with --tls-cert")
@@ -236,7 +251,7 @@ func (a *app) transcriptionServicePaths() (transcriptionservice.Platform, transc
 	return platform, paths, nil
 }
 
-func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, provider string, allowedProviders []string, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
+func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, provider string, allowedProviders []string, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval time.Duration, fixtureDir string, probeInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
 	platform, paths, err := a.transcriptionServicePaths()
 	if err != nil {
 		return "", transcriptionservice.Paths{}, transcriptionservice.Config{}, err
@@ -255,6 +270,13 @@ func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, provi
 	if err != nil {
 		return "", transcriptionservice.Paths{}, transcriptionservice.Config{}, fmt.Errorf("resolve cdp executable path: %w", err)
 	}
+	fixtureDir = strings.TrimSpace(fixtureDir)
+	if fixtureDir != "" {
+		fixtureDir, err = filepath.Abs(fixtureDir)
+		if err != nil {
+			return "", transcriptionservice.Paths{}, transcriptionservice.Config{}, fmt.Errorf("resolve transcription fixture directory: %w", err)
+		}
+	}
 	config := transcriptionservice.Config{
 		BinaryPath:           binaryPath,
 		StateDir:             stateStore.Dir,
@@ -271,12 +293,30 @@ func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, provi
 		LocalAPIKey:          strings.TrimSpace(localAPIKey),
 		MaxAudioBytes:        maxAudioBytes,
 		AuthRefreshInterval:  authRefreshInterval,
+		FixtureDir:           fixtureDir,
+		ProbeInterval:        probeInterval,
 		PersistAudio:         persistAudio,
 		TLSCertFile:          strings.TrimSpace(tlsCertFile),
 		TLSKeyFile:           strings.TrimSpace(tlsKeyFile),
 		Path:                 os.Getenv("PATH"),
 	}
 	return platform, paths, config, nil
+}
+
+func defaultTranscriptionFixtureDir() string {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Join(workingDirectory, "testdata", "transcription-fixtures")
+	if _, err := os.Stat(filepath.Join(candidate, "manifest.json")); err != nil {
+		return ""
+	}
+	absolute, err := filepath.Abs(candidate)
+	if err != nil {
+		return ""
+	}
+	return absolute
 }
 
 func writeTranscriptionServiceArtifacts(artifacts []transcriptionservice.Artifact, logDirectory string) error {

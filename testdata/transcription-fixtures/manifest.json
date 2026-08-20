@@ -1,0 +1,708 @@
+{
+  "schema_version": "cdp-cli-transcription-fixtures/v2",
+  "count": 100,
+  "engine": "say",
+  "voice": "Samantha",
+  "entries": [
+    {
+      "id": "fixture-001",
+      "text": "Could you open the latest project notes before the meeting starts?",
+      "webm": "001.webm",
+      "webm_bytes": 14369,
+      "webm_sha256": "7fa6c2377e5b1ada003cfe772ad54b4ddd76646dbbad50a0a4c0537dc1b9a88b"
+    },
+    {
+      "id": "fixture-002",
+      "text": "Please remind me to review the deployment checklist this afternoon.",
+      "webm": "002.webm",
+      "webm_bytes": 14935,
+      "webm_sha256": "be8edb7b802c18b353f265f3d79364c7ab119ff586c330cc89c3d6e7943c762c"
+    },
+    {
+      "id": "fixture-003",
+      "text": "The small orange notebook is beside the keyboard on my desk.",
+      "webm": "003.webm",
+      "webm_bytes": 13913,
+      "webm_sha256": "755c174e5667223bdb72a9b51c19ce9ab4e28209ead961266594c79319bf3adc"
+    },
+    {
+      "id": "fixture-004",
+      "text": "Which route is fastest when the bridge is closed for maintenance?",
+      "webm": "004.webm",
+      "webm_bytes": 13565,
+      "webm_sha256": "17b64bbef5c16b8143ba9e9db18ca2fa1da9bbffc5271c3e9acf873d131ebf76"
+    },
+    {
+      "id": "fixture-005",
+      "text": "I would like a quiet room with reliable internet and natural light.",
+      "webm": "005.webm",
+      "webm_bytes": 14558,
+      "webm_sha256": "d57512960e7fdbbd24fc7d915865041cb2b2ed547bbafab25b320551b3ebc728"
+    },
+    {
+      "id": "fixture-006",
+      "text": "Can you move the dollar key closer to the beginning of the row?",
+      "webm": "006.webm",
+      "webm_bytes": 12931,
+      "webm_sha256": "0cb369ae762f046bc7c886a109a2721ac4f38ad2ed7e5f1a5a2a5999ead2a4f6"
+    },
+    {
+      "id": "fixture-007",
+      "text": "The backup completed successfully, but the report still needs verification.",
+      "webm": "007.webm",
+      "webm_bytes": 18334,
+      "webm_sha256": "be201db27fb83d5937597fe98810a1c99eeabfb37de14b16bb30cd12391b1f65"
+    },
+    {
+      "id": "fixture-008",
+      "text": "Let us compare the local result with the remote result before deciding.",
+      "webm": "008.webm",
+      "webm_bytes": 15790,
+      "webm_sha256": "86e5265377879318681e20b04243d1b73267d51a31830292d6454a9a5132cdc8"
+    },
+    {
+      "id": "fixture-009",
+      "text": "What time does the train leave from the central station tomorrow morning?",
+      "webm": "009.webm",
+      "webm_bytes": 15747,
+      "webm_sha256": "a9d51c54ad2776f4d4a1e2f69b57ae15abc2d0880e710a53d412c6b63925c2dd"
+    },
+    {
+      "id": "fixture-010",
+      "text": "Please save this draft without submitting the form or sending a message.",
+      "webm": "010.webm",
+      "webm_bytes": 15473,
+      "webm_sha256": "c362e56a31afab62a0a476cf01a5e9389af7d888ed3a0c780a0278c1b5d941ca"
+    },
+    {
+      "id": "fixture-011",
+      "text": "The new microphone sounds clear even when the room is noisy.",
+      "webm": "011.webm",
+      "webm_bytes": 13304,
+      "webm_sha256": "3c886db3a82fe8ff9d32e113934934bdc6d2c9fc516ca5093db3775ee542a26f"
+    },
+    {
+      "id": "fixture-012",
+      "text": "I forgot whether the test server is running on Linux or macOS.",
+      "webm": "012.webm",
+      "webm_bytes": 15359,
+      "webm_sha256": "0f7b0e245b6cb3711acf9a18496860f6e16b352c43a422aa6183755de89f2f3c"
+    },
+    {
+      "id": "fixture-013",
+      "text": "Could you explain why the connection was closed after the first request?",
+      "webm": "013.webm",
+      "webm_bytes": 16485,
+      "webm_sha256": "e8808c8f4cd9431e2f439547f3f6d3effc98f6d75526ab58844671eeef45956a"
+    },
+    {
+      "id": "fixture-014",
+      "text": "The garden needs water, but the forecast says rain is coming tonight.",
+      "webm": "014.webm",
+      "webm_bytes": 15044,
+      "webm_sha256": "e7bb5aa213efc8a66d499cbc674e6d047e9aaf5dc011e0aba88081979747188b"
+    },
+    {
+      "id": "fixture-015",
+      "text": "Please check that every required field has a helpful validation message.",
+      "webm": "015.webm",
+      "webm_bytes": 16907,
+      "webm_sha256": "8b98445d32700272559ee7a4424938507c89745d8c5f32d87a6a27007e005439"
+    },
+    {
+      "id": "fixture-016",
+      "text": "The blue folder contains the design references for the next release.",
+      "webm": "016.webm",
+      "webm_bytes": 15321,
+      "webm_sha256": "03967e73c0e35342b977e90047c1b5e6765f8d01dfc1dd641718bb40d2e69017"
+    },
+    {
+      "id": "fixture-017",
+      "text": "How many independent providers are ready to accept a transcription request?",
+      "webm": "017.webm",
+      "webm_bytes": 17964,
+      "webm_sha256": "9533b2d94b323abd5333dbd56239d3e2abe6762c432cea9f041ff7731325df35"
+    },
+    {
+      "id": "fixture-018",
+      "text": "I want the most frequently used key to remain easy to reach.",
+      "webm": "018.webm",
+      "webm_bytes": 14305,
+      "webm_sha256": "eb3b827b3173766a1c610659f34ba8771e8959e8e8c01818e607440d58c3a77d"
+    },
+    {
+      "id": "fixture-019",
+      "text": "The service should recover gracefully when a browser tab disappears.",
+      "webm": "019.webm",
+      "webm_bytes": 15353,
+      "webm_sha256": "5a4ebb5fef3aa8be79a4ba5adbb8ecd9284a36eff384d0fe93f5503a9b79e2f0"
+    },
+    {
+      "id": "fixture-020",
+      "text": "Can we keep the interface simple while still exposing advanced settings?",
+      "webm": "020.webm",
+      "webm_bytes": 16307,
+      "webm_sha256": "31a4ec9993b475eb3dde3aeee2221581f7a4d5547a928103bb11b839fc98399c"
+    },
+    {
+      "id": "fixture-021",
+      "text": "The invoice total is one hundred twenty four dollars and fifty cents.",
+      "webm": "021.webm",
+      "webm_bytes": 16534,
+      "webm_sha256": "82071ea0fe35c715c015caa1966821ad01c9e2b1a031704832718bbf46196746"
+    },
+    {
+      "id": "fixture-022",
+      "text": "Please do not store the audio recording after the transcript is accepted.",
+      "webm": "022.webm",
+      "webm_bytes": 17253,
+      "webm_sha256": "fe627d42f873d79034c29bf3d1a2c60e8cbef6ee37d8d65dc5189d1e6ae16c86"
+    },
+    {
+      "id": "fixture-023",
+      "text": "Which device has the newest build installed right now?",
+      "webm": "023.webm",
+      "webm_bytes": 12228,
+      "webm_sha256": "d37389e056418197e72839af2b33bb1aa844e50b46e820003bc276bd171f1480"
+    },
+    {
+      "id": "fixture-024",
+      "text": "The child process stopped, so the supervisor should report a clear reason.",
+      "webm": "024.webm",
+      "webm_bytes": 18482,
+      "webm_sha256": "452263cd5d6f213a02bd8e8543ac207791847923a5217b203eee08b786e7ea4e"
+    },
+    {
+      "id": "fixture-025",
+      "text": "I need an answer that works on both the laptop and the virtual machine.",
+      "webm": "025.webm",
+      "webm_bytes": 15326,
+      "webm_sha256": "a16b8a8af2ac33774387dac8042364f48462cebd1613b31dde5befea64ae300b"
+    },
+    {
+      "id": "fixture-026",
+      "text": "The window is narrow, but the primary action must remain visible.",
+      "webm": "026.webm",
+      "webm_bytes": 14907,
+      "webm_sha256": "fd5dd91b081095f84738ec5458fdea7329d6ed8caf37f30dd4689d29ea95ea8c"
+    },
+    {
+      "id": "fixture-027",
+      "text": "Could you sort these favorite keys into the order I use most often?",
+      "webm": "027.webm",
+      "webm_bytes": 15031,
+      "webm_sha256": "999d899540170d52b67427adb7d53141c1045a03574d4caa1d6f68731b2e1f37"
+    },
+    {
+      "id": "fixture-028",
+      "text": "The changed host key must block the connection until I approve the replacement.",
+      "webm": "028.webm",
+      "webm_bytes": 16485,
+      "webm_sha256": "91875a04aa4e9ae311ca50296d645f22b13707d5db6aac81d08000a937cf7e0f"
+    },
+    {
+      "id": "fixture-029",
+      "text": "A short retry with a bounded timeout is safer than an endless request.",
+      "webm": "029.webm",
+      "webm_bytes": 16312,
+      "webm_sha256": "7fcb96939a0c27c9676b626384471dd3b5e35503d2bddbc1a449db0659b5d3a4"
+    },
+    {
+      "id": "fixture-030",
+      "text": "Please write the result in plain language for someone new to the project.",
+      "webm": "030.webm",
+      "webm_bytes": 15564,
+      "webm_sha256": "79508b0c6ccff148d7cd65d569066474967e3fad3ea9c5f30c916dca446898d0"
+    },
+    {
+      "id": "fixture-031",
+      "text": "The local model should remain available when the online provider is offline.",
+      "webm": "031.webm",
+      "webm_bytes": 17283,
+      "webm_sha256": "9d680b6b4c8f730abfbe5f84aae6050c81c75521c39e8c31c82f2ec5b732602e"
+    },
+    {
+      "id": "fixture-032",
+      "text": "How can we prove that a stale stream never becomes authoritative again?",
+      "webm": "032.webm",
+      "webm_bytes": 15695,
+      "webm_sha256": "d2d299e6d4e43bcf533d93ad07b3f2663918201f3bef3e90620bdec3fccafca7"
+    },
+    {
+      "id": "fixture-033",
+      "text": "The tablet and phone should show the same saved preferences after syncing.",
+      "webm": "033.webm",
+      "webm_bytes": 16812,
+      "webm_sha256": "cff9520d0af5553cb05f12cdd2f539ba70fcb02638cb0e5872e292997de460f7"
+    },
+    {
+      "id": "fixture-034",
+      "text": "I would rather see one useful error than several confusing warnings.",
+      "webm": "034.webm",
+      "webm_bytes": 15238,
+      "webm_sha256": "fd1811d31cc791a5a4c51b745091e7ceef31f74b886a5743d0c6d481fc1be2ed"
+    },
+    {
+      "id": "fixture-035",
+      "text": "Please leave unrelated changes untouched while you update the provider adapter.",
+      "webm": "035.webm",
+      "webm_bytes": 17823,
+      "webm_sha256": "4cacb48d53fea905510639b3354f266bfbf96586920404fa79ae73a95e04fd21"
+    },
+    {
+      "id": "fixture-036",
+      "text": "The test should fail first so that the new behavior is genuinely protected.",
+      "webm": "036.webm",
+      "webm_bytes": 17180,
+      "webm_sha256": "106d3eab2612d72f81ddeeb668ba18c316af40cdd498c42edb5f46df97830c9b"
+    },
+    {
+      "id": "fixture-037",
+      "text": "Can you measure the disk usage before and after the cleanup?",
+      "webm": "037.webm",
+      "webm_bytes": 13314,
+      "webm_sha256": "3f66d65e7c5553d8d656e3c14cabab0a1e643dbe55f1b906078f0311d92ecdb8"
+    },
+    {
+      "id": "fixture-038",
+      "text": "The green status indicator means the service is ready for a real request.",
+      "webm": "038.webm",
+      "webm_bytes": 16932,
+      "webm_sha256": "c0047bd1f212b0d63e465fa863faeb7fbd7db0ab731e69443ec9dd88f5e71391"
+    },
+    {
+      "id": "fixture-039",
+      "text": "I want the application to work even when the terminal is temporarily hidden.",
+      "webm": "039.webm",
+      "webm_bytes": 16968,
+      "webm_sha256": "56b628819012039dd68006a02ff6b025296c87c2099de7b1ddcdbe416615c1fd"
+    },
+    {
+      "id": "fixture-040",
+      "text": "The remote session belongs to tmux, not to the lifetime of this connection.",
+      "webm": "040.webm",
+      "webm_bytes": 17521,
+      "webm_sha256": "6c4c40ec828c13b7eda80667e2c725af882b338de1ad108bc32d4d1f5aed31fa"
+    },
+    {
+      "id": "fixture-041",
+      "text": "Please confirm that the credentials never appear in logs or screenshots.",
+      "webm": "041.webm",
+      "webm_bytes": 16267,
+      "webm_sha256": "2603141019f45b19db76dd6b4c052521622e5441c50bfb1ec2e84c941d13ad82"
+    },
+    {
+      "id": "fixture-042",
+      "text": "Which capability was observed most recently by the headed browser?",
+      "webm": "042.webm",
+      "webm_bytes": 15510,
+      "webm_sha256": "4a48cc5726f88c4982f99d003ad760fd290e5db6e357fe0652daf641841f5d69"
+    },
+    {
+      "id": "fixture-043",
+      "text": "The audio file is short enough to fit within the bounded request limit.",
+      "webm": "043.webm",
+      "webm_bytes": 15436,
+      "webm_sha256": "e29cb6e107295550d1d05d3587c5f6face945825ce4c0abcf0591640641f0a36"
+    },
+    {
+      "id": "fixture-044",
+      "text": "I use the question mark often, so it should not be buried in a group.",
+      "webm": "044.webm",
+      "webm_bytes": 16781,
+      "webm_sha256": "9bad70e273e22a145e7725c07cdf63025f529beb90e1a7110e8830d8021d2b5b"
+    },
+    {
+      "id": "fixture-045",
+      "text": "The new screen needs a clear title, a single primary action, and useful empty state.",
+      "webm": "045.webm",
+      "webm_bytes": 21099,
+      "webm_sha256": "da2d60df1f74d59f1999ccb1fcfd67ddf28d8435d2a058ddf884897b9f9231b1"
+    },
+    {
+      "id": "fixture-046",
+      "text": "Could you retry only the failed provider while leaving the healthy one alone?",
+      "webm": "046.webm",
+      "webm_bytes": 15948,
+      "webm_sha256": "00f8dc329979513b618d09b2749093290316fd2f756e8d12d27df1186e1f4657"
+    },
+    {
+      "id": "fixture-047",
+      "text": "The server is reachable from home, but the laptop address changes outside.",
+      "webm": "047.webm",
+      "webm_bytes": 17871,
+      "webm_sha256": "ceb8c639155fd74139ca7a3b6c24f2016bf945d443db73d4c7f491a4253c0d57"
+    },
+    {
+      "id": "fixture-048",
+      "text": "Please make the default behavior safe for unattended background operation.",
+      "webm": "048.webm",
+      "webm_bytes": 17671,
+      "webm_sha256": "d627d60d5d62b3690ef0f8b6df00b0fde3a2ad57049448d70aa76f9a6571f596"
+    },
+    {
+      "id": "fixture-049",
+      "text": "The release build passed locally before it was copied to the test device.",
+      "webm": "049.webm",
+      "webm_bytes": 16723,
+      "webm_sha256": "a9522a25004da9f6a4fb3d2f49b5d106c5750b8c3faea48d8869df431c980a3b"
+    },
+    {
+      "id": "fixture-050",
+      "text": "I want to understand the tradeoff before we add another dependency.",
+      "webm": "050.webm",
+      "webm_bytes": 15771,
+      "webm_sha256": "ad9b18148cd549b2f892d7246de43aa45fdc939561910f04c8ff719a9b2e80d8"
+    },
+    {
+      "id": "fixture-051",
+      "text": "The authentication session is valid, but the capability evidence is outdated.",
+      "webm": "051.webm",
+      "webm_bytes": 18671,
+      "webm_sha256": "3f0aa391fb9722c9199862077411f4b2c703acaa92b42a016492f4b06a89ae8c"
+    },
+    {
+      "id": "fixture-052",
+      "text": "Can the service refresh both pieces of evidence without opening a browser per request?",
+      "webm": "052.webm",
+      "webm_bytes": 19870,
+      "webm_sha256": "b79da61e217aed82b8d3a2801d3709fb8ea014db3965263f1adbbb469c333a70"
+    },
+    {
+      "id": "fixture-053",
+      "text": "The response should include a stable provider-neutral schema for the client.",
+      "webm": "053.webm",
+      "webm_bytes": 15943,
+      "webm_sha256": "a50e5ecc9bc718d1083e0f5576821be10355b533632f0374c40a1977154681dc"
+    },
+    {
+      "id": "fixture-054",
+      "text": "Please keep the retry budget small enough to protect battery and bandwidth.",
+      "webm": "054.webm",
+      "webm_bytes": 17008,
+      "webm_sha256": "b18b8389b5176509aa0f3fd327190d52fd86354a627a304067c41100db4bdb73"
+    },
+    {
+      "id": "fixture-055",
+      "text": "The first sentence is a statement, and the next one asks a question.",
+      "webm": "055.webm",
+      "webm_bytes": 16033,
+      "webm_sha256": "eec02030b727b25a3728c69a164a5e2dc67126a663523c2cead42455db8283f3"
+    },
+    {
+      "id": "fixture-056",
+      "text": "I would like one fixture with a comma, a dash, and a colon.",
+      "webm": "056.webm",
+      "webm_bytes": 14881,
+      "webm_sha256": "d1c5bfb66ff299afe00de5c92f278aeae5be5663ba7cca31ca38f6998a6cde29"
+    },
+    {
+      "id": "fixture-057",
+      "text": "The number forty two should remain understandable when spoken aloud.",
+      "webm": "057.webm",
+      "webm_bytes": 14948,
+      "webm_sha256": "ef2412b2644101b526786c00e4ab2df3aa333843e1b31b24a41a6586aad828df"
+    },
+    {
+      "id": "fixture-058",
+      "text": "Please check whether the WebM file has a valid container header.",
+      "webm": "058.webm",
+      "webm_bytes": 13721,
+      "webm_sha256": "a3c6d695615def737a5c949b6b29c0eb70bb2d9d1de58417cdced337f0fa7220"
+    },
+    {
+      "id": "fixture-059",
+      "text": "The WebM file should use a mono sixteen kilohertz Opus stream.",
+      "webm": "059.webm",
+      "webm_bytes": 15661,
+      "webm_sha256": "59d571bf5d3350f4b4c0020aacb7bf18b4be2d666260e05d7c7b4616e1674ebf"
+    },
+    {
+      "id": "fixture-060",
+      "text": "Could a capability refresh failure make the provider report not ready?",
+      "webm": "060.webm",
+      "webm_bytes": 16052,
+      "webm_sha256": "bb05a92fe47c38bc143c365adef5ef36dd5d9a5c59728445d45e730fe2caa058"
+    },
+    {
+      "id": "fixture-061",
+      "text": "The health check should distinguish missing evidence from expired evidence.",
+      "webm": "061.webm",
+      "webm_bytes": 15754,
+      "webm_sha256": "2bd26cbdecf9e4b553ec9bfc2f868fd49b6f3f140317349fdb7703f38acc8f43"
+    },
+    {
+      "id": "fixture-062",
+      "text": "I prefer a direct request when the persisted owner-only template is fresh.",
+      "webm": "062.webm",
+      "webm_bytes": 17228,
+      "webm_sha256": "6f1d7784ef757cb4b237f12a74242d4088be619a35a468a0f9d19455d434a3f4"
+    },
+    {
+      "id": "fixture-063",
+      "text": "The headed browser is a repair boundary, not the normal transcription path.",
+      "webm": "063.webm",
+      "webm_bytes": 17507,
+      "webm_sha256": "8d86e3c8037bd5e3f03d29645c951f5fcbefe46f3e45c192e547784ab357561c"
+    },
+    {
+      "id": "fixture-064",
+      "text": "Please use a random-looking sentence only as ordinary synthetic test data.",
+      "webm": "064.webm",
+      "webm_bytes": 17422,
+      "webm_sha256": "87a45f249030b4e628f4769a00438c2cd2dc3532c45f3075f688dd5bc22c32de"
+    },
+    {
+      "id": "fixture-065",
+      "text": "We should never generate traffic merely to avoid a provider detection system.",
+      "webm": "065.webm",
+      "webm_bytes": 18302,
+      "webm_sha256": "6a96deea3bbe8db6d5ebb9ce6c92a6de5461b2aca544971ec34abbaf926248a6"
+    },
+    {
+      "id": "fixture-066",
+      "text": "The fixture generator runs once during development and never from a scheduler.",
+      "webm": "066.webm",
+      "webm_bytes": 17380,
+      "webm_sha256": "ad0a89e1fe771f6d1253b0eb1a461286bde3719d3d27707ec034917694799f04"
+    },
+    {
+      "id": "fixture-067",
+      "text": "Can the same contract be exercised on an Apple laptop and Ubuntu server?",
+      "webm": "067.webm",
+      "webm_bytes": 17785,
+      "webm_sha256": "8f85ab182e5ffa5a1ca207c9860e45a6a3f90e1039af967385839a27445a648a"
+    },
+    {
+      "id": "fixture-068",
+      "text": "The service should identify its build without revealing private configuration.",
+      "webm": "068.webm",
+      "webm_bytes": 17931,
+      "webm_sha256": "1ce377ce5a7956cce0d47dbdfa899eff6cb24703d6fc4fa8c32bb42e36f702ec"
+    },
+    {
+      "id": "fixture-069",
+      "text": "I want the command to return a useful exit status when a dependency is absent.",
+      "webm": "069.webm",
+      "webm_bytes": 18952,
+      "webm_sha256": "bb62e94507e8a12ac60696a457af393c0ed08cd094d1b25985eb2d7a50f423dd"
+    },
+    {
+      "id": "fixture-070",
+      "text": "The background coordinator needs one schedule instead of one timer per provider.",
+      "webm": "070.webm",
+      "webm_bytes": 17947,
+      "webm_sha256": "1de7840ba9dac1606cc5de29cfadba192d26baf8ab955c43853683fd7a42dacd"
+    },
+    {
+      "id": "fixture-071",
+      "text": "Please ensure that one provider error does not cancel sibling refresh work.",
+      "webm": "071.webm",
+      "webm_bytes": 17694,
+      "webm_sha256": "95a514002249aca007390234cb6df310b1f64ee73ec64c9284fd3e82ef32bf9e"
+    },
+    {
+      "id": "fixture-072",
+      "text": "The audio bytes are ephemeral until the provider accepts the completed request.",
+      "webm": "072.webm",
+      "webm_bytes": 18576,
+      "webm_sha256": "fdd01506fc5d4f22c96d96175a0a80f839d6a825e9f6ee957312964b3b5c029c"
+    },
+    {
+      "id": "fixture-073",
+      "text": "A private key belongs in the operating system key store, never in a profile.",
+      "webm": "073.webm",
+      "webm_bytes": 19009,
+      "webm_sha256": "9f95318dc034d2d657dae1da3b22ba71e8934ded99de615501318bb266807e6d"
+    },
+    {
+      "id": "fixture-074",
+      "text": "Could the interface explain what will be synced before the user opts in?",
+      "webm": "074.webm",
+      "webm_bytes": 15666,
+      "webm_sha256": "4b92cd991807cd60775aa6dea53d828ecb8ac2ef37ff61d5d78cf5e578aa1acf"
+    },
+    {
+      "id": "fixture-075",
+      "text": "The sync boundary must be explicit about secrets, settings, and connection data.",
+      "webm": "075.webm",
+      "webm_bytes": 20021,
+      "webm_sha256": "509d860988f06dae8b3ffbd9d74da0e6a0dd9ee144c83991124c0d4b51301076"
+    },
+    {
+      "id": "fixture-076",
+      "text": "Please use the smallest useful visual change for this empty state.",
+      "webm": "076.webm",
+      "webm_bytes": 15955,
+      "webm_sha256": "6e750192281e8a91096df53800f528ef12ddb28fdb460809ccb8536c64e4a3ec"
+    },
+    {
+      "id": "fixture-077",
+      "text": "The favorite list should support create, update, delete, and reorder operations.",
+      "webm": "077.webm",
+      "webm_bytes": 20299,
+      "webm_sha256": "4fd3d8c593270cc32d6117a68380f15b534daf447fc1303557c13f03db589dbc"
+    },
+    {
+      "id": "fixture-078",
+      "text": "I do not need a group when I only want to move one frequently used key.",
+      "webm": "078.webm",
+      "webm_bytes": 16606,
+      "webm_sha256": "d5eae06bf5bce59af17417f0bf48a92e842a1edd8cc8e1359734ec89bcb7c657"
+    },
+    {
+      "id": "fixture-079",
+      "text": "The save button should remain disabled until the input is valid.",
+      "webm": "079.webm",
+      "webm_bytes": 13840,
+      "webm_sha256": "641153c8367ee0085d9a6ec18a636d8feb5a8438bb2e0fcc72f5901907c091a3"
+    },
+    {
+      "id": "fixture-080",
+      "text": "Can you preserve the selected order after restarting the application?",
+      "webm": "080.webm",
+      "webm_bytes": 15516,
+      "webm_sha256": "03fb45b7cd3e2e6019065d8c60f86de802b421f73b87bbf1e8232466f3299c2e"
+    },
+    {
+      "id": "fixture-081",
+      "text": "The keyboard shortcut should not submit text unless the user explicitly sends it.",
+      "webm": "081.webm",
+      "webm_bytes": 18715,
+      "webm_sha256": "b9b2179e99185a24719b15faca708ae61efe9c0c0b91357f1ff613eaada11e2d"
+    },
+    {
+      "id": "fixture-082",
+      "text": "Please add a focused regression for the broken edit action.",
+      "webm": "082.webm",
+      "webm_bytes": 13212,
+      "webm_sha256": "2a2e3e34d268b360a68a41d4e2888ce440f44cca720985d9a1c51c256b2d997b"
+    },
+    {
+      "id": "fixture-083",
+      "text": "The remote deployment must use a strict known-host check and bounded timeout.",
+      "webm": "083.webm",
+      "webm_bytes": 16784,
+      "webm_sha256": "6fe6a5f2b6bb2409d1ddf4b40f23a962e0177037ef97d9860fb59ea22bb3fd44"
+    },
+    {
+      "id": "fixture-084",
+      "text": "Rsync should copy only the approved source tree before the repository is pushed.",
+      "webm": "084.webm",
+      "webm_bytes": 18901,
+      "webm_sha256": "e7f959de121dd687c59376702eb06075cfc2f54398662c19c023bea2d17e4b14"
+    },
+    {
+      "id": "fixture-085",
+      "text": "The installed binary must match the commit used for live validation.",
+      "webm": "085.webm",
+      "webm_bytes": 15604,
+      "webm_sha256": "2fa321ff1f3bb294d0329219428b1133a61b0dbf9fe3ae7d0448edf442bbdfa1"
+    },
+    {
+      "id": "fixture-086",
+      "text": "Could you prove the service status on both machines without printing endpoints?",
+      "webm": "086.webm",
+      "webm_bytes": 17078,
+      "webm_sha256": "262ac0e71d52fed91171c4b029162e5c2a26679759081f95d676e193c68e1cf6"
+    },
+    {
+      "id": "fixture-087",
+      "text": "The browser service is headed because the owner must be able to approve access.",
+      "webm": "087.webm",
+      "webm_bytes": 17559,
+      "webm_sha256": "c46457d21e4fb5122f046e7d0428cd8dc7a90eb1c85f01b4367095e5f8a42073"
+    },
+    {
+      "id": "fixture-088",
+      "text": "A missing display variable in an interactive shell does not prove the service is broken.",
+      "webm": "088.webm",
+      "webm_bytes": 19138,
+      "webm_sha256": "19890857832695de2bcb117b6925e68e3f7832c888fdfa016eea914c8b7d4e86"
+    },
+    {
+      "id": "fixture-089",
+      "text": "Please inspect the supervised service environment before changing its launch configuration.",
+      "webm": "089.webm",
+      "webm_bytes": 21687,
+      "webm_sha256": "c365d7d8332f635be457aa4c04e027b997584252de4ff41bd770cf5108cd9ef0"
+    },
+    {
+      "id": "fixture-090",
+      "text": "The local transcription path must keep working after online transcription is enabled.",
+      "webm": "090.webm",
+      "webm_bytes": 19886,
+      "webm_sha256": "bcf2479035f59e95c06dc442029908d3b21193efe0983ff15fd81b9d89142a71"
+    },
+    {
+      "id": "fixture-091",
+      "text": "I want a clear fallback when the online provider cannot be refreshed.",
+      "webm": "091.webm",
+      "webm_bytes": 15856,
+      "webm_sha256": "cfccbdd79e66722b51430a047d6e1df282a424a20d07714749866d1f61c46e0c"
+    },
+    {
+      "id": "fixture-092",
+      "text": "The client should not silently submit a partial transcript to the terminal.",
+      "webm": "092.webm",
+      "webm_bytes": 16766,
+      "webm_sha256": "0f87f7b47e08e9ab1b831cbb3b7accc321ea569661a1c91436a3f0fdfb5f7942"
+    },
+    {
+      "id": "fixture-093",
+      "text": "Can we test a completed WebM through the provider-neutral contract?",
+      "webm": "093.webm",
+      "webm_bytes": 15123,
+      "webm_sha256": "c69f3cc36a58ed3f3b8f55563b0676171a0101dc660699d2ef540d80d4288e7f"
+    },
+    {
+      "id": "fixture-094",
+      "text": "The transcript text should preserve useful punctuation without inventing a command.",
+      "webm": "094.webm",
+      "webm_bytes": 18964,
+      "webm_sha256": "5b86345069a602eedac8158a978e49dd125f14dd383b19b9026c5a98f340118a"
+    },
+    {
+      "id": "fixture-095",
+      "text": "Please keep temporary audio files inside an owned cleanup root.",
+      "webm": "095.webm",
+      "webm_bytes": 15487,
+      "webm_sha256": "8036af2d2c70eaadd5829551868b2914b80f8b7a3a111f6bf450708f25d30ddd"
+    },
+    {
+      "id": "fixture-096",
+      "text": "The cleanup check should prove that the temporary files are gone afterward.",
+      "webm": "096.webm",
+      "webm_bytes": 15983,
+      "webm_sha256": "6cb0d2966a832e1790a55a6f52e0f7be3f7314b4598602c2065932fa2a3c42db"
+    },
+    {
+      "id": "fixture-097",
+      "text": "Disk usage must remain below ten gigabytes for this development workspace.",
+      "webm": "097.webm",
+      "webm_bytes": 18131,
+      "webm_sha256": "76840c26b4e06ef32182c7ef1f84c833d6b280a07e9cf6ff81595bc2185e2ecf"
+    },
+    {
+      "id": "fixture-098",
+      "text": "A concise status snapshot makes the next session easier to resume.",
+      "webm": "098.webm",
+      "webm_bytes": 17049,
+      "webm_sha256": "aef43e769cff3cb5b2ffd28e44ed7459788f2198aaa9da183df43e91666f34da"
+    },
+    {
+      "id": "fixture-099",
+      "text": "Please record the validation evidence without recording cookies or transcript content.",
+      "webm": "099.webm",
+      "webm_bytes": 19830,
+      "webm_sha256": "0a5d8e257df17c6e28a95b5f719eb3f4b4dd6ac4a95628165f6916c99e8155ed"
+    },
+    {
+      "id": "fixture-100",
+      "text": "The final readiness claim requires a real boundary test, not only unit tests.",
+      "webm": "100.webm",
+      "webm_bytes": 20868,
+      "webm_sha256": "a835261b26e10cb967e53e9be1c5e102c73effb2fea0671d0b55bcf49063d600"
+    }
+  ]
+}

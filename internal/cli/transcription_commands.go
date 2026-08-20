@@ -64,6 +64,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var localAPIKey string
 	var maxAudioBytes int64
 	var authRefreshInterval time.Duration
+	var fixtureDir string
+	var probeInterval time.Duration
 	var persistAudio bool
 	var tlsCertFile string
 	var tlsKeyFile string
@@ -77,7 +79,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 		Long: "Start the deployable provider-neutral transcription API. The server defaults to the " +
 			"LAN-capable primary and cleartext companion listeners without bearer-token authentication, and retains result records under " +
 			"<state-dir>/transcription; uploaded media is ephemeral unless --persist-audio is set. " +
-			"Configure a local OpenAI-compatible backend with " +
+			"When --fixture-dir is configured, the service runs a bounded synthetic probe for every configured provider on a recurring cadence; " +
+			"health is green only after a recent probe succeeds. Configure a local OpenAI-compatible backend with " +
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
 		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --local-base-url http://localhost:9000/v1 --print-ready\n" +
@@ -89,6 +92,12 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			}
 			if authRefreshInterval < 0 {
 				return commandError("transcription_auth_refresh_interval_invalid", "usage", "--auth-refresh-interval must be zero or positive", ExitUsage, nil)
+			}
+			if probeInterval < 0 {
+				return commandError("transcription_probe_interval_invalid", "usage", "--probe-interval must be zero or positive", ExitUsage, nil)
+			}
+			if probeInterval == 0 {
+				probeInterval = transcriptionapi.DefaultProbeInterval
 			}
 			stateStore, err := a.stateStore()
 			if err != nil {
@@ -110,20 +119,46 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			}
 			registry, err := a.transcriptionRegistry(cmd.Context(), localBaseURL, localRealtimeBaseURL, localAPIKey, allowedProviders)
 			if err != nil {
+				_ = store.Close()
 				return err
 			}
 			authCoordinator := transcriptionapi.NewAuthRefreshCoordinator(registry, authRefreshInterval)
+			var probeCoordinator *transcriptionapi.SyntheticProbeCoordinator
+			var probeHealth *transcriptionapi.ProbeHealth
+			if strings.TrimSpace(fixtureDir) != "" {
+				fixtures, fixtureErr := transcriptionapi.LoadFixtureCatalog(fixtureDir)
+				if fixtureErr != nil {
+					_ = store.Close()
+					return fmt.Errorf("validate transcription fixture corpus: %w", fixtureErr)
+				}
+				probeCoordinator, err = transcriptionapi.NewSyntheticProbeCoordinator(
+					registry,
+					fixtures,
+					stateStore.Dir,
+					probeInterval,
+					transcriptionapi.DefaultProbeTimeout,
+					transcriptionapi.DefaultProbeMaxAge,
+				)
+				if err != nil {
+					_ = store.Close()
+					return err
+				}
+				probeHealth = probeCoordinator.Health()
+			}
 			server, err := transcriptionapi.NewServer(transcriptionapi.ServerConfig{
-				Registry:        registry,
-				Store:           store,
-				DefaultProvider: transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
-				Address:         strings.TrimSpace(address),
-				HTTPAddress:     strings.TrimSpace(httpAddress),
-				TLSCertFile:     tlsFiles.CertFile,
-				TLSKeyFile:      tlsFiles.KeyFile,
-				AuthCoordinator: authCoordinator,
+				Registry:         registry,
+				Store:            store,
+				DefaultProvider:  transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
+				Address:          strings.TrimSpace(address),
+				HTTPAddress:      strings.TrimSpace(httpAddress),
+				TLSCertFile:      tlsFiles.CertFile,
+				TLSKeyFile:       tlsFiles.KeyFile,
+				AuthCoordinator:  authCoordinator,
+				ProbeHealth:      probeHealth,
+				ProbeCoordinator: probeCoordinator,
 			})
 			if err != nil {
+				_ = store.Close()
 				return err
 			}
 			if printReady {
@@ -135,6 +170,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 					"contract_version":      transcriptionapi.ContractVersion,
 					"state_dir":             store.Root(),
 					"auth_refresh_interval": authRefreshInterval.String(),
+					"probe_interval":        probeInterval.String(),
+					"probe_enabled":         probeCoordinator != nil,
 					"audio_persisted":       persistAudio,
 					"tls_enabled":           tlsEnabled,
 					"tls_cert_file":         tlsFiles.CertFile,
@@ -164,6 +201,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes; transcript records are retained independently")
 	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers")
+	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", os.Getenv("CDP_TRANSCRIPTION_FIXTURE_DIR"), "checked-in WebM corpus used by the bounded provider health probe; empty disables probe scheduling for transient runs")
+	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
 	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", os.Getenv("CDP_TRANSCRIPTION_TLS_CERT"), "TLS certificate file; provide with --tls-key for HTTPS microphone access over LAN")
 	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", os.Getenv("CDP_TRANSCRIPTION_TLS_KEY"), "TLS private key file; provide with --tls-cert")
@@ -258,9 +297,10 @@ func filterTranscriptionProviders(providers []transcriptionapi.Provider, request
 }
 
 type chatGPTTranscriptionProvider struct {
-	app    *app
-	store  *chatgpt.Store
-	authMu sync.Mutex
+	app        *app
+	store      *chatgpt.Store
+	authMu     sync.Mutex
+	transcribe func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
 }
 
 func (p *chatGPTTranscriptionProvider) ID() transcriptionapi.ProviderID {
@@ -299,6 +339,17 @@ func (p *chatGPTTranscriptionProvider) EnsureAuthFresh(ctx context.Context) erro
 	return nil
 }
 
+func (p *chatGPTTranscriptionProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
+	now := time.Now()
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	status := p.store.RuntimeStatus(ctx, now, chatgpt.DefaultCapabilitiesTTL)
+	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
+		return nil
+	}
+	return p.refreshCapabilitiesLocked(ctx)
+}
+
 func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
 	if request.Task == transcriptionapi.TaskTranslate {
 		return transcriptionapi.Result{}, transcriptionProviderError(501, "unsupported", "translation_unsupported", "ChatGPT web transcription adapter does not expose Whisper translation", false)
@@ -307,21 +358,46 @@ func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request t
 	if err != nil {
 		return transcriptionapi.Result{}, err
 	}
-	var browserConfig *chatgpt.BrowserConfig
-	if p.app.selectHeadedProviderRuntime() {
-		candidate, _, unavailable := p.app.chatgptBrowserOperationConfig(
-			ctx,
-			webagent.OperationTranscribe,
-		)
-		if unavailable == nil {
-			browserConfig = &candidate
-		}
+	// File transcription deliberately uses the persisted request template and
+	// direct HTTP replay. Headed cdp is reserved for bounded auth/capability
+	// refresh, so a normal request never opens or attaches to a browser target.
+	transcribe := p.transcribe
+	if transcribe == nil {
+		transcribe = chatgpt.Transcribe
 	}
-	result := chatgpt.Transcribe(ctx, chatgpt.TranscribeConfig{
-		Store:       p.store,
-		Browser:     browserConfig,
-		BuildCommit: p.app.build.Commit,
-		RefreshAuth: p.refreshAuth,
+	result := transcribe(ctx, chatgpt.TranscribeConfig{
+		Store:         p.store,
+		BuildCommit:   p.app.build.Commit,
+		RefreshAuth:   p.refreshAuth,
+		AudioFileName: request.Audio.FileName,
+		AudioMIMEType: request.Audio.MIMEType,
+		BrowserFallback: func(
+			fallbackContext context.Context,
+			fallbackConfig chatgpt.TranscribeConfig,
+			filePath string,
+			durationMilliseconds int64,
+		) webagent.Result {
+			if !p.app.selectHeadedProviderRuntime() {
+				return chatgpt.UnavailableOperation(
+					p.app.build.Commit,
+					webagent.OperationTranscribe,
+					"chatgpt_headed_browser_required",
+					"connection",
+					"ChatGPT headed browser fallback is unavailable",
+				)
+			}
+			browserConfig, refreshedStore, unavailable := p.app.chatgptBrowserOperationConfig(
+				fallbackContext,
+				webagent.OperationTranscribe,
+			)
+			if unavailable != nil {
+				return *unavailable
+			}
+			fallbackConfig.Browser = &browserConfig
+			fallbackConfig.Store = refreshedStore
+			fallbackConfig.BrowserFallback = nil
+			return transcribe(fallbackContext, fallbackConfig, filePath, durationMilliseconds)
+		},
 	}, request.Audio.PersistedPath, duration)
 	if !result.OK {
 		return transcriptionapi.Result{}, webAgentProviderError(result)
@@ -355,6 +431,24 @@ func (p *chatGPTTranscriptionProvider) refreshAuthLocked(ctx context.Context) er
 		return fmt.Errorf("ChatGPT headed browser auth repair is unavailable")
 	}
 	result := chatgpt.RefreshAuth(ctx, chatgpt.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
+	if !result.OK {
+		return webAgentProviderError(result)
+	}
+	return nil
+}
+
+func (p *chatGPTTranscriptionProvider) refreshCapabilitiesLocked(ctx context.Context) error {
+	if !p.app.selectHeadedProviderRuntime() {
+		return fmt.Errorf("ChatGPT headed browser runtime is unavailable for capability repair")
+	}
+	browserConfig, refreshedStore, unavailable := p.app.chatgptBrowserOperationConfig(ctx, webagent.OperationCapabilities)
+	if unavailable != nil {
+		if unavailable.Error != nil {
+			return fmt.Errorf("%s", unavailable.Error.Message)
+		}
+		return fmt.Errorf("ChatGPT headed browser capability repair is unavailable")
+	}
+	result := chatgpt.RefreshCapabilities(ctx, chatgpt.CapabilityRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
 	if !result.OK {
 		return webAgentProviderError(result)
 	}
@@ -407,6 +501,17 @@ func (p *m365TranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
 		return transcriptionProviderError(401, "authentication_error", "auth_refresh_failed", err.Error(), false)
 	}
 	return nil
+}
+
+func (p *m365TranscriptionProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
+	now := time.Now()
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	status := p.store.RuntimeStatus(ctx, now, m365.DefaultCapabilitiesTTL)
+	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
+		return nil
+	}
+	return p.refreshCapabilitiesLocked(ctx)
 }
 
 func (p *m365TranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
@@ -464,6 +569,24 @@ func (p *m365TranscriptionProvider) refreshAuthLocked(ctx context.Context) error
 		return fmt.Errorf("Microsoft 365 headed browser auth repair is unavailable")
 	}
 	result := m365.RefreshAuth(ctx, m365.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
+	if !result.OK {
+		return webAgentProviderError(result)
+	}
+	return nil
+}
+
+func (p *m365TranscriptionProvider) refreshCapabilitiesLocked(ctx context.Context) error {
+	if !p.app.selectHeadedProviderRuntime() {
+		return fmt.Errorf("Microsoft 365 headed browser runtime is unavailable for capability repair")
+	}
+	browserConfig, refreshedStore, unavailable := p.app.m365BrowserOperationConfig(ctx, webagent.OperationCapabilities)
+	if unavailable != nil {
+		if unavailable.Error != nil {
+			return fmt.Errorf("%s", unavailable.Error.Message)
+		}
+		return fmt.Errorf("Microsoft 365 headed browser capability repair is unavailable")
+	}
+	result := m365.RefreshCapabilities(ctx, m365.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
 	if !result.OK {
 		return webAgentProviderError(result)
 	}

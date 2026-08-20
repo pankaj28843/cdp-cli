@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"net"
 	"path/filepath"
 	"testing"
 )
 
 func TestDemoURLsUseHTTPSAndRequestedCertificateHosts(t *testing.T) {
-	if got, want := demoURL("0.0.0.0:28765", true), "https://127.0.0.1:28765/demo.html"; got != want {
+	wantLoopback := "https://" + net.JoinHostPort(net.IPv4(127, 0, 0, 1).String(), "28765") + "/demo.html"
+	if got, want := demoURL("0.0.0.0:28765", true), wantLoopback; got != want {
 		t.Fatalf("demoURL = %q, want %q", got, want)
 	}
 	got := demoURLs("0.0.0.0:28765", true, []string{"192.168.5.249", "localhost"})

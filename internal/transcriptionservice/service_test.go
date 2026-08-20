@@ -23,6 +23,8 @@ func testConfig() Config {
 		LocalAPIKey:          "local-key",
 		MaxAudioBytes:        512 << 20,
 		AuthRefreshInterval:  10 * time.Minute,
+		FixtureDir:           "/synthetic-user/cdp-fixtures",
+		ProbeInterval:        5 * time.Minute,
 		Path:                 "/opt/homebrew/bin:/usr/bin:/bin",
 	}
 	return config
@@ -49,6 +51,10 @@ func TestRenderLaunchAgentIsOwnerScopedAndRestartable(t *testing.T) {
 		"0.0.0.0:28766",
 		"CDP_TRANSCRIPTION_PROVIDERS",
 		"chatgpt-web",
+		"CDP_TRANSCRIPTION_FIXTURE_DIR",
+		"/synthetic-user/cdp-fixtures",
+		"CDP_TRANSCRIPTION_PROBE_INTERVAL",
+		"5m0s",
 		"CDP_BROWSER_MODE",
 		"headed",
 		"DISPLAY",
@@ -97,6 +103,8 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	}
 	for _, want := range []string{
 		`CDP_TRANSCRIPTION_PROVIDERS="chatgpt-web"`,
+		`CDP_TRANSCRIPTION_PROBE_INTERVAL="5m0s"`,
+		`CDP_TRANSCRIPTION_FIXTURE_DIR="/synthetic-user/cdp-fixtures"`,
 		`CDP_BROWSER_MODE="headed"`,
 		`CDP_ALLOW_OVER_BUDGET="true"`,
 		`DISPLAY=":0"`,

@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	m365RealtimeSampleRate = 16_000
-	m365RealtimeWireChunk  = 64 * 1024
-	m365RealtimeReadyWait  = 2 * time.Minute
+	m365RealtimeSampleRate          = 16_000
+	m365RealtimeWireChunk           = 64 * 1024
+	m365RealtimeReadyWait           = 2 * time.Minute
+	m365RealtimeHypothesisQuietTime = 25 * time.Millisecond
 )
 
 // m365RealtimeSession keeps the public WebSocket contract at OpenAI's 24 kHz
@@ -186,7 +187,10 @@ func (s *m365RealtimeSession) Append(ctx context.Context, audio []byte) ([]trans
 	if err := s.writeAudio(ctx, pcm); err != nil {
 		return nil, err
 	}
-	return s.collectHypotheses(ctx, 100*time.Millisecond)
+	// Keep append handling below the iOS capture cadence. The final event on
+	// Commit remains authoritative; this quiet window only bounds partial-event
+	// draining so small chunks cannot queue behind a 100 ms sleep each.
+	return s.collectHypotheses(ctx, m365RealtimeHypothesisQuietTime)
 }
 
 func (s *m365RealtimeSession) writeAudio(ctx context.Context, pcm []byte) error {
