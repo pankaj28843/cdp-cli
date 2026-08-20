@@ -299,7 +299,7 @@ func newTranscriptionRequest(
 		request.Header.Set(name, value)
 	}
 	request.Header.Del("Accept-Encoding")
-	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Accept", "*/*")
 	request.Header.Set("Origin", Origin)
 	if strings.TrimSpace(request.Header.Get("Referer")) == "" {
 		request.Header.Set("Referer", Origin+"/")

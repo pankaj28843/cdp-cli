@@ -40,7 +40,7 @@ func TestTranscribeUsesDirectObservedHTTPMultipart(t *testing.T) {
 			request.Header.Get("ChatGPT-Account-Id") != "" ||
 			request.Header.Get("X-OpenAI-Target-Path") != "/backend-api/transcribe" ||
 			request.Header.Get("Origin") != Origin ||
-			request.Header.Get("Accept") != "application/json" ||
+			request.Header.Get("Accept") != "*/*" ||
 			request.Header.Get("Referer") != Origin+"/" ||
 			request.Header.Get("Sec-Fetch-Dest") != "empty" ||
 			request.Header.Get("Sec-Fetch-Mode") != "cors" ||
