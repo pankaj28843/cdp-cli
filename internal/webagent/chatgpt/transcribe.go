@@ -29,6 +29,7 @@ const (
 
 type TranscribeConfig struct {
 	Store       *Store
+	Browser     *BrowserConfig
 	BuildCommit string
 	HTTPClient  *http.Client
 	RefreshAuth func(context.Context) error
@@ -84,6 +85,9 @@ func Transcribe(
 		FileName:             fileName,
 		DurationMilliseconds: durationMilliseconds,
 	}
+	if config.Browser != nil {
+		data.Transport = "headed_browser_fetch"
+	}
 
 	if config.Store == nil {
 		return transcriptionFailureResult(
@@ -112,14 +116,33 @@ func Transcribe(
 	}
 	data.AudioBytes = int64(len(audio))
 
+	var lastBrowserResult webagent.Result
 	attempt, report, runErr := resilience.Run(
 		ctx,
 		resilience.Policy{MaxAttempts: config.MaxAttempts, Backoff: config.Backoff},
 		resilience.Hooks[transcriptionAttempt]{
-			Attempt: func(attemptContext context.Context, _ int) (transcriptionAttempt, error) {
+			Attempt: func(attemptContext context.Context, attemptNumber int) (transcriptionAttempt, error) {
+				if config.Browser != nil {
+					lastBrowserResult = webagent.Result{}
+				}
 				template, templateFailure := loadTranscriptionTemplate(attemptContext, config)
 				if templateFailure != nil {
 					return transcriptionAttempt{}, templateFailure
+				}
+				if config.Browser != nil {
+					browserAttempt, browserResult, browserFailure :=
+						transcribeBrowserAttempt(
+							attemptContext,
+							config,
+							runID,
+							attemptNumber,
+							data,
+							template,
+							audio,
+							durationMilliseconds,
+						)
+					lastBrowserResult = browserResult
+					return browserAttempt, browserFailure
 				}
 				request, requestErr := newTranscriptionRequest(
 					attemptContext,
@@ -167,6 +190,13 @@ func Transcribe(
 	data.Attempts = report.Attempts
 	if runErr == nil {
 		data.Transcript = attempt.transcript
+		if config.Browser != nil && lastBrowserResult.SchemaVersion != "" {
+			if browserData, ok := lastBrowserResult.Data.(TranscriptionData); ok {
+				data.StatusCode = browserData.StatusCode
+			}
+			lastBrowserResult.Data = data
+			return lastBrowserResult
+		}
 		return operationSuccess(
 			runID,
 			config.BuildCommit,
@@ -181,6 +211,22 @@ func Transcribe(
 				"cdp workflow agent chatgpt capabilities --json",
 			},
 		)
+	}
+	if config.Browser != nil && lastBrowserResult.SchemaVersion != "" {
+		failure := transcriptionFailureFromError(runErr)
+		if browserData, ok := lastBrowserResult.Data.(TranscriptionData); ok {
+			data.StatusCode = browserData.StatusCode
+		}
+		lastBrowserResult.Data = data
+		lastBrowserResult.Error = &webagent.OperationError{
+			Code:      failure.code,
+			ErrClass:  failure.errClass,
+			Message:   failure.message,
+			RetrySafe: true,
+		}
+		lastBrowserResult.OK = false
+		lastBrowserResult.State = webagent.StateFailed
+		return lastBrowserResult
 	}
 	return transcriptionFailureResult(runID, config, data, transcriptionFailureFromError(runErr))
 }

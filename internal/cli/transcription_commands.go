@@ -288,8 +288,19 @@ func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request t
 	if err != nil {
 		return transcriptionapi.Result{}, err
 	}
+	var browserConfig *chatgpt.BrowserConfig
+	if p.app.selectHeadedProviderRuntime() {
+		candidate, _, unavailable := p.app.chatgptBrowserOperationConfig(
+			ctx,
+			webagent.OperationTranscribe,
+		)
+		if unavailable == nil {
+			browserConfig = &candidate
+		}
+	}
 	result := chatgpt.Transcribe(ctx, chatgpt.TranscribeConfig{
 		Store:       p.store,
+		Browser:     browserConfig,
 		BuildCommit: p.app.build.Commit,
 		RefreshAuth: p.refreshAuth,
 	}, request.Audio.PersistedPath, duration)

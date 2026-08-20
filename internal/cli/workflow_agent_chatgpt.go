@@ -115,10 +115,10 @@ func (a *app) newWorkflowAgentChatGPTTranscribeCommand() *cobra.Command {
 	var durationMilliseconds int64
 	cmd := &cobra.Command{
 		Use:   "transcribe",
-		Short: "Transcribe one local WebM file through direct ChatGPT HTTP",
-		Long: "Read the owner-only ChatGPT request template and send one persisted WebM audio file " +
-			"to the observed /backend-api/transcribe endpoint over direct HTTP. The normal path does not " +
-			"open Chrome; a headed auth refresh is lazy and bounded to repair stale evidence.",
+		Short: "Transcribe one local WebM file through ChatGPT",
+		Long: "Use the exact headed ChatGPT browser network boundary for one persisted WebM audio file " +
+			"when the headed runtime is available; direct HTTP remains a bounded fallback when it is not. " +
+			"A headed auth refresh is lazy and bounded to repair stale evidence.",
 		Example: "  cdp workflow agent chatgpt transcribe --file ~/.cache/whisper.webm --duration-ms 4200 --json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -155,6 +155,16 @@ func (a *app) newWorkflowAgentChatGPTTranscribeCommand() *cobra.Command {
 				)
 				return a.renderWebAgentResult(ctx, "chatgpt transcribe: unavailable", result)
 			}
+			var browserConfig *chatgpt.BrowserConfig
+			if a.selectHeadedProviderRuntime() {
+				candidate, _, unavailable := a.chatgptBrowserOperationConfig(
+					ctx,
+					webagent.OperationTranscribe,
+				)
+				if unavailable == nil {
+					browserConfig = &candidate
+				}
+			}
 
 			refreshAuth := func(refreshCtx context.Context) error {
 				if !a.selectHeadedProviderRuntime() {
@@ -187,6 +197,7 @@ func (a *app) newWorkflowAgentChatGPTTranscribeCommand() *cobra.Command {
 				ctx,
 				chatgpt.TranscribeConfig{
 					Store:       store,
+					Browser:     browserConfig,
 					BuildCommit: a.build.Commit,
 					RefreshAuth: refreshAuth,
 				},
