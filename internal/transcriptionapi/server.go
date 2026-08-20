@@ -804,19 +804,34 @@ func (c *realtimeConnection) sendEvents(ctx context.Context, connection *websock
 		switch event.Kind {
 		case EventHypothesis:
 			delta := event.Text
+			replaces := false
 			if event.Replace {
-				delta = strings.TrimPrefix(after, before)
+				if strings.HasPrefix(after, before) {
+					delta = strings.TrimPrefix(after, before)
+				} else {
+					// A cumulative provider hypothesis may revise an earlier
+					// word. An append-only delta cannot represent that revision;
+					// carry the authoritative text plus a tiny compatibility
+					// marker so clients replace their preview instead of
+					// duplicating the old hypothesis.
+					delta = after
+					replaces = true
+				}
 			}
-			if delta == "" {
+			if delta == "" && !replaces {
 				continue
 			}
-			if err := connection.Write(ctx, websocket.MessageText, marshalRealtime(map[string]any{
+			payload := map[string]any{
 				"type":          "conversation.item.input_audio_transcription.delta",
 				"event_id":      NewRequestID(),
 				"item_id":       event.ItemID,
 				"content_index": 0,
 				"delta":         delta,
-			})); err != nil {
+			}
+			if replaces {
+				payload["replace"] = true
+			}
+			if err := connection.Write(ctx, websocket.MessageText, marshalRealtime(payload)); err != nil {
 				return err
 			}
 		case EventFinal:

@@ -462,6 +462,57 @@ func TestServerRealtimeUsesOpenAIShapedEventsAndPersistsPCM(t *testing.T) {
 	}
 }
 
+func TestServerRealtimeMarksCumulativeHypothesisRevisionsAsReplacement(t *testing.T) {
+	provider := &fakeProvider{
+		id: ProviderLocal,
+		realtime: &fakeRealtime{
+			appendEvents: []ProviderEvent{
+				{Kind: EventHypothesis, Text: "hello world", Replace: true, Sequence: 1},
+				{Kind: EventHypothesis, Text: "hello word", Replace: true, Sequence: 2},
+			},
+			commitEvents: []ProviderEvent{{Kind: EventFinal, Text: "hello word", Sequence: 3}},
+		},
+	}
+	server, _ := newTestServer(t, provider, "secret")
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/realtime?intent=transcription"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer secret"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close(websocket.StatusNormalClosure, "test done")
+
+	writeRealtimeTestEvent(t, ctx, connection, map[string]any{
+		"type": "session.update",
+		"session": map[string]any{
+			"type":  "transcription",
+			"model": "whisper-1",
+			"audio": map[string]any{"input": map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}}},
+		},
+	})
+	readRealtimeTestEvent(t, ctx, connection, "session.created")
+	writeRealtimeTestEvent(t, ctx, connection, map[string]any{
+		"type":  "input_audio_buffer.append",
+		"audio": EncodeRealtimeAudio([]byte("pcmx")),
+	})
+
+	first := readRealtimeTestEvent(t, ctx, connection, "conversation.item.input_audio_transcription.delta")
+	second := readRealtimeTestEvent(t, ctx, connection, "conversation.item.input_audio_transcription.delta")
+	if first["delta"] != "hello world" || first["replace"] != nil {
+		t.Fatalf("first hypothesis = %#v, want append-only hello world", first)
+	}
+	if second["delta"] != "hello word" || second["replace"] != true {
+		t.Fatalf("revised hypothesis = %#v, want replacement hello word", second)
+	}
+
+	writeRealtimeTestEvent(t, ctx, connection, map[string]any{"type": "input_audio_buffer.commit"})
+	readRealtimeTestEvent(t, ctx, connection, "input_audio_buffer.committed")
+	readRealtimeTestEvent(t, ctx, connection, "conversation.item.input_audio_transcription.completed")
+}
+
 func TestStorePrunesOldAudioButKeepsRecord(t *testing.T) {
 	store, err := NewStore(t.TempDir(), 4)
 	if err != nil {
@@ -669,21 +720,20 @@ func writeRealtimeTestEvent(t *testing.T, ctx context.Context, connection *webso
 	}
 }
 
-func readRealtimeTestEvent(t *testing.T, ctx context.Context, connection *websocket.Conn, expectedType string) {
+func readRealtimeTestEvent(t *testing.T, ctx context.Context, connection *websocket.Conn, expectedType string) map[string]any {
 	t.Helper()
 	_, payload, err := connection.Read(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var event struct {
-		Type string `json:"type"`
-	}
+	var event map[string]any
 	if err := json.Unmarshal(payload, &event); err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != expectedType {
-		t.Fatalf("event type = %q, want %q; payload=%s", event.Type, expectedType, payload)
+	if eventType, _ := event["type"].(string); eventType != expectedType {
+		t.Fatalf("event type = %q, want %q; payload=%s", eventType, expectedType, payload)
 	}
+	return event
 }
 
 func minInt(left, right int) int {
