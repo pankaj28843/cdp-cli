@@ -74,7 +74,7 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	environment := string(artifacts[1].Data)
 	for _, want := range []string{
 		"ExecStart=\"/Users/test/.local/bin/cdp\" transcription serve",
-		"EnvironmentFile=\"-" + paths.Environment + "\"",
+		"EnvironmentFile=-" + paths.Environment,
 		"Restart=on-failure",
 		"WantedBy=default.target",
 	} {

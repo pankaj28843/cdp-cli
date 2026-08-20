@@ -204,11 +204,11 @@ func renderSystemdUnit(c Config, paths Paths) ([]byte, error) {
 	b.WriteString("ExecStart=")
 	b.WriteString(systemdQuote(c.BinaryPath))
 	b.WriteString(" transcription serve\n")
-	// Keep systemd's optional-file marker inside the quoted path. A marker
-	// placed before the opening quote is parsed as part of the directive's
-	// value and makes systemd ignore the absolute path.
-	b.WriteString("EnvironmentFile=")
-	b.WriteString(systemdQuote("-" + paths.Environment))
+	// The optional-file marker must be directly adjacent to the absolute path.
+	// Quoting either side makes systemd treat the marker or quote as part of the
+	// path and ignore the environment file.
+	b.WriteString("EnvironmentFile=-")
+	b.WriteString(paths.Environment)
 	b.WriteString("\nRestart=on-failure\nRestartSec=2\n")
 	b.WriteString("KillSignal=SIGINT\nTimeoutStopSec=10\nUMask=0077\n")
 	b.WriteString("NoNewPrivileges=true\nPrivateTmp=true\n\n")
