@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -139,7 +140,7 @@ func Transcribe(
 				}
 				data.StatusCode = response.statusCode
 				if response.statusCode < 200 || response.statusCode >= 300 {
-					failure := transcriptionHTTPFailure(response.statusCode)
+					failure := transcriptionHTTPFailure(response.statusCode, response.body)
 					return transcriptionAttempt{}, &failure
 				}
 				transcript, parseErr := parseTranscriptionBody(response.body)
@@ -283,11 +284,9 @@ func newTranscriptionRequest(
 		lower := strings.ToLower(name)
 		if lower == "content-type" ||
 			lower == "content-length" ||
+			lower == "chatgpt-account-id" ||
 			lower == "oai-echo-logs" ||
 			lower == "oai-telemetry" ||
-			lower == "origin" ||
-			lower == "priority" ||
-			strings.HasPrefix(lower, "sec-fetch-") ||
 			lower == "x-conduit-token" ||
 			lower == "x-oai-turn-trace-id" ||
 			strings.HasPrefix(lower, "openai-sentinel-") {
@@ -296,13 +295,46 @@ func newTranscriptionRequest(
 		request.Header.Set(name, value)
 	}
 	request.Header.Del("Accept-Encoding")
-	request.Header.Set("Accept", "*/*")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Origin", Origin)
+	if strings.TrimSpace(request.Header.Get("Referer")) == "" {
+		request.Header.Set("Referer", Origin+"/")
+	}
 	request.Header.Set("User-Agent", template.BrowserUserAgent)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	request.Header.Set("X-OpenAI-Target-Path", "/backend-api/transcribe")
 	request.Header.Set("X-OpenAI-Target-Route", "/backend-api/transcribe")
-	request.Header.Set("Cookie", template.CookieHeader)
+	request.Header.Set("Cookie", transcriptionCookieHeader(template))
 	return request, nil
+}
+
+// transcriptionCookieHeader mirrors the browser's path-scoped cookie selection
+// for /backend-api/transcribe. The auth refresh observes a conversation-read
+// request, which can include the path-scoped _account cookie that Chrome omits
+// from the transcription request. Sending that extra cookie makes ChatGPT
+// reject otherwise current auth evidence.
+func transcriptionCookieHeader(template RequestTemplate) string {
+	parts := strings.Split(template.CookieHeader, ";")
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		name := trimmed
+		if separator := strings.IndexByte(trimmed, '='); separator >= 0 {
+			name = strings.TrimSpace(trimmed[:separator])
+		}
+		if strings.EqualFold(name, "_account") {
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if value, ok := template.Cookies[name]; ok {
+			kept = append(kept, name+"="+value)
+		} else {
+			kept = append(kept, trimmed)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 func doTranscriptionRequest(
@@ -388,13 +420,20 @@ func findTranscriptionText(value any) string {
 	return ""
 }
 
-func transcriptionHTTPFailure(status int) transcribeFailure {
+func transcriptionHTTPFailure(status int, body []byte) transcribeFailure {
+	detail := transcriptionResponseDetail(body)
+	withDetail := func(message string) string {
+		if detail == "" {
+			return message
+		}
+		return fmt.Sprintf("%s (%s)", message, detail)
+	}
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return transcribeFailure{
 			code:      "chatgpt_transcription_auth_failed",
 			errClass:  "auth",
-			message:   "ChatGPT rejected the transcription auth evidence",
+			message:   withDetail("ChatGPT rejected the transcription auth evidence"),
 			status:    status,
 			retryable: true,
 			auth:      true,
@@ -403,7 +442,7 @@ func transcriptionHTTPFailure(status int) transcribeFailure {
 		return transcribeFailure{
 			code:      "chatgpt_transcription_timeout",
 			errClass:  "timeout",
-			message:   "ChatGPT transcription timed out",
+			message:   withDetail("ChatGPT transcription timed out"),
 			status:    status,
 			retryable: true,
 		}
@@ -411,7 +450,7 @@ func transcriptionHTTPFailure(status int) transcribeFailure {
 		return transcribeFailure{
 			code:      "chatgpt_transcription_rate_limited",
 			errClass:  "rate_limit",
-			message:   "ChatGPT transcription was rate limited",
+			message:   withDetail("ChatGPT transcription was rate limited"),
 			status:    status,
 			retryable: true,
 		}
@@ -419,7 +458,7 @@ func transcriptionHTTPFailure(status int) transcribeFailure {
 		return transcribeFailure{
 			code:      "chatgpt_transcription_server",
 			errClass:  "provider",
-			message:   "ChatGPT transcription returned a server failure",
+			message:   withDetail("ChatGPT transcription returned a server failure"),
 			status:    status,
 			retryable: true,
 		}
@@ -427,9 +466,43 @@ func transcriptionHTTPFailure(status int) transcribeFailure {
 		return transcribeFailure{
 			code:     "chatgpt_transcription_invalid_request",
 			errClass: "provider",
-			message:  "ChatGPT rejected the transcription request",
+			message:  withDetail("ChatGPT rejected the transcription request"),
 			status:   status,
 		}
+	}
+}
+
+func transcriptionResponseDetail(body []byte) string {
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	code := strings.TrimSpace(payload.Error.Code)
+	message := strings.TrimSpace(payload.Error.Message)
+	if code == "" && message == "" {
+		return ""
+	}
+	if len(code) > 120 {
+		code = code[:120]
+	}
+	if len(message) > 240 {
+		message = message[:240]
+	}
+	if strings.ContainsAny(code+message, "\r\n") {
+		return ""
+	}
+	switch {
+	case code != "" && message != "":
+		return fmt.Sprintf("provider_code=%s provider_message=%s", code, message)
+	case code != "":
+		return "provider_code=" + code
+	default:
+		return "provider_message=" + message
 	}
 }
 

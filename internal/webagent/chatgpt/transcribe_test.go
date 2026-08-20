@@ -37,8 +37,14 @@ func TestTranscribeUsesDirectObservedHTTPMultipart(t *testing.T) {
 			request.URL.Path != "/backend-api/transcribe" ||
 			request.Header.Get("Authorization") != "Bearer synthetic" ||
 			request.Header.Get("Cookie") != "__Secure-next-auth.session-token=synthetic; session=synthetic" ||
+			request.Header.Get("ChatGPT-Account-Id") != "" ||
 			request.Header.Get("X-OpenAI-Target-Path") != "/backend-api/transcribe" ||
-			request.Header.Get("Origin") != "" {
+			request.Header.Get("Origin") != Origin ||
+			request.Header.Get("Accept") != "application/json" ||
+			request.Header.Get("Referer") != Origin+"/" ||
+			request.Header.Get("Sec-Fetch-Dest") != "empty" ||
+			request.Header.Get("Sec-Fetch-Mode") != "cors" ||
+			request.Header.Get("Sec-Fetch-Site") != "same-origin" {
 			t.Fatalf("request shape = method=%s path=%s headers=%v", request.Method, request.URL.Path, request.Header)
 		}
 		return makeTranscriptionHTTPResponse(http.StatusOK, `{"result":{"text":"direct works"}}`), nil
@@ -120,13 +126,19 @@ func testTranscriptionStore(t *testing.T) *Store {
 		Method:        http.MethodGet,
 		URL:           Origin + ConversationListPath,
 		Headers: map[string]string{
-			"authorization": "Bearer synthetic",
-			"user-agent":    "synthetic-agent",
+			"authorization":      "Bearer synthetic",
+			"chatgpt-account-id": "synthetic-account",
+			"sec-fetch-dest":     "empty",
+			"sec-fetch-mode":     "cors",
+			"sec-fetch-site":     "same-origin",
+			"user-agent":         "synthetic-agent",
 		},
 		Cookies: map[string]string{
 			"__Secure-next-auth.session-token": "synthetic",
+			"_account":                         "synthetic-account",
+			"session":                          "synthetic",
 		},
-		CookieHeader:     "__Secure-next-auth.session-token=synthetic; session=synthetic",
+		CookieHeader:     "__Secure-next-auth.session-token=synthetic; _account=synthetic-account; session=synthetic",
 		BrowserUserAgent: "synthetic-agent",
 		CapturedAt:       now,
 		Source:           "headed-cdp-retained-read-shape",

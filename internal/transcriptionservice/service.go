@@ -100,8 +100,8 @@ func (c Config) Validate() error {
 	if c.MaxAudioBytes <= 0 {
 		return fmt.Errorf("transcription service max audio bytes must be positive")
 	}
-	if c.AuthRefreshInterval <= 0 {
-		return fmt.Errorf("transcription service auth refresh interval must be positive")
+	if c.AuthRefreshInterval < 0 {
+		return fmt.Errorf("transcription service auth refresh interval must be zero or positive")
 	}
 	if (strings.TrimSpace(c.TLSCertFile) == "") != (strings.TrimSpace(c.TLSKeyFile) == "") {
 		return fmt.Errorf("transcription service TLS certificate and key must be provided together")

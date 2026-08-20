@@ -57,6 +57,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var address string
 	var token string
 	var defaultProvider string
+	var allowedProviders []string
 	var localBaseURL string
 	var localRealtimeBaseURL string
 	var localAPIKey string
@@ -81,8 +82,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			if maxAudioBytes <= 0 {
 				return commandError("transcription_cache_limit_invalid", "usage", "--max-audio-bytes must be positive", ExitUsage, nil)
 			}
-			if authRefreshInterval <= 0 {
-				return commandError("transcription_auth_refresh_interval_invalid", "usage", "--auth-refresh-interval must be positive", ExitUsage, nil)
+			if authRefreshInterval < 0 {
+				return commandError("transcription_auth_refresh_interval_invalid", "usage", "--auth-refresh-interval must be zero or positive", ExitUsage, nil)
 			}
 			stateStore, err := a.stateStore()
 			if err != nil {
@@ -98,7 +99,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			registry, err := a.transcriptionRegistry(cmd.Context(), localBaseURL, localRealtimeBaseURL, localAPIKey)
+			registry, err := a.transcriptionRegistry(cmd.Context(), localBaseURL, localRealtimeBaseURL, localAPIKey, allowedProviders)
 			if err != nil {
 				return err
 			}
@@ -141,6 +142,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "listen address; loopback is the safe default")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("CDP_TRANSCRIPTION_API_TOKEN"), "local bearer token; set this before exposing the service beyond a trusted loopback")
 	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
+	cmd.Flags().StringSliceVar(&allowedProviders, "providers", nil, "provider allowlist; repeat or comma-separate (default: all configured providers)")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
@@ -153,7 +155,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string) (*transcriptionapi.Registry, error) {
+func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string, allowedProviders []string) (*transcriptionapi.Registry, error) {
 	providers := make([]transcriptionapi.Provider, 0, 3)
 	if strings.TrimSpace(localBaseURL) != "" {
 		localProvider, err := transcriptionapi.NewOpenAIHTTPProvider(
@@ -169,6 +171,10 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 	}
 	stateStore, err := a.stateStore()
 	if err != nil {
+		providers, filterErr := filterTranscriptionProviders(providers, allowedProviders)
+		if filterErr != nil {
+			return nil, filterErr
+		}
 		return transcriptionapi.NewRegistry(providers...), nil
 	}
 	chatStore, chatErr := chatgpt.NewStore(stateStore.Dir)
@@ -179,7 +185,57 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 	if m365Err == nil {
 		providers = append(providers, &m365TranscriptionProvider{app: a, store: m365Store})
 	}
+	providers, err = filterTranscriptionProviders(providers, allowedProviders)
+	if err != nil {
+		return nil, err
+	}
 	return transcriptionapi.NewRegistry(providers...), nil
+}
+
+func filterTranscriptionProviders(providers []transcriptionapi.Provider, requested []string) ([]transcriptionapi.Provider, error) {
+	if len(requested) == 0 {
+		return providers, nil
+	}
+
+	available := make(map[transcriptionapi.ProviderID]transcriptionapi.Provider, len(providers))
+	for _, provider := range providers {
+		if provider != nil {
+			available[provider.ID()] = provider
+		}
+	}
+	selected := make([]transcriptionapi.Provider, 0, len(requested))
+	seen := make(map[transcriptionapi.ProviderID]struct{}, len(requested))
+	for _, raw := range requested {
+		id := transcriptionapi.ProviderID(strings.TrimSpace(raw))
+		if id == "" {
+			continue
+		}
+		provider, ok := available[id]
+		if !ok {
+			return nil, commandError(
+				"transcription_provider_not_configured",
+				"usage",
+				fmt.Sprintf("transcription provider %q is not configured", id),
+				ExitUsage,
+				[]string{"cdp transcription serve --help"},
+			)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		selected = append(selected, provider)
+	}
+	if len(selected) == 0 {
+		return nil, commandError(
+			"transcription_provider_allowlist_empty",
+			"usage",
+			"--providers must contain at least one configured provider",
+			ExitUsage,
+			nil,
+		)
+	}
+	return selected, nil
 }
 
 type chatGPTTranscriptionProvider struct {

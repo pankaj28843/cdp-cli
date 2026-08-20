@@ -32,7 +32,7 @@ type AuthRefreshCoordinator struct {
 }
 
 func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *AuthRefreshCoordinator {
-	if interval <= 0 {
+	if interval < 0 {
 		interval = DefaultAuthRefreshInterval
 	}
 	providers := []AuthRefresher(nil)
@@ -51,7 +51,7 @@ func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *Auth
 // remains the authoritative failure path and each provider is isolated from
 // its siblings.
 func (c *AuthRefreshCoordinator) Start(ctx context.Context) {
-	if c == nil || len(c.providers) == 0 {
+	if c == nil || c.interval <= 0 || len(c.providers) == 0 {
 		return
 	}
 	if ctx == nil {
