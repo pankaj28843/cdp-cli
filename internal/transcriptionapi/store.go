@@ -29,6 +29,7 @@ type Store struct {
 	retainAudio   bool
 	maxAudioBytes int64
 	mu            sync.Mutex
+	traceMu       sync.Mutex
 }
 
 func NewStore(root string, maxAudioBytes int64) (*Store, error) {

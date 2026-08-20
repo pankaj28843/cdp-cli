@@ -460,6 +460,23 @@ func TestServerRealtimeUsesOpenAIShapedEventsAndPersistsPCM(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("realtime request entries = %d err=%v", len(entries), err)
 	}
+	var trace []byte
+	for attempt := 0; attempt < 20; attempt++ {
+		trace, err = os.ReadFile(store.TracePath())
+		if err == nil && strings.Contains(string(trace), `"event":"realtime.completed"`) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(trace), `"event":"realtime.completed"`) || !strings.Contains(string(trace), `"audio_chunks":1`) {
+		t.Fatalf("realtime trace = %s", trace)
+	}
+	if strings.Contains(string(trace), "hello world") {
+		t.Fatal("realtime trace leaked transcript text")
+	}
 }
 
 func TestServerRealtimeMarksCumulativeHypothesisRevisionsAsReplacement(t *testing.T) {
@@ -799,6 +816,10 @@ func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *tes
 			Address string `json:"address"`
 			TLS     bool   `json:"tls"`
 		} `json:"listeners"`
+		Observability struct {
+			RequestRecords bool `json:"request_records"`
+			TraceFile      bool `json:"trace_file"`
+		} `json:"observability"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -808,6 +829,9 @@ func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *tes
 	}
 	if len(body.Listeners) != 2 || body.Listeners[0].Scheme != "https" || body.Listeners[0].Address != primaryAddress || !body.Listeners[0].TLS || body.Listeners[1].Scheme != "http" || body.Listeners[1].Address != httpAddress {
 		t.Fatalf("health listeners = %#v", body.Listeners)
+	}
+	if !body.Observability.RequestRecords || !body.Observability.TraceFile {
+		t.Fatalf("health observability = %+v", body.Observability)
 	}
 	if strings.Contains(response.Body.String(), "do-not-leak-this") {
 		t.Fatal("health response leaked bearer token")

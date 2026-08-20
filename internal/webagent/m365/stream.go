@@ -18,6 +18,7 @@ import (
 type StreamEvent struct {
 	Type       string `json:"type"`
 	Text       string `json:"text,omitempty"`
+	Terminal   bool   `json:"terminal,omitempty"`
 	Code       string `json:"code,omitempty"`
 	ErrorClass string `json:"error_class,omitempty"`
 	Message    string `json:"message,omitempty"`
@@ -187,7 +188,7 @@ func StreamTranscribe(
 				if finishFailure != nil {
 					return writeStreamFailure(output, finishFailure)
 				}
-				if err := writeStreamEvent(output, StreamEvent{Type: "final", Text: transcript}); err != nil {
+				if err := writeStreamEvent(output, StreamEvent{Type: "final", Text: transcript, Terminal: true}); err != nil {
 					return err
 				}
 				return nil

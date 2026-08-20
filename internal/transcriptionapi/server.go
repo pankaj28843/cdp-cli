@@ -224,6 +224,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"default_provider": s.config.DefaultProvider,
 		"listeners":        s.listenerHealth(),
 		"providers":        capabilities,
+		"observability": map[string]any{
+			"request_records": true,
+			"trace_file":      true,
+		},
 	})
 }
 
@@ -502,6 +506,42 @@ type realtimeConnection struct {
 	queryModel  string
 	initialized bool
 	audioBytes  int64
+	audioChunks int64
+	startedAt   time.Time
+}
+
+func (s *Server) trace(event TraceEvent) {
+	if s == nil || s.config.Store == nil {
+		return
+	}
+	_ = s.config.Store.AppendTrace(context.Background(), event)
+}
+
+func (c *realtimeConnection) trace(event string, phase RecordPhase, err error) {
+	if c == nil || c.server == nil {
+		return
+	}
+	value := TraceEvent{
+		Event:       event,
+		Transport:   "websocket",
+		RequestID:   c.requestID,
+		Provider:    providerID(c.provider),
+		Model:       c.request.Model,
+		Phase:       phase,
+		Attempts:    c.record.Attempts,
+		AudioBytes:  c.audioBytes,
+		AudioChunks: c.audioChunks,
+	}
+	if !c.startedAt.IsZero() {
+		value.DurationMS = time.Since(c.startedAt).Milliseconds()
+	}
+	if err != nil {
+		apiError := apiErrorFrom(err)
+		value.ErrorType = apiError.Type
+		value.ErrorCode = apiError.Code
+		value.ErrorMessage = apiError.Message
+	}
+	c.server.trace(value)
 }
 
 func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
@@ -514,13 +554,24 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, APIError{Type: "invalid_request_error", Code: "intent_required", Param: "intent", Message: "realtime intent=transcription is required"})
 		return
 	}
+	requestID := NewRequestID()
 	connection, err := websocket.Accept(w, r, nil)
 	if err != nil {
+		s.trace(TraceEvent{
+			Event:        "realtime.accept_failed",
+			Provider:     ProviderID(strings.TrimSpace(r.URL.Query().Get("provider"))),
+			Model:        strings.TrimSpace(r.URL.Query().Get("model")),
+			RequestID:    requestID,
+			Transport:    "websocket",
+			ErrorType:    "connection_error",
+			ErrorMessage: err.Error(),
+		})
 		return
 	}
 	defer connection.Close(websocket.StatusNormalClosure, "done")
-	state, stateErr := NewSessionState(NewRequestID())
+	state, stateErr := NewSessionState(requestID)
 	if stateErr != nil {
+		s.trace(TraceEvent{Event: "realtime.session_state_failed", RequestID: requestID, Transport: "websocket", ErrorType: "internal_error", ErrorMessage: stateErr.Error()})
 		s.writeRealtimeError(r.Context(), connection, stateErr)
 		return
 	}
@@ -530,7 +581,9 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 		requestID:  state.ID,
 		itemID:     "item-0",
 		queryModel: strings.TrimSpace(r.URL.Query().Get("model")),
+		startedAt:  time.Now(),
 	}
+	client.trace("realtime.accepted", PhaseReceived, nil)
 	defer func() {
 		if client.session != nil {
 			_ = client.session.Close()
@@ -540,6 +593,7 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 			client.record.Phase = PhaseCancelled
 			client.record.UpdatedAt = time.Now().UTC()
 			_ = s.config.Store.SaveRecord(context.Background(), client.record)
+			client.trace("realtime.cancelled", PhaseCancelled, nil)
 		}
 	}()
 	for {
@@ -559,18 +613,22 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 		switch event.Type {
 		case "session.update":
 			if err := client.initialize(r.Context(), event); err != nil {
+				client.trace("realtime.session_failed", PhaseFailed, err)
 				client.sendError(r.Context(), connection, apiErrorFrom(err))
 				return
 			}
+			client.trace("realtime.session_ready", PhaseReceived, nil)
 			if err := client.sendSession(r.Context(), connection, "session.created"); err != nil {
 				return
 			}
 		case "input_audio_buffer.append":
 			if err := client.append(r.Context(), connection, event.Audio); err != nil {
+				client.trace("realtime.append_failed", PhaseFailed, err)
 				client.sendError(r.Context(), connection, apiErrorFrom(err))
 			}
 		case "input_audio_buffer.commit":
 			if err := client.commit(r.Context(), connection); err != nil {
+				client.trace("realtime.commit_failed", PhaseFailed, err)
 				client.sendError(r.Context(), connection, apiErrorFrom(err))
 				return
 			}
@@ -704,6 +762,7 @@ func (c *realtimeConnection) append(ctx context.Context, connection *websocket.C
 		return err
 	}
 	c.audioBytes = asset.Bytes
+	c.audioChunks++
 	c.request.Audio = asset
 	if c.record.Phase == PhaseReceived {
 		c.record.Audio = asset
@@ -727,6 +786,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 	if c.audioBytes == 0 {
 		return fmt.Errorf("at least one audio chunk is required before commit")
 	}
+	c.trace("realtime.commit_started", PhaseCommitting, nil)
 	c.record.Phase = PhaseCommitting
 	c.record.UpdatedAt = time.Now().UTC()
 	_ = c.server.config.Store.SaveRecord(ctx, c.record)
@@ -743,6 +803,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Error = apiErrorPtr(apiErrorFrom(err))
 		c.record.UpdatedAt = time.Now().UTC()
 		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		c.trace("realtime.commit_failed", PhaseFailed, err)
 		return err
 	}
 	if err := c.sendEvents(ctx, connection, events); err != nil {
@@ -750,6 +811,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Error = apiErrorPtr(apiErrorFrom(err))
 		c.record.UpdatedAt = time.Now().UTC()
 		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		c.trace("realtime.send_failed", PhaseFailed, err)
 		return err
 	}
 	if c.state.Phase == SessionFailed {
@@ -757,6 +819,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Error = apiErrorPtr(APIError{Type: "provider_error", Message: c.state.FailureReason})
 		c.record.UpdatedAt = time.Now().UTC()
 		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		c.trace("realtime.provider_failed", PhaseFailed, errors.New(c.state.FailureReason))
 		return fmt.Errorf("realtime provider failed: %s", c.state.FailureReason)
 	}
 	if !c.state.AllCompleted() {
@@ -764,6 +827,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Error = apiErrorPtr(APIError{Type: "provider_error", Code: "final_transcript_missing", Message: "realtime provider did not return a final transcription"})
 		c.record.UpdatedAt = time.Now().UTC()
 		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		c.trace("realtime.final_missing", PhaseFailed, errors.New("realtime provider did not return a final transcription"))
 		return errors.New("realtime provider did not return a final transcription")
 	}
 	if c.state.AllCompleted() {
@@ -774,6 +838,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 			return err
 		}
 		_ = c.server.config.Store.SaveResult(ctx, c.record, Result{Task: TaskTranscribe, Text: c.record.Text})
+		c.trace("realtime.completed", PhaseCompleted, nil)
 	}
 	return nil
 }

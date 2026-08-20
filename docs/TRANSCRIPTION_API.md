@@ -105,6 +105,27 @@ The API retains JSON request/result records but uses ephemeral transaction
 media by default. Use `--persist-audio` only when the API itself must retain
 audio for a later retry; VoxInput may still keep its own local retry copy.
 
+## Debugging a live session
+
+Every service instance writes a bounded, owner-only metadata trace next to its
+request records at `~/.cdp-cli/transcription/trace.jsonl` (or
+`<state-dir>/transcription/trace.jsonl`). It records request ID, provider,
+phase, audio byte/chunk counts, attempts, duration, and sanitized error
+metadata. It never records audio, transcript text, cookies, or bearer tokens.
+The active file rotates once it reaches 8 MiB; the previous file is kept as
+`trace.jsonl.previous`.
+
+```bash
+tail -f ~/.cdp-cli/transcription/trace.jsonl
+find ~/.cdp-cli/transcription/requests -name record.json -print
+# Linux user service
+journalctl --user -u cdp-transcription.service -f
+```
+
+Use the same trace file and `launchctl`/service log path on macOS. The
+`/healthz` response advertises `observability.request_records` and
+`observability.trace_file` without exposing the local filesystem path.
+
 The service reports the selected transport and every configured listener from
 `GET /healthz`, so consumers can diagnose a wrong scheme or port without
 guessing:

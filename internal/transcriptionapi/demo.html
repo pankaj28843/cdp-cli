@@ -330,6 +330,7 @@
     realtimeSink: null,
     realtimeText: "",
     realtimeCommitted: false,
+    realtimeFailed: false,
     active: false,
     pending: false,
     mode: "file",
@@ -468,8 +469,19 @@
     $("finalTranscript").hidden = false;
     $("finalTranscript").textContent = message;
     $("copyTranscript").disabled = true;
-    $("transcriptActions").hidden = !state.recordedBlob;
+    $("transcriptActions").hidden = !(state.recordedBlob && state.recordedBlob.size > 0);
     setTalkStatus(message, "bad");
+  }
+
+  function failRealtime(message) {
+    state.realtimeFailed = true;
+    state.active = false;
+    state.pending = false;
+    stopRecorder();
+    void stopRealtimeAudio();
+    $("talkButton").disabled = false;
+    setTalkButton("Start talking");
+    showFailure(`Realtime failed. ${message}`);
   }
 
   function secureOriginHint() {
@@ -555,6 +567,7 @@
       const url = URL.createObjectURL(state.recordedBlob);
       $("audioPreview").src = url;
       $("audioPreview").hidden = false;
+      if (state.realtimeFailed && state.recordedBlob.size > 0) $("transcriptActions").hidden = false;
       onDone?.(state.recordedBlob);
     };
     state.recorder.start(250);
@@ -688,12 +701,13 @@
     showRealtime(value);
     if (!value || typeof value !== "object") return;
     if (value.type === "conversation.item.input_audio_transcription.delta") {
-      state.realtimeText += value.delta || "";
+      state.realtimeText = value.replace ? (value.delta || "") : state.realtimeText + (value.delta || "");
       showLive(state.realtimeText);
     }
     if (value.type === "conversation.item.input_audio_transcription.completed") {
       state.realtimeText = value.transcript || state.realtimeText;
       state.realtimeCommitted = true;
+      state.realtimeFailed = false;
       finishTranscript(state.realtimeText, "live", $("provider").value, $("fileModel").value);
       state.pending = false;
       state.active = false;
@@ -701,7 +715,7 @@
       setTalkButton("Start talking");
       setTimeout(() => state.realtimeSocket?.close(), 250);
     }
-    if (value.type === "error") showFailure(value.error?.message || "Realtime transcription failed.");
+    if (value.type === "error") failRealtime(value.error?.message || "Realtime transcription failed.");
   }
 
   async function stopRealtimeAudio() {
@@ -718,6 +732,7 @@
     const stream = await microphone();
     state.realtimeText = "";
     state.realtimeCommitted = false;
+    state.realtimeFailed = false;
     state.active = false;
     state.pending = false;
     resetTranscript("Listening…");
@@ -755,15 +770,11 @@
       setTalkStatus("Listening… your transcript will grow here.");
     };
     ws.onmessage = handleRealtimeMessage;
-    ws.onerror = () => showFailure("Realtime connection failed. Try again or open Advanced API controls.");
+    ws.onerror = () => failRealtime("connection failed. Try again or open Advanced API controls.");
     ws.onclose = async () => {
       await stopRealtimeAudio();
       state.active = false;
-      if (!state.realtimeCommitted && !state.pending) {
-        $("talkButton").disabled = false;
-        setTalkButton("Start talking");
-        setTalkStatus("Realtime session closed.", "bad");
-      }
+      if (!state.realtimeCommitted && !state.realtimeFailed) failRealtime("session closed before a final transcript.");
     };
   }
 
@@ -775,6 +786,10 @@
     setTalkStatus("Finishing the last words…");
     stopRecorder();
     await stopRealtimeAudio();
+    if (state.realtimeSocket?.readyState !== WebSocket.OPEN) {
+      failRealtime("connection closed before the final chunk was sent.");
+      return;
+    }
     realtimeSend({ type: "input_audio_buffer.commit" });
   }
 
@@ -807,7 +822,7 @@
   };
 
   $("retryButton").onclick = async () => {
-    if (!state.recordedBlob) { setTalkStatus("There is no saved recording to retry.", "bad"); return; }
+    if (!state.recordedBlob || state.recordedBlob.size === 0) { setTalkStatus("There is no saved recording to retry.", "bad"); return; }
     resetTranscript("Retrying…");
     await submitWholeFile(state.recordedBlob, "retry.webm", state.recordedDurationMS);
   };

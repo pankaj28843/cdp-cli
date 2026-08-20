@@ -271,6 +271,14 @@ func (s *m365RealtimeSession) Commit(ctx context.Context) ([]transcriptionapi.Pr
 				s.latest = event.Text
 				s.stateMu.Unlock()
 			}
+			if event.Type == "final" && event.Terminal {
+				s.stateMu.Lock()
+				latest := s.latest
+				s.sequence++
+				sequence := s.sequence
+				s.stateMu.Unlock()
+				return []transcriptionapi.ProviderEvent{{Kind: transcriptionapi.EventFinal, Text: latest, Sequence: sequence}}, nil
+			}
 		case "error":
 			return nil, m365StreamError(event)
 		}

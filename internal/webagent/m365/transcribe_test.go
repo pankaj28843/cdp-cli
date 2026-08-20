@@ -179,6 +179,9 @@ func TestStreamTranscribeEmitsReadyPartialAndFinalEvents(t *testing.T) {
 	require.Contains(t, []string{"partial", "final"}, events[len(events)-1].Type)
 	require.Equal(t, "final", events[len(events)-1].Type)
 	require.Equal(t, "Final words.", events[len(events)-1].Text)
+	if !events[len(events)-1].Terminal {
+		t.Fatal("the post-end final must be marked terminal")
+	}
 }
 
 func testAuthTemplate(t *testing.T) AuthTemplate {
