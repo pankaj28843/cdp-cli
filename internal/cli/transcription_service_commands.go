@@ -37,6 +37,7 @@ func (a *app) newTranscriptionServiceCommand() *cobra.Command {
 
 func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	var address string
+	var httpAddress string
 	var token string
 	var provider string
 	var localBaseURL string
@@ -63,7 +64,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			"  cdp transcription service install --address 0.0.0.0:8765 --tls-self-signed --tls-host 192.168.5.249",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, paths, config, err := a.transcriptionServiceConfig(binaryPath, address, token, provider, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, persistAudio, tlsCertFile, tlsKeyFile)
+			platform, paths, config, err := a.transcriptionServiceConfig(binaryPath, address, httpAddress, token, provider, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, persistAudio, tlsCertFile, tlsKeyFile)
 			if err != nil {
 				return err
 			}
@@ -93,6 +94,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 				"service":          serviceName(platform),
 				"started":          start,
 				"address":          config.Address,
+				"http_address":     config.HTTPAddress,
 				"provider":         config.Provider,
 				"token_configured": strings.TrimSpace(config.Token) != "",
 				"audio_persisted":  config.PersistAudio,
@@ -107,6 +109,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "listen address; use 0.0.0.0:8765 for LAN dogfooding")
+	cmd.Flags().StringVar(&httpAddress, "http-address", os.Getenv("CDP_TRANSCRIPTION_HTTP_ADDRESS"), "optional plain-HTTP listener; use a distinct port for explicit private-LAN/Tailscale access")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("CDP_TRANSCRIPTION_API_TOKEN"), "optional bearer token; leave blank for a private no-auth demo")
 	cmd.Flags().StringVar(&provider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
@@ -236,7 +239,7 @@ func (a *app) transcriptionServicePaths() (transcriptionservice.Platform, transc
 	return platform, paths, nil
 }
 
-func (a *app) transcriptionServiceConfig(binaryPath, address, token, provider, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
+func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, token, provider, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
 	platform, paths, err := a.transcriptionServicePaths()
 	if err != nil {
 		return "", transcriptionservice.Paths{}, transcriptionservice.Config{}, err
@@ -259,6 +262,7 @@ func (a *app) transcriptionServiceConfig(binaryPath, address, token, provider, l
 		BinaryPath:           binaryPath,
 		StateDir:             stateStore.Dir,
 		Address:              strings.TrimSpace(address),
+		HTTPAddress:          strings.TrimSpace(httpAddress),
 		Provider:             strings.TrimSpace(provider),
 		LocalBaseURL:         strings.TrimSpace(localBaseURL),
 		LocalRealtimeBaseURL: strings.TrimSpace(localRealtimeBaseURL),

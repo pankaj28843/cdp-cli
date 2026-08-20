@@ -56,6 +56,7 @@ func (a *app) newTranscriptionSpecCommand() *cobra.Command {
 
 func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var address string
+	var httpAddress string
 	var token string
 	var defaultProvider string
 	var allowedProviders []string
@@ -119,6 +120,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				DefaultProvider: transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
 				BearerToken:     strings.TrimSpace(token),
 				Address:         strings.TrimSpace(address),
+				HTTPAddress:     strings.TrimSpace(httpAddress),
 				TLSCertFile:     tlsFiles.CertFile,
 				TLSKeyFile:      tlsFiles.KeyFile,
 				AuthCoordinator: authCoordinator,
@@ -131,6 +133,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				ready := map[string]any{
 					"ok":                    true,
 					"address":               address,
+					"http_address":          httpAddress,
 					"contract_version":      transcriptionapi.ContractVersion,
 					"state_dir":             store.Root(),
 					"auth_refresh_interval": authRefreshInterval.String(),
@@ -155,6 +158,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "listen address; loopback is the safe default")
+	cmd.Flags().StringVar(&httpAddress, "http-address", os.Getenv("CDP_TRANSCRIPTION_HTTP_ADDRESS"), "optional plain-HTTP listener; use a distinct port for explicit private-LAN/Tailscale access")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("CDP_TRANSCRIPTION_API_TOKEN"), "local bearer token; set this before exposing the service beyond a trusted loopback")
 	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
 	cmd.Flags().StringSliceVar(&allowedProviders, "providers", nil, "provider allowlist; repeat or comma-separate (default: all configured providers)")

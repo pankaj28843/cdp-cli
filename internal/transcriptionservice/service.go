@@ -30,6 +30,7 @@ type Config struct {
 	BinaryPath           string
 	StateDir             string
 	Address              string
+	HTTPAddress          string
 	Token                string
 	Provider             string
 	LocalBaseURL         string
@@ -94,6 +95,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Address) == "" {
 		return fmt.Errorf("transcription service listen address is required")
 	}
+	if strings.TrimSpace(c.HTTPAddress) == strings.TrimSpace(c.Address) && strings.TrimSpace(c.HTTPAddress) != "" {
+		return fmt.Errorf("transcription service HTTP address must differ from the primary address")
+	}
 	if strings.TrimSpace(c.Provider) == "" {
 		return fmt.Errorf("transcription service provider is required")
 	}
@@ -113,6 +117,7 @@ func (c Config) Environment() map[string]string {
 	environment := map[string]string{
 		"CDP_STATE_DIR":                             c.StateDir,
 		"CDP_TRANSCRIPTION_ADDRESS":                 c.Address,
+		"CDP_TRANSCRIPTION_HTTP_ADDRESS":            c.HTTPAddress,
 		"CDP_TRANSCRIPTION_API_TOKEN":               c.Token,
 		"CDP_TRANSCRIPTION_PROVIDER":                c.Provider,
 		"CDP_TRANSCRIPTION_LOCAL_BASE_URL":          c.LocalBaseURL,

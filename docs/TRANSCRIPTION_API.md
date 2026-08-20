@@ -17,11 +17,29 @@ cdp transcription serve \
   --print-ready
 ```
 
+The primary listener is the existing transport. `--http-address` is an
+explicit second, cleartext listener for private clients such as a shell on a
+trusted Tailscale/LAN network; it uses the same API, health contract, and
+provider selection as the primary listener. Keep the primary listener on
+HTTPS for browser microphone access. HTTP is not a browser microphone
+permission workaround: mobile browsers still need an HTTPS secure origin.
+
+```bash
+cdp transcription serve \
+  --address 0.0.0.0:8765 \
+  --http-address 0.0.0.0:8766 \
+  --token local-development-token \
+  --default-provider chatgpt-web \
+  --tls-cert /path/to/lan-cert.pem \
+  --tls-key /path/to/lan-key.pem
+```
+
 For a private LAN dogfood session, the embedded demo can run without a token:
 
 ```bash
 cdp transcription service install \
   --address 0.0.0.0:8765 \
+  --http-address 0.0.0.0:8766 \
   --default-provider chatgpt-web \
   --tls-self-signed \
   --tls-host <this-machine-LAN-IP> \
@@ -46,6 +64,7 @@ the CLI can generate and reuse a self-signed certificate in one command:
 ```bash
 cdp transcription service install \
   --address 0.0.0.0:8765 \
+  --http-address 0.0.0.0:8766 \
   --default-provider chatgpt-web \
   --tls-self-signed \
   --tls-host 192.168.5.249 \
@@ -85,6 +104,27 @@ curl -k https://192.168.5.249:8765/healthz
 The API retains JSON request/result records but uses ephemeral transaction
 media by default. Use `--persist-audio` only when the API itself must retain
 audio for a later retry; VoxInput may still keep its own local retry copy.
+
+The service reports the selected transport and every configured listener from
+`GET /healthz`, so consumers can diagnose a wrong scheme or port without
+guessing:
+
+```json
+{
+  "status": "ok",
+  "contract_version": "voxinput-transcription/v1",
+  "transport": "http",
+  "default_provider": "chatgpt-web",
+  "listeners": [
+    {"scheme": "https", "address": "0.0.0.0:8765", "tls": true},
+    {"scheme": "http", "address": "0.0.0.0:8766", "tls": false}
+  ],
+  "providers": []
+}
+```
+
+Health is intentionally unauthenticated and contains capability/readiness
+metadata only; it never includes bearer tokens or provider session material.
 
 To use an OpenAI-compatible local ASR server instead:
 
@@ -127,7 +167,7 @@ base URL and API key:
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8765/v1",
+    base_url="http://localhost:8766/v1",
     api_key="local-development-token",
 )
 with open("speech.webm", "rb") as audio:

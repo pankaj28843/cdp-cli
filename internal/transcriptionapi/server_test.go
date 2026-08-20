@@ -2,10 +2,12 @@ package transcriptionapi
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -151,6 +153,85 @@ func TestServerRequiresCompleteTLSConfiguration(t *testing.T) {
 	if _, err := NewServer(ServerConfig{Store: store, TLSCertFile: "cert.pem"}); err == nil {
 		t.Fatal("NewServer accepted a TLS certificate without a key")
 	}
+}
+
+func TestServerServesPrimaryAndOptionalHTTPListeners(t *testing.T) {
+	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: "ready"}}
+	store, err := NewStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryAddress := reserveTCPAddress(t)
+	httpAddress := reserveTCPAddress(t)
+	server, err := NewServer(ServerConfig{
+		Registry:        NewRegistry(provider),
+		Store:           store,
+		DefaultProvider: ProviderLocal,
+		Address:         primaryAddress,
+		HTTPAddress:     httpAddress,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.ListenAndServe(ctx) }()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	for _, address := range []string{primaryAddress, httpAddress} {
+		var response *http.Response
+		for attempt := 0; attempt < 20; attempt++ {
+			response, err = client.Get("http://" + address + "/healthz")
+			if err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("GET /healthz on %s: %v", address, err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET /healthz on %s status = %d body = %s", address, response.StatusCode, body)
+		}
+		var health struct {
+			Transport string `json:"transport"`
+			Listeners []struct {
+				Address string `json:"address"`
+			} `json:"listeners"`
+		}
+		if err := json.Unmarshal(body, &health); err != nil {
+			t.Fatal(err)
+		}
+		if health.Transport != "http" || len(health.Listeners) != 2 {
+			t.Fatalf("health on %s = %+v, want HTTP and two listeners", address, health)
+		}
+	}
+	cancel()
+	if err := <-serveDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListenAndServe error = %v, want context.Canceled", err)
+	}
+}
+
+func reserveTCPAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return address
 }
 
 func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testing.T) {
@@ -610,4 +691,72 @@ func minInt(left, right int) int {
 		return left
 	}
 	return right
+}
+
+func TestServerRejectsListenerAddressCollision(t *testing.T) {
+	store, err := NewStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewServer(ServerConfig{
+		Registry:    NewRegistry(&fakeProvider{id: ProviderLocal}),
+		Store:       store,
+		Address:     "127.0.0.1:8765",
+		HTTPAddress: "127.0.0.1:8765",
+	})
+	if err == nil || !strings.Contains(err.Error(), "must differ") {
+		t.Fatalf("collision error = %v, want distinct-listener error", err)
+	}
+}
+
+func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *testing.T) {
+	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: "ok"}}
+	store, err := NewStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{
+		Registry:        NewRegistry(provider),
+		Store:           store,
+		DefaultProvider: ProviderLocal,
+		BearerToken:     "do-not-leak-this",
+		Address:         "127.0.0.1:8765",
+		HTTPAddress:     "127.0.0.1:8766",
+		TLSCertFile:     "synthetic-cert.pem",
+		TLSKeyFile:      "synthetic-key.pem",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "https://example.test/healthz", nil)
+	request.TLS = &tls.ConnectionState{}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", response.Code)
+	}
+	var body struct {
+		Status          string     `json:"status"`
+		ContractVersion string     `json:"contract_version"`
+		Transport       string     `json:"transport"`
+		DefaultProvider ProviderID `json:"default_provider"`
+		Listeners       []struct {
+			Scheme  string `json:"scheme"`
+			Address string `json:"address"`
+			TLS     bool   `json:"tls"`
+		} `json:"listeners"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "ok" || body.ContractVersion != ContractVersion || body.Transport != "https" || body.DefaultProvider != ProviderLocal {
+		t.Fatalf("health body = %+v", body)
+	}
+	if len(body.Listeners) != 2 || body.Listeners[0].Scheme != "https" || body.Listeners[0].Address != "127.0.0.1:8765" || !body.Listeners[0].TLS || body.Listeners[1].Scheme != "http" || body.Listeners[1].Address != "127.0.0.1:8766" {
+		t.Fatalf("health listeners = %#v", body.Listeners)
+	}
+	if strings.Contains(response.Body.String(), "do-not-leak-this") {
+		t.Fatal("health response leaked bearer token")
+	}
 }

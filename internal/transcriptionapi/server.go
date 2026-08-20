@@ -30,6 +30,7 @@ type ServerConfig struct {
 	DefaultProvider ProviderID
 	BearerToken     string
 	Address         string
+	HTTPAddress     string
 	TLSCertFile     string
 	TLSKeyFile      string
 	AuthCoordinator *AuthRefreshCoordinator
@@ -49,6 +50,11 @@ func NewServer(config ServerConfig) (*Server, error) {
 	}
 	if strings.TrimSpace(config.Address) == "" {
 		config.Address = DefaultListenAddress
+	}
+	config.Address = strings.TrimSpace(config.Address)
+	config.HTTPAddress = strings.TrimSpace(config.HTTPAddress)
+	if config.HTTPAddress != "" && config.HTTPAddress == config.Address {
+		return nil, fmt.Errorf("transcription HTTP address must differ from the primary address")
 	}
 	if (strings.TrimSpace(config.TLSCertFile) == "") != (strings.TrimSpace(config.TLSKeyFile) == "") {
 		return nil, fmt.Errorf("transcription TLS certificate and key must be provided together")
@@ -124,23 +130,45 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			MinVersion:   tls.VersionTLS12,
 		})
 	}
-	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- s.httpServer.Serve(listener)
-	}()
-	select {
-	case <-ctx.Done():
+	listeners := []net.Listener{listener}
+	if s.config.HTTPAddress != "" {
+		httpListener, listenErr := net.Listen("tcp", s.config.HTTPAddress)
+		if listenErr != nil {
+			_ = rawListener.Close()
+			return fmt.Errorf("listen for transcription HTTP API on %s: %w", s.config.HTTPAddress, listenErr)
+		}
+		listeners = append(listeners, httpListener)
+	}
+	serveErr := make(chan error, len(listeners))
+	for _, currentListener := range listeners {
+		go func(listener net.Listener) {
+			serveErr <- s.httpServer.Serve(listener)
+		}(currentListener)
+	}
+	shutdown := func() error {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := s.httpServer.Shutdown(shutdownContext); err != nil {
+		return s.httpServer.Shutdown(shutdownContext)
+	}
+	select {
+	case <-ctx.Done():
+		if err := shutdown(); err != nil {
 			return fmt.Errorf("shutdown transcription API: %w", err)
 		}
-		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("serve transcription API: %w", err)
+		for range listeners {
+			if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve transcription API: %w", err)
+			}
 		}
 		return ctx.Err()
 	case err := <-serveErr:
-		if errors.Is(err, http.ErrServerClosed) {
+		if shutdownErr := shutdown(); shutdownErr != nil {
+			return fmt.Errorf("shutdown transcription API: %w", shutdownErr)
+		}
+		for index := 1; index < len(listeners); index++ {
+			<-serveErr
+		}
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return fmt.Errorf("serve transcription API: %w", err)
@@ -190,8 +218,37 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":           status,
 		"contract_version": ContractVersion,
+		"transport":        requestTransport(r),
+		"default_provider": s.config.DefaultProvider,
+		"listeners":        s.listenerHealth(),
 		"providers":        capabilities,
 	})
+}
+
+type healthListener struct {
+	Scheme  string `json:"scheme"`
+	Address string `json:"address"`
+	TLS     bool   `json:"tls"`
+}
+
+func requestTransport(r *http.Request) string {
+	if r != nil && r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func (s *Server) listenerHealth() []healthListener {
+	primary := healthListener{Scheme: "http", Address: s.config.Address}
+	if strings.TrimSpace(s.config.TLSCertFile) != "" {
+		primary.Scheme = "https"
+		primary.TLS = true
+	}
+	listeners := []healthListener{primary}
+	if s.config.HTTPAddress != "" {
+		listeners = append(listeners, healthListener{Scheme: "http", Address: s.config.HTTPAddress})
+	}
+	return listeners
 }
 
 func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
