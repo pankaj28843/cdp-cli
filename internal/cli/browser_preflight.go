@@ -372,7 +372,7 @@ func (a *app) runBrowserPreflightOpenReadiness(ctx context.Context, rawURL strin
 	if err != nil {
 		return map[string]any{"ok": false, "url": rawURL, "error": err.Error()}, err
 	}
-	targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "browser-preflight")
+	targetID, err := a.createWorkflowPageTargetWithKeepOpen(ctx, client, rawURL, "browser-preflight", keepOpen)
 	if err != nil {
 		_ = closeClient(ctx)
 		return map[string]any{"ok": false, "url": rawURL, "error": err.Error()}, err

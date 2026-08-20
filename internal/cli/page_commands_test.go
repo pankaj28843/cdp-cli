@@ -1799,7 +1799,10 @@ func TestWaitEvalSemanticReadinessTimeoutIncludesLastValueJSON(t *testing.T) {
 		"wait", "eval", "window.__semanticNeverReady",
 		"--ready-expr", `value.terminalCondition === "fare_rows"`,
 		"--poll", "10ms",
-		"--timeout", "40ms",
+		// This budget includes daemon lease, target discovery, WebSocket attach,
+		// and the first evaluation; keep enough margin to exercise last-value
+		// reporting instead of making the fixture scheduler-sensitive.
+		"--timeout", "250ms",
 		"--json",
 	}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {

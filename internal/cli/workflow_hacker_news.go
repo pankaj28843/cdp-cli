@@ -55,7 +55,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 			if err != nil {
 				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 			}
-			targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "hacker-news")
+			targetID, err := a.createWorkflowPageTargetWithKeepOpen(ctx, client, rawURL, "hacker-news", keepOpen)
 			if err != nil {
 				_ = closeClient(ctx)
 				return err

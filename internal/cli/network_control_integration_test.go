@@ -48,7 +48,10 @@ func TestNetworkMockJSONResolvesEveryPausedRequest(t *testing.T) {
 
 	const rule = `{"url_pattern":"*://*/api/config","method":"GET","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"enabled\":true}","max_matches":1}`
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"network", "mock", "--rule", rule, "--duration", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	// This window covers two CDP event/response round trips through the fake
+	// daemon. Keep enough scheduler margin to exercise both paused requests
+	// instead of making the integration fixture depend on host load.
+	code := cli.Execute(context.Background(), []string{"network", "mock", "--rule", rule, "--duration", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("network mock exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}

@@ -28,6 +28,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	var runID string
 	var taskID string
 	var stageName string
+	var keepOpen bool
 	var reload bool
 	var ignoreCache bool
 	cmd := &cobra.Command{
@@ -155,7 +156,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 						a.connectionRemediationCommands(),
 					)
 				}
-				targetID, err = a.createWorkflowPageTarget(ctx, client, "about:blank", "debug-bundle")
+				targetID, err = a.createWorkflowPageTargetWithKeepOpen(ctx, client, "about:blank", "debug-bundle", keepOpen)
 				if err != nil {
 					closeClient(ctx)
 					return err
@@ -387,6 +388,9 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 			if stageName != "" {
 				commandArgv = append(commandArgv, "--stage", stageName)
 			}
+			if keepOpen {
+				commandArgv = append(commandArgv, "--keep-open")
+			}
 			commands = append(commands, newDebugBundleCommandRecord(debugBundleCommandRecordOptions{
 				Name:         "workflow debug-bundle",
 				BrowserMode:  a.browserModeName(),
@@ -465,6 +469,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					"screenshot_full": screenshotFull,
 					"redact":          redact,
 					"inline_payloads": inlinePayloads,
+					"keep_open":       keepOpen,
 					"run_id":          runID,
 					"task_id":         taskID,
 					"stage":           stageName,
@@ -506,6 +511,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	cmd.Flags().StringVar(&runID, "run-id", "", "optional run id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "optional task id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&stageName, "stage", "", "optional stage name recorded in bundle command and stage logs")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for follow-up commands")
 	cmd.Flags().BoolVar(&reload, "reload", true, "reload an existing selected target after collectors are armed")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", true, "bypass ordinary HTTP cache for the evidence-triggering reload or navigation")
 	return cmd

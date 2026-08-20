@@ -830,7 +830,10 @@ func TestWaitPopupTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "popup", "--match-url", "/missing", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	// Popup discovery includes target listing, event subscription, and the
+	// first event drain; leave scheduler margin for the fixture to observe the
+	// non-matching popup before timing out.
+	code := cli.Execute(context.Background(), []string{"wait", "popup", "--match-url", "/missing", "--timeout", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait popup timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}

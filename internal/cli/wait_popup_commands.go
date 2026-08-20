@@ -315,7 +315,7 @@ func popupWaitReport(observation popupWaitObservation, criteria popupWaitCriteri
 }
 
 func popupWaitError(ctx context.Context, openerID string, criteria popupWaitCriteria, report map[string]any, err error) error {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+	if popupWaitDeadlineExceeded(ctx, err) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return commandErrorWithData(
 			"timeout",
 			"timeout",
@@ -330,6 +330,17 @@ func popupWaitError(ctx context.Context, openerID string, criteria popupWaitCrit
 		return err
 	}
 	return popupWaitConnectionError(openerID, err)
+}
+
+func popupWaitDeadlineExceeded(ctx context.Context, err error) bool {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	return strings.Contains(errText, context.DeadlineExceeded.Error()) || strings.Contains(errText, "i/o timeout")
 }
 
 func popupWaitConnectionError(openerID string, err error) error {

@@ -41,7 +41,7 @@ func (a *app) newWorkflowXCollectionCommand(use, short string) *cobra.Command {
 			if err != nil {
 				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 			}
-			targetID, err := a.createWorkflowPageTarget(ctx, client, request.URL, "x-collect")
+			targetID, err := a.createWorkflowPageTargetWithKeepOpen(ctx, client, request.URL, "x-collect", keepOpen)
 			if err != nil {
 				_ = closeClient(ctx)
 				return err
