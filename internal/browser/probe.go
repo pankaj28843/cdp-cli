@@ -1,10 +1,7 @@
 package browser
 
 import (
-	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -14,7 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
+
+	"nhooyr.io/websocket"
 )
 
 type ProbeOptions struct {
@@ -376,38 +374,16 @@ func defaultUserDataDir(channel string) (string, error) {
 }
 
 func websocketProbe(ctx context.Context, port, path string) (int, error) {
-	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", port))
+	endpoint := fmt.Sprintf("ws://%s%s", net.JoinHostPort("127.0.0.1", port), path)
+	conn, response, err := websocket.Dial(ctx, endpoint, nil)
 	if err != nil {
-		return 0, err
+		if response != nil {
+			return response.StatusCode, fmt.Errorf("dial websocket probe: %w", err)
+		}
+		return 0, fmt.Errorf("dial websocket probe: %w", err)
 	}
-	defer conn.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-	if err := conn.SetDeadline(deadline); err != nil {
-		return 0, fmt.Errorf("set websocket probe deadline: %w", err)
-	}
-
-	keyBytes := make([]byte, 16)
-	if _, err := rand.Read(keyBytes); err != nil {
-		return 0, fmt.Errorf("generate websocket key: %w", err)
-	}
-	key := base64.StdEncoding.EncodeToString(keyBytes)
-	_, err = fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: localhost:%s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", path, port, key)
-	if err != nil {
-		return 0, fmt.Errorf("write websocket handshake: %w", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		return 0, fmt.Errorf("read websocket handshake: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return resp.StatusCode, fmt.Errorf("websocket handshake status = %d", resp.StatusCode)
-	}
-	return resp.StatusCode, nil
+	defer conn.Close(websocket.StatusNormalClosure, "probe")
+	return http.StatusSwitchingProtocols, nil
 }
 
 func versionEndpoint(rawURL string) (string, error) {

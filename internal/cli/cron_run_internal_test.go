@@ -12,7 +12,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 )
 
-func TestRunManagedCronTaskCapturesPassiveHeadedChildInBoundedLog(t *testing.T) {
+func TestRunManagedCronTaskCapturesActiveHeadedChildInBoundedLog(t *testing.T) {
 	stateDir := t.TempDir()
 	script := filepath.Join(t.TempDir(), "fake-cdp")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\"\n"), 0o700); err != nil {
@@ -39,8 +39,8 @@ func TestRunManagedCronTaskCapturesPassiveHeadedChildInBoundedLog(t *testing.T) 
 		t.Fatalf("read managed log: %v", err)
 	}
 	logText := string(logBytes)
-	if !strings.Contains(logText, "daemon keepalive") || !strings.Contains(logText, "--probe passive") {
-		t.Fatalf("managed log = %q, want passive headed child command", logText)
+	if !strings.Contains(logText, "daemon keepalive") || !strings.Contains(logText, "--probe active") {
+		t.Fatalf("managed log = %q, want active headed child command", logText)
 	}
 	for _, forbidden := range []string{" login ", " consent ", " ask ", " click ", " type "} {
 		if strings.Contains(" "+logText+" ", forbidden) {

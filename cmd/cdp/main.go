@@ -21,6 +21,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if code, handled := cli.ExecuteInternal(ctx, os.Args[1:], os.Stdout, os.Stderr); handled {
+		os.Exit(code)
+	}
+
 	code := cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr, cli.BuildInfo{
 		Version:    version,
 		Commit:     commit,

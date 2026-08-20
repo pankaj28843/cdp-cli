@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -42,17 +43,20 @@ func TestManagedCronTasksBoundLogsAndScheduleDailyArtifactPrune(t *testing.T) {
 	}
 }
 
-func TestManagedCronTaskChildSpecsKeepHeadedWorkPassive(t *testing.T) {
+func TestManagedCronTaskChildSpecsKeepHeadedWorkActiveAndSelfHealing(t *testing.T) {
 	opts := defaultCronRenderOptions()
 	args, env, err := managedCronTaskChildSpec(cronTaskHeadedDaemonKeepalive, "/tmp/cdp-state", opts)
 	if err != nil {
 		t.Fatalf("headed child spec: %v", err)
 	}
 	command := strings.Join(args, " ")
-	for _, want := range []string{"--browser-mode headed", "daemon keepalive", "--probe passive", "--auto-connect", "--repair"} {
+	for _, want := range []string{"--browser-mode headed", "daemon keepalive", "--probe active", "--auto-connect", "--repair"} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("headed child command missing %q: %s", want, command)
 		}
+	}
+	if runtime.GOOS == "darwin" && !strings.Contains(command, "--macos-self-heal-approval") {
+		t.Fatalf("headed macOS child command missing approval self-heal flag: %s", command)
 	}
 	for _, forbidden := range []string{" ask ", " login ", " consent ", " click ", " type "} {
 		if strings.Contains(" "+command+" ", forbidden) {

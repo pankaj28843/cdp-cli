@@ -237,7 +237,7 @@
       <p id="primaryStatus" class="talk-status" role="status" aria-live="polite">Ready when you are.</p>
       <div id="activity" class="activity" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
     </div>
-    <p id="secureHint" class="secure-hint" hidden>Phone mic needs HTTPS. Localhost works on this Mac.</p>
+    <p id="secureHint" class="secure-hint" hidden>Phone mic needs HTTPS. <a id="secureLink" href="#">Open the secure demo</a> and accept the private certificate once.</p>
   </section>
 
   <section class="transcript-surface" aria-labelledby="transcriptHeading">
@@ -318,6 +318,8 @@
     recorder: null,
     recorderChunks: [],
     recorderPurpose: "",
+    recordingStartedAt: 0,
+    recordedDurationMS: 0,
     recordedBlob: null,
     selectedFile: null,
     microphone: null,
@@ -472,7 +474,10 @@
 
   function secureOriginHint() {
     const localHost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
-    if (!window.isSecureContext && !localHost) $("secureHint").hidden = false;
+    if (!window.isSecureContext && !localHost) {
+      $("secureLink").href = `https://${window.location.host}${window.location.pathname}`;
+      $("secureHint").hidden = false;
+    }
   }
 
   async function fetchValue(path, options = {}) {
@@ -541,9 +546,11 @@
     const mimeType = recorderMimeType();
     state.recorderChunks = [];
     state.recorderPurpose = purpose;
+    state.recordingStartedAt = performance.now();
     state.recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     state.recorder.ondataavailable = (event) => { if (event.data.size) state.recorderChunks.push(event.data); };
     state.recorder.onstop = () => {
+      state.recordedDurationMS = Math.max(1, Math.round(performance.now() - state.recordingStartedAt));
       state.recordedBlob = new Blob(state.recorderChunks, { type: state.recorder.mimeType || "audio/webm" });
       const url = URL.createObjectURL(state.recordedBlob);
       $("audioPreview").src = url;
@@ -588,7 +595,7 @@
     return { events, transcript: finalText || deltas };
   }
 
-  async function submitWholeFile(blob, name = "microphone.webm") {
+  async function submitWholeFile(blob, name = "microphone.webm", durationMS = state.recordedDurationMS) {
     if (!blob) throw new Error("record or choose an audio file first");
     state.pending = true;
     setTalkButton("Finalizing…", "is-finalizing");
@@ -596,6 +603,7 @@
     setTalkStatus("Sending the complete recording…");
     const form = new FormData();
     form.append("file", blob, name);
+    if (Number.isInteger(durationMS) && durationMS > 0) form.append("duration_ms", String(durationMS));
     form.append("model", $("fileModel").value.trim() || "whisper-1");
     appendFormValue(form, "provider", $("advancedProvider").value || $("provider").value);
     appendFormValue(form, "language", $("language").value);
@@ -801,7 +809,7 @@
   $("retryButton").onclick = async () => {
     if (!state.recordedBlob) { setTalkStatus("There is no saved recording to retry.", "bad"); return; }
     resetTranscript("Retrying…");
-    await submitWholeFile(state.recordedBlob, "retry.webm");
+    await submitWholeFile(state.recordedBlob, "retry.webm", state.recordedDurationMS);
   };
 
   $("audioFile").onchange = () => {

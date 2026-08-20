@@ -128,6 +128,19 @@ type RuntimeClient struct {
 	LeaseID string
 }
 
+// IsInvocationLeaseUnsupported reports the compatibility error returned by a
+// daemon created before invocation leases were added. A newer client can still
+// make a bounded browser call through that daemon, but it cannot attribute or
+// clean up targets through the lease protocol until the daemon is refreshed.
+func IsInvocationLeaseUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, strings.ToLower(RPCMethodBeginInvocationLease)) &&
+		(strings.Contains(message, "-32601") || strings.Contains(message, "not found"))
+}
+
 type holdOptions struct {
 	fetchProtocolFallback func(context.Context) (cdp.Protocol, error)
 }
@@ -351,10 +364,21 @@ func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir
 	if runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode); err != nil {
 		return Runtime{}, false, err
 	} else if ok && RuntimeRunning(runtime) {
-		if RuntimeSocketReady(ctx, runtime) && runtimeMatchesKeepAliveRequest(runtime, browserMode, endpoint, connectionMode, metadata, reconnect) {
-			return runtime, true, nil
+		if runtimeMatchesKeepAliveRequest(runtime, browserMode, endpoint, connectionMode, metadata, reconnect) {
+			if RuntimeSocketReady(ctx, runtime) {
+				return runtime, true, nil
+			}
+			if ready, waitErr := waitForRuntimeSocket(ctx, runtime); waitErr == nil {
+				return ready, true, nil
+			} else {
+				return Runtime{}, true, fmt.Errorf("existing daemon keepalive did not become ready: %w", waitErr)
+			}
 		}
-		_, _, _ = StopRuntimeForMode(ctx, stateDir, browserMode)
+		if _, stopped, stopErr := StopRuntimeForMode(ctx, stateDir, browserMode); stopErr != nil {
+			return Runtime{}, true, fmt.Errorf("stop mismatched daemon keepalive: %w", stopErr)
+		} else if !stopped || RuntimeRunning(runtime) {
+			return Runtime{}, true, fmt.Errorf("mismatched daemon keepalive did not stop")
+		}
 	}
 
 	cmd := exec.Command(executable, "daemon", "hold")
@@ -404,6 +428,22 @@ func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir
 		return Runtime{}, false, err
 	}
 	return runtime, false, nil
+}
+
+func waitForRuntimeSocket(ctx context.Context, runtime Runtime) (Runtime, error) {
+	for {
+		if !RuntimeRunning(runtime) {
+			return Runtime{}, fmt.Errorf("daemon keepalive process exited")
+		}
+		if RuntimeSocketReady(ctx, runtime) {
+			return runtime, nil
+		}
+		select {
+		case <-ctx.Done():
+			return Runtime{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func runtimeMatchesKeepAliveRequest(runtime Runtime, browserMode, endpoint, connectionMode string, metadata KeepAliveMetadata, reconnect time.Duration) bool {

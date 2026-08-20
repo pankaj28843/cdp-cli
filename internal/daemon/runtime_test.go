@@ -522,6 +522,15 @@ func TestRuntimeClientInvocationLeaseLifecycle(t *testing.T) {
 	}
 }
 
+func TestIsInvocationLeaseUnsupported(t *testing.T) {
+	if !daemon.IsInvocationLeaseUnsupported(errors.New("cdp Daemon.beginInvocationLease failed: method wasn't found (-32601)")) {
+		t.Fatal("old daemon method-not-found error was not recognized")
+	}
+	if daemon.IsInvocationLeaseUnsupported(errors.New("daemon lease rejected: resource budget exceeded")) {
+		t.Fatal("non-compatibility lease error was misclassified")
+	}
+}
+
 func TestRuntimeClientReadsVeryLargeCDPResponsesAndStaysRunning(t *testing.T) {
 	server := newRuntimeRPCLargeFakeServer(t)
 	defer server.Close()

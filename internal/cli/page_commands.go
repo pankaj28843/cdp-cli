@@ -1466,10 +1466,16 @@ func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(con
 		return nil, nil, err
 	}
 	leased, _, err := client.BeginLease(ctx, daemon.DefaultInvocationLeaseTTL)
-	if err != nil {
-		return nil, nil, err
+	if err == nil {
+		return leased, leased.EndLease, nil
 	}
-	return leased, leased.EndLease, nil
+	if daemon.IsInvocationLeaseUnsupported(err) {
+		// Keep an older, still-running daemon usable while the scheduled
+		// keepalive upgrades it. The unleased path deliberately does not claim
+		// lifecycle attribution or target cleanup ownership.
+		return client, func(context.Context) error { return nil }, nil
+	}
+	return nil, nil, err
 }
 
 func (a *app) browserEventCDPClient(ctx context.Context) (browserEventClient, func(context.Context) error, error) {
@@ -1478,10 +1484,13 @@ func (a *app) browserEventCDPClient(ctx context.Context) (browserEventClient, fu
 		return nil, nil, err
 	}
 	leased, _, err := client.BeginLease(ctx, daemon.DefaultInvocationLeaseTTL)
-	if err != nil {
-		return nil, nil, err
+	if err == nil {
+		return leased, leased.EndLease, nil
 	}
-	return leased, leased.EndLease, nil
+	if daemon.IsInvocationLeaseUnsupported(err) {
+		return client, func(context.Context) error { return nil }, nil
+	}
+	return nil, nil, err
 }
 
 func (a *app) daemonRuntimeClient(ctx context.Context) (daemon.RuntimeClient, error) {

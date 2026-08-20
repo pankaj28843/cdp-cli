@@ -299,6 +299,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		writeAPIError(w, status, APIError{Type: "invalid_request_error", Code: "audio_persist_failed", Param: "file", Message: safeStoreError(err)})
 		return
 	}
+	asset.DurationMS = request.Audio.DurationMS
 	request.Audio = asset
 	if err := request.Validate(); err != nil {
 		writeValidationError(w, err)

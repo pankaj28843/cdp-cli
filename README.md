@@ -31,6 +31,11 @@ is available through `cdp transcription service install` on macOS and Linux.
 See
 [docs/TRANSCRIPTION_API.md](docs/TRANSCRIPTION_API.md).
 
+For phone or tablet microphone testing over a private LAN, install the service
+with `--tls-self-signed --tls-host <LAN-IP>` and open the reported `https://`
+demo URL; plain HTTP on a LAN address is not a microphone-capable browser
+origin.
+
 ## Intended Shape
 
 ```bash
@@ -40,7 +45,7 @@ cdp daemon status --json
 cdp doctor --check scheduled-tasks --json
 cdp doctor --check browser-health --json
 cdp doctor --check headless-security --json
-cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --display :0 --json
+cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --macos-self-heal-approval --display :0 --json
 cdp --browser-mode headless browser profile seed --strategy managed --json
 cdp --browser-mode headless daemon keepalive --repair --json
 cdp --browser-mode headless daemon maintenance --json
@@ -490,14 +495,18 @@ setups; they are not the normal headed/headless selector.
 `cdp daemon keepalive` is safe to run from cron or a user timer. It acquires a
 mode-specific per-connection lock before any active probe, exits successfully when
 another keepalive already owns that lock, and starts or repairs the selected-mode
-daemon only when the selected connection is not healthy.
+daemon only when the selected connection is not healthy. A healthy headed tick is
+a no-op: it does not activate Chrome, touch the remote-debugging preference, or
+spawn another hold. Headed repair is bounded by a 20-second lease.
 
-For headed auto-connect, scheduled keepalive uses `--probe passive`: if a prior
-approved daemon runtime went stale while Chrome stayed open, keepalive restarts
-the daemon from that last approved endpoint without opening pages or asking for a
-new prompt. Use `--probe active` only for a human-managed repair when someone can
-approve Chrome if needed. Headless keepalive remains fully unattended and starts
-or reuses the managed headless Chrome runtime.
+For headed auto-connect, the managed cron task uses `--probe active` and, on
+macOS, `--macos-self-heal-approval`: it keeps at least one visible Chrome window
+open, starts or reuses the real daemon transport, and drains only Chrome's exact
+`Allow remote debugging?` sheet across all windows. The daemon becoming ready is
+the transport proof; the accessibility click alone is never treated as success.
+Linux currently reports the approval adapter as an explicit placeholder for a
+future AT-SPI implementation. Headless keepalive remains fully unattended and
+starts or reuses the managed headless Chrome runtime.
 
 The managed path is available through first-class cron commands:
 
@@ -520,9 +529,11 @@ shell program. Overlap is a successful typed `already_running` skip. The
 maintenance entry performs managed-process
 sweep, resource preflight, profile seeding, daemon repair, synthetic
 health-check, page cleanup, and summary artifact writes in one ordered flow.
-Headed keepalive is passive: it may repair the daemon against a previously
-approved endpoint, but it never opens provider pages, logs in, accepts consent,
-or submits prompts. Any Chrome approval remains a human action.
+Headed keepalive never opens provider pages, logs in, accepts provider consent,
+or submits prompts. Its only scheduled UI action on macOS is the exact native
+Chrome remote-debugging `Allow` button, and success still requires the daemon
+transport to become ready. Other desktop platforms return a structured
+placeholder until their accessibility adapter is implemented.
 Use `cdp cron diff --json` or
 `cdp cron install --dry-run --json` before installing to inspect the intended
 block without mutating the current crontab. Add an explicit browser mode to render

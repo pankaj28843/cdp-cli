@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -113,7 +114,7 @@ func (a *app) newCronCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cron",
 		Short: "Manage cdp-managed browser runtime cron tasks",
-		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block for headed daemon keepalive and canonical unattended headless maintenance tasks.",
+		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block for headed daemon keepalive with active self-healing and canonical unattended headless maintenance tasks.",
 	}
 	cmd.AddCommand(a.newCronStatusCommand())
 	cmd.AddCommand(a.newCronDiffCommand())
@@ -130,7 +131,7 @@ func (a *app) newCronRunCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <task-id>",
 		Short: "Run one cdp-managed cron task with Go-owned locking",
-		Long:  "Run one stable cdp-managed task with a non-blocking owner-only advisory lock, bounded latest-run logging, and typed skip or failure output. Headed keepalive uses passive browser probing and never performs login, consent, prompt submission, or other human actions.",
+		Long:  "Run one stable cdp-managed task with a non-blocking owner-only advisory lock, bounded latest-run logging, and typed skip or failure output. Headed keepalive ensures Chrome is running, uses an active probe, and on macOS can drain only the exact remote-debugging approval queue before requiring verified CDP health.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
@@ -584,6 +585,27 @@ func (a *app) newCronHealHeadedCommand() *cobra.Command {
 				return err
 			}
 			a.opts.activeProbe = true
+			verifiedProbe, approval, repairErr := a.runHeadedRemoteDebuggingRepair(ctx)
+			if repairErr != nil {
+				return commandErrorWithData(
+					"permission_pending",
+					"permission",
+					fmt.Sprintf("headed cron self-heal failed: %v", repairErr),
+					ExitPermission,
+					permissionRemediationCommands(),
+					permissionPendingData(map[string]any{"approval": approval, "probe": verifiedProbe, "previous": before}),
+				)
+			}
+			if verifiedProbe.State != "cdp_available" || !approval.QueueDrained {
+				return commandErrorWithData(
+					"permission_pending",
+					"permission",
+					"headed cron self-heal did not produce a verified CDP transport",
+					ExitPermission,
+					permissionRemediationCommands(),
+					permissionPendingData(map[string]any{"approval": approval, "probe": verifiedProbe, "previous": before}),
+				)
+			}
 			result, err := a.runDaemonStart(ctx, daemonStartConfig{reconnect: reconnect, connectionName: "default", remember: true})
 			if err != nil {
 				return err
@@ -600,6 +622,8 @@ func (a *app) newCronHealHeadedCommand() *cobra.Command {
 			result.data["action"] = "repaired"
 			result.data["locked"] = false
 			result.data["chrome"] = chrome
+			result.data["remote_debugging_approval"] = approval
+			result.data["verified_probe"] = verifiedProbe
 			result.data["previous"] = before
 			result.data["health"] = health
 			result.data["lock"] = map[string]any{"name": lockName, "acquired": true}
@@ -740,7 +764,7 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 				LockName:           "cron-run-headed-daemon-keepalive",
 				LogName:            "keepalive-headed.log",
 				LogArtifactKey:     "headed_keepalive_log",
-				Purpose:            "Keep the headed daemon healthy with passive probing and noninteractive repair when an approved endpoint already exists.",
+				Purpose:            "Keep at least one headed Chrome instance available, actively verify CDP, and self-heal the exact macOS remote-debugging approval queue when needed.",
 				Command:            fmt.Sprintf("%s --state-dir %s cron run %s --display %s --xdg-runtime-dir %s --reconnect %s --max-log-size %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadedDaemonKeepalive, display, xdgRuntimeDir, reconnect, maxLogSize),
 				ProbeWords:         []string{"cron", "run", cronTaskHeadedDaemonKeepalive},
 				ConfigDependencies: []string{"display", "xdg_runtime_dir", "reconnect"},
@@ -834,11 +858,14 @@ func managedCronTaskChildSpec(taskID, stateDir string, opts cronRenderOptions) (
 			"daemon", "keepalive",
 			"--auto-connect",
 			"--repair",
-			"--probe", "passive",
+			"--probe", "active",
 			"--reconnect", opts.Reconnect.String(),
 			"--display", opts.Display,
 			"--json",
 		)
+		if runtime.GOOS == "darwin" {
+			args = append(args, "--macos-self-heal-approval")
+		}
 		return args, envWithOverrides(os.Environ(), map[string]string{
 			"DISPLAY":         opts.Display,
 			"XDG_RUNTIME_DIR": opts.XDGRuntimeDir,

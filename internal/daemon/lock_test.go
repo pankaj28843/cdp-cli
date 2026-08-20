@@ -78,6 +78,75 @@ func TestInspectLockClassifiesDeadOwner(t *testing.T) {
 	}
 }
 
+func TestInspectLockClassifiesExpiredLiveLease(t *testing.T) {
+	stateDir := t.TempDir()
+	name := "headed-remote-debugging-repair"
+	path := writeLockFile(t, stateDir, name, daemon.LockMetadata{
+		Name:      name,
+		PID:       os.Getpid(),
+		StartedAt: time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano),
+		ExpiresAt: time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano),
+		Phase:     "approval",
+	})
+
+	info := daemon.InspectLock(path, 10*time.Minute)
+	if !info.Exists || !info.Stale || info.StaleReason != "lease_expired" || info.OwnerRunning == nil || !*info.OwnerRunning {
+		t.Fatalf("InspectLock = %+v, want expired live lease", info)
+	}
+}
+
+func TestAcquireLockWithLeaseRecordsExpiry(t *testing.T) {
+	stateDir := t.TempDir()
+	name := "headed-remote-debugging-repair"
+	before := time.Now().UTC()
+	lock, acquired, _, err := daemon.AcquireLockWithLease(context.Background(), stateDir, name, 0, 10*time.Minute, 20*time.Second, daemon.LockMetadata{Name: name, Phase: "starting"})
+	if err != nil {
+		t.Fatalf("AcquireLockWithLease returned error: %v", err)
+	}
+	if !acquired {
+		t.Fatal("AcquireLockWithLease acquired=false, want true")
+	}
+	defer lock.Release()
+	expires, err := time.Parse(time.RFC3339Nano, lock.Metadata.ExpiresAt)
+	if err != nil {
+		t.Fatalf("parse ExpiresAt %q: %v", lock.Metadata.ExpiresAt, err)
+	}
+	if !expires.After(before) || !expires.Before(before.Add(21*time.Second)) {
+		t.Fatalf("ExpiresAt = %s, want roughly 20 seconds after %s", expires, before)
+	}
+}
+
+func TestExpiredHandleCannotReleaseReplacement(t *testing.T) {
+	stateDir := t.TempDir()
+	name := "headed-remote-debugging-repair"
+	old, acquired, _, err := daemon.AcquireLockWithLease(context.Background(), stateDir, name, 0, 10*time.Minute, time.Millisecond, daemon.LockMetadata{Name: name, Phase: "old"})
+	if err != nil {
+		t.Fatalf("acquire old lease: %v", err)
+	}
+	if !acquired {
+		t.Fatal("old lease acquired=false, want true")
+	}
+	time.Sleep(5 * time.Millisecond)
+	newLock, acquired, _, err := daemon.AcquireLockWithLease(context.Background(), stateDir, name, 0, 10*time.Minute, 20*time.Second, daemon.LockMetadata{Name: name, Phase: "new"})
+	if err != nil {
+		t.Fatalf("acquire replacement lease: %v", err)
+	}
+	if !acquired {
+		t.Fatal("replacement lease acquired=false, want true")
+	}
+	defer newLock.Release()
+	if err := old.Update(context.Background(), "stale"); err == nil {
+		t.Fatal("old Update returned nil, want ownership error")
+	}
+	if err := old.Release(); err != nil {
+		t.Fatalf("old Release returned error: %v", err)
+	}
+	info := daemon.InspectLock(newLock.Path, 10*time.Minute)
+	if !info.Exists || info.Stale || info.Metadata.Phase != "new" {
+		t.Fatalf("replacement lock after old Release = %+v, want live new lock", info)
+	}
+}
+
 func writeLockFile(t *testing.T, stateDir, name string, metadata daemon.LockMetadata) string {
 	t.Helper()
 	lockDir := filepath.Join(stateDir, "locks")

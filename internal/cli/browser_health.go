@@ -24,7 +24,7 @@ func safeDiagnosticCommands() []string {
 }
 
 func permissionRemediationCommands() []string {
-	return append([]string{"open chrome://inspect/#remote-debugging"}, safeDiagnosticCommands()...)
+	return append([]string{remoteDebuggingApprovalCommand(), "open chrome://inspect/#remote-debugging"}, safeDiagnosticCommands()...)
 }
 
 func permissionPendingData(extra map[string]any) map[string]any {

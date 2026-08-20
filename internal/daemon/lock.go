@@ -17,6 +17,7 @@ type LockMetadata struct {
 	PID       int    `json:"pid"`
 	StartedAt string `json:"started_at"`
 	Phase     string `json:"phase,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
 type LockHandle struct {
@@ -63,7 +64,7 @@ func RemoveStaleLocks(ctx context.Context, stateDir string, staleAfter time.Dura
 		path := filepath.Join(stateDir, "locks", entry.Name())
 		info := InspectLock(path, staleAfter)
 		result.Checked = append(result.Checked, info)
-		if !info.Stale || (info.OwnerRunning != nil && *info.OwnerRunning) {
+		if !info.Stale || (info.OwnerRunning != nil && *info.OwnerRunning && info.StaleReason != "lease_expired") {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -84,8 +85,19 @@ func hasAnyPrefix(name string, prefixes []string) bool {
 }
 
 func AcquireLock(ctx context.Context, stateDir, name string, timeout, staleAfter time.Duration, metadata LockMetadata) (LockHandle, bool, LockMetadata, error) {
+	return AcquireLockWithLease(ctx, stateDir, name, timeout, staleAfter, 0, metadata)
+}
+
+// AcquireLockWithLease acquires a lock whose owner lease expires after lease.
+// A zero lease preserves the legacy lock behavior. The lease is deliberately
+// separate from staleAfter: staleAfter handles abandoned legacy locks, while
+// the lease bounds a live repair attempt.
+func AcquireLockWithLease(ctx context.Context, stateDir, name string, timeout, staleAfter, lease time.Duration, metadata LockMetadata) (LockHandle, bool, LockMetadata, error) {
 	if strings.TrimSpace(stateDir) == "" {
 		return LockHandle{}, false, LockMetadata{}, fmt.Errorf("state directory is required for lock")
+	}
+	if lease < 0 {
+		return LockHandle{}, false, LockMetadata{}, fmt.Errorf("lock lease cannot be negative")
 	}
 	name = sanitizeLockName(name)
 	path := filepath.Join(stateDir, "locks", name+".lock")
@@ -109,8 +121,12 @@ func AcquireLock(ctx context.Context, stateDir, name string, timeout, staleAfter
 			if metadata.PID == 0 {
 				metadata.PID = os.Getpid()
 			}
+			now := time.Now().UTC()
 			if metadata.StartedAt == "" {
-				metadata.StartedAt = time.Now().UTC().Format(time.RFC3339)
+				metadata.StartedAt = now.Format(time.RFC3339Nano)
+			}
+			if lease > 0 {
+				metadata.ExpiresAt = now.Add(lease).Format(time.RFC3339Nano)
 			}
 			if err := json.NewEncoder(file).Encode(metadata); err != nil {
 				_ = file.Close()
@@ -163,6 +179,9 @@ func (h LockHandle) Update(ctx context.Context, phase string) error {
 		return ctx.Err()
 	default:
 	}
+	if !h.ownsCurrentFile() {
+		return fmt.Errorf("lock is no longer owned")
+	}
 	h.Metadata.Phase = phase
 	b, err := json.MarshalIndent(h.Metadata, "", "  ")
 	if err != nil {
@@ -179,10 +198,34 @@ func (h LockHandle) Release() error {
 	if strings.TrimSpace(h.Path) == "" {
 		return nil
 	}
+	if !h.ownsCurrentFile() {
+		return nil
+	}
 	if err := os.Remove(h.Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("release lock: %w", err)
 	}
 	return nil
+}
+
+func (h LockHandle) ownsCurrentFile() bool {
+	b, err := os.ReadFile(h.Path)
+	if err != nil {
+		return false
+	}
+	var current LockMetadata
+	if err := json.Unmarshal(b, &current); err != nil {
+		return false
+	}
+	if current.Name != h.Metadata.Name || current.PID != h.Metadata.PID || current.StartedAt != h.Metadata.StartedAt {
+		return false
+	}
+	if current.ExpiresAt != "" {
+		expires, err := time.Parse(time.RFC3339Nano, current.ExpiresAt)
+		if err != nil || !time.Now().UTC().Before(expires) {
+			return false
+		}
+	}
+	return true
 }
 
 func readLockMetadata(path string, staleAfter time.Duration) (LockMetadata, bool) {
@@ -207,6 +250,13 @@ func InspectLock(path string, staleAfter time.Duration) LockInfo {
 		if !running {
 			info.Stale = true
 			info.StaleReason = "owner_process_not_running"
+			return info
+		}
+	}
+	if metadata.ExpiresAt != "" {
+		if expires, err := time.Parse(time.RFC3339Nano, metadata.ExpiresAt); err == nil && !time.Now().UTC().Before(expires) {
+			info.Stale = true
+			info.StaleReason = "lease_expired"
 			return info
 		}
 	}

@@ -29,6 +29,7 @@ func (a *app) newTranscriptionCommand() *cobra.Command {
 			"provider-specific auth refresh remains inside the cdp workflow adapter.",
 		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1\n" +
+			"  cdp transcription service install --address 0.0.0.0:8765 --tls-self-signed --tls-host 192.168.5.249\n" +
 			"  cdp transcription spec > openapi.json",
 	}
 	cmd.AddCommand(a.newTranscriptionServeCommand())
@@ -66,6 +67,9 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var persistAudio bool
 	var tlsCertFile string
 	var tlsKeyFile string
+	var tlsSelfSigned bool
+	var tlsHosts []string
+	var tlsRegenerate bool
 	var printReady bool
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -76,7 +80,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			"Configure a local OpenAI-compatible backend with " +
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
 		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
-			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1 --print-ready",
+			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1 --print-ready\n" +
+			"  cdp transcription serve --address 0.0.0.0:8765 --tls-self-signed --tls-host 192.168.5.249 --print-ready",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if maxAudioBytes <= 0 {
@@ -86,6 +91,10 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				return commandError("transcription_auth_refresh_interval_invalid", "usage", "--auth-refresh-interval must be zero or positive", ExitUsage, nil)
 			}
 			stateStore, err := a.stateStore()
+			if err != nil {
+				return err
+			}
+			tlsFiles, err := configureTranscriptionTLS(stateStore.Dir, tlsCertFile, tlsKeyFile, tlsSelfSigned, tlsHosts, tlsRegenerate)
 			if err != nil {
 				return err
 			}
@@ -110,14 +119,15 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				DefaultProvider: transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
 				BearerToken:     strings.TrimSpace(token),
 				Address:         strings.TrimSpace(address),
-				TLSCertFile:     strings.TrimSpace(tlsCertFile),
-				TLSKeyFile:      strings.TrimSpace(tlsKeyFile),
+				TLSCertFile:     tlsFiles.CertFile,
+				TLSKeyFile:      tlsFiles.KeyFile,
 				AuthCoordinator: authCoordinator,
 			})
 			if err != nil {
 				return err
 			}
 			if printReady {
+				tlsEnabled := strings.TrimSpace(tlsFiles.CertFile) != ""
 				ready := map[string]any{
 					"ok":                    true,
 					"address":               address,
@@ -125,7 +135,12 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 					"state_dir":             store.Root(),
 					"auth_refresh_interval": authRefreshInterval.String(),
 					"audio_persisted":       persistAudio,
-					"tls_enabled":           strings.TrimSpace(tlsCertFile) != "",
+					"tls_enabled":           tlsEnabled,
+					"tls_cert_file":         tlsFiles.CertFile,
+					"tls_hosts":             tlsFiles.Hosts,
+					"tls_reused":            tlsFiles.Reused,
+					"demo_url":              preferredDemoURL(address, tlsEnabled, tlsFiles.Hosts),
+					"demo_urls":             demoURLs(address, tlsEnabled, tlsFiles.Hosts),
 					"providers":             registry.Capabilities(cmd.Context()),
 				}
 				if err := a.render(cmd.Context(), "transcription API ready", ready); err != nil {
@@ -151,6 +166,9 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
 	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", os.Getenv("CDP_TRANSCRIPTION_TLS_CERT"), "TLS certificate file; provide with --tls-key for HTTPS microphone access over LAN")
 	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", os.Getenv("CDP_TRANSCRIPTION_TLS_KEY"), "TLS private key file; provide with --tls-cert")
+	cmd.Flags().BoolVar(&tlsSelfSigned, "tls-self-signed", false, "generate or reuse a private-LAN self-signed certificate under the cdp state directory")
+	cmd.Flags().StringSliceVar(&tlsHosts, "tls-host", nil, "DNS name or IP to include in a self-signed certificate; repeat for multiple names")
+	cmd.Flags().BoolVar(&tlsRegenerate, "tls-regenerate", false, "replace the generated self-signed certificate and key")
 	cmd.Flags().BoolVar(&printReady, "print-ready", false, "print one readiness JSON object before serving")
 	return cmd
 }
@@ -459,19 +477,68 @@ func providerAudioDuration(ctx context.Context, request transcriptionapi.FileReq
 	if err != nil {
 		return 0, transcriptionProviderError(422, "usage", "duration_required", "ChatGPT and Microsoft 365 adapters need audio duration_ms or ffprobe on PATH", false)
 	}
-	output, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", request.Audio.PersistedPath).Output()
-	if err != nil {
-		return 0, transcriptionProviderError(422, "usage", "duration_probe_failed", "audio duration could not be determined", false)
+	output, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_entries", "format=duration:stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", request.Audio.PersistedPath).Output()
+	if err == nil {
+		if duration, ok := probeDurationMilliseconds(string(output)); ok {
+			return duration, nil
+		}
 	}
-	seconds, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
-	if err != nil || seconds <= 0 {
-		return 0, transcriptionProviderError(422, "usage", "duration_probe_failed", "audio duration could not be determined", false)
+	// Browser MediaRecorder WebM often has no container duration. Its packet
+	// timestamps are sufficient and keep normal OpenAI-compatible clients from
+	// having to know the VoxInput duration_ms extension.
+	packets, packetErr := exec.CommandContext(ctx, ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", request.Audio.PersistedPath).Output()
+	if packetErr == nil {
+		if duration, ok := probePacketDurationMilliseconds(string(packets)); ok {
+			return duration, nil
+		}
 	}
+	return 0, transcriptionProviderError(422, "usage", "duration_probe_failed", "audio duration could not be determined", false)
+}
+
+func probeDurationMilliseconds(output string) (int64, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		seconds, err := strconv.ParseFloat(strings.TrimSpace(line), 64)
+		if err == nil && seconds > 0 {
+			return maxDurationMilliseconds(seconds), true
+		}
+	}
+	return 0, false
+}
+
+func probePacketDurationMilliseconds(output string) (int64, bool) {
+	var endSeconds float64
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), ",")
+		if len(fields) == 0 {
+			continue
+		}
+		start, err := strconv.ParseFloat(strings.TrimSpace(fields[0]), 64)
+		if err != nil || start < 0 {
+			continue
+		}
+		packetDuration := 0.0
+		if len(fields) > 1 {
+			packetDuration, _ = strconv.ParseFloat(strings.TrimSpace(fields[len(fields)-1]), 64)
+			if packetDuration < 0 {
+				packetDuration = 0
+			}
+		}
+		if start+packetDuration > endSeconds {
+			endSeconds = start + packetDuration
+		}
+	}
+	if endSeconds <= 0 {
+		return 0, false
+	}
+	return maxDurationMilliseconds(endSeconds), true
+}
+
+func maxDurationMilliseconds(seconds float64) int64 {
 	duration := int64(seconds * 1000)
 	if duration <= 0 {
-		duration = 1
+		return 1
 	}
-	return duration, nil
+	return duration
 }
 
 func webAgentProviderError(result webagent.Result) error {

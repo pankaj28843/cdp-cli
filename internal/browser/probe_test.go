@@ -3,6 +3,8 @@ package browser_test
 import (
 	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
@@ -80,7 +82,9 @@ func TestProbeAutoConnectAvailable(t *testing.T) {
 			errCh <- fmt.Errorf("unexpected websocket request: %s upgrade=%s", req.URL.Path, req.Header.Get("Upgrade"))
 			return
 		}
-		_, err = fmt.Fprint(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: test\r\n\r\n")
+		acceptHash := sha1.Sum([]byte(req.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		accept := base64.StdEncoding.EncodeToString(acceptHash[:])
+		_, err = fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept)
 		errCh <- err
 	}()
 

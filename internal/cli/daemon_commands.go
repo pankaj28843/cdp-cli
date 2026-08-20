@@ -26,6 +26,7 @@ func (a *app) newDaemonCommand() *cobra.Command {
 		Short: "Manage the long-running Chrome attach daemon",
 		Long:  "Manage the long-running Chrome attach daemon. In --auto-connect headed/default-profile mode, browser access is human-in-the-loop: agents may inspect status, doctor, health, and logs, but should not retry start/restart/stop loops when permission is pending. In --browser-mode headless, cdp owns the managed browser profile and repair commands are noninteractive.",
 	}
+	cmd.AddCommand(a.newDaemonApproveCommand())
 	cmd.AddCommand(a.newDaemonStartCommand())
 	cmd.AddCommand(a.newDaemonStatusCommand())
 	cmd.AddCommand(a.newDaemonStopCommand())
@@ -1348,18 +1349,19 @@ func (a *app) runHeadlessDaemonRestart(ctx context.Context, stop daemonStopResul
 }
 
 type keepaliveChromeStatus struct {
-	Display        string                 `json:"display,omitempty"`
-	Command        string                 `json:"command,omitempty"`
-	Args           []string               `json:"args,omitempty"`
-	Checked        bool                   `json:"checked"`
-	Running        bool                   `json:"running"`
-	Launched       bool                   `json:"launched"`
-	Skipped        bool                   `json:"skipped"`
-	Reason         string                 `json:"reason,omitempty"`
-	Attempts       int                    `json:"attempts,omitempty"`
-	MaxAttempts    int                    `json:"max_attempts,omitempty"`
-	AttemptErrors  []string               `json:"attempt_errors,omitempty"`
-	ManagedBrowser *browser.ManagedStatus `json:"managed_browser,omitempty"`
+	Display        string                      `json:"display,omitempty"`
+	Command        string                      `json:"command,omitempty"`
+	Args           []string                    `json:"args,omitempty"`
+	Checked        bool                        `json:"checked"`
+	Running        bool                        `json:"running"`
+	Launched       bool                        `json:"launched"`
+	Skipped        bool                        `json:"skipped"`
+	Reason         string                      `json:"reason,omitempty"`
+	Attempts       int                         `json:"attempts,omitempty"`
+	MaxAttempts    int                         `json:"max_attempts,omitempty"`
+	AttemptErrors  []string                    `json:"attempt_errors,omitempty"`
+	ManagedBrowser *browser.ManagedStatus      `json:"managed_browser,omitempty"`
+	Window         *browser.HeadedWindowResult `json:"window,omitempty"`
 }
 
 type managedKeepAlive struct {
@@ -1379,6 +1381,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	var repair bool
 	var force bool
 	var managedProcessSweep bool
+	var macOSSelfHealApproval bool
 
 	cmd := &cobra.Command{
 		Use:   "keepalive",
@@ -1444,25 +1447,124 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 			}
 			defer lock.Release()
 
+			selfHealApproval := remoteDebuggingApprovalEnabled(cmd, macOSSelfHealApproval)
 			initialActiveProbe := a.opts.activeProbe
-			if probeMode == "passive" || probeMode == "auto" {
+			selfHealActive := selfHealApproval && browserMode == "headed" && a.opts.autoConnect && probeMode != "passive"
+			probeResult := map[string]any{"mode": probeMode, "repair_requested": repair, "force_requested": force, "managed_process_sweep_requested": managedProcessSweep}
+			if selfHealActive {
+				// A scheduled keepalive must be a no-op while the existing headed
+				// runtime is healthy. Inspect its socket passively before opening
+				// Chrome, touching preferences, or starting another hold process.
 				a.opts.activeProbe = false
-			}
-			if probeMode == "active" {
+				preflightProbe, probeErr := a.browserProbe(ctx)
+				if probeErr != nil {
+					return commandError(
+						"invalid_browser_url",
+						"usage",
+						probeErr.Error(),
+						ExitUsage,
+						[]string{"cdp --browser-mode headed --auto-connect daemon keepalive --json"},
+					)
+				}
+				preflightStatus := a.daemonStatus(ctx, preflightProbe)
+				preflightHealthy, preflightCheck := keepaliveRuntimeCheck(ctx, preflightStatus)
+				probeResult["result"] = preflightProbe.State
+				probeResult["self_heal_requested"] = true
+				if preflightStatus.State == "running" && preflightHealthy {
+					probeResult["self_heal_skipped"] = "runtime_healthy"
+					return a.render(ctx, fmt.Sprintf("keepalive\t%s\thealthy", connectionName), map[string]any{
+						"ok":           true,
+						"browser_mode": browserMode,
+						"connection":   connectionName,
+						"mode":         mode,
+						"state":        "healthy",
+						"action":       "none",
+						"locked":       false,
+						"daemon":       preflightStatus,
+						"probe":        probeResult,
+						"health":       preflightCheck,
+						"chrome":       keepaliveChromeStatus{Skipped: true, Reason: "headed runtime healthy; self-heal skipped"},
+						"lock":         map[string]any{"name": lock.Metadata.Name, "acquired": true},
+					})
+				}
+				// The runtime is missing or unhealthy. The existing bounded repair
+				// branch below may now activate Chrome and request one CDP probe.
 				a.opts.activeProbe = true
 			}
-			probe, err := a.browserProbe(ctx)
-			if err != nil {
-				return commandError(
-					"invalid_browser_url",
-					"usage",
-					err.Error(),
-					ExitUsage,
-					[]string{"cdp daemon keepalive --browser-url <browser-url> --json"},
-				)
+
+			chrome := keepaliveChromeStatus{Skipped: true, Reason: "not required for browser_url mode"}
+			chromePrepared := false
+			if browserMode == "headed" && a.opts.autoConnect && (probeMode == "active" || (selfHealApproval && probeMode != "passive")) {
+				if err := lock.Update(ctx, "ensuring_chrome_before_probe"); err != nil {
+					return err
+				}
+				chrome, err = ensureChromeForKeepalive(ctx, display, chromeCommand, chromeArgs)
+				if err != nil {
+					return commandError(
+						"chrome_start_failed",
+						"connection",
+						fmt.Sprintf("ensure headed Chrome is running before active probe: %v", err),
+						ExitConnection,
+						[]string{"cdp daemon keepalive --chrome-command <command> --json", "open chrome://inspect/#remote-debugging"},
+					)
+				}
+				chromePrepared = true
+			}
+
+			var probe browser.ProbeResult
+			var approval browser.RemoteDebuggingApprovalResult
+			if selfHealActive {
+				if err := lock.Update(ctx, "self_healing_remote_debugging_approval"); err != nil {
+					return err
+				}
+				var repairErr error
+				probe, approval, repairErr = a.runHeadedRemoteDebuggingRepair(ctx)
+				if repairErr != nil {
+					return commandErrorWithData(
+						"permission_pending",
+						"permission",
+						fmt.Sprintf("headed remote-debugging self-heal failed: %v", repairErr),
+						ExitPermission,
+						permissionRemediationCommands(),
+						permissionPendingData(map[string]any{"approval": approval, "probe": probe, "probe_result": probeResult}),
+					)
+				}
+				if probe.State != "cdp_available" || !approval.QueueDrained {
+					return commandErrorWithData(
+						"permission_pending",
+						"permission",
+						"headed remote-debugging self-heal did not produce a verified CDP transport",
+						ExitPermission,
+						permissionRemediationCommands(),
+						permissionPendingData(map[string]any{"approval": approval, "probe": probe}),
+					)
+				}
+			} else {
+				if probeMode == "passive" || probeMode == "auto" {
+					a.opts.activeProbe = false
+				}
+				if probeMode == "active" {
+					a.opts.activeProbe = true
+				}
+				var err error
+				probe, err = a.browserProbe(ctx)
+				if err != nil {
+					return commandError(
+						"invalid_browser_url",
+						"usage",
+						err.Error(),
+						ExitUsage,
+						[]string{"cdp daemon keepalive --browser-url <browser-url> --json"},
+					)
+				}
 			}
 			status := a.daemonStatus(ctx, probe)
-			probeResult := map[string]any{"mode": probeMode, "result": probe.State, "repair_requested": repair, "force_requested": force, "managed_process_sweep_requested": managedProcessSweep}
+			probeResult["result"] = probe.State
+			if selfHealActive {
+				probeResult["remote_debugging_approval"] = approval
+				probeResult["self_heal_requested"] = true
+				probeResult["self_heal_message"] = remoteDebuggingApprovalMessage(approval)
+			}
 			runtimeHealthy, runtimeCheck := keepaliveRuntimeCheck(ctx, status)
 			if managedProcessSweep && browserMode == "headless" {
 				sweep, err := a.runManagedProcessSweep(ctx, store.Dir, lock, status)
@@ -1599,21 +1701,22 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				})
 			}
 
-			chrome := keepaliveChromeStatus{Skipped: true, Reason: "not required for browser_url mode"}
 			var managed *managedKeepAlive
 			if a.opts.autoConnect {
-				if err := lock.Update(ctx, "launching_chrome"); err != nil {
-					return err
-				}
-				chrome, err = ensureChromeForKeepalive(ctx, display, chromeCommand, chromeArgs)
-				if err != nil {
-					return commandError(
-						"chrome_start_failed",
-						"connection",
-						fmt.Sprintf("ensure Chrome is running: %v", err),
-						ExitConnection,
-						[]string{"cdp daemon keepalive --chrome-command <command> --json", "open chrome://inspect/#remote-debugging"},
-					)
+				if !chromePrepared {
+					if err := lock.Update(ctx, "launching_chrome"); err != nil {
+						return err
+					}
+					chrome, err = ensureChromeForKeepalive(ctx, display, chromeCommand, chromeArgs)
+					if err != nil {
+						return commandError(
+							"chrome_start_failed",
+							"connection",
+							fmt.Sprintf("ensure Chrome is running: %v", err),
+							ExitConnection,
+							[]string{"cdp daemon keepalive --chrome-command <command> --json", "open chrome://inspect/#remote-debugging"},
+						)
+					}
 				}
 				if err := lock.Update(ctx, "active_probe"); err != nil {
 					return err
@@ -1683,6 +1786,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&repair, "repair", false, "human-managed repair mode: remove stale runtime state and restart the daemon when safe")
 	cmd.Flags().BoolVar(&force, "force", false, "for --browser-mode headless repair, clear stale managed runtime state before relaunching")
 	cmd.Flags().BoolVar(&managedProcessSweep, "managed-process-sweep", false, "run managed headless process reconciliation before launch-capable repair work; lifecycle enforcement is expanded by cdp cron resilience")
+	cmd.Flags().BoolVar(&macOSSelfHealApproval, "macos-self-heal-approval", false, "on macOS headed auto-connect, drain exact Chrome remote-debugging approval sheets across all windows and require a verified CDP probe")
 	return cmd
 }
 
@@ -2084,8 +2188,16 @@ func ensureChromeForKeepalive(ctx context.Context, display, chromeCommand string
 		status.Reason = "chrome launch disabled"
 		return status, nil
 	}
+	if _, err := browser.EnableRemoteDebuggingPreference(ctx, "stable"); err != nil {
+		return status, fmt.Errorf("prepare Chrome remote-debugging preference: %w", err)
+	}
 	if chromeProcessRunning(ctx, chromeCommand) {
 		status.Running = true
+		window, err := browser.EnsureHeadedChromeWindow(ctx, "stable")
+		if err != nil {
+			return status, err
+		}
+		status.Window = &window
 		return status, nil
 	}
 	cmd := exec.CommandContext(ctx, chromeCommand, chromeArgs...)
@@ -2107,6 +2219,11 @@ func ensureChromeForKeepalive(ctx context.Context, display, chromeCommand string
 	if cmd.Process != nil {
 		_ = cmd.Process.Release()
 	}
+	window, err := browser.EnsureHeadedChromeWindow(ctx, "stable")
+	if err != nil {
+		return status, err
+	}
+	status.Window = &window
 	return status, nil
 }
 

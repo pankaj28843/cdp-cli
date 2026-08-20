@@ -22,13 +22,16 @@ For a private LAN dogfood session, the embedded demo can run without a token:
 ```bash
 cdp transcription service install \
   --address 0.0.0.0:8765 \
-  --default-provider chatgpt-web
+  --default-provider chatgpt-web \
+  --tls-self-signed \
+  --tls-host <this-machine-LAN-IP> \
+  --tls-host localhost
 ```
 
-Open `http://<this-machine-LAN-IP>:8765/demo.html` from a desktop or mobile
-browser and allow microphone access. The service is supervised by a macOS
-user-level LaunchAgent or a Linux `systemd --user` unit. Inspect or control it
-with:
+Open the reported `https://<this-machine-LAN-IP>:8765/demo.html` URL from a
+desktop or mobile browser and allow microphone access. The service is
+supervised by a macOS user-level LaunchAgent or a Linux `systemd --user` unit.
+Inspect or control it with:
 
 ```bash
 cdp transcription service status
@@ -37,8 +40,30 @@ cdp transcription service stop
 ```
 
 Desktop browsers generally allow microphone access on `localhost`. Mobile
-browsers require a secure origin for a LAN address; provide a certificate and
-key to serve HTTPS, using a certificate trusted by the phone:
+browsers require a secure origin for a LAN address. For private-LAN dogfooding,
+the CLI can generate and reuse a self-signed certificate in one command:
+
+```bash
+cdp transcription service install \
+  --address 0.0.0.0:8765 \
+  --default-provider chatgpt-web \
+  --tls-self-signed \
+  --tls-host 192.168.5.249 \
+  --tls-host localhost
+```
+
+It stores the certificate and owner-only private key under
+`~/.cdp-cli/tls/`, restarts the user service, and reports the HTTPS demo URLs.
+Replace `192.168.5.249` with the Mac's current LAN address. If the address
+changes, rerun the command with the new `--tls-host`; use `--tls-regenerate`
+only when the existing certificate needs to be replaced. On the first visit,
+Safari or Chrome may show a self-signed-certificate warning. Continue through
+that warning for private testing, or install the certificate on the phone and
+enable its trust if the browser does not permit microphone access after the
+exception.
+
+For a certificate issued by a local CA or another trusted authority, provide
+the certificate and key explicitly instead:
 
 ```bash
 cdp transcription service install \
@@ -49,6 +74,13 @@ cdp transcription service install \
 
 The demo automatically switches its WebSocket transport to `wss://` when it is
 opened over HTTPS.
+
+For a self-signed certificate, command-line probes need certificate verification
+disabled explicitly, for example:
+
+```bash
+curl -k https://192.168.5.249:8765/healthz
+```
 
 The API retains JSON request/result records but uses ephemeral transaction
 media by default. Use `--persist-audio` only when the API itself must retain

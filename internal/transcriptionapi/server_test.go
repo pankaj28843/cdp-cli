@@ -137,7 +137,7 @@ func TestDemoPageIsServedWithoutAuthentication(t *testing.T) {
 		if got := response.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
 			t.Fatalf("GET %s content type = %q, want text/html", path, got)
 		}
-		if !strings.Contains(string(body), "cdp transcription API") || !strings.Contains(string(body), "getUserMedia") {
+		if !strings.Contains(string(body), "cdp transcription API") || !strings.Contains(string(body), "getUserMedia") || !strings.Contains(string(body), "duration_ms") || !strings.Contains(string(body), "secureLink") {
 			t.Fatalf("GET %s did not return the microphone demo", path)
 		}
 	}
@@ -160,7 +160,8 @@ func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testin
 	defer httpServer.Close()
 
 	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "req-file-1", "speech.mp3", []byte("fake-mp3"), map[string]string{
-		"model": "whisper-1",
+		"model":       "whisper-1",
+		"duration_ms": "1250",
 	})
 	request.Header.Set("Authorization", "Bearer secret")
 	response, err := http.DefaultClient.Do(request)
@@ -184,6 +185,9 @@ func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testin
 	provider.requestMu.Unlock()
 	if lastRequest.Audio.PersistedPath == "" {
 		t.Fatal("provider did not receive a persisted path")
+	}
+	if lastRequest.Audio.DurationMS != 1250 {
+		t.Fatalf("provider duration_ms = %d, want 1250", lastRequest.Audio.DurationMS)
 	}
 	provider.requestMu.Lock()
 	ensureCalls := provider.ensureCalls

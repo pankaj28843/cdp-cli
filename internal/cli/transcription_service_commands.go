@@ -47,6 +47,9 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	var persistAudio bool
 	var tlsCertFile string
 	var tlsKeyFile string
+	var tlsSelfSigned bool
+	var tlsHosts []string
+	var tlsRegenerate bool
 	var binaryPath string
 	var start bool
 	cmd := &cobra.Command{
@@ -56,7 +59,8 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			"environment file on Linux. Installation is idempotent and starts the service by default. " +
 			"Leave --token empty for a private no-auth demo, or set it before exposing the listener.",
 		Example: "  cdp transcription service install --address 0.0.0.0:8765 --start\n" +
-			"  cdp transcription service install --address 0.0.0.0:8765 --token lan-test",
+			"  cdp transcription service install --address 0.0.0.0:8765 --token lan-test\n" +
+			"  cdp transcription service install --address 0.0.0.0:8765 --tls-self-signed --tls-host 192.168.5.249",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, paths, config, err := a.transcriptionServiceConfig(binaryPath, address, token, provider, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, persistAudio, tlsCertFile, tlsKeyFile)
@@ -66,6 +70,12 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			if err := os.MkdirAll(config.StateDir, 0o700); err != nil {
 				return fmt.Errorf("create transcription service state directory: %w", err)
 			}
+			tlsFiles, err := configureTranscriptionTLS(config.StateDir, config.TLSCertFile, config.TLSKeyFile, tlsSelfSigned, tlsHosts, tlsRegenerate)
+			if err != nil {
+				return err
+			}
+			config.TLSCertFile = tlsFiles.CertFile
+			config.TLSKeyFile = tlsFiles.KeyFile
 			artifacts, err := transcriptionservice.Render(platform, config, paths)
 			if err != nil {
 				return err
@@ -87,7 +97,11 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 				"token_configured": strings.TrimSpace(config.Token) != "",
 				"audio_persisted":  config.PersistAudio,
 				"tls_enabled":      strings.TrimSpace(config.TLSCertFile) != "",
-				"demo_url":         demoURL(config.Address),
+				"tls_cert_file":    tlsFiles.CertFile,
+				"tls_hosts":        tlsFiles.Hosts,
+				"tls_reused":       tlsFiles.Reused,
+				"demo_url":         preferredDemoURL(config.Address, strings.TrimSpace(config.TLSCertFile) != "", tlsFiles.Hosts),
+				"demo_urls":        demoURLs(config.Address, strings.TrimSpace(config.TLSCertFile) != "", tlsFiles.Hosts),
 				"artifacts":        artifactPaths(artifacts),
 			})
 		},
@@ -103,6 +117,9 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
 	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", os.Getenv("CDP_TRANSCRIPTION_TLS_CERT"), "TLS certificate file; provide with --tls-key for HTTPS microphone access over LAN")
 	cmd.Flags().StringVar(&tlsKeyFile, "tls-key", os.Getenv("CDP_TRANSCRIPTION_TLS_KEY"), "TLS private key file; provide with --tls-cert")
+	cmd.Flags().BoolVar(&tlsSelfSigned, "tls-self-signed", false, "generate or reuse a private-LAN self-signed certificate under the cdp state directory")
+	cmd.Flags().StringSliceVar(&tlsHosts, "tls-host", nil, "DNS name or IP to include in a self-signed certificate; repeat for multiple names")
+	cmd.Flags().BoolVar(&tlsRegenerate, "tls-regenerate", false, "replace the generated self-signed certificate and key")
 	cmd.Flags().StringVar(&binaryPath, "binary", "", "absolute cdp binary path; defaults to the running executable")
 	cmd.Flags().BoolVar(&start, "start", true, "start and enable the service after installing its files")
 	return cmd
@@ -162,14 +179,16 @@ func (a *app) newTranscriptionServiceStatusCommand() *cobra.Command {
 			}
 			installed := serviceInstalled(platform, paths)
 			running, detail := transcriptionServiceRunning(cmd.Context(), platform, paths)
+			tlsEnabled := transcriptionServiceTLSConfigured(platform, paths)
 			return a.render(cmd.Context(), "transcription service status", map[string]any{
-				"platform":  platform,
-				"service":   serviceName(platform),
-				"installed": installed,
-				"running":   running,
-				"detail":    detail,
-				"demo_url":  demoURL(transcriptionapi.DefaultListenAddress),
-				"artifacts": map[string]string{"launch_agent": paths.LaunchAgent, "systemd_unit": paths.SystemdUnit, "environment": paths.Environment},
+				"platform":    platform,
+				"service":     serviceName(platform),
+				"installed":   installed,
+				"running":     running,
+				"detail":      detail,
+				"tls_enabled": tlsEnabled,
+				"demo_url":    demoURL(transcriptionapi.DefaultListenAddress, tlsEnabled),
+				"artifacts":   map[string]string{"launch_agent": paths.LaunchAgent, "systemd_unit": paths.SystemdUnit, "environment": paths.Environment},
 			})
 		},
 	}
@@ -302,17 +321,6 @@ func serviceName(platform transcriptionservice.Platform) string {
 		return transcriptionservice.LaunchAgentLabel
 	}
 	return transcriptionservice.SystemdUnitName
-}
-
-func demoURL(address string) string {
-	address = strings.TrimSpace(address)
-	if strings.HasPrefix(address, ":") {
-		return "http://127.0.0.1" + address + "/demo.html"
-	}
-	if strings.HasPrefix(address, "localhost:") {
-		return "http://" + address + "/demo.html"
-	}
-	return "http://" + address + "/demo.html"
 }
 
 func runTranscriptionServiceAction(ctx context.Context, platform transcriptionservice.Platform, action string, paths transcriptionservice.Paths) (string, error) {

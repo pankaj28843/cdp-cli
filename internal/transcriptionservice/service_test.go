@@ -86,3 +86,35 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 		t.Fatalf("environment mode = %o, want 600", artifacts[1].Mode)
 	}
 }
+
+func TestRenderPropagatesTLSFilesToNativeServiceEnvironment(t *testing.T) {
+	paths, err := PathsForHome("/synthetic-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := testConfig()
+	config.TLSCertFile = "/synthetic-user/.cdp-cli/tls/transcription.crt"
+	config.TLSKeyFile = "/synthetic-user/.cdp-cli/tls/transcription.key"
+
+	macArtifacts, err := Render(PlatformMacOS, config, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	macText := string(macArtifacts[0].Data)
+	for _, want := range []string{config.TLSCertFile, config.TLSKeyFile, "CDP_TRANSCRIPTION_TLS_CERT", "CDP_TRANSCRIPTION_TLS_KEY"} {
+		if !strings.Contains(macText, want) {
+			t.Fatalf("LaunchAgent missing TLS value %q:\n%s", want, macText)
+		}
+	}
+
+	linuxArtifacts, err := Render(PlatformLinux, config, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linuxEnvironment := string(linuxArtifacts[1].Data)
+	for _, want := range []string{`CDP_TRANSCRIPTION_TLS_CERT="` + config.TLSCertFile + `"`, `CDP_TRANSCRIPTION_TLS_KEY="` + config.TLSKeyFile + `"`} {
+		if !strings.Contains(linuxEnvironment, want) {
+			t.Fatalf("systemd environment missing TLS value %q:\n%s", want, linuxEnvironment)
+		}
+	}
+}

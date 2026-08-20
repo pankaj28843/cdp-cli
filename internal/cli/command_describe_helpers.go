@@ -87,6 +87,10 @@ func commandExamples(path string) []string {
 			"cdp daemon start --browser-url <browser-url> --json",
 			"cdp daemon start --autoConnect --json",
 		},
+		"cdp daemon approve": {
+			"cdp --browser-mode headed --auto-connect daemon approve --json",
+			"CDP_MACOS_SELF_HEAL_APPROVAL=1 cdp --browser-mode headed --auto-connect daemon keepalive --repair --probe active --macos-self-heal-approval --json",
+		},
 		"cdp daemon status": {
 			"cdp daemon status --json",
 			"cdp daemon health --json",
@@ -104,6 +108,7 @@ func commandExamples(path string) []string {
 		"cdp daemon keepalive": {
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect 30s --display :0 --json",
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --reconnect 30s --display :0 --json",
+			"CDP_MACOS_SELF_HEAL_APPROVAL=1 cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --macos-self-heal-approval --reconnect 30s --json",
 			"cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json",
 			"cdp --browser-mode headless daemon keepalive --repair --force --json",
 			"cdp cron install --json",
