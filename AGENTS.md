@@ -31,6 +31,13 @@ For browser-facing changes, also run the synthetic live-site loop:
 make e2e-demo-installed
 ```
 
+For work on `main`, keep the checkout synchronized with `origin/main` and
+install the exact checkout around every synchronization boundary. Run
+`make install` immediately before and immediately after each fetch, pull,
+merge, rebase, or push; then verify the installed build identity and restart
+any service that consumes the binary before live validation. Resolve divergence
+on `main` explicitly and leave the worktree and `origin/main` aligned.
+
 When validating a CLI behavior that users or agents will exercise through the installed `cdp` binary, run `make install` before the live/manual validation and again after final code changes. Run the validation with `cdp ...` from `PATH`, not `go run`, so the improved command is actually available to everyone using the local install.
 
 ## Design
