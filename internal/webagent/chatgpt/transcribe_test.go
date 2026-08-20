@@ -44,7 +44,11 @@ func TestTranscribeUsesDirectObservedHTTPMultipart(t *testing.T) {
 			request.Header.Get("Referer") != Origin+"/" ||
 			request.Header.Get("Sec-Fetch-Dest") != "empty" ||
 			request.Header.Get("Sec-Fetch-Mode") != "cors" ||
-			request.Header.Get("Sec-Fetch-Site") != "same-origin" {
+			request.Header.Get("Sec-Fetch-Site") != "same-origin" ||
+			request.Header.Get("OAI-Client-Build-Number") != "" ||
+			request.Header.Get("OAI-Client-Version") != "" ||
+			request.Header.Get("OAI-Session-Id") != "" ||
+			request.Header.Get("X-OAI-Is-Client-Observation") != "" {
 			t.Fatalf("request shape = method=%s path=%s headers=%v", request.Method, request.URL.Path, request.Header)
 		}
 		return makeTranscriptionHTTPResponse(http.StatusOK, `{"result":{"text":"direct works"}}`), nil
@@ -126,12 +130,16 @@ func testTranscriptionStore(t *testing.T) *Store {
 		Method:        http.MethodGet,
 		URL:           Origin + ConversationListPath,
 		Headers: map[string]string{
-			"authorization":      "Bearer synthetic",
-			"chatgpt-account-id": "synthetic-account",
-			"sec-fetch-dest":     "empty",
-			"sec-fetch-mode":     "cors",
-			"sec-fetch-site":     "same-origin",
-			"user-agent":         "synthetic-agent",
+			"authorization":               "Bearer synthetic",
+			"chatgpt-account-id":          "synthetic-account",
+			"oai-client-build-number":     "9999999",
+			"oai-client-version":          "synthetic-version",
+			"oai-session-id":              "synthetic-session",
+			"sec-fetch-dest":              "empty",
+			"sec-fetch-mode":              "cors",
+			"sec-fetch-site":              "same-origin",
+			"user-agent":                  "synthetic-agent",
+			"x-oai-is-client-observation": "synthetic-observation",
 		},
 		Cookies: map[string]string{
 			"__Secure-next-auth.session-token": "synthetic",

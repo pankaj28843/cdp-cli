@@ -285,9 +285,13 @@ func newTranscriptionRequest(
 		if lower == "content-type" ||
 			lower == "content-length" ||
 			lower == "chatgpt-account-id" ||
+			lower == "oai-client-build-number" ||
+			lower == "oai-client-version" ||
 			lower == "oai-echo-logs" ||
+			lower == "oai-session-id" ||
 			lower == "oai-telemetry" ||
 			lower == "x-conduit-token" ||
+			lower == "x-oai-is-client-observation" ||
 			lower == "x-oai-turn-trace-id" ||
 			strings.HasPrefix(lower, "openai-sentinel-") {
 			continue
