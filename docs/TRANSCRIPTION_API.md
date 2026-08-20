@@ -41,6 +41,7 @@ cdp transcription service install \
   --address 0.0.0.0:28765 \
   --http-address 0.0.0.0:28766 \
   --default-provider chatgpt-web \
+  --providers chatgpt-web \
   --tls-self-signed \
   --tls-host <this-machine-LAN-IP> \
   --tls-host localhost
@@ -56,6 +57,13 @@ cdp transcription service status
 cdp transcription service restart
 cdp transcription service stop
 ```
+
+Use `--providers` to persist an explicit provider allowlist in the user
+service. For a ChatGPT-only deployment, set `--default-provider chatgpt-web
+--providers chatgpt-web`; requests for every other provider are then rejected
+by the service boundary even if those adapters are available in the binary.
+The service also persists the selected browser mode and display session so
+headed Linux services can use the same authenticated browser owned by cdp.
 
 Desktop browsers generally allow microphone access on `localhost`. Mobile
 browsers require a secure origin for a LAN address. For private-LAN dogfooding,

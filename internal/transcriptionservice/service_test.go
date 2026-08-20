@@ -13,6 +13,11 @@ func testConfig() Config {
 		Address:              "0.0.0.0:28765",
 		HTTPAddress:          "0.0.0.0:28766",
 		Provider:             "chatgpt-web",
+		AllowedProviders:     []string{"chatgpt-web"},
+		BrowserMode:          "headed",
+		Display:              ":0",
+		XAuthority:           "/Users/test/.Xauthority",
+		AllowOverBudget:      true,
 		LocalBaseURL:         "http://example.test:9000/v1",
 		LocalRealtimeBaseURL: "ws://example.test:9001/v1",
 		LocalAPIKey:          "local-key",
@@ -45,6 +50,14 @@ func TestRenderLaunchAgentIsOwnerScopedAndRestartable(t *testing.T) {
 		"0.0.0.0:28766",
 		"CDP_TRANSCRIPTION_API_TOKEN",
 		"demo-token",
+		"CDP_TRANSCRIPTION_PROVIDERS",
+		"chatgpt-web",
+		"CDP_BROWSER_MODE",
+		"headed",
+		"DISPLAY",
+		":0",
+		"XAUTHORITY",
+		"/Users/test/.Xauthority",
 		"<key>RunAtLoad</key>",
 		"<key>KeepAlive</key>",
 		"transcription.error.log",
@@ -84,6 +97,17 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(environment, `CDP_TRANSCRIPTION_API_TOKEN="demo-token"`) {
 		t.Fatalf("environment file does not contain quoted token: %s", environment)
+	}
+	for _, want := range []string{
+		`CDP_TRANSCRIPTION_PROVIDERS="chatgpt-web"`,
+		`CDP_BROWSER_MODE="headed"`,
+		`CDP_ALLOW_OVER_BUDGET="true"`,
+		`DISPLAY=":0"`,
+		`XAUTHORITY="/Users/test/.Xauthority"`,
+	} {
+		if !strings.Contains(environment, want) {
+			t.Fatalf("environment file missing %q: %s", want, environment)
+		}
 	}
 	if artifacts[1].Mode != 0o600 {
 		t.Fatalf("environment mode = %o, want 600", artifacts[1].Mode)

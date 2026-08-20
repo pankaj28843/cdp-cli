@@ -33,6 +33,11 @@ type Config struct {
 	HTTPAddress          string
 	Token                string
 	Provider             string
+	AllowedProviders     []string
+	BrowserMode          string
+	Display              string
+	XAuthority           string
+	AllowOverBudget      bool
 	LocalBaseURL         string
 	LocalRealtimeBaseURL string
 	LocalAPIKey          string
@@ -120,6 +125,9 @@ func (c Config) Environment() map[string]string {
 		"CDP_TRANSCRIPTION_HTTP_ADDRESS":            c.HTTPAddress,
 		"CDP_TRANSCRIPTION_API_TOKEN":               c.Token,
 		"CDP_TRANSCRIPTION_PROVIDER":                c.Provider,
+		"CDP_TRANSCRIPTION_PROVIDERS":               strings.Join(c.AllowedProviders, ","),
+		"CDP_BROWSER_MODE":                          c.BrowserMode,
+		"CDP_ALLOW_OVER_BUDGET":                     strconv.FormatBool(c.AllowOverBudget),
 		"CDP_TRANSCRIPTION_LOCAL_BASE_URL":          c.LocalBaseURL,
 		"CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL": c.LocalRealtimeBaseURL,
 		"CDP_TRANSCRIPTION_LOCAL_API_KEY":           c.LocalAPIKey,
@@ -128,6 +136,12 @@ func (c Config) Environment() map[string]string {
 		"CDP_TRANSCRIPTION_PERSIST_AUDIO":           strconv.FormatBool(c.PersistAudio),
 		"CDP_TRANSCRIPTION_TLS_CERT":                c.TLSCertFile,
 		"CDP_TRANSCRIPTION_TLS_KEY":                 c.TLSKeyFile,
+	}
+	if strings.TrimSpace(c.Display) != "" {
+		environment["DISPLAY"] = c.Display
+	}
+	if strings.TrimSpace(c.XAuthority) != "" {
+		environment["XAUTHORITY"] = c.XAuthority
 	}
 	if strings.TrimSpace(c.Path) != "" {
 		environment["PATH"] = c.Path

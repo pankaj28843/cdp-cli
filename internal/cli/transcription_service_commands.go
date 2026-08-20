@@ -40,6 +40,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	var httpAddress string
 	var token string
 	var provider string
+	var allowedProviders []string
 	var localBaseURL string
 	var localRealtimeBaseURL string
 	var localAPIKey string
@@ -64,7 +65,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			"  cdp transcription service install --address 0.0.0.0:28765 --tls-self-signed --tls-host 192.168.5.249",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, paths, config, err := a.transcriptionServiceConfig(binaryPath, address, httpAddress, token, provider, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, persistAudio, tlsCertFile, tlsKeyFile)
+			platform, paths, config, err := a.transcriptionServiceConfig(binaryPath, address, httpAddress, token, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, persistAudio, tlsCertFile, tlsKeyFile)
 			if err != nil {
 				return err
 			}
@@ -112,6 +113,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	cmd.Flags().StringVar(&httpAddress, "http-address", os.Getenv("CDP_TRANSCRIPTION_HTTP_ADDRESS"), "optional plain-HTTP listener; use a distinct port for explicit private-LAN/Tailscale access")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("CDP_TRANSCRIPTION_API_TOKEN"), "optional bearer token; leave blank for a private no-auth demo")
 	cmd.Flags().StringVar(&provider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
+	cmd.Flags().StringSliceVar(&allowedProviders, "providers", envStringSlice("CDP_TRANSCRIPTION_PROVIDERS"), "provider allowlist persisted into the user service; repeat or comma-separate")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
@@ -239,7 +241,7 @@ func (a *app) transcriptionServicePaths() (transcriptionservice.Platform, transc
 	return platform, paths, nil
 }
 
-func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, token, provider, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
+func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, token, provider string, allowedProviders []string, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
 	platform, paths, err := a.transcriptionServicePaths()
 	if err != nil {
 		return "", transcriptionservice.Paths{}, transcriptionservice.Config{}, err
@@ -264,6 +266,11 @@ func (a *app) transcriptionServiceConfig(binaryPath, address, httpAddress, token
 		Address:              strings.TrimSpace(address),
 		HTTPAddress:          strings.TrimSpace(httpAddress),
 		Provider:             strings.TrimSpace(provider),
+		AllowedProviders:     append([]string(nil), allowedProviders...),
+		BrowserMode:          a.browserModeName(),
+		Display:              strings.TrimSpace(os.Getenv("DISPLAY")),
+		XAuthority:           strings.TrimSpace(os.Getenv("XAUTHORITY")),
+		AllowOverBudget:      a.opts.allowOverBudget,
 		LocalBaseURL:         strings.TrimSpace(localBaseURL),
 		LocalRealtimeBaseURL: strings.TrimSpace(localRealtimeBaseURL),
 		LocalAPIKey:          strings.TrimSpace(localAPIKey),

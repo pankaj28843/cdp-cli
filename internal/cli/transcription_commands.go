@@ -161,7 +161,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&httpAddress, "http-address", os.Getenv("CDP_TRANSCRIPTION_HTTP_ADDRESS"), "optional plain-HTTP listener; use a distinct port for explicit private-LAN/Tailscale access")
 	cmd.Flags().StringVar(&token, "token", os.Getenv("CDP_TRANSCRIPTION_API_TOKEN"), "local bearer token; set this before exposing the service beyond a trusted loopback")
 	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
-	cmd.Flags().StringSliceVar(&allowedProviders, "providers", nil, "provider allowlist; repeat or comma-separate (default: all configured providers)")
+	cmd.Flags().StringSliceVar(&allowedProviders, "providers", envStringSlice("CDP_TRANSCRIPTION_PROVIDERS"), "provider allowlist; repeat or comma-separate (default: all configured providers)")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
@@ -597,6 +597,21 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func envStringSlice(name string) []string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
 }
 
 func authEvidenceExpiringSoon(expiresAt string, now time.Time) bool {
