@@ -764,7 +764,7 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 				LockName:           "cron-run-headed-daemon-keepalive",
 				LogName:            "keepalive-headed.log",
 				LogArtifactKey:     "headed_keepalive_log",
-				Purpose:            "Keep at least one headed Chrome instance available, actively verify CDP, and self-heal the exact macOS remote-debugging approval queue when needed.",
+				Purpose:            "Keep the headed runtime available with a passive-first health check, then self-heal the exact remote-debugging approval queue only when needed.",
 				Command:            fmt.Sprintf("%s --state-dir %s cron run %s --display %s --xdg-runtime-dir %s --reconnect %s --max-log-size %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadedDaemonKeepalive, display, xdgRuntimeDir, reconnect, maxLogSize),
 				ProbeWords:         []string{"cron", "run", cronTaskHeadedDaemonKeepalive},
 				ConfigDependencies: []string{"display", "xdg_runtime_dir", "reconnect"},
