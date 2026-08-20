@@ -284,7 +284,6 @@ func newTranscriptionRequest(
 		lower := strings.ToLower(name)
 		if lower == "content-type" ||
 			lower == "content-length" ||
-			lower == "chatgpt-account-id" ||
 			lower == "oai-client-build-number" ||
 			lower == "oai-client-version" ||
 			lower == "oai-echo-logs" ||
@@ -313,10 +312,9 @@ func newTranscriptionRequest(
 }
 
 // transcriptionCookieHeader mirrors the browser's path-scoped cookie selection
-// for /backend-api/transcribe. The auth refresh observes a conversation-read
-// request, which can include the path-scoped _account cookie that Chrome omits
-// from the transcription request. Sending that extra cookie makes ChatGPT
-// reject otherwise current auth evidence.
+// for /backend-api/transcribe while replacing observed values with the current
+// cookie snapshot. The successful browser transcription request includes the
+// _account cookie, so it must remain part of the replayed auth evidence.
 func transcriptionCookieHeader(template RequestTemplate) string {
 	parts := strings.Split(template.CookieHeader, ";")
 	kept := make([]string, 0, len(parts))
@@ -325,9 +323,6 @@ func transcriptionCookieHeader(template RequestTemplate) string {
 		name := trimmed
 		if separator := strings.IndexByte(trimmed, '='); separator >= 0 {
 			name = strings.TrimSpace(trimmed[:separator])
-		}
-		if strings.EqualFold(name, "_account") {
-			continue
 		}
 		if trimmed == "" {
 			continue

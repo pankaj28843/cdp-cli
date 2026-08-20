@@ -36,8 +36,8 @@ func TestTranscribeUsesDirectObservedHTTPMultipart(t *testing.T) {
 		if request.Method != http.MethodPost ||
 			request.URL.Path != "/backend-api/transcribe" ||
 			request.Header.Get("Authorization") != "Bearer synthetic" ||
-			request.Header.Get("Cookie") != "__Secure-next-auth.session-token=synthetic; session=synthetic" ||
-			request.Header.Get("ChatGPT-Account-Id") != "" ||
+			request.Header.Get("Cookie") != "__Secure-next-auth.session-token=synthetic; _account=synthetic-account; session=synthetic" ||
+			request.Header.Get("ChatGPT-Account-Id") != "synthetic-account" ||
 			request.Header.Get("X-OpenAI-Target-Path") != "/backend-api/transcribe" ||
 			request.Header.Get("Origin") != Origin ||
 			request.Header.Get("Accept") != "*/*" ||
