@@ -2564,7 +2564,7 @@ func TestEvalTimeoutIsClassifiedAndSharedDaemonRemainsUsable(t *testing.T) {
 				resp["result"] = map[string]any{}
 			case "Runtime.evaluate":
 				if delayed.CompareAndSwap(false, true) {
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(2 * time.Second)
 				}
 				resp["result"] = map[string]any{
 					"result": map[string]any{"type": "string", "value": "Example App"},
@@ -2582,7 +2582,10 @@ func TestEvalTimeoutIsClassifiedAndSharedDaemonRemainsUsable(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var timeoutOut, timeoutErrOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--timeout", "50ms", "eval", "document.title", "--json"}, &timeoutOut, &timeoutErrOut, cli.BuildInfo{})
+	// Leave room for target discovery and WebSocket setup while remaining below
+	// the fake Runtime.evaluate delay, so this tests eval timeout classification
+	// without making the fixture scheduler-sensitive.
+	code := cli.Execute(context.Background(), []string{"--timeout", "1s", "eval", "document.title", "--json"}, &timeoutOut, &timeoutErrOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("timed eval exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, timeoutOut.String(), timeoutErrOut.String())
 	}

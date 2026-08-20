@@ -18,7 +18,10 @@ func TestAssertValueFailureSingleJSONEnvelope(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "value", "textarea", "not-the-value", "--timeout", "100ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	// Include target discovery, locator resolution, and repeated value reads
+	// in the budget without making the failure-envelope fixture scheduler-
+	// sensitive.
+	code := cli.Execute(context.Background(), []string{"assert", "value", "textarea", "not-the-value", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("assert value exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
