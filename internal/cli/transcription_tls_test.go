@@ -6,11 +6,11 @@ import (
 )
 
 func TestDemoURLsUseHTTPSAndRequestedCertificateHosts(t *testing.T) {
-	if got, want := demoURL("0.0.0.0:8765", true), "https://0.0.0.0:8765/demo.html"; got != want {
+	if got, want := demoURL("0.0.0.0:28765", true), "https://0.0.0.0:28765/demo.html"; got != want {
 		t.Fatalf("demoURL = %q, want %q", got, want)
 	}
-	got := demoURLs("0.0.0.0:8765", true, []string{"192.168.5.249", "localhost"})
-	want := []string{"https://192.168.5.249:8765/demo.html", "https://localhost:8765/demo.html"}
+	got := demoURLs("0.0.0.0:28765", true, []string{"192.168.5.249", "localhost"})
+	want := []string{"https://192.168.5.249:28765/demo.html", "https://localhost:28765/demo.html"}
 	if len(got) != len(want) {
 		t.Fatalf("demoURLs = %#v, want %#v", got, want)
 	}
@@ -19,7 +19,7 @@ func TestDemoURLsUseHTTPSAndRequestedCertificateHosts(t *testing.T) {
 			t.Fatalf("demoURLs = %#v, want %#v", got, want)
 		}
 	}
-	if got, want := preferredDemoURL("0.0.0.0:8765", true, []string{"192.168.5.249", "localhost"}), "https://192.168.5.249:8765/demo.html"; got != want {
+	if got, want := preferredDemoURL("0.0.0.0:28765", true, []string{"192.168.5.249", "localhost"}), "https://192.168.5.249:28765/demo.html"; got != want {
 		t.Fatalf("preferredDemoURL = %q, want %q", got, want)
 	}
 }

@@ -26,8 +26,8 @@ permission workaround: mobile browsers still need an HTTPS secure origin.
 
 ```bash
 cdp transcription serve \
-  --address 0.0.0.0:8765 \
-  --http-address 0.0.0.0:8766 \
+  --address 0.0.0.0:28765 \
+  --http-address 0.0.0.0:28766 \
   --token local-development-token \
   --default-provider chatgpt-web \
   --tls-cert /path/to/lan-cert.pem \
@@ -38,15 +38,15 @@ For a private LAN dogfood session, the embedded demo can run without a token:
 
 ```bash
 cdp transcription service install \
-  --address 0.0.0.0:8765 \
-  --http-address 0.0.0.0:8766 \
+  --address 0.0.0.0:28765 \
+  --http-address 0.0.0.0:28766 \
   --default-provider chatgpt-web \
   --tls-self-signed \
   --tls-host <this-machine-LAN-IP> \
   --tls-host localhost
 ```
 
-Open the reported `https://<this-machine-LAN-IP>:8765/demo.html` URL from a
+Open the reported `https://<this-machine-LAN-IP>:28765/demo.html` URL from a
 desktop or mobile browser and allow microphone access. The service is
 supervised by a macOS user-level LaunchAgent or a Linux `systemd --user` unit.
 Inspect or control it with:
@@ -63,8 +63,8 @@ the CLI can generate and reuse a self-signed certificate in one command:
 
 ```bash
 cdp transcription service install \
-  --address 0.0.0.0:8765 \
-  --http-address 0.0.0.0:8766 \
+  --address 0.0.0.0:28765 \
+  --http-address 0.0.0.0:28766 \
   --default-provider chatgpt-web \
   --tls-self-signed \
   --tls-host 192.168.5.249 \
@@ -86,7 +86,7 @@ the certificate and key explicitly instead:
 
 ```bash
 cdp transcription service install \
-  --address 0.0.0.0:8765 \
+  --address 0.0.0.0:28765 \
   --tls-cert /path/to/lan-cert.pem \
   --tls-key /path/to/lan-key.pem
 ```
@@ -98,7 +98,7 @@ For a self-signed certificate, command-line probes need certificate verification
 disabled explicitly, for example:
 
 ```bash
-curl -k https://192.168.5.249:8765/healthz
+curl -k https://192.168.5.249:28765/healthz
 ```
 
 The API retains JSON request/result records but uses ephemeral transaction
@@ -116,8 +116,8 @@ guessing:
   "transport": "http",
   "default_provider": "chatgpt-web",
   "listeners": [
-    {"scheme": "https", "address": "0.0.0.0:8765", "tls": true},
-    {"scheme": "http", "address": "0.0.0.0:8766", "tls": false}
+    {"scheme": "https", "address": "0.0.0.0:28765", "tls": true},
+    {"scheme": "http", "address": "0.0.0.0:28766", "tls": false}
   ],
   "providers": []
 }
@@ -142,7 +142,7 @@ The OpenAPI document is available from the running service and from the CLI:
 
 ```bash
 curl -H 'Authorization: Bearer local-development-token' \
-  http://localhost:8765/openapi.json
+  http://localhost:28765/openapi.json
 cdp transcription spec > openapi.json
 ```
 
@@ -167,7 +167,7 @@ base URL and API key:
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8766/v1",
+    base_url="http://localhost:28766/v1",
     api_key="local-development-token",
 )
 with open("speech.webm", "rb") as audio:

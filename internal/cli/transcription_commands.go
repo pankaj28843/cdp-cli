@@ -29,7 +29,7 @@ func (a *app) newTranscriptionCommand() *cobra.Command {
 			"provider-specific auth refresh remains inside the cdp workflow adapter.",
 		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1\n" +
-			"  cdp transcription service install --address 0.0.0.0:8765 --tls-self-signed --tls-host 192.168.5.249\n" +
+			"  cdp transcription service install --address 0.0.0.0:28765 --tls-self-signed --tls-host 192.168.5.249\n" +
 			"  cdp transcription spec > openapi.json",
 	}
 	cmd.AddCommand(a.newTranscriptionServeCommand())
@@ -82,7 +82,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
 		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1 --print-ready\n" +
-			"  cdp transcription serve --address 0.0.0.0:8765 --tls-self-signed --tls-host 192.168.5.249 --print-ready",
+			"  cdp transcription serve --address 0.0.0.0:28765 --tls-self-signed --tls-host 192.168.5.249 --print-ready",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if maxAudioBytes <= 0 {

@@ -66,7 +66,7 @@ func TestEnsureSelfSignedTLSIncludesRequestedHostsAndReusesFiles(t *testing.T) {
 
 func TestEnsureSelfSignedTLSRequiresMatchingFilesAndValidHosts(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "tls")
-	if _, err := EnsureSelfSignedTLS(directory, []string{"example.test:8765"}, false); err == nil {
+	if _, err := EnsureSelfSignedTLS(directory, []string{"example.test:28765"}, false); err == nil {
 		t.Fatal("TLS generation accepted a host with a port")
 	}
 	if _, err := EnsureSelfSignedTLS(directory, nil, false); err == nil {

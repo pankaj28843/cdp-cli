@@ -223,7 +223,7 @@ func TestServerServesPrimaryAndOptionalHTTPListeners(t *testing.T) {
 
 func reserveTCPAddress(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", net.JoinHostPort("localhost", "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,11 +748,12 @@ func TestServerRejectsListenerAddressCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	address := reserveTCPAddress(t)
 	_, err = NewServer(ServerConfig{
 		Registry:    NewRegistry(&fakeProvider{id: ProviderLocal}),
 		Store:       store,
-		Address:     "127.0.0.1:8765",
-		HTTPAddress: "127.0.0.1:8765",
+		Address:     address,
+		HTTPAddress: address,
 	})
 	if err == nil || !strings.Contains(err.Error(), "must differ") {
 		t.Fatalf("collision error = %v, want distinct-listener error", err)
@@ -765,13 +766,15 @@ func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	primaryAddress := reserveTCPAddress(t)
+	httpAddress := reserveTCPAddress(t)
 	server, err := NewServer(ServerConfig{
 		Registry:        NewRegistry(provider),
 		Store:           store,
 		DefaultProvider: ProviderLocal,
 		BearerToken:     "do-not-leak-this",
-		Address:         "127.0.0.1:8765",
-		HTTPAddress:     "127.0.0.1:8766",
+		Address:         primaryAddress,
+		HTTPAddress:     httpAddress,
 		TLSCertFile:     "synthetic-cert.pem",
 		TLSKeyFile:      "synthetic-key.pem",
 	})
@@ -803,7 +806,7 @@ func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *tes
 	if body.Status != "ok" || body.ContractVersion != ContractVersion || body.Transport != "https" || body.DefaultProvider != ProviderLocal {
 		t.Fatalf("health body = %+v", body)
 	}
-	if len(body.Listeners) != 2 || body.Listeners[0].Scheme != "https" || body.Listeners[0].Address != "127.0.0.1:8765" || !body.Listeners[0].TLS || body.Listeners[1].Scheme != "http" || body.Listeners[1].Address != "127.0.0.1:8766" {
+	if len(body.Listeners) != 2 || body.Listeners[0].Scheme != "https" || body.Listeners[0].Address != primaryAddress || !body.Listeners[0].TLS || body.Listeners[1].Scheme != "http" || body.Listeners[1].Address != httpAddress {
 		t.Fatalf("health listeners = %#v", body.Listeners)
 	}
 	if strings.Contains(response.Body.String(), "do-not-leak-this") {

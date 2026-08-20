@@ -20,7 +20,9 @@ import (
 )
 
 const (
-	DefaultListenAddress = "localhost:8765"
+	// Keep the user-facing transcription listener in the documented high-port
+	// range so it does not collide with legacy loopback services.
+	DefaultListenAddress = "localhost:28765"
 	maxRequestBodyBytes  = MaxUploadBytes + 2*1024*1024
 )
 
