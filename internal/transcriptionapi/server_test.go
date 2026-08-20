@@ -1,6 +1,7 @@
 package transcriptionapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -484,6 +485,45 @@ func TestServerRealtimeUsesOpenAIShapedEventsAndPersistsPCM(t *testing.T) {
 	if strings.Contains(string(trace), "hello world") {
 		t.Fatal("realtime trace leaked transcript text")
 	}
+}
+
+func TestServerRealtimeAcceptsPCMChunkAboveDefaultWebSocketLimit(t *testing.T) {
+	provider := &fakeProvider{
+		id: ProviderLocal,
+		realtime: &fakeRealtime{
+			appendEvents: []ProviderEvent{{Kind: EventHypothesis, Text: "chunk received", Sequence: 1}},
+			commitEvents: []ProviderEvent{{Kind: EventFinal, Text: "chunk received", Sequence: 2}},
+		},
+	}
+	server, _ := newTestServer(t, provider, "secret")
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/realtime?intent=transcription"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer secret"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close(websocket.StatusNormalClosure, "test done")
+
+	writeRealtimeTestEvent(t, ctx, connection, map[string]any{
+		"type": "session.update",
+		"session": map[string]any{
+			"type":  "transcription",
+			"model": "whisper-1",
+			"audio": map[string]any{"input": map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}}},
+		},
+	})
+	readRealtimeTestEvent(t, ctx, connection, "session.created")
+	writeRealtimeTestEvent(t, ctx, connection, map[string]any{
+		"type":  "input_audio_buffer.append",
+		"audio": EncodeRealtimeAudio(bytes.Repeat([]byte{0x01}, 48*1024)),
+	})
+	readRealtimeTestEvent(t, ctx, connection, "conversation.item.input_audio_transcription.delta")
+	writeRealtimeTestEvent(t, ctx, connection, map[string]any{"type": "input_audio_buffer.commit"})
+	readRealtimeTestEvent(t, ctx, connection, "input_audio_buffer.committed")
+	readRealtimeTestEvent(t, ctx, connection, "conversation.item.input_audio_transcription.completed")
 }
 
 func TestServerRealtimeMarksCumulativeHypothesisRevisionsAsReplacement(t *testing.T) {

@@ -568,6 +568,11 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// nhooyr's default message limit is 32 KiB, but the public contract allows
+	// up to 1 MiB of raw PCM per append. Base64 expands that payload, so leave
+	// room for the encoded audio and its JSON envelope while keeping a finite
+	// bound on every client message.
+	connection.SetReadLimit(MaxChunkBytes * 2)
 	defer connection.Close(websocket.StatusNormalClosure, "done")
 	state, stateErr := NewSessionState(requestID)
 	if stateErr != nil {
