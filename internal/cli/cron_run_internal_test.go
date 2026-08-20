@@ -12,7 +12,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 )
 
-func TestRunManagedCronTaskCapturesActiveHeadedChildInBoundedLog(t *testing.T) {
+func TestRunManagedCronTaskCapturesPassiveFirstHeadedChildInBoundedLog(t *testing.T) {
 	stateDir := t.TempDir()
 	script := filepath.Join(t.TempDir(), "fake-cdp")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\"\n"), 0o700); err != nil {
@@ -39,13 +39,32 @@ func TestRunManagedCronTaskCapturesActiveHeadedChildInBoundedLog(t *testing.T) {
 		t.Fatalf("read managed log: %v", err)
 	}
 	logText := string(logBytes)
-	if !strings.Contains(logText, "daemon keepalive") || !strings.Contains(logText, "--probe active") {
-		t.Fatalf("managed log = %q, want active headed child command", logText)
+	if !strings.Contains(logText, "daemon keepalive") || !strings.Contains(logText, "--probe auto") {
+		t.Fatalf("managed log = %q, want passive-first headed child command", logText)
 	}
 	for _, forbidden := range []string{" login ", " consent ", " ask ", " click ", " type "} {
 		if strings.Contains(" "+logText+" ", forbidden) {
 			t.Fatalf("managed child contains human action %q: %s", forbidden, logText)
 		}
+	}
+}
+
+func TestChromeProcessLineMatchesNormalChromeButNotHeadlessHelpers(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		line string
+		want bool
+	}{
+		{name: "linux chrome executable differs from launcher", line: "187159 /opt/google/chrome/chrome", want: true},
+		{name: "mac chrome application", line: "420 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome", want: true},
+		{name: "headless cdp profile", line: "2117 /usr/bin/google-chrome --headless --user-data-dir=/tmp/cdp", want: false},
+		{name: "crashpad helper", line: "2283 /opt/google/chrome/chrome_crashpad_handler", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := chromeProcessLineMatches(test.line, "google-chrome"); got != test.want {
+				t.Fatalf("chromeProcessLineMatches(%q) = %v, want %v", test.line, got, test.want)
+			}
+		})
 	}
 }
 

@@ -43,14 +43,14 @@ func TestManagedCronTasksBoundLogsAndScheduleDailyArtifactPrune(t *testing.T) {
 	}
 }
 
-func TestManagedCronTaskChildSpecsKeepHeadedWorkActiveAndSelfHealing(t *testing.T) {
+func TestManagedCronTaskChildSpecsKeepHeadedWorkPassiveFirstAndSelfHealing(t *testing.T) {
 	opts := defaultCronRenderOptions()
 	args, env, err := managedCronTaskChildSpec(cronTaskHeadedDaemonKeepalive, "/tmp/cdp-state", opts)
 	if err != nil {
 		t.Fatalf("headed child spec: %v", err)
 	}
 	command := strings.Join(args, " ")
-	for _, want := range []string{"--browser-mode headed", "daemon keepalive", "--probe active", "--auto-connect", "--repair"} {
+	for _, want := range []string{"--browser-mode headed", "daemon keepalive", "--probe auto", "--auto-connect", "--repair"} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("headed child command missing %q: %s", want, command)
 		}

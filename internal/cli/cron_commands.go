@@ -114,7 +114,7 @@ func (a *app) newCronCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cron",
 		Short: "Manage cdp-managed browser runtime cron tasks",
-		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block for headed daemon keepalive with active self-healing and canonical unattended headless maintenance tasks.",
+		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block with passive-first headed keepalive and canonical unattended headless maintenance tasks.",
 	}
 	cmd.AddCommand(a.newCronStatusCommand())
 	cmd.AddCommand(a.newCronDiffCommand())
@@ -131,7 +131,7 @@ func (a *app) newCronRunCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <task-id>",
 		Short: "Run one cdp-managed cron task with Go-owned locking",
-		Long:  "Run one stable cdp-managed task with a non-blocking owner-only advisory lock, bounded latest-run logging, and typed skip or failure output. Headed keepalive ensures Chrome is running, uses an active probe, and on macOS can drain only the exact remote-debugging approval queue before requiring verified CDP health.",
+		Long:  "Run one stable cdp-managed task with a non-blocking owner-only advisory lock, bounded latest-run logging, and typed skip or failure output. Headed keepalive checks the existing runtime passively first, then repairs only when health is not verified; on macOS it can drain only the exact remote-debugging approval queue before requiring verified CDP health.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
@@ -858,7 +858,10 @@ func managedCronTaskChildSpec(taskID, stateDir string, opts cronRenderOptions) (
 			"daemon", "keepalive",
 			"--auto-connect",
 			"--repair",
-			"--probe", "active",
+			// A scheduled tick must prove the existing daemon is healthy before
+			// it is allowed to activate Chrome or request a native approval.
+			// Active probing is reserved for an unhealthy repair path.
+			"--probe", "auto",
 			"--reconnect", opts.Reconnect.String(),
 			"--display", opts.Display,
 			"--json",

@@ -499,9 +499,10 @@ daemon only when the selected connection is not healthy. A healthy headed tick i
 a no-op: it does not activate Chrome, touch the remote-debugging preference, or
 spawn another hold. Headed repair is bounded by a 20-second lease.
 
-For headed auto-connect, the managed cron task uses `--probe active` and, on
-macOS, `--macos-self-heal-approval`: it keeps at least one visible Chrome window
-open, starts or reuses the real daemon transport, and drains only Chrome's exact
+For headed auto-connect, the managed cron task uses `--probe auto` and, on
+macOS, `--macos-self-heal-approval`: it passively checks the existing runtime
+first and only enters the bounded active repair path when health is not proven.
+Repair starts or reuses the real daemon transport and drains only Chrome's exact
 `Allow remote debugging?` sheet across all windows. The daemon becoming ready is
 the transport proof; the accessibility click alone is never treated as success.
 On Ubuntu/Linux the same bounded exact-title/action contract uses the embedded
@@ -530,10 +531,13 @@ shell program. Overlap is a successful typed `already_running` skip. The
 maintenance entry performs managed-process
 sweep, resource preflight, profile seeding, daemon repair, synthetic
 health-check, page cleanup, and summary artifact writes in one ordered flow.
-Headed keepalive never opens provider pages, logs in, accepts provider consent,
-or submits prompts. Its only scheduled UI action on macOS is the exact native
-Chrome remote-debugging `Allow` button, and success still requires the daemon
-transport to become ready. Other desktop platforms return a structured
+Headed keepalive first performs a passive health check, so a healthy existing
+Chrome runtime is a no-op: it does not launch another window, touch preferences,
+or request native approval. Only an unhealthy runtime enters the bounded repair
+path. Headed keepalive never opens provider pages, logs in, accepts provider
+consent, or submits prompts. Its only scheduled UI action on macOS is the exact
+native Chrome remote-debugging `Allow` button, and success still requires the
+daemon transport to become ready. Other desktop platforms return a structured
 placeholder until their accessibility adapter is implemented.
 Use `cdp cron diff --json` or
 `cdp cron install --dry-run --json` before installing to inspect the intended

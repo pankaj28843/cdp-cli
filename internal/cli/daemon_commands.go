@@ -2228,16 +2228,38 @@ func ensureChromeForKeepalive(ctx context.Context, display, chromeCommand string
 }
 
 func chromeProcessRunning(ctx context.Context, chromeCommand string) bool {
-	pgrep, err := exec.LookPath("pgrep")
+	name := strings.ToLower(strings.TrimSpace(filepath.Base(chromeCommand)))
+	if name == "" {
+		return false
+	}
+	ps, err := exec.LookPath("ps")
 	if err != nil {
 		return false
 	}
-	name := filepath.Base(chromeCommand)
-	if strings.TrimSpace(name) == "" {
+	output, err := exec.CommandContext(ctx, ps, "-axo", "pid=,args=").Output()
+	if err != nil {
 		return false
 	}
-	cmd := exec.CommandContext(ctx, pgrep, "-x", name)
-	return cmd.Run() == nil
+	for _, line := range strings.Split(string(output), "\n") {
+		if chromeProcessLineMatches(line, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func chromeProcessLineMatches(line, requestedName string) bool {
+	line = strings.ToLower(strings.TrimSpace(line))
+	if line == "" || strings.Contains(line, "chrome_crashpad_handler") || strings.Contains(line, "chrome-headless") || strings.Contains(line, "--headless") {
+		return false
+	}
+	for _, name := range []string{requestedName, "google chrome", "google-chrome", "chromium", "chrome"} {
+		name = strings.TrimSpace(name)
+		if name != "" && strings.Contains(line, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) newDaemonHoldCommand() *cobra.Command {
