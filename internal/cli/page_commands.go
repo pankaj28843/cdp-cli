@@ -1781,6 +1781,23 @@ func (a *app) createWorkflowPageTarget(ctx context.Context, client cdp.CommandCl
 	return a.createPageTargetWithOwnership(ctx, client, rawURL, targetOwnershipMetadata{CreatedBy: "cdp", Workflow: workflow})
 }
 
+func (a *app) createWorkflowPageTargetWithKeepOpen(ctx context.Context, client cdp.CommandClient, rawURL, workflow string, keepOpen bool) (string, error) {
+	targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, workflow)
+	if err != nil || !keepOpen {
+		return targetID, err
+	}
+	if err := cdp.MarkTargetPersistent(ctx, client, targetID); err != nil {
+		return targetID, commandError(
+			"lease_target_policy_failed",
+			"lifecycle",
+			fmt.Sprintf("keep %s target %s open: %v", workflow, targetID, err),
+			ExitConnection,
+			[]string{"cdp daemon status --json", "cdp pages --json"},
+		)
+	}
+	return targetID, nil
+}
+
 func (a *app) createPageTargetWithOwnership(ctx context.Context, client cdp.CommandClient, rawURL string, ownership targetOwnershipMetadata) (string, error) {
 	if _, err := a.enforceBrowserBudgetForNewPage(ctx, client); err != nil {
 		return "", err

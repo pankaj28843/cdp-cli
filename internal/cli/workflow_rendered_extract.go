@@ -303,12 +303,12 @@ func closeRenderedExtractSession(session *cdp.PageSession, closeClient func(cont
 	}
 }
 
-func (a *app) openRenderedExtractReusablePage(ctx context.Context, rawURL, workflow string) (*renderedExtractReusablePage, error) {
+func (a *app) openRenderedExtractReusablePage(ctx context.Context, rawURL, workflow string, keepOpen bool) (*renderedExtractReusablePage, error) {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		return nil, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 	}
-	targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, workflow)
+	targetID, err := a.createWorkflowPageTargetWithKeepOpen(ctx, client, rawURL, workflow, keepOpen)
 	if err != nil {
 		_ = closeClient(ctx)
 		return nil, err
@@ -568,7 +568,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		reusedPage = true
 		defer closeRenderedExtractSession(session, nil)
 	} else {
-		reusablePage, err := a.openRenderedExtractReusablePage(ctx, "about:blank", "rendered-extract")
+		reusablePage, err := a.openRenderedExtractReusablePage(ctx, "about:blank", "rendered-extract", options.KeepOpen)
 		if err != nil {
 			return renderedExtractResult{}, err
 		}

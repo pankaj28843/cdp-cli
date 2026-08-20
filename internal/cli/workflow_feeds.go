@@ -23,7 +23,7 @@ func (a *app) newWorkflowFeedsCommand() *cobra.Command {
 			return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 		}
 		rawURL := strings.TrimSpace(args[0])
-		targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "feeds")
+		targetID, err := a.createWorkflowPageTargetWithKeepOpen(ctx, client, rawURL, "feeds", keepOpen)
 		if err != nil {
 			_ = closeClient(ctx)
 			return err

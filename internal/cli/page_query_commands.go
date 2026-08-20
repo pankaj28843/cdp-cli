@@ -564,6 +564,9 @@ func (a *app) newWaitTextCommand() *cobra.Command {
 			}
 			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
+				if timeoutErr := waitAttachTimeoutError(ctx, "text", target, err, []string{"cdp wait text <needle> --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
+					return timeoutErr
+				}
 				return err
 			}
 			defer session.Close(ctx)
@@ -623,6 +626,9 @@ func (a *app) newWaitURLCommand() *cobra.Command {
 			}
 			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
+				if timeoutErr := waitAttachTimeoutError(ctx, "url", target, err, []string{"cdp wait url <expected> --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
+					return timeoutErr
+				}
 				return err
 			}
 			defer session.Close(ctx)
@@ -680,6 +686,9 @@ func (a *app) newWaitSelectorCommand() *cobra.Command {
 			}
 			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
+				if timeoutErr := waitAttachTimeoutError(ctx, "selector", target, err, []string{"cdp wait selector <css> --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
+					return timeoutErr
+				}
 				return err
 			}
 			defer session.Close(ctx)
@@ -735,6 +744,9 @@ func (a *app) newWaitLocatorCommand() *cobra.Command {
 
 			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
+				if timeoutErr := waitAttachTimeoutError(ctx, "locator", target, err, locatorWaitRemediations(args[0], locatorOpts)); timeoutErr != nil {
+					return timeoutErr
+				}
 				return err
 			}
 			defer session.Close(ctx)
@@ -813,6 +825,9 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
 				session, target, err := a.attachPageSession(attemptCtx, targetID, urlContains, titleContains)
 				if err != nil {
+					if timeoutErr := waitAttachTimeoutError(attemptCtx, "eval", target, err, evalWaitRemediations(args[0], readyOpts)); timeoutErr != nil {
+						return commandRetryResult{Target: &target}, timeoutErr
+					}
 					if target.TargetID != "" {
 						return commandRetryResult{Target: &target}, err
 					}
@@ -901,6 +916,9 @@ func (a *app) newWaitLoadStateCommand() *cobra.Command {
 
 			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
 			if err != nil {
+				if timeoutErr := waitAttachTimeoutError(ctx, "load-state", target, err, []string{"cdp wait load-state load --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
+					return timeoutErr
+				}
 				return err
 			}
 			defer session.Close(ctx)
@@ -1454,6 +1472,34 @@ func waitForPageCondition(ctx context.Context, session *cdp.PageSession, poll ti
 		case <-timer.C:
 		}
 	}
+}
+
+func waitAttachTimeoutError(ctx context.Context, kind string, target cdp.TargetInfo, err error, remediation []string) error {
+	if err == nil {
+		return nil
+	}
+	errText := strings.ToLower(err.Error())
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!strings.Contains(errText, context.DeadlineExceeded.Error()) &&
+		!strings.Contains(errText, "i/o timeout") {
+		return nil
+	}
+	targetSuffix := ""
+	if target.TargetID != "" {
+		targetSuffix = fmt.Sprintf(" for target %s", target.TargetID)
+	}
+	cause := ctx.Err()
+	if cause == nil {
+		cause = err
+	}
+	return commandError(
+		"timeout",
+		"timeout",
+		fmt.Sprintf("wait %s%s could not start before the command deadline: %v", kind, targetSuffix, cause),
+		ExitTimeout,
+		remediation,
+	)
 }
 
 func evaluateJSONValue(ctx context.Context, session *cdp.PageSession, expression, label string, out any) error {

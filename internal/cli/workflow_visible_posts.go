@@ -28,7 +28,7 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 			}
 			rawURL := strings.TrimSpace(args[0])
-			targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "visible-posts")
+			targetID, err := a.createWorkflowPageTargetWithKeepOpen(ctx, client, rawURL, "visible-posts", keepOpen)
 			if err != nil {
 				_ = closeClient(ctx)
 				return err

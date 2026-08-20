@@ -243,7 +243,7 @@ Parallel engine lanes are paced independently.`,
 				var reusePage *renderedExtractReusablePage
 				lane := serpEngineLane{Serp: activeSerp, NavigationDelay: navigationDelay.String()}
 				if batchParallel == 1 && resultCount > 0 {
-					page, err := a.openRenderedExtractReusablePage(ctx, "about:blank", "web-research-serp-"+activeSerp)
+					page, err := a.openRenderedExtractReusablePage(ctx, "about:blank", "web-research-serp-"+activeSerp, false)
 					if err != nil {
 						for queryIndex, query := range queries {
 							for page := 1; page <= resultPages; page++ {

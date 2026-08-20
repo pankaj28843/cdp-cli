@@ -712,7 +712,7 @@ require_artifact "$state_dir/storage.local.json"
 require_artifact "$state_dir/demo.png"
 mkdir -p "$state_dir/debug-bundle"
 debug_bundle_report="$state_dir/debug-bundle.json"
-"$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url?token=demo-secret" --since 2s --out-dir "$state_dir/debug-bundle" --run-id demo-run --task-id demo-debug-bundle --stage demo-debug --json >"$debug_bundle_report"
+"$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url "$app_url?token=demo-secret" --since 2s --out-dir "$state_dir/debug-bundle" --run-id demo-run --task-id demo-debug-bundle --stage demo-debug --keep-open --json >"$debug_bundle_report"
 jq -e --arg path "$state_dir/debug-bundle/debug-bundle.bundle.json" '.ok == true and .artifact.path == $path and .workflow.name == "debug-bundle" and .workflow.trigger == "navigate" and .workflow.reloaded == false and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache" and .workflow.request_count >= 1 and .workflow.message_count >= 1 and (.bundle.schema_version == "cdp-evidence-bundle/v1") and .bundle.default_json == "artifact_references" and (.bundle.public_safe_artifacts >= 1) and (.bundle.local_only_artifacts >= 1) and (.bundle.commands[0].task_id == "demo-debug-bundle") and (.bundle.commands[0].artifact_path == $path) and (.bundle.stages[0].name == "demo-debug") and (has("requests") | not) and (.artifacts | length >= 8) and (.artifact_list[] | select(.type == "workflow-debug-bundle-command-log" and .classification == "public_safe"))' "$debug_bundle_report" >/dev/null
 debug_bundle_target_id="$(jq -er '.target.id | select(length > 0)' "$debug_bundle_report")"
 require_artifact "$state_dir/debug-bundle/debug-bundle.bundle.json"
