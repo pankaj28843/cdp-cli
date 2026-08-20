@@ -27,9 +27,9 @@ func (a *app) newTranscriptionCommand() *cobra.Command {
 		Long: "Expose one local REST, SSE, and realtime WebSocket boundary for VoxInput. " +
 			"Audio is ephemeral transaction media by default and can be explicitly retained with --persist-audio; " +
 			"provider-specific auth refresh remains inside the cdp workflow adapter.",
-		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
-			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1\n" +
-			"  cdp transcription service install --address 0.0.0.0:28765 --tls-self-signed --tls-host 192.168.5.249\n" +
+		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
+			"  cdp transcription serve --local-base-url http://localhost:9000/v1\n" +
+			"  cdp transcription service install --address 0.0.0.0:28765 --http-address 0.0.0.0:28766 --tls-self-signed --tls-host 192.168.5.249\n" +
 			"  cdp transcription spec > openapi.json",
 	}
 	cmd.AddCommand(a.newTranscriptionServeCommand())
@@ -57,7 +57,6 @@ func (a *app) newTranscriptionSpecCommand() *cobra.Command {
 func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var address string
 	var httpAddress string
-	var token string
 	var defaultProvider string
 	var allowedProviders []string
 	var localBaseURL string
@@ -75,14 +74,14 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve REST, SSE, and realtime transcription locally",
-		Long: "Start the deployable provider-neutral transcription API. The server binds to loopback by " +
-			"default, requires a bearer token when --token is set, and retains result records under " +
+		Long: "Start the deployable provider-neutral transcription API. The server defaults to the " +
+			"LAN-capable primary and cleartext companion listeners without bearer-token authentication, and retains result records under " +
 			"<state-dir>/transcription; uploaded media is ephemeral unless --persist-audio is set. " +
 			"Configure a local OpenAI-compatible backend with " +
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
-		Example: "  cdp transcription serve --token local-test --default-provider chatgpt-web\n" +
-			"  cdp transcription serve --token local-test --local-base-url http://localhost:9000/v1 --print-ready\n" +
-			"  cdp transcription serve --address 0.0.0.0:28765 --tls-self-signed --tls-host 192.168.5.249 --print-ready",
+		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
+			"  cdp transcription serve --local-base-url http://localhost:9000/v1 --print-ready\n" +
+			"  cdp transcription serve --address 0.0.0.0:28765 --http-address 0.0.0.0:28766 --tls-self-signed --tls-host 192.168.5.249 --print-ready",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if maxAudioBytes <= 0 {
@@ -118,7 +117,6 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				Registry:        registry,
 				Store:           store,
 				DefaultProvider: transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
-				BearerToken:     strings.TrimSpace(token),
 				Address:         strings.TrimSpace(address),
 				HTTPAddress:     strings.TrimSpace(httpAddress),
 				TLSCertFile:     tlsFiles.CertFile,
@@ -157,9 +155,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "listen address; loopback is the safe default")
-	cmd.Flags().StringVar(&httpAddress, "http-address", os.Getenv("CDP_TRANSCRIPTION_HTTP_ADDRESS"), "optional plain-HTTP listener; use a distinct port for explicit private-LAN/Tailscale access")
-	cmd.Flags().StringVar(&token, "token", os.Getenv("CDP_TRANSCRIPTION_API_TOKEN"), "local bearer token; set this before exposing the service beyond a trusted loopback")
+	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "primary listen address; defaults to 0.0.0.0:28765")
+	cmd.Flags().StringVar(&httpAddress, "http-address", envDefault("CDP_TRANSCRIPTION_HTTP_ADDRESS", transcriptionapi.DefaultHTTPListenAddress), "cleartext companion listen address; defaults to 0.0.0.0:28766")
 	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
 	cmd.Flags().StringSliceVar(&allowedProviders, "providers", envStringSlice("CDP_TRANSCRIPTION_PROVIDERS"), "provider allowlist; repeat or comma-separate (default: all configured providers)")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")

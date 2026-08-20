@@ -6,13 +6,12 @@
     "description": "Provider-neutral OpenAI/Whisper-compatible transcription with completed-file SSE and realtime WebSocket sessions."
   },
   "servers": [
-    { "url": "http://localhost:28765", "description": "Local loopback default" }
+    { "url": "https://localhost:28765", "description": "HTTPS primary when TLS is configured" },
+    { "url": "http://localhost:28766", "description": "HTTP companion default" }
   ],
-  "security": [{ "bearerAuth": [] }],
   "paths": {
     "/healthz": {
       "get": {
-        "security": [],
         "summary": "Read liveness and safe provider readiness",
         "responses": {
           "200": { "description": "Service is alive", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } }
@@ -66,7 +65,6 @@
             }
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
           "413": { "$ref": "#/components/responses/PayloadTooLarge" },
           "422": { "$ref": "#/components/responses/ProviderFailure" }
         }
@@ -80,7 +78,6 @@
         "responses": {
           "200": { "description": "Translation result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TranscriptionResult" } }, "text/plain": { "schema": { "type": "string" } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
           "413": { "$ref": "#/components/responses/PayloadTooLarge" },
           "422": { "$ref": "#/components/responses/ProviderFailure" }
         }
@@ -88,7 +85,6 @@
     },
     "/openapi.json": {
       "get": {
-        "security": [],
         "summary": "Read the OpenAPI contract",
         "responses": {
           "200": { "description": "OpenAPI 3.1 JSON document", "content": { "application/vnd.oai.openapi+json": { "schema": { "type": "object" } } } }
@@ -105,17 +101,13 @@
           "server_events": ["session.created", "session.updated", "input_audio_buffer.committed", "conversation.item.input_audio_transcription.delta", "conversation.item.input_audio_transcription.completed", "conversation.item.input_audio_transcription.failed", "error"],
           "audio_format": { "type": "audio/pcm", "rate": 24000 }
         },
-        "responses": { "101": { "description": "WebSocket protocol switch" }, "400": { "$ref": "#/components/responses/BadRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+        "responses": { "101": { "description": "WebSocket protocol switch" }, "400": { "$ref": "#/components/responses/BadRequest" } }
       }
     }
   },
   "components": {
-    "securitySchemes": {
-      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "local-token" }
-    },
     "responses": {
       "BadRequest": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "Unauthorized": { "description": "Local authentication failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
       "PayloadTooLarge": { "description": "Configured upload/session limit exceeded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
       "ProviderFailure": { "description": "Provider unavailable or returned an unrecognized shape", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
     },

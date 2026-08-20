@@ -272,7 +272,6 @@
     <div class="details-body">
       <div class="advanced-grid">
         <label class="field full" for="baseUrl"><span class="field-label">API base URL</span><input id="baseUrl" autocomplete="off"></label>
-        <label class="field full" for="token"><span class="field-label">Bearer token (optional for a private demo)</span><input id="token" type="password" autocomplete="off" placeholder="leave blank when the server has no token"></label>
       </div>
       <div class="advanced-actions">
         <button id="health" class="button-secondary" type="button">Check health</button>
@@ -347,10 +346,7 @@
   }
 
   function headers(extra = {}) {
-    const result = { ...extra };
-    const token = $("token").value.trim();
-    if (token) result.Authorization = `Bearer ${token}`;
-    return result;
+    return { ...extra };
   }
 
   function show(element, value) {

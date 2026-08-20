@@ -138,7 +138,6 @@ done
 
 "$binary" --state-dir "$state_dir/cdp" transcription serve \
   --address "127.0.0.1:${api_port}" \
-  --token e2e-token \
   --default-provider local \
   --local-base-url "http://127.0.0.1:${fixture_http_port}/v1" \
   --local-realtime-base-url "http://127.0.0.1:${fixture_ws_port}/v1" \
@@ -159,7 +158,7 @@ for _ in $(seq 1 60); do
 done
 
 export VOX_API_BASE_URL="http://127.0.0.1:${api_port}/v1"
-export VOX_API_TOKEN="e2e-token"
+export VOX_API_KEY="unused-no-bearer-key"
 
 uv run --quiet --with httpx --with 'openai[realtime] @ git+https://github.com/openai/openai-python.git@753ab5c1a81cd85e8bf0aef4c04c51a2e8dae6cd' python3 - <<'PY'
 import asyncio
@@ -171,8 +170,8 @@ import httpx
 from openai import AsyncOpenAI, OpenAI
 
 base_url = os.environ["VOX_API_BASE_URL"]
-token = os.environ["VOX_API_TOKEN"]
-client = OpenAI(base_url=base_url, api_key=token)
+api_key = os.environ["VOX_API_KEY"]
+client = OpenAI(base_url=base_url, api_key=api_key)
 
 fixture_path = os.environ.get("VOX_E2E_AUDIO")
 if fixture_path:
@@ -204,7 +203,6 @@ assert str(plain) == "fixture text transcript", plain
 with httpx.stream(
     "POST",
     base_url + "/audio/transcriptions",
-    headers={"Authorization": f"Bearer {token}"},
     files={"file": ("fixture.webm", b"synthetic webm bytes", "audio/webm")},
     data={"model": "whisper-1", "stream": "true"},
 ) as response:
@@ -214,7 +212,7 @@ assert "transcript.text.delta" in stream_body, stream_body
 assert "transcript.text.done" in stream_body, stream_body
 
 async def realtime_check():
-    async_client = AsyncOpenAI(base_url=base_url, api_key=token)
+    async_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
     async with async_client.realtime.connect(model="whisper-1") as connection:
         await connection.session.update(session={
             "type": "transcription",

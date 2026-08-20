@@ -25,7 +25,6 @@ func testConfig() Config {
 		AuthRefreshInterval:  10 * time.Minute,
 		Path:                 "/opt/homebrew/bin:/usr/bin:/bin",
 	}
-	config.Token = "demo-token"
 	return config
 }
 
@@ -48,8 +47,6 @@ func TestRenderLaunchAgentIsOwnerScopedAndRestartable(t *testing.T) {
 		"0.0.0.0:28765",
 		"CDP_TRANSCRIPTION_HTTP_ADDRESS",
 		"0.0.0.0:28766",
-		"CDP_TRANSCRIPTION_API_TOKEN",
-		"demo-token",
 		"CDP_TRANSCRIPTION_PROVIDERS",
 		"chatgpt-web",
 		"CDP_BROWSER_MODE",
@@ -95,8 +92,8 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 			t.Fatalf("systemd unit missing %q:\n%s", want, unit)
 		}
 	}
-	if !strings.Contains(environment, `CDP_TRANSCRIPTION_API_TOKEN="demo-token"`) {
-		t.Fatalf("environment file does not contain quoted token: %s", environment)
+	if strings.Contains(environment, "CDP_TRANSCRIPTION_API_TOKEN") {
+		t.Fatalf("environment file contains removed bearer-token configuration: %s", environment)
 	}
 	for _, want := range []string{
 		`CDP_TRANSCRIPTION_PROVIDERS="chatgpt-web"`,

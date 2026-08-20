@@ -6,7 +6,7 @@ import (
 )
 
 func TestDemoURLsUseHTTPSAndRequestedCertificateHosts(t *testing.T) {
-	if got, want := demoURL("0.0.0.0:28765", true), "https://0.0.0.0:28765/demo.html"; got != want {
+	if got, want := demoURL("0.0.0.0:28765", true), "https://127.0.0.1:28765/demo.html"; got != want {
 		t.Fatalf("demoURL = %q, want %q", got, want)
 	}
 	got := demoURLs("0.0.0.0:28765", true, []string{"192.168.5.249", "localhost"})

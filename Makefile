@@ -1,4 +1,4 @@
-.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-openai-compat e2e-public-sources-installed e2e-web-research-live-installed fmt fmt-check install leak-check test verify vet
+.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
 PREFIX ?= $(HOME)/.local
@@ -56,6 +56,9 @@ e2e-installed:
 e2e-openai-compat: build
 	bash scripts/e2e_openai_compat.sh ./$(BINARY)
 
+e2e-transcription-live: build
+	bash scripts/e2e_transcription_live.sh ./$(BINARY)
+
 e2e-demo-installed:
 	@cdp_bin="$$(command -v cdp)"; \
 	if [ -z "$$cdp_bin" ]; then \
@@ -67,6 +70,18 @@ e2e-demo-installed:
 		exit 2; \
 	fi; \
 	bash scripts/e2e_demo.sh "$$cdp_bin"
+
+e2e-transcription-live-installed:
+	@cdp_bin="$$(command -v cdp)"; \
+	if [ -z "$$cdp_bin" ]; then \
+		echo "cdp is not on PATH; run make install or add Go bin to PATH" >&2; \
+		exit 2; \
+	fi; \
+	if [ ! -x "$$cdp_bin" ]; then \
+		echo "cdp binary at $$cdp_bin is not executable" >&2; \
+		exit 2; \
+	fi; \
+	bash scripts/e2e_transcription_live.sh "$$cdp_bin"
 
 e2e-public-sources-installed:
 	go run ./cmd/e2e-public-sources --cdp "$$(command -v cdp)"

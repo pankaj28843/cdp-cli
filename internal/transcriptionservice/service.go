@@ -31,7 +31,6 @@ type Config struct {
 	StateDir             string
 	Address              string
 	HTTPAddress          string
-	Token                string
 	Provider             string
 	AllowedProviders     []string
 	BrowserMode          string
@@ -123,7 +122,6 @@ func (c Config) Environment() map[string]string {
 		"CDP_STATE_DIR":                             c.StateDir,
 		"CDP_TRANSCRIPTION_ADDRESS":                 c.Address,
 		"CDP_TRANSCRIPTION_HTTP_ADDRESS":            c.HTTPAddress,
-		"CDP_TRANSCRIPTION_API_TOKEN":               c.Token,
 		"CDP_TRANSCRIPTION_PROVIDER":                c.Provider,
 		"CDP_TRANSCRIPTION_PROVIDERS":               strings.Join(c.AllowedProviders, ","),
 		"CDP_BROWSER_MODE":                          c.BrowserMode,

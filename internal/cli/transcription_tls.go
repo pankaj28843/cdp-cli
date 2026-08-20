@@ -40,6 +40,9 @@ func demoURL(address string, tlsEnabled bool) string {
 		scheme = "https"
 	}
 	address = strings.TrimSpace(address)
+	if address == "0.0.0.0:28765" || address == "[::]:28765" {
+		address = "127.0.0.1:28765"
+	}
 	if strings.HasPrefix(address, ":") {
 		return scheme + "://127.0.0.1" + address + "/demo.html"
 	}

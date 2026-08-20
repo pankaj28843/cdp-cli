@@ -79,7 +79,7 @@ cdp workflow agent gemini capabilities --json
 cdp workflow agent gemini capabilities refresh --json
 cdp workflow agent grok capabilities --json
 cdp workflow agent grok capabilities refresh --json
-cdp transcription serve --token local-development-token --default-provider chatgpt-web
+cdp transcription serve --default-provider chatgpt-web
 cdp transcription spec > openapi.json
 cdp schema webagent-operation --json
 cdp protocol search screenshot --json

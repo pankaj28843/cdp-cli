@@ -2,7 +2,6 @@ package transcriptionapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -20,17 +19,19 @@ import (
 )
 
 const (
-	// Keep the user-facing transcription listener in the documented high-port
-	// range so it does not collide with legacy loopback services.
-	DefaultListenAddress = "localhost:28765"
-	maxRequestBodyBytes  = MaxUploadBytes + 2*1024*1024
+	// Keep the user-facing transcription listeners in the documented high-port
+	// range so they do not collide with legacy services. The primary listener
+	// supports HTTPS when TLS files are configured; the companion listener is
+	// explicitly cleartext for trusted private clients.
+	DefaultListenAddress     = "0.0.0.0:28765"
+	DefaultHTTPListenAddress = "0.0.0.0:28766"
+	maxRequestBodyBytes      = MaxUploadBytes + 2*1024*1024
 )
 
 type ServerConfig struct {
 	Registry        *Registry
 	Store           *Store
 	DefaultProvider ProviderID
-	BearerToken     string
 	Address         string
 	HTTPAddress     string
 	TLSCertFile     string
@@ -80,14 +81,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/demo.html", s.handleDemo)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/openapi.json", s.handleOpenAPI)
-	mux.HandleFunc("/v1/models", s.withAuth(s.handleModels))
-	mux.HandleFunc("/v1/audio/transcriptions", s.withAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/models", s.handleModels)
+	mux.HandleFunc("/v1/audio/transcriptions", func(w http.ResponseWriter, r *http.Request) {
 		s.handleFile(w, r, TaskTranscribe)
-	}))
-	mux.HandleFunc("/v1/audio/translations", s.withAuth(func(w http.ResponseWriter, r *http.Request) {
+	})
+	mux.HandleFunc("/v1/audio/translations", func(w http.ResponseWriter, r *http.Request) {
 		s.handleFile(w, r, TaskTranslate)
-	}))
-	mux.HandleFunc("/v1/realtime", s.withAuth(s.handleRealtime))
+	})
+	mux.HandleFunc("/v1/realtime", s.handleRealtime)
 	return mux
 }
 
@@ -175,33 +176,6 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		return fmt.Errorf("serve transcription API: %w", err)
 	}
-}
-
-func (s *Server) withAuth(handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if strings.TrimSpace(s.config.BearerToken) != "" && !authorized(r, s.config.BearerToken) {
-			writeAPIError(w, http.StatusUnauthorized, APIError{
-				Type:    "authentication_error",
-				Code:    "invalid_api_key",
-				Message: "a valid local bearer token is required",
-			})
-			return
-		}
-		handler(w, r)
-	}
-}
-
-func authorized(request *http.Request, expected string) bool {
-	const prefix = "Bearer "
-	value := strings.TrimSpace(request.Header.Get("Authorization"))
-	if !strings.HasPrefix(value, prefix) {
-		return false
-	}
-	provided := strings.TrimSpace(strings.TrimPrefix(value, prefix))
-	if provided == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

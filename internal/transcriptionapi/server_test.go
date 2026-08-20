@@ -93,7 +93,7 @@ func (s *fakeRealtime) Close() error {
 	return nil
 }
 
-func newTestServer(t *testing.T, provider Provider, token string) (*Server, *Store) {
+func newTestServer(t *testing.T, provider Provider) (*Server, *Store) {
 	t.Helper()
 	store, err := NewStore(t.TempDir(), 8<<20)
 	if err != nil {
@@ -103,7 +103,6 @@ func newTestServer(t *testing.T, provider Provider, token string) (*Server, *Sto
 		Registry:        NewRegistry(provider),
 		Store:           store,
 		DefaultProvider: provider.ID(),
-		BearerToken:     token,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +112,7 @@ func newTestServer(t *testing.T, provider Provider, token string) (*Server, *Sto
 
 func TestDemoPageIsServedWithoutAuthentication(t *testing.T) {
 	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: "demo"}}
-	server, _ := newTestServer(t, provider, "secret")
+	server, _ := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 
@@ -237,7 +236,7 @@ func reserveTCPAddress(t *testing.T) string {
 
 func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testing.T) {
 	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: "hello from the provider"}}
-	server, store := newTestServer(t, provider, "secret")
+	server, store := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 
@@ -245,7 +244,6 @@ func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testin
 		"model":       "whisper-1",
 		"duration_ms": "1250",
 	})
-	request.Header.Set("Authorization", "Bearer secret")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -322,26 +320,25 @@ func TestServerEphemeralMediaIsRemovedAfterFileTransaction(t *testing.T) {
 	}
 }
 
-func TestServerAuthAndCompletedFileSSE(t *testing.T) {
+func TestServerUnauthenticatedAndCompletedFileSSE(t *testing.T) {
 	provider := &fakeProvider{id: ProviderLocal, result: Result{Text: strings.Repeat("x", 5000)}}
-	server, _ := newTestServer(t, provider, "secret")
+	server, _ := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 
-	unauthorized, err := http.Get(httpServer.URL + "/v1/models")
+	models, err := http.Get(httpServer.URL + "/v1/models")
 	if err != nil {
 		t.Fatal(err)
 	}
-	unauthorized.Body.Close()
-	if unauthorized.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unauthorized status = %d", unauthorized.StatusCode)
+	models.Body.Close()
+	if models.StatusCode != http.StatusOK {
+		t.Fatalf("models status = %d, want %d", models.StatusCode, http.StatusOK)
 	}
 
 	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "req-sse-1", "speech.webm", []byte("fake-webm"), map[string]string{
 		"model":  "whisper-1",
 		"stream": "true",
 	})
-	request.Header.Set("Authorization", "Bearer secret")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -361,14 +358,13 @@ func TestServerRetainsAudioWhenProviderFails(t *testing.T) {
 		id:  ProviderLocal,
 		err: providerError(422, "provider", "bad_audio", "provider rejected fixture", false),
 	}
-	server, store := newTestServer(t, provider, "secret")
+	server, store := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 
 	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "req-failed-1", "speech.wav", []byte("fake-wav"), map[string]string{
 		"model": "whisper-1",
 	})
-	request.Header.Set("Authorization", "Bearer secret")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -394,14 +390,13 @@ func TestServerRetainsAudioWhenProactiveAuthRefreshFails(t *testing.T) {
 		id:        ProviderLocal,
 		ensureErr: providerError(401, "authentication_error", "auth_refresh_failed", "auth fixture failed", false),
 	}
-	server, store := newTestServer(t, provider, "secret")
+	server, store := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 
 	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "req-auth-failed-1", "speech.webm", []byte("fake-webm"), map[string]string{
 		"model": DefaultModel,
 	})
-	request.Header.Set("Authorization", "Bearer secret")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -427,13 +422,13 @@ func TestServerRealtimeUsesOpenAIShapedEventsAndPersistsPCM(t *testing.T) {
 			commitEvents: []ProviderEvent{{Kind: EventFinal, Text: "hello world", Sequence: 2}},
 		},
 	}
-	server, store := newTestServer(t, provider, "secret")
+	server, store := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/realtime?intent=transcription"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	connection, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer secret"}}})
+	connection, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,13 +490,13 @@ func TestServerRealtimeAcceptsPCMChunkAboveDefaultWebSocketLimit(t *testing.T) {
 			commitEvents: []ProviderEvent{{Kind: EventFinal, Text: "chunk received", Sequence: 2}},
 		},
 	}
-	server, _ := newTestServer(t, provider, "secret")
+	server, _ := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/realtime?intent=transcription"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	connection, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer secret"}}})
+	connection, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,13 +532,13 @@ func TestServerRealtimeMarksCumulativeHypothesisRevisionsAsReplacement(t *testin
 			commitEvents: []ProviderEvent{{Kind: EventFinal, Text: "hello word", Sequence: 3}},
 		},
 	}
-	server, _ := newTestServer(t, provider, "secret")
+	server, _ := newTestServer(t, provider)
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/realtime?intent=transcription"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	connection, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer secret"}}})
+	connection, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -836,7 +831,6 @@ func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *tes
 		Registry:        NewRegistry(provider),
 		Store:           store,
 		DefaultProvider: ProviderLocal,
-		BearerToken:     "do-not-leak-this",
 		Address:         primaryAddress,
 		HTTPAddress:     httpAddress,
 		TLSCertFile:     "synthetic-cert.pem",

@@ -7,12 +7,15 @@ The root page is a self-contained human dogfood app at `/demo.html` (also `/`).
 
 ## Start the service
 
-The safe default is loopback. Set a token whenever another process or host can
-reach the listener.
+The service defaults to the LAN-capable primary listener on `0.0.0.0:28765`
+and the cleartext companion on `0.0.0.0:28766`, without bearer-token
+authentication. Keep both listeners on a trusted network or behind an
+operator-managed access boundary. Configure TLS on the primary listener
+when HTTPS access is needed; the HTTP companion remains available for trusted
+private clients that cannot install the self-signed certificate.
 
 ```bash
 cdp transcription serve \
-  --token local-development-token \
   --default-provider chatgpt-web \
   --print-ready
 ```
@@ -28,7 +31,6 @@ permission workaround: mobile browsers still need an HTTPS secure origin.
 cdp transcription serve \
   --address 0.0.0.0:28765 \
   --http-address 0.0.0.0:28766 \
-  --token local-development-token \
   --default-provider chatgpt-web \
   --tls-cert /path/to/lan-cert.pem \
   --tls-key /path/to/lan-key.pem
@@ -62,6 +64,9 @@ Use `--providers` to persist an explicit provider allowlist in the user
 service. For a ChatGPT-only deployment, set `--default-provider chatgpt-web
 --providers chatgpt-web`; requests for every other provider are then rejected
 by the service boundary even if those adapters are available in the binary.
+For a provider-neutral cdp-cli demo or live check, allow both web adapters with
+`--providers chatgpt-web,microsoft-365-web` and choose ChatGPT or Microsoft 365
+in the rendered provider selector. VoxKey itself remains ChatGPT-only in v1.
 The service also persists the selected browser mode and display session so
 headed Linux services can use the same authenticated browser owned by cdp.
 
@@ -159,7 +164,6 @@ To use an OpenAI-compatible local ASR server instead:
 
 ```bash
 cdp transcription serve \
-  --token local-development-token \
   --default-provider local \
   --local-base-url http://localhost:9000/v1
 ```
@@ -170,8 +174,7 @@ If the local service exposes realtime on a different origin, add
 The OpenAPI document is available from the running service and from the CLI:
 
 ```bash
-curl -H 'Authorization: Bearer local-development-token' \
-  http://localhost:28765/openapi.json
+curl http://localhost:28766/openapi.json
 cdp transcription spec > openapi.json
 ```
 
