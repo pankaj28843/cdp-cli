@@ -69,6 +69,43 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	}
 }
 
+func TestCronInstallUsesPersistedHeadedConnectionURL(t *testing.T) {
+	_, crontabBin := fakeCrontab(t, "")
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"connection", "add", "default", "--browser-url", "http://headed.example.invalid",
+		"--state-dir", stateDir, "--json",
+	}, &stdout, &stderr, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add exit = %d, want 0; stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+
+	var install cronInstallResult
+	executeCronJSON(t, []string{"--browser-mode", "headed", "cron", "install", "--state-dir", stateDir, "--json"}, &install)
+	if !install.OK || !install.Changed || !install.Installed {
+		t.Fatalf("cron install = %+v, want installed headed block", install)
+	}
+	crontab := readFileString(t, os.Getenv("CDP_FAKE_CRONTAB"))
+	if !strings.Contains(crontab, "--browser-url http://headed.example.invalid") {
+		t.Fatalf("persisted headed browser URL missing from cron block:\n%s", crontab)
+	}
+	if strings.Contains(crontab, "--auto-connect") {
+		t.Fatalf("persisted browser-url connection unexpectedly rendered auto-connect:\n%s", crontab)
+	}
+
+	var status struct {
+		OK              bool `json:"ok"`
+		MatchesIntended bool `json:"matches_intended"`
+	}
+	executeCronJSON(t, []string{"--browser-mode", "headed", "cron", "status", "--state-dir", stateDir, "--json"}, &status)
+	if !status.OK || !status.MatchesIntended {
+		t.Fatalf("headed cron status = %+v, want persisted connection URL to match", status)
+	}
+}
+
 func TestCronInstallAtomicallyMigratesLegacyOwnedHeadedBlock(t *testing.T) {
 	initial := strings.Join([]string{
 		"SHELL=/bin/sh",

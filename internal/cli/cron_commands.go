@@ -692,6 +692,20 @@ func (a *app) applyCronBrowserMode(cmd *cobra.Command, opts *cronRenderOptions) 
 	if opts.BrowserMode == "" {
 		opts.BrowserMode = "all"
 	}
+	// A headed deployment commonly persists its browser URL in the selected
+	// connection. Reuse that value when the caller explicitly selects headed
+	// cron mode, so status/install remain stable without requiring the same
+	// CDP_BROWSER_URL environment variable on every invocation. Auto-connect
+	// connections intentionally remain URL-less and keep their existing path.
+	if opts.BrowserMode == "headed" && strings.TrimSpace(opts.BrowserURL) == "" {
+		connection, _, ok, err := a.resolveConnection(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if ok && strings.TrimSpace(connection.BrowserURL) != "" {
+			opts.BrowserURL = strings.TrimSpace(connection.BrowserURL)
+		}
+	}
 	cfg, err := config.Load(a.opts.config)
 	if err != nil {
 		return commandError("invalid_config", "usage", err.Error(), ExitUsage, []string{"cdp --config <path> cron install --dry-run --json"})
