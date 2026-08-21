@@ -405,6 +405,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		return
 	}
 	if err := ensureProviderAuth(r.Context(), provider); err != nil {
+		s.recordObservedFileFailure(provider, err)
 		s.failRecord(r.Context(), &record, err)
 		writeProviderError(w, err)
 		return
@@ -415,6 +416,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	result, runErr, attempts := runFileProvider(r.Context(), provider, request)
 	record.Attempts = attempts
 	if runErr != nil {
+		s.recordObservedFileFailure(provider, runErr)
 		s.failRecord(r.Context(), &record, runErr)
 		if request.Stream {
 			s.writeSSEError(w, runErr)
@@ -437,6 +439,33 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		return
 	}
 	writeResult(w, request.ResponseFormat, result)
+}
+
+func (s *Server) recordObservedFileFailure(provider Provider, err error) {
+	if s == nil || provider == nil || !countsAgainstFilePathHealth(err) {
+		return
+	}
+	reason := probeReason(err)
+	if s.config.ProbeCoordinator != nil {
+		s.config.ProbeCoordinator.RecordObservedFileFailure(provider.ID(), reason)
+		return
+	}
+	if s.config.ProbeHealth != nil {
+		s.config.ProbeHealth.RecordPathFailure(provider.ID(), ProbePathFile, time.Now().UTC(), "live-request", reason)
+	}
+}
+
+func countsAgainstFilePathHealth(err error) bool {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr == nil {
+		return false
+	}
+	switch providerErr.APIError.Type {
+	case "invalid_request_error", "internal", "usage", "unsupported", "provider_disabled":
+		return false
+	default:
+		return true
+	}
 }
 
 func newRequestRecord(request FileRequest, provider ProviderID, phase RecordPhase) RequestRecord {

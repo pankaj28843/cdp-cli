@@ -142,6 +142,49 @@ func TestTranscribeUsesLazyBrowserFallbackAfterDirectAuthFailure(t *testing.T) {
 	}
 }
 
+func TestTranscribeRetriesResponseDriftAndUsesLazyBrowserFallback(t *testing.T) {
+	store := testTranscriptionStore(t)
+	filePath := testTranscriptionFile(t, []byte("synthetic-webm"))
+	directRequests := 0
+	fallbackCalls := 0
+	client := &http.Client{Transport: transcriptionRoundTripper(func(request *http.Request) (*http.Response, error) {
+		directRequests++
+		return makeTranscriptionHTTPResponse(http.StatusOK, `{}`), nil
+	})}
+	result := Transcribe(context.Background(), TranscribeConfig{
+		Store:       store,
+		BuildCommit: "test",
+		HTTPClient:  client,
+		MaxAttempts: 2,
+		Backoff:     []time.Duration{0, 0},
+		BrowserFallback: func(
+			_ context.Context,
+			config TranscribeConfig,
+			_ string,
+			_ int64,
+		) webagent.Result {
+			fallbackCalls++
+			if config.Browser != nil || config.BrowserFallback != nil {
+				t.Fatalf("fallback config should remain lazy and non-recursive: %+v", config)
+			}
+			return webagent.NewMetadataResult(
+				webagent.ProviderChatGPT,
+				webagent.OperationTranscribe,
+				TranscriptionData{Transcript: "browser recovered"},
+				"test",
+				nil,
+			)
+		},
+	}, filePath, 500)
+	if !result.OK || directRequests != 2 || fallbackCalls != 1 {
+		t.Fatalf("result=%+v directRequests=%d fallbackCalls=%d", result, directRequests, fallbackCalls)
+	}
+	data, ok := result.Data.(TranscriptionData)
+	if !ok || data.Transcript != "browser recovered" {
+		t.Fatalf("fallback transcription data = %+v", result.Data)
+	}
+}
+
 func TestTranscribePreservesIncomingAudioMetadata(t *testing.T) {
 	store := testTranscriptionStore(t)
 	filePath := testTranscriptionFile(t, []byte("synthetic-wav"))

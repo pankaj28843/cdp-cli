@@ -385,6 +385,55 @@ func TestServerRetainsAudioWhenProviderFails(t *testing.T) {
 	}
 }
 
+func TestServerMarksObservedFileFailureUntilSyntheticRecovery(t *testing.T) {
+	provider := &fakeProvider{
+		id:  ProviderChatGPT,
+		err: providerError(http.StatusBadGateway, "provider", "provider_response_changed", "provider returned no transcript", false),
+	}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health := NewProbeHealth(15 * time.Minute)
+	health.RecordSuccess(ProviderChatGPT, time.Now().UTC(), "fixture-001")
+	server, err := NewServer(ServerConfig{
+		Registry:        NewRegistry(provider),
+		Store:           store,
+		DefaultProvider: ProviderChatGPT,
+		ProbeHealth:     health,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "req-health-failed-1", "speech.webm", []byte("fake-webm"), map[string]string{
+		"model": DefaultModel,
+	})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", response.StatusCode)
+	}
+	capability := health.Apply(provider.Capabilities(context.Background()), time.Now().UTC())
+	if capability.Ready || capability.ProbeReady || capability.FileProbe == nil || capability.FileProbe.Ready {
+		t.Fatalf("observed file failure left health ready: %+v", capability)
+	}
+	if capability.FileProbe.Reason != "provider_response_changed" {
+		t.Fatalf("observed failure reason = %q", capability.FileProbe.Reason)
+	}
+
+	health.RecordSuccess(ProviderChatGPT, time.Now().UTC(), "fixture-002")
+	recovered := health.Apply(provider.Capabilities(context.Background()), time.Now().UTC())
+	if !recovered.Ready || !recovered.ProbeReady || recovered.FileProbe == nil || !recovered.FileProbe.Ready {
+		t.Fatalf("synthetic recovery did not restore health: %+v", recovered)
+	}
+}
+
 func TestServerRetainsAudioWhenProactiveAuthRefreshFails(t *testing.T) {
 	provider := &fakeProvider{
 		id:        ProviderLocal,

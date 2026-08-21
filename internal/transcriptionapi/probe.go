@@ -326,6 +326,17 @@ func (c *SyntheticProbeCoordinator) Health() *ProbeHealth {
 	return c.health
 }
 
+// RecordObservedFileFailure invalidates the file path after a real user
+// request fails. Synthetic probes remain the recovery authority: the next
+// bounded fixture run must succeed before health becomes ready again.
+func (c *SyntheticProbeCoordinator) RecordObservedFileFailure(provider ProviderID, reason string) {
+	if c == nil || c.health == nil {
+		return
+	}
+	c.health.RecordPathFailure(provider, ProbePathFile, time.Now().UTC(), "live-request", reason)
+	_ = c.persistState()
+}
+
 func (c *SyntheticProbeCoordinator) Start(ctx context.Context) {
 	if c == nil || c.interval <= 0 {
 		return

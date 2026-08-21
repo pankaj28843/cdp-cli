@@ -684,7 +684,18 @@ func webAgentProviderError(result webagent.Result) error {
 	case "connection":
 		status = 503
 	}
-	return transcriptionProviderError(status, "provider", result.Error.Code, result.Error.Message, false)
+	code := result.Error.Code
+	message := result.Error.Message
+	if isUnusableTranscriptionResult(code) {
+		code = "provider_transcript_unavailable"
+		message = "The transcription provider did not return a usable result; retry the saved audio"
+	}
+	return transcriptionProviderError(status, "provider", code, message, false)
+}
+
+func isUnusableTranscriptionResult(code string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(code))
+	return strings.Contains(normalized, "response_changed") || strings.Contains(normalized, "shape")
 }
 
 func transcriptionProviderError(status int, kind, code, message string, retryable bool) error {

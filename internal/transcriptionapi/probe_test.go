@@ -158,6 +158,11 @@ func TestSyntheticProbeCoordinatorIsolatesProvidersAndPersistsRedactedState(t *t
 	if states[ProviderChatGPT].LastSuccessAt.IsZero() {
 		t.Fatalf("successful provider state = %+v", states[ProviderChatGPT])
 	}
+	coordinator.RecordObservedFileFailure(ProviderChatGPT, "provider_transcript_unavailable")
+	degraded := coordinator.Health().Apply(successful.Capabilities(context.Background()), time.Now().UTC())
+	if degraded.Ready || degraded.FileProbe == nil || degraded.FileProbe.Ready || degraded.FileProbe.Reason != "provider_transcript_unavailable" {
+		t.Fatalf("observed live failure did not invalidate file health: %+v", degraded)
+	}
 	if !states[ProviderM365].LastSuccessAt.IsZero() || states[ProviderM365].Reason != "auth_expired" {
 		t.Fatalf("failed provider state = %+v", states[ProviderM365])
 	}
@@ -174,7 +179,7 @@ func TestSyntheticProbeCoordinatorIsolatesProvidersAndPersistsRedactedState(t *t
 	if err := json.Unmarshal(stateBytes, &document); err != nil {
 		t.Fatal(err)
 	}
-	if document.SchemaVersion != probeStateSchemaVersion || document.Providers[string(ProviderChatGPT)].File == nil || document.Providers[string(ProviderChatGPT)].File.LastFixtureID != "fixture-001" {
+	if document.SchemaVersion != probeStateSchemaVersion || document.Providers[string(ProviderChatGPT)].File == nil || document.Providers[string(ProviderChatGPT)].File.LastFixtureID != "live-request" || document.Providers[string(ProviderChatGPT)].File.Reason != "provider_transcript_unavailable" {
 		t.Fatalf("unexpected persisted probe state: %+v", document)
 	}
 }

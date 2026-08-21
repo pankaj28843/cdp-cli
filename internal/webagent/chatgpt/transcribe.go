@@ -179,9 +179,10 @@ func Transcribe(
 				transcript, parseErr := parseTranscriptionBody(response.body)
 				if parseErr != nil {
 					return transcriptionAttempt{}, &transcribeFailure{
-						code:     "chatgpt_transcription_response_changed",
-						errClass: "provider",
-						message:  "ChatGPT transcription returned an empty or unrecognized response",
+						code:      "chatgpt_transcription_response_changed",
+						errClass:  "provider",
+						message:   "ChatGPT transcription returned an empty or unrecognized response",
+						retryable: true,
 					}
 				}
 				return transcriptionAttempt{transcript: transcript}, nil
@@ -252,7 +253,8 @@ func Transcribe(
 
 func shouldUseBrowserFallback(failure transcribeFailure) bool {
 	return failure.auth || failure.status == http.StatusUnauthorized ||
-		failure.status == http.StatusForbidden || failure.errClass == "auth"
+		failure.status == http.StatusForbidden || failure.errClass == "auth" ||
+		failure.code == "chatgpt_transcription_response_changed"
 }
 
 type transcriptionHTTPResponse struct {
