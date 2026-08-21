@@ -434,6 +434,30 @@ func TestCronInstallHeadedOnlyDryRunDoesNotMutateCrontab(t *testing.T) {
 	}
 }
 
+func TestCronInstallHeadedBrowserURLCarriesIntoManagedEntry(t *testing.T) {
+	initial := "SHELL=/bin/sh\n"
+	crontabPath, crontabBin := fakeCrontab(t, initial)
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var got struct {
+		OK            bool `json:"ok"`
+		IntendedBlock struct {
+			Entries []string `json:"entries"`
+		} `json:"intended_block"`
+	}
+	executeCronJSON(t, []string{"--browser-mode", "headed", "--browser-url", "http://browser.example.test:9223", "cron", "install", "--dry-run", "--state-dir", stateDir, "--json"}, &got)
+	if !got.OK || len(got.IntendedBlock.Entries) != 2 {
+		t.Fatalf("cron install headed browser URL = %+v, want headed keepalive plus prune", got)
+	}
+	if !strings.Contains(got.IntendedBlock.Entries[0], "cron run headed-daemon-keepalive --browser-url http://browser.example.test:9223") {
+		t.Fatalf("headed browser URL was not carried into managed entry: %q", got.IntendedBlock.Entries[0])
+	}
+	if after := readFileString(t, crontabPath); after != initial {
+		t.Fatalf("dry-run mutated crontab:\n%s", after)
+	}
+}
+
 func TestCronInstallWarnsWhenPreservingPagesPollingHack(t *testing.T) {
 	initial := "SHELL=/bin/sh\n* * * * * $HOME/.local/bin/cdp pages --browser-mode headed >/dev/null 2>&1\n"
 	crontabPath, crontabBin := fakeCrontab(t, initial)

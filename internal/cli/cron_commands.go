@@ -39,6 +39,7 @@ type cronRenderOptions struct {
 	Profile           string
 	CDPBin            string
 	LogDir            string
+	BrowserURL        string
 	Display           string
 	XDGRuntimeDir     string
 	Reconnect         time.Duration
@@ -656,6 +657,7 @@ func defaultCronRenderOptions() cronRenderOptions {
 		Profile:           "agent",
 		CDPBin:            envDefault("CDP_BIN", "$HOME/.local/bin/cdp"),
 		LogDir:            envDefault("CDP_LOG_DIR", "$HOME/.cdp-cli"),
+		BrowserURL:        envDefault("CDP_BROWSER_URL", ""),
 		Display:           envDefault("DISPLAY", ":0"),
 		XDGRuntimeDir:     envDefault("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", os.Getuid())),
 		Reconnect:         30 * time.Second,
@@ -671,6 +673,9 @@ func defaultCronRenderOptions() cronRenderOptions {
 func (a *app) applyCronBrowserMode(cmd *cobra.Command, opts *cronRenderOptions) error {
 	if opts == nil {
 		return nil
+	}
+	if browserURL := strings.TrimSpace(a.opts.browserURL); browserURL != "" {
+		opts.BrowserURL = browserURL
 	}
 	if root := cmd.Root(); root != nil {
 		flags := root.PersistentFlags()
@@ -738,6 +743,7 @@ func managedCronBlock(opts cronRenderOptions) string {
 func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 	cdpBin := cronValue(opts.CDPBin)
 	logDir := cronValue(opts.LogDir)
+	browserURL := strings.TrimSpace(opts.BrowserURL)
 	display := cronValue(opts.Display)
 	xdgRuntimeDir := cronValue(opts.XDGRuntimeDir)
 	reconnect := opts.Reconnect.String()
@@ -756,6 +762,10 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 	}
 	var tasks []managedCronTask
 	if opts.BrowserMode == "all" || opts.BrowserMode == "headed" {
+		browserURLArg := ""
+		if browserURL != "" {
+			browserURLArg = " --browser-url " + cronValue(browserURL)
+		}
 		tasks = append(tasks, newManagedCronTask(
 			managedCronTask{
 				ID:                 cronTaskHeadedDaemonKeepalive,
@@ -765,7 +775,7 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 				LogName:            "keepalive-headed.log",
 				LogArtifactKey:     "headed_keepalive_log",
 				Purpose:            "Keep the headed runtime available with a passive-first health check, then self-heal the exact remote-debugging approval queue only when needed.",
-				Command:            fmt.Sprintf("%s --state-dir %s cron run %s --display %s --xdg-runtime-dir %s --reconnect %s --max-log-size %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadedDaemonKeepalive, display, xdgRuntimeDir, reconnect, maxLogSize),
+				Command:            fmt.Sprintf("%s --state-dir %s cron run %s%s --display %s --xdg-runtime-dir %s --reconnect %s --max-log-size %s --json >/dev/null 2>&1", cdpBin, logDir, cronTaskHeadedDaemonKeepalive, browserURLArg, display, xdgRuntimeDir, reconnect, maxLogSize),
 				ProbeWords:         []string{"cron", "run", cronTaskHeadedDaemonKeepalive},
 				ConfigDependencies: []string{"display", "xdg_runtime_dir", "reconnect"},
 				LaunchCapable:      true,
@@ -856,7 +866,6 @@ func managedCronTaskChildSpec(taskID, stateDir string, opts cronRenderOptions) (
 		args := append(common,
 			"--browser-mode", "headed",
 			"daemon", "keepalive",
-			"--auto-connect",
 			"--repair",
 			// A scheduled tick must prove the existing daemon is healthy before
 			// it is allowed to activate Chrome or request a native approval.
@@ -866,6 +875,11 @@ func managedCronTaskChildSpec(taskID, stateDir string, opts cronRenderOptions) (
 			"--display", opts.Display,
 			"--json",
 		)
+		if strings.TrimSpace(opts.BrowserURL) != "" {
+			args = append(args, "--browser-url", strings.TrimSpace(opts.BrowserURL))
+		} else {
+			args = append(args, "--auto-connect")
+		}
 		if runtime.GOOS == "darwin" {
 			args = append(args, "--macos-self-heal-approval")
 		}
