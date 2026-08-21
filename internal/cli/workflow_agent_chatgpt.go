@@ -1130,6 +1130,9 @@ func (a *app) chatgptBrowserOperationConfig(
 	}
 	client, _, err := a.browserEventCDPClient(ctx)
 	if err != nil {
+		if a.opts.debug {
+			_, _ = fmt.Fprintf(a.err, "chatgpt headed browser runtime unavailable: %v\n", err)
+		}
 		result := chatgpt.UnavailableOperation(
 			a.build.Commit, operation,
 			"chatgpt_browser_unavailable", "connection",

@@ -69,6 +69,79 @@ func TestLoadMissingConfigDefaultsToHeaded(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultMissingPersistsCurrentSchema(t *testing.T) {
+	path := useIsolatedDefaultConfig(t)
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Path != path || cfg.Profile != config.DefaultProfile {
+		t.Fatalf("loaded config = %+v, want default config at %q", cfg, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read persisted default config: %v", err)
+	}
+	if !strings.Contains(string(data), `"schema_version": "cdp-cli-config/v1"`) {
+		t.Fatalf("persisted default config lacks current schema: %s", data)
+	}
+}
+
+func TestLoadDefaultMigratesLegacyConfig(t *testing.T) {
+	path := useIsolatedDefaultConfig(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"browser":{"mode":"headed","resource_budget":{"max_tabs":7}}}`), 0o600); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Browser.Mode != config.BrowserModeHeaded || cfg.Browser.ResourceBudget.MaxTabs != 7 {
+		t.Fatalf("migrated config lost legacy values: %+v", cfg.Browser)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migrated config: %v", err)
+	}
+	if !strings.Contains(string(data), `"schema_version": "cdp-cli-config/v1"`) {
+		t.Fatalf("migrated config lacks current schema: %s", data)
+	}
+}
+
+func TestLoadDefaultQuarantinesMalformedConfigAndRecovers(t *testing.T) {
+	path := useIsolatedDefaultConfig(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{`), 0o600); err != nil {
+		t.Fatalf("write malformed config: %v", err)
+	}
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Profile != config.DefaultProfile {
+		t.Fatalf("Profile = %q, want recovered default", cfg.Profile)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("replacement config is not valid: %v", err)
+	}
+	quarantined, err := filepath.Glob(path + ".invalid-*")
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined configs = %v, err = %v, want one", quarantined, err)
+	}
+	data, err := os.ReadFile(quarantined[0])
+	if err != nil || string(data) != "{" {
+		t.Fatalf("quarantined content = %q, err = %v", data, err)
+	}
+}
+
 func TestLoadParsesBrowserConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{
@@ -236,6 +309,7 @@ func TestLoadRejectsMalformedConfig(t *testing.T) {
 		body string
 	}{
 		{"bad json", `{`},
+		{"newer schema", `{"schema_version":"cdp-cli-config/v2"}`},
 		{"bad mode", `{"browser":{"mode":"hidden"}}`},
 		{"bad timeout", `{"timeout":"soon"}`},
 		{"bad profile seed strategy", `{"browser":{"headless":{"profile_seed_strategy":"mirror-default"}}}`},
@@ -264,6 +338,18 @@ func TestLoadRejectsMalformedConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func useIsolatedDefaultConfig(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	path, err := config.ResolvePath("")
+	if err != nil {
+		t.Fatalf("ResolvePath returned error: %v", err)
+	}
+	return path
 }
 
 func TestSaveWritesOwnerOnlyConfig(t *testing.T) {

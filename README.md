@@ -229,6 +229,13 @@ another file. Values are canonicalized and aliases such as `chatgpt-web` and
 `microsoft-365-web` are accepted; local transcription is independent and
 cannot be disabled through this list:
 
+The default config is self-maintaining: a first run writes the current
+`schema_version`, and a valid legacy file is upgraded atomically while
+preserving its values. If the implicit default file is malformed, cdp moves it
+aside with an `.invalid-<timestamp>` suffix and continues with sane defaults.
+An explicitly selected `--config` remains strict so project configuration
+mistakes are never silently ignored.
+
 ```json
 {
   "agents": {

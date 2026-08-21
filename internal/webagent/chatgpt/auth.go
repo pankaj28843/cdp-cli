@@ -613,15 +613,34 @@ func observeSignedInUI(
 	  const text = String(document.body && document.body.innerText || '');
 	  const composer = document.querySelector('#prompt-textarea') ||
 	    document.querySelector('[contenteditable="true"][role="textbox"]');
+	  const visible = element => {
+	    const rect = element.getBoundingClientRect();
+	    const style = getComputedStyle(element);
+	    return rect.width > 0 && rect.height > 0 &&
+	      style.display !== 'none' && style.visibility !== 'hidden';
+	  };
+	  const signedOutControl = Array.from(document.querySelectorAll('a,button'))
+	    .some(element => visible(element) &&
+	      /^(Log in|Sign up)$/i.test(String(element.innerText || '').trim()));
 	  return {
 	    signed_in: Boolean(composer) || /\b(New chat|Chat history|How can I help)\b/i.test(text),
-	    signed_out: /\b(Log in|Sign up)\b/i.test(text)
+	    signed_out: !composer && signedOutControl
 	  };
 	})()`, &result)
 	if err != nil {
 		return false, err
 	}
-	return result.SignedIn && !result.SignedOut, nil
+	return signedInUIEvidenceReady(
+		result.SignedIn,
+		result.SignedOut,
+	), nil
+}
+
+func signedInUIEvidenceReady(
+	signedIn bool,
+	signedOut bool,
+) bool {
+	return signedIn && !signedOut
 }
 
 func normalizeReplayHeaders(raw map[string]any) map[string]string {

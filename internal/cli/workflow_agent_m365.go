@@ -331,6 +331,9 @@ func (a *app) m365BrowserOperationConfig(
 	}
 	client, _, err := a.browserEventCDPClient(ctx)
 	if err != nil {
+		if a.opts.debug {
+			_, _ = fmt.Fprintf(a.err, "m365 headed browser runtime unavailable: %v\n", err)
+		}
 		result := m365.UnavailableOperation(
 			a.build.Commit,
 			operation,

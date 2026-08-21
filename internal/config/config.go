@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	AppName        = "cdp-cli"
-	DefaultProfile = "default"
+	AppName                  = "cdp-cli"
+	DefaultProfile           = "default"
+	CurrentFileSchemaVersion = "cdp-cli-config/v1"
 )
 
 type BrowserMode string
@@ -43,6 +44,7 @@ type Config struct {
 
 	browserModeSet           bool
 	googleExclusiveAIModeSet bool
+	needsMigration           bool
 }
 
 type BrowserConfig struct {
@@ -128,6 +130,14 @@ func Load(explicitPath string) (Config, error) {
 		if os.IsNotExist(err) {
 			cfg := Defaults()
 			cfg.Path = path
+			if explicitPath == "" {
+				_ = Save(path, cfg)
+			}
+			return cfg, nil
+		}
+		if explicitPath == "" {
+			cfg := Defaults()
+			cfg.Path = path
 			return cfg, nil
 		}
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
@@ -135,9 +145,21 @@ func Load(explicitPath string) (Config, error) {
 
 	cfg, err := decode(data)
 	if err != nil {
+		if explicitPath == "" {
+			cfg = Defaults()
+			cfg.Path = path
+			if quarantineInvalidConfig(path) {
+				_ = Save(path, cfg)
+			}
+			return cfg, nil
+		}
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.Path = path
+	if cfg.needsMigration {
+		_ = Save(path, cfg)
+		cfg.needsMigration = false
+	}
 	return cfg, nil
 }
 
@@ -163,10 +185,36 @@ func Save(explicitPath string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config directory %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary config beside %s: %w", path, err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return fmt.Errorf("secure temporary config %s: %w", temporaryPath, err)
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write temporary config %s: %w", temporaryPath, err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return fmt.Errorf("sync temporary config %s: %w", temporaryPath, err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary config %s: %w", temporaryPath, err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace config %s: %w", path, err)
 	}
 	return nil
+}
+
+func quarantineInvalidConfig(path string) bool {
+	suffix := time.Now().UTC().Format("20060102T150405.000000000Z")
+	return os.Rename(path, path+".invalid-"+suffix) == nil
 }
 
 func ParseBrowserMode(value string) (BrowserMode, error) {
@@ -220,11 +268,12 @@ func (c Config) GoogleExclusiveAIModeConfigured() bool {
 }
 
 type fileConfig struct {
-	Profile   string              `json:"profile,omitempty"`
-	Timeout   string              `json:"timeout,omitempty"`
-	Browser   *fileBrowserConfig  `json:"browser,omitempty"`
-	Artifacts *fileArtifactConfig `json:"artifacts,omitempty"`
-	Agents    *fileAgentConfig    `json:"agents,omitempty"`
+	SchemaVersion string              `json:"schema_version,omitempty"`
+	Profile       string              `json:"profile,omitempty"`
+	Timeout       string              `json:"timeout,omitempty"`
+	Browser       *fileBrowserConfig  `json:"browser,omitempty"`
+	Artifacts     *fileArtifactConfig `json:"artifacts,omitempty"`
+	Agents        *fileAgentConfig    `json:"agents,omitempty"`
 }
 
 type fileAgentConfig struct {
@@ -272,8 +321,12 @@ func decode(data []byte) (Config, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Config{}, err
 	}
+	if raw.SchemaVersion != "" && raw.SchemaVersion != CurrentFileSchemaVersion {
+		return Config{}, fmt.Errorf("unsupported schema_version %q", raw.SchemaVersion)
+	}
 
 	cfg := Defaults()
+	cfg.needsMigration = raw.SchemaVersion == ""
 	cfg.Profile = raw.Profile
 	if cfg.Profile == "" {
 		cfg.Profile = DefaultProfile
@@ -375,7 +428,8 @@ func decode(data []byte) (Config, error) {
 
 func encode(cfg Config) ([]byte, error) {
 	raw := fileConfig{
-		Profile: cfg.Profile,
+		SchemaVersion: CurrentFileSchemaVersion,
+		Profile:       cfg.Profile,
 	}
 	if raw.Profile == "" {
 		raw.Profile = DefaultProfile

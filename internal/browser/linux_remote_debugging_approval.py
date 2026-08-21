@@ -19,6 +19,7 @@ ALLOWED_APPLICATIONS = {
     "Google Chrome Beta",
     "Google Chrome Canary",
     "Google Chrome Dev",
+    "Chromium",
 }
 SHEET_ROLES = {
     "alert",
@@ -88,10 +89,10 @@ def walk(root):
         stack.extend((child, depth + 1) for child in reversed(descendants))
 
 
-def matching_applications(desktop, process_name):
+def matching_applications(desktop, process_names):
     matches = []
     for child in children(desktop):
-        if role_name(child) == "application" and node_name(child) == process_name:
+        if role_name(child) == "application" and node_name(child) in process_names:
             matches.append(child)
     return matches
 
@@ -130,8 +131,8 @@ def press_target_button(sheet):
     return False
 
 
-def scan(desktop, process_name):
-    applications = matching_applications(desktop, process_name)
+def scan(desktop, process_names):
+    applications = matching_applications(desktop, process_names)
     windows = 0
     sheets = []
     for application in applications:
@@ -142,15 +143,15 @@ def scan(desktop, process_name):
     return windows, sheets
 
 
-def drain(process_name, press):
-    if process_name not in ALLOWED_APPLICATIONS:
+def drain(process_names, press):
+    if not process_names or any(name not in ALLOWED_APPLICATIONS for name in process_names):
         raise ValueError("unsupported Chrome application")
     desktop = pyatspi.Registry.getDesktop(0)
     deadline = time.monotonic() + 12.0
     windows = 0
     sheets = []
     while time.monotonic() < deadline:
-        windows, sheets = scan(desktop, process_name)
+        windows, sheets = scan(desktop, process_names)
         if sheets:
             break
         time.sleep(0.2)
@@ -159,13 +160,13 @@ def drain(process_name, press):
     approved = 0
     if press:
         for _ in range(20):
-            windows, sheets = scan(desktop, process_name)
+            windows, sheets = scan(desktop, process_names)
             if not sheets or not press_target_button(sheets[0]):
                 break
             approved += 1
             time.sleep(0.2)
 
-    windows, sheets = scan(desktop, process_name)
+    windows, sheets = scan(desktop, process_names)
     return {
         "windows_scanned": windows,
         "prompt_count_before": prompt_count_before,
@@ -176,7 +177,7 @@ def drain(process_name, press):
 
 def main():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--process-name", required=True)
+    parser.add_argument("--process-name", required=True, action="append")
     parser.add_argument("--press", action="store_true")
     args = parser.parse_args()
     report = drain(args.process_name, args.press)

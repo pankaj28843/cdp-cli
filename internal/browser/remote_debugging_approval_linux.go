@@ -35,7 +35,7 @@ const linuxRemoteDebuggingApprovalLease = 15 * time.Second
 // helper. Chrome's Linux approval sheet is a native accessibility surface,
 // not a DOM element, so a browser-page selector cannot safely approve it.
 func drainRemoteDebuggingApprovalQueue(ctx context.Context, channel string) (RemoteDebuggingApprovalResult, error) {
-	processName, ok := chromeApplicationName(channel)
+	processNames, ok := chromeApplicationNames(channel)
 	if !ok {
 		return unsupportedRemoteDebuggingApproval(channel), nil
 	}
@@ -44,12 +44,12 @@ func drainRemoteDebuggingApprovalQueue(ctx context.Context, channel string) (Rem
 		Supported:          true,
 		Platform:           "linux",
 		Adapter:            "linux-atspi",
-		BrowserApplication: processName,
+		BrowserApplication: strings.Join(processNames, ", "),
 		ApprovalURL:        RemoteDebuggingApprovalURL,
 		Action:             "scan",
 		Message:            "scanning all Chrome windows for queued remote-debugging approvals",
 	}
-	report, err := runLinuxRemoteDebuggingApprovalHelper(ctx, processName)
+	report, err := runLinuxRemoteDebuggingApprovalHelper(ctx, processNames)
 	if err != nil {
 		result.Action = "failed"
 		result.Message = "could not inspect Chrome's remote-debugging approval queue"
@@ -76,7 +76,7 @@ func drainRemoteDebuggingApprovalQueue(ctx context.Context, channel string) (Rem
 	return result, nil
 }
 
-func runLinuxRemoteDebuggingApprovalHelper(ctx context.Context, processName string) (linuxRemoteDebuggingApprovalReport, error) {
+func runLinuxRemoteDebuggingApprovalHelper(ctx context.Context, processNames []string) (linuxRemoteDebuggingApprovalReport, error) {
 	python, err := linuxSystemPython()
 	if err != nil {
 		return linuxRemoteDebuggingApprovalReport{}, err
@@ -84,15 +84,12 @@ func runLinuxRemoteDebuggingApprovalHelper(ctx context.Context, processName stri
 
 	helperCtx, cancel := context.WithTimeout(ctx, linuxRemoteDebuggingApprovalLease)
 	defer cancel()
-	cmd := exec.CommandContext(
-		helperCtx,
-		python,
-		"-c",
-		string(linuxRemoteDebuggingApprovalScript),
-		"--process-name",
-		processName,
-		"--press",
-	)
+	args := []string{"-c", string(linuxRemoteDebuggingApprovalScript)}
+	for _, processName := range processNames {
+		args = append(args, "--process-name", processName)
+	}
+	args = append(args, "--press")
+	cmd := exec.CommandContext(helperCtx, python, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		if helperCtx.Err() != nil {
@@ -124,17 +121,17 @@ func linuxSystemPython() (string, error) {
 	return python, nil
 }
 
-func chromeApplicationName(channel string) (string, bool) {
+func chromeApplicationNames(channel string) ([]string, bool) {
 	switch strings.ToLower(strings.TrimSpace(channel)) {
 	case "", "stable":
-		return "Google Chrome", true
+		return []string{"Google Chrome", "Chromium"}, true
 	case "beta":
-		return "Google Chrome Beta", true
+		return []string{"Google Chrome Beta"}, true
 	case "canary":
-		return "Google Chrome Canary", true
+		return []string{"Google Chrome Canary"}, true
 	case "dev":
-		return "Google Chrome Dev", true
+		return []string{"Google Chrome Dev"}, true
 	default:
-		return "", false
+		return nil, false
 	}
 }
