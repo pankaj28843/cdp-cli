@@ -38,7 +38,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp storage indexeddb put", want: []string{"@tmp/value.json"}},
 		{path: "cdp storage cache put", want: []string{"--content-type"}},
 		{path: "cdp storage service-workers unregister", want: []string{"--scope"}},
-		{path: "cdp protocol exec", want: []string{"--target"}},
+		{path: "cdp protocol exec", want: []string{"--target", "--target-type service_worker"}},
 		{path: "cdp file chooser", want: []string{"--target <target-id>", "--trial", "first.epub", "second.epub"}},
 		{path: "cdp protocol examples", want: []string{"Page.captureScreenshot"}},
 		{path: "cdp workflow page-load", want: []string{"--reload"}},

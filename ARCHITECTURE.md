@@ -60,7 +60,9 @@ architecture is intentionally small: keep browser protocol mechanics in
   unknown paths, and external custom output directories.
 - Raw CDP is a first-class escape hatch. High-level commands should cover common
   workflows, but agents must be able to discover and execute current protocol
-  methods without waiting for wrappers.
+  methods without waiting for wrappers. `protocol exec --target-type` also
+  supports non-page targets such as workers and service workers for bounded
+  diagnostics; target selection remains unique before attachment.
 - Refactors preserve behavior. Structural changes should keep tests and E2E
   output stable, then feature changes can build on the cleaner shape.
 
