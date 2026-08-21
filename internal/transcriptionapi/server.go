@@ -23,8 +23,8 @@ const (
 	// range so they do not collide with legacy services. The primary listener
 	// supports HTTPS when TLS files are configured; the companion listener is
 	// explicitly cleartext for trusted private clients.
-	DefaultListenAddress     = "0.0.0.0:28765"
-	DefaultHTTPListenAddress = "0.0.0.0:28766"
+	DefaultListenAddress     = "[::]:28765"
+	DefaultHTTPListenAddress = "[::]:28766"
 	maxRequestBodyBytes      = MaxUploadBytes + 2*1024*1024
 )
 

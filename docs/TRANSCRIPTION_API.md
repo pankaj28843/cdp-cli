@@ -14,11 +14,13 @@ the explicit diagnostic projection.
 
 ## Start the service
 
-The service defaults to the LAN-capable primary listener on `0.0.0.0:28765`
-and the cleartext companion on `0.0.0.0:28766`, without bearer-token
-authentication. Keep both listeners on a trusted network or behind an
-operator-managed access boundary. Configure TLS on the primary listener
-when HTTPS access is needed; the HTTP companion remains available for trusted
+The service defaults to the dual-stack wildcard primary listener on
+`[::]:28765` and the cleartext companion on `[::]:28766`, without bearer-token
+authentication. On Linux, IPv6 must be enabled by the host kernel for the
+wildcard to accept IPv6; with the normal `bindv6only=0` setting the same socket
+also accepts IPv4. Keep both listeners on a trusted network or behind an
+operator-managed access boundary. Configure TLS on the primary listener when
+HTTPS access is needed; the HTTP companion remains available for trusted
 private clients that cannot install the self-signed certificate.
 
 ```bash
@@ -36,8 +38,8 @@ permission workaround: mobile browsers still need an HTTPS secure origin.
 
 ```bash
 cdp transcription serve \
-  --address 0.0.0.0:28765 \
-  --http-address 0.0.0.0:28766 \
+  --address '[::]:28765' \
+  --http-address '[::]:28766' \
   --default-provider chatgpt-web \
   --tls-cert /path/to/lan-cert.pem \
   --tls-key /path/to/lan-key.pem
@@ -47,8 +49,8 @@ For a private LAN dogfood session, the embedded demo can run without a token:
 
 ```bash
 cdp transcription service install \
-  --address 0.0.0.0:28765 \
-  --http-address 0.0.0.0:28766 \
+  --address '[::]:28765' \
+  --http-address '[::]:28766' \
   --default-provider chatgpt-web \
   --providers chatgpt-web,microsoft-365-web \
   --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
@@ -99,8 +101,8 @@ the CLI can generate and reuse a self-signed certificate in one command:
 
 ```bash
 cdp transcription service install \
-  --address 0.0.0.0:28765 \
-  --http-address 0.0.0.0:28766 \
+  --address '[::]:28765' \
+  --http-address '[::]:28766' \
   --default-provider chatgpt-web \
   --providers chatgpt-web,microsoft-365-web \
   --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
@@ -124,7 +126,7 @@ the certificate and key explicitly instead:
 
 ```bash
 cdp transcription service install \
-  --address 0.0.0.0:28765 \
+  --address '[::]:28765' \
   --tls-cert /path/to/lan-cert.pem \
   --tls-key /path/to/lan-key.pem
 ```
@@ -175,8 +177,8 @@ guessing:
   "transport": "http",
   "default_provider": "chatgpt-web",
   "listeners": [
-    {"scheme": "https", "address": "0.0.0.0:28765", "tls": true},
-    {"scheme": "http", "address": "0.0.0.0:28766", "tls": false}
+    {"scheme": "https", "address": "[::]:28765", "tls": true},
+    {"scheme": "http", "address": "[::]:28766", "tls": false}
   ],
   "providers": []
 }

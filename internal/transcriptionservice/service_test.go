@@ -10,8 +10,8 @@ func testConfig() Config {
 	config := Config{
 		BinaryPath:           "/Users/test/.local/bin/cdp",
 		StateDir:             "/Users/test/.cdp-cli",
-		Address:              "0.0.0.0:28765",
-		HTTPAddress:          "0.0.0.0:28766",
+		Address:              "[::]:28765",
+		HTTPAddress:          "[::]:28766",
 		Provider:             "chatgpt-web",
 		AllowedProviders:     []string{"chatgpt-web"},
 		BrowserMode:          "headed",
@@ -46,9 +46,9 @@ func TestRenderLaunchAgentIsOwnerScopedAndRestartable(t *testing.T) {
 	for _, want := range []string{
 		"dev.pankaj.cdp.transcription",
 		"/Users/test/.local/bin/cdp",
-		"0.0.0.0:28765",
+		"[::]:28765",
 		"CDP_TRANSCRIPTION_HTTP_ADDRESS",
-		"0.0.0.0:28766",
+		"[::]:28766",
 		"CDP_TRANSCRIPTION_PROVIDERS",
 		"chatgpt-web",
 		"CDP_TRANSCRIPTION_FIXTURE_DIR",
