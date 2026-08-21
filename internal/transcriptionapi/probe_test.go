@@ -67,17 +67,67 @@ func TestProbeHealthRequiresARecentSuccessfulProbe(t *testing.T) {
 	}
 	health.RecordAttempt(ProviderChatGPT, now, "fixture-001")
 	pending := health.Apply(provider, now)
-	if pending.Ready || pending.ProbeReady || pending.ProbeReason != "synthetic probe is stale" && pending.ProbeReason != "probe_pending" {
+	if pending.Ready || pending.ProbeReady || pending.ProbeReason != "file:synthetic probe is stale" && pending.ProbeReason != "file:probe_pending" {
 		t.Fatalf("pending provider reported ready: %+v", pending)
+	}
+	if pending.FileProbe == nil || pending.FileProbe.Ready || pending.FileProbe.Reason != "probe_pending" {
+		t.Fatalf("pending file path reported ready: %+v", pending.FileProbe)
 	}
 	health.RecordSuccess(ProviderChatGPT, now, "fixture-001")
 	ready := health.Apply(provider, now.Add(time.Second))
-	if !ready.Ready || !ready.ProbeReady || ready.ProbeAgeSec > 1 {
+	if !ready.Ready || !ready.ProbeReady || ready.ProbeAgeSec > 1 || ready.FileProbe == nil || !ready.FileProbe.Ready {
 		t.Fatalf("recently probed provider was not ready: %+v", ready)
 	}
 	stale := health.Apply(provider, now.Add(maxAge+time.Second))
-	if stale.Ready || stale.ProbeReady || stale.ProbeReason != "synthetic probe is stale" {
+	if stale.Ready || stale.ProbeReady || stale.ProbeReason != "file:synthetic probe is stale" || stale.FileProbe == nil || stale.FileProbe.Reason != "synthetic probe is stale" {
 		t.Fatalf("stale provider reported ready: %+v", stale)
+	}
+}
+
+func TestProbeHealthKeepsPathFailureAgeTiedToLastSuccess(t *testing.T) {
+	health := NewProbeHealth(10 * time.Minute)
+	provider := ProviderCapability{Provider: ProviderM365, File: true, Realtime: true, Ready: true}
+	now := time.Date(2026, 8, 20, 20, 0, 0, 0, time.UTC)
+	health.RecordPathSuccess(ProviderM365, ProbePathFile, now, "fixture-001")
+	health.RecordPathSuccess(ProviderM365, ProbePathRealtime, now, "fixture-001")
+	health.RecordPathFailure(ProviderM365, ProbePathRealtime, now.Add(time.Minute), "fixture-002", "m365_final_result_timeout")
+
+	degraded := health.Apply(provider, now.Add(2*time.Minute))
+	if degraded.Ready || degraded.ProbeReady {
+		t.Fatalf("provider with failed realtime path reported ready: %+v", degraded)
+	}
+	if degraded.FileProbe == nil || !degraded.FileProbe.Ready || degraded.FileProbe.AgeSec != 120 {
+		t.Fatalf("file path freshness = %+v, want a 120-second fresh success", degraded.FileProbe)
+	}
+	if degraded.RealtimeProbe == nil || degraded.RealtimeProbe.Ready || degraded.RealtimeProbe.Reason != "m365_final_result_timeout" || degraded.RealtimeProbe.AgeSec != 120 {
+		t.Fatalf("realtime path freshness = %+v, want the failed retry and last-success age", degraded.RealtimeProbe)
+	}
+	if !strings.Contains(degraded.ProbeReason, "realtime:m365_final_result_timeout") {
+		t.Fatalf("aggregate probe reason = %q, want realtime path context", degraded.ProbeReason)
+	}
+}
+
+func TestProbeStateMigratesLegacyFlatFileHealth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe-state.json")
+	legacy := `{
+  "schema_version": "cdp-cli-transcription-probes/v1",
+  "fixtures": {},
+  "providers": {
+    "chatgpt-web": {
+      "last_attempt_at": "2026-08-20T20:00:01Z",
+      "last_success_at": "2026-08-20T20:00:00Z",
+      "last_fixture_id": "fixture-001"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := loadProbeState(path)
+	parsed := parseProbeHealthStates(state.Providers)
+	fileState, ok := parsed[probeStateKey{Provider: ProviderChatGPT, Path: ProbePathFile}]
+	if state.SchemaVersion != probeStateSchemaVersion || !ok || fileState.LastFixtureID != "fixture-001" || fileState.LastSuccessAt.IsZero() {
+		t.Fatalf("migrated state = schema %q paths %+v", state.SchemaVersion, parsed)
 	}
 }
 
@@ -124,8 +174,58 @@ func TestSyntheticProbeCoordinatorIsolatesProvidersAndPersistsRedactedState(t *t
 	if err := json.Unmarshal(stateBytes, &document); err != nil {
 		t.Fatal(err)
 	}
-	if document.SchemaVersion != probeStateSchemaVersion || document.Providers[string(ProviderChatGPT)].LastFixtureID != "fixture-001" {
+	if document.SchemaVersion != probeStateSchemaVersion || document.Providers[string(ProviderChatGPT)].File == nil || document.Providers[string(ProviderChatGPT)].File.LastFixtureID != "fixture-001" {
 		t.Fatalf("unexpected persisted probe state: %+v", document)
+	}
+}
+
+type realtimeProbeFakeProvider struct {
+	*fakeProvider
+	realtimeErr error
+	probeCalls  int
+}
+
+func (p *realtimeProbeFakeProvider) ProbeRealtime(context.Context, ProbeFixture) error {
+	p.probeCalls++
+	return p.realtimeErr
+}
+
+func TestSyntheticProbeCoordinatorProbesEveryAdvertisedPath(t *testing.T) {
+	provider := &realtimeProbeFakeProvider{
+		fakeProvider: &fakeProvider{
+			id:       ProviderM365,
+			result:   Result{Text: "file response"},
+			realtime: &fakeRealtime{},
+		},
+	}
+	coordinator, err := NewSyntheticProbeCoordinator(
+		NewRegistry(provider),
+		[]ProbeFixture{{ID: "fixture-001", Path: "/tmp/fixture-001.webm", FileName: "fixture-001.webm", MIMEType: "audio/webm", Bytes: 32}},
+		t.TempDir(),
+		5*time.Minute,
+		time.Second,
+		15*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.RunOnce(context.Background())
+	if provider.transcribeCall != 1 || provider.probeCalls != 1 {
+		t.Fatalf("path calls = file %d/realtime %d, want one each", provider.transcribeCall, provider.probeCalls)
+	}
+	capability := coordinator.Health().Apply(provider.Capabilities(context.Background()), time.Now().UTC())
+	if !capability.Ready || !capability.ProbeReady || capability.FileProbe == nil || !capability.FileProbe.Ready || capability.RealtimeProbe == nil || !capability.RealtimeProbe.Ready {
+		t.Fatalf("all-path capability = %+v", capability)
+	}
+
+	provider.realtimeErr = providerError(http.StatusGatewayTimeout, "provider", "m365_final_result_timeout", "realtime failed", true)
+	coordinator.RunOnce(context.Background())
+	capability = coordinator.Health().Apply(provider.Capabilities(context.Background()), time.Now().UTC())
+	if capability.Ready || capability.ProbeReady || capability.FileProbe == nil || !capability.FileProbe.Ready || capability.RealtimeProbe == nil || capability.RealtimeProbe.Ready {
+		t.Fatalf("failed realtime capability = %+v", capability)
+	}
+	if !strings.Contains(capability.ProbeReason, "realtime:m365_final_result_timeout") {
+		t.Fatalf("failed realtime reason = %q", capability.ProbeReason)
 	}
 }
 

@@ -32,6 +32,13 @@ type CapabilityRefresher interface {
 	EnsureCapabilitiesFresh(context.Context) error
 }
 
+// RealtimeProbeProvider is an optional provider-owned live-path probe. The
+// transcription API owns cadence and health aggregation; the adapter owns
+// decoding the checked-in fixture and exercising its native realtime wire.
+type RealtimeProbeProvider interface {
+	ProbeRealtime(context.Context, ProbeFixture) error
+}
+
 // RealtimeSession receives normalized PCM chunks and returns provider events.
 // Adapters own wire details; the server owns protocol framing, persistence,
 // ordering, and reduction.

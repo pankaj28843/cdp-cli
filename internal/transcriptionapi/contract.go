@@ -211,19 +211,32 @@ type ErrorEnvelope struct {
 }
 
 type ProviderCapability struct {
-	Provider       ProviderID `json:"provider"`
-	Models         []string   `json:"models"`
-	File           bool       `json:"file"`
-	Translation    bool       `json:"translation"`
-	Streaming      bool       `json:"streaming"`
-	Realtime       bool       `json:"realtime"`
-	Ready          bool       `json:"ready"`
-	EvidenceAgeSec int64      `json:"evidence_age_seconds,omitempty"`
-	ProbeReady     bool       `json:"probe_ready"`
-	ProbeAgeSec    int64      `json:"probe_age_seconds,omitempty"`
-	LastProbeAt    string     `json:"last_probe_at,omitempty"`
-	ProbeReason    string     `json:"probe_reason,omitempty"`
-	Reason         string     `json:"reason,omitempty"`
+	Provider       ProviderID       `json:"provider"`
+	Models         []string         `json:"models"`
+	File           bool             `json:"file"`
+	Translation    bool             `json:"translation"`
+	Streaming      bool             `json:"streaming"`
+	Realtime       bool             `json:"realtime"`
+	Ready          bool             `json:"ready"`
+	EvidenceAgeSec int64            `json:"evidence_age_seconds,omitempty"`
+	ProbeReady     bool             `json:"probe_ready"`
+	ProbeAgeSec    int64            `json:"probe_age_seconds,omitempty"`
+	LastProbeAt    string           `json:"last_probe_at,omitempty"`
+	ProbeReason    string           `json:"probe_reason,omitempty"`
+	FileProbe      *ProbePathStatus `json:"file_probe,omitempty"`
+	RealtimeProbe  *ProbePathStatus `json:"realtime_probe,omitempty"`
+	Reason         string           `json:"reason,omitempty"`
+}
+
+// ProbePathStatus reports the latest successful bounded probe for one
+// provider operation. It is intentionally separate from the provider's static
+// capability flags: a provider may support realtime while that path is
+// temporarily unhealthy and the file fallback remains usable.
+type ProbePathStatus struct {
+	Ready         bool   `json:"ready"`
+	AgeSec        int64  `json:"age_seconds,omitempty"`
+	LastSuccessAt string `json:"last_success_at,omitempty"`
+	Reason        string `json:"reason,omitempty"`
 }
 
 type Model struct {

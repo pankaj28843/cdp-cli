@@ -84,9 +84,13 @@ headed Linux services can use the same authenticated browser owned by cdp.
 Native service installation requires the checked-in WebM corpus through
 `--fixture-dir`. The corpus must contain exactly 100 validated WebM files. The
 installed service selects one fixture from the least-recently-used weighted
-pool and exercises every configured provider every five minutes by default.
+pool immediately at startup and then every five minutes by default. Each
+configured provider path is exercised independently: file upload for
+`file: true`, and the native paced PCM WebSocket path for `realtime: true`.
 `--probe-interval` can be changed for a deployment; setting it to zero uses the
-five-minute default rather than disabling the safety gate.
+five-minute default rather than disabling the safety gate. One fixture is
+selected per cadence and the corpus rotates over time, keeping the recurring
+probe bounded while exercising all 100 checked-in inputs.
 
 `GET /healthz` and `GET /v1/models` accept the explicit diagnostic query
 `?include_disabled=true`. Ordinary responses omit providers disabled by
@@ -186,12 +190,18 @@ guessing:
 
 Health is intentionally unauthenticated and contains capability/readiness
 metadata only; it never includes bearer tokens or provider session material.
-When synthetic probes are enabled, `status: "ok"` means every configured
-provider has recently completed a real fixture transcription successfully. The
-freshness window is fifteen minutes by default, so startup and any failed or
-stale provider are reported as `status: "degraded"`; this is not a cached
-“service process is alive” signal. Each provider entry exposes `probe_ready`,
-`last_probe_at`, `probe_age_seconds`, and a redacted `probe_reason`.
+When synthetic probes are enabled, `status: "ok"` means every enabled,
+advertised provider path has recently completed a real fixture transcription
+successfully. The freshness window is fifteen minutes by default, so startup
+and any failed or stale path are reported as `status: "degraded"`; this is not
+a cached “service process is alive” signal. Each provider entry exposes the
+aggregate `probe_ready`, `last_probe_at`, `probe_age_seconds`, and redacted
+`probe_reason`, plus `file_probe` and `realtime_probe` objects when those paths
+are advertised. Path status age is measured from the last successful probe, so
+a failed retry cannot make an old success appear fresh. A realtime failure can
+therefore be diagnosed directly while the file fallback remains visible as
+healthy; provider `ready` is conservative and becomes false until every
+advertised path recovers.
 
 Probe state is owner-only metadata at `<state-dir>/probe-state.json`. It stores
 fixture IDs, timestamps, and redacted result codes only—never fixture audio,
