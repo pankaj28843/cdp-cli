@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/providerpolicy"
 )
 
 type authRefreshTestProvider struct {
@@ -18,6 +20,7 @@ type authRefreshTestProvider struct {
 func (p *authRefreshTestProvider) ID() ProviderID { return p.id }
 
 func (p *authRefreshTestProvider) Capabilities(context.Context) ProviderCapability {
+	p.capabilityCalls.Add(1)
 	return ProviderCapability{Provider: p.id, Models: []string{DefaultModel}, File: true, Ready: true}
 }
 
@@ -55,6 +58,63 @@ func TestAuthRefreshCoordinatorRefreshesAllProvidersIndependently(t *testing.T) 
 	coordinator.RefreshAll(context.Background())
 	if first.calls.Load() != 1 || second.calls.Load() != 1 {
 		t.Fatalf("calls = %d/%d, want one attempt per provider", first.calls.Load(), second.calls.Load())
+	}
+}
+
+func TestRegistryPolicyOmitsDisabledCapabilitiesAndRefreshers(t *testing.T) {
+	first := &authRefreshTestProvider{id: ProviderChatGPT}
+	second := &authRefreshTestProvider{id: ProviderM365}
+	policy, err := providerpolicy.New([]string{"chatgpt"})
+	if err != nil {
+		t.Fatalf("provider policy: %v", err)
+	}
+	registry := NewRegistryWithPolicy(policy, second, first)
+
+	capabilities := registry.Capabilities(context.Background())
+	if len(capabilities) != 1 || capabilities[0].Provider != ProviderM365 {
+		t.Fatalf("ordinary capabilities = %+v", capabilities)
+	}
+	diagnostic := registry.DiagnosticCapabilities(context.Background())
+	if len(diagnostic) != 2 || diagnostic[0].Provider != ProviderChatGPT || diagnostic[0].Reason != "disabled_by_config" || diagnostic[0].Ready {
+		t.Fatalf("diagnostic capabilities = %+v", diagnostic)
+	}
+	if first.capabilityCalls.Load() != 0 {
+		t.Fatalf("disabled provider capability calls = %d, want 0", first.capabilityCalls.Load())
+	}
+	if second.capabilityCalls.Load() != 2 {
+		t.Fatalf("enabled provider capability calls = %d, want ordinary plus diagnostic", second.capabilityCalls.Load())
+	}
+	refreshers := registry.AuthRefreshers()
+	if len(refreshers) != 1 || refreshers[0] != second {
+		t.Fatalf("policy refreshers = %#v", refreshers)
+	}
+}
+
+func TestRegistryPolicyBlocksDisabledExplicitAndFallbackSelection(t *testing.T) {
+	chatGPT := &authRefreshTestProvider{id: ProviderChatGPT}
+	m365 := &authRefreshTestProvider{id: ProviderM365}
+	policy, err := providerpolicy.New([]string{"chatgpt"})
+	if err != nil {
+		t.Fatalf("provider policy: %v", err)
+	}
+	registry := NewRegistryWithPolicy(policy, chatGPT, m365)
+	for name, test := range map[string]struct {
+		selected ProviderID
+		fallback ProviderID
+	}{
+		"explicit": {selected: ProviderChatGPT, fallback: ProviderM365},
+		"fallback": {selected: "", fallback: ProviderChatGPT},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := registry.Select(test.selected, test.fallback)
+			if err == nil {
+				t.Fatal("Select returned nil error")
+			}
+			providerErr, ok := err.(*ProviderError)
+			if !ok || providerErr.APIError.Code != "provider_disabled" || providerErr.Status != 403 {
+				t.Fatalf("Select error = %T %+v", err, err)
+			}
+		})
 	}
 }
 

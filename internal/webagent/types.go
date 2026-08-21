@@ -102,6 +102,7 @@ type OperationError struct {
 	Code      string `json:"code"`
 	ErrClass  string `json:"err_class"`
 	Message   string `json:"message"`
+	Reason    string `json:"reason,omitempty"`
 	RetrySafe bool   `json:"retry_safe"`
 	RetryAt   string `json:"retry_at,omitempty"`
 }

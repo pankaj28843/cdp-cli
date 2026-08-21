@@ -222,6 +222,28 @@ the open-source transport defaults:
 }
 ```
 
+Unusable authenticated providers can be disabled in the same owner-only
+config. On macOS the default file is
+`~/Library/Application Support/cdp-cli/config.json`; use `--config <path>` for
+another file. Values are canonicalized and aliases such as `chatgpt-web` and
+`microsoft-365-web` are accepted; local transcription is independent and
+cannot be disabled through this list:
+
+```json
+{
+  "agents": {
+    "disabled_providers": ["chatgpt"]
+  }
+}
+```
+
+Normal provider metadata omits disabled entries so clients do not advertise a
+route that cannot run. Use `cdp workflow agent providers --include-disabled
+--json` when diagnosing the policy; disabled entries carry the stable
+`reason=disabled_by_config` code. Direct provider commands and transcription
+requests fail before browser or adapter dispatch, and aggregate refresh keeps
+enabled providers independent.
+
 For headed providers, `cdp --browser-mode headed pages --json` returning open
 tabs proves that the selected headed runtime is reachable. Each ask then opens
 one fresh tab, verifies the live composer, applies any requested mode/model,

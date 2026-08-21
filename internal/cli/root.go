@@ -99,7 +99,10 @@ func (a *app) newRoot() *cobra.Command {
 				return commandError("invalid_resource_budget", "usage", "--max-tabs and --max-renderer-processes must be non-negative", ExitUsage, []string{"cdp --max-tabs 25 --max-renderer-processes 12 pages --json"})
 			}
 			_, err := a.resolveBrowserMode(cmd)
-			return err
+			if err != nil {
+				return err
+			}
+			return a.guardWorkflowAgentProvider(cmd)
 		},
 		Long: "cdp is a shell-first Chrome DevTools Protocol CLI for coding agents.\n\n" +
 			"The project is being built around a long-running local attach daemon, compact\n" +

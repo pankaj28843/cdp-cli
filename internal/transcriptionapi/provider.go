@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/pankaj28843/cdp-cli/internal/providerpolicy"
 )
 
 var (
@@ -82,10 +84,15 @@ func providerError(status int, kind, code, message string, retryable bool) error
 // the adapter and are bounded by the shared provider implementation.
 type Registry struct {
 	providers map[ProviderID]Provider
+	policy    providerpolicy.Policy
 }
 
 func NewRegistry(providers ...Provider) *Registry {
-	registry := &Registry{providers: make(map[ProviderID]Provider, len(providers))}
+	return NewRegistryWithPolicy(providerpolicy.Default(), providers...)
+}
+
+func NewRegistryWithPolicy(policy providerpolicy.Policy, providers ...Provider) *Registry {
+	registry := &Registry{providers: make(map[ProviderID]Provider, len(providers)), policy: policy}
 	for _, provider := range providers {
 		if provider == nil || strings.TrimSpace(string(provider.ID())) == "" {
 			continue
@@ -99,17 +106,44 @@ func (r *Registry) Provider(id ProviderID) (Provider, bool) {
 	if r == nil {
 		return nil, false
 	}
+	if r.isDisabled(id) {
+		return nil, false
+	}
 	provider, ok := r.providers[id]
 	return provider, ok
 }
 
 func (r *Registry) Capabilities(ctx context.Context) []ProviderCapability {
+	return r.capabilities(ctx, false)
+}
+
+func (r *Registry) DiagnosticCapabilities(ctx context.Context) []ProviderCapability {
+	return r.capabilities(ctx, true)
+}
+
+func (r *Registry) capabilities(ctx context.Context, includeDisabled bool) []ProviderCapability {
 	if r == nil {
 		return []ProviderCapability{}
 	}
 	capabilities := make([]ProviderCapability, 0, len(r.providers))
 	for _, provider := range r.providers {
-		capabilities = append(capabilities, provider.Capabilities(ctx))
+		if provider == nil || (!includeDisabled && r.isDisabled(provider.ID())) {
+			continue
+		}
+		if r.isDisabled(provider.ID()) {
+			// Diagnostics expose the stable policy reason without invoking the
+			// provider adapter. A disabled provider must not wake a browser,
+			// inspect auth, or perform any other provider work.
+			capabilities = append(capabilities, ProviderCapability{
+				Provider: provider.ID(),
+				Models:   []string{DefaultModel},
+				Ready:    false,
+				Reason:   string(providerpolicy.ReasonDisabledByConfig),
+			})
+			continue
+		}
+		capability := provider.Capabilities(ctx)
+		capabilities = append(capabilities, capability)
 	}
 	// Provider IDs are small and stable; sorting prevents map iteration from
 	// making health/model responses nondeterministic.
@@ -123,10 +157,16 @@ func (r *Registry) Capabilities(ctx context.Context) []ProviderCapability {
 
 func (r *Registry) Select(id ProviderID, fallback ProviderID) (Provider, error) {
 	if strings.TrimSpace(string(id)) != "" {
+		if r.isDisabled(id) {
+			return nil, providerError(403, "provider_disabled", "provider_disabled", fmt.Sprintf("provider %q is disabled by cdp-cli policy", id), false)
+		}
 		if provider, ok := r.Provider(id); ok {
 			return provider, nil
 		}
 		return nil, providerError(503, "provider_unavailable", "provider_not_configured", fmt.Sprintf("provider %q is not configured", id), false)
+	}
+	if r.isDisabled(fallback) {
+		return nil, providerError(403, "provider_disabled", "provider_disabled", fmt.Sprintf("provider %q is disabled by cdp-cli policy", fallback), false)
 	}
 	if provider, ok := r.Provider(fallback); ok {
 		return provider, nil
@@ -142,6 +182,9 @@ func (r *Registry) AuthRefreshers() []AuthRefresher {
 	}
 	ids := make([]ProviderID, 0, len(r.providers))
 	for id, provider := range r.providers {
+		if r.isDisabled(id) {
+			continue
+		}
 		if _, ok := provider.(AuthRefresher); ok {
 			ids = append(ids, id)
 		}
@@ -179,6 +222,9 @@ func (r *Registry) refreshTargets() []providerRefreshTarget {
 	}
 	targets := make([]providerRefreshTarget, 0, len(ids))
 	for _, id := range ids {
+		if r.isDisabled(id) {
+			continue
+		}
 		provider := r.providers[id]
 		target := providerRefreshTarget{id: id}
 		if refresher, ok := provider.(AuthRefresher); ok {
@@ -192,4 +238,8 @@ func (r *Registry) refreshTargets() []providerRefreshTarget {
 		}
 	}
 	return targets
+}
+
+func (r *Registry) isDisabled(id ProviderID) bool {
+	return r != nil && r.policy.IsDisabled(string(id))
 }

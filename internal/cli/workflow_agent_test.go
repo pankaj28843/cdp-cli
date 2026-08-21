@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +52,86 @@ func TestWorkflowAgentProvidersJSONNeedsNoBrowser(t *testing.T) {
 	}
 	if catalog.SchemaVersion != webagent.CapabilitySchemaVersion || len(catalog.Providers) != 8 {
 		t.Fatalf("providers catalog = %+v", catalog)
+	}
+}
+
+func TestWorkflowAgentProvidersPolicyProjection(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"agents":{"disabled_providers":["chatgpt"]}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	for _, test := range []struct {
+		name            string
+		includeDisabled bool
+		wantChatGPT     bool
+		wantReason      string
+	}{
+		{name: "ordinary omits disabled", wantChatGPT: false},
+		{name: "diagnostic explains disabled", includeDisabled: true, wantChatGPT: true, wantReason: "disabled_by_config"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := []string{"--config", configPath, "workflow", "agent", "providers", "--json"}
+			if test.includeDisabled {
+				args = []string{"--config", configPath, "workflow", "agent", "providers", "--include-disabled", "--json"}
+			}
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{Commit: "test-commit"})
+			if code != cli.ExitOK {
+				t.Fatalf("exit = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
+			}
+			var result webagent.Result
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatalf("decode result: %v", err)
+			}
+			data, err := json.Marshal(result.Data)
+			if err != nil {
+				t.Fatalf("marshal catalog: %v", err)
+			}
+			var catalog webagent.CatalogData
+			if err := json.Unmarshal(data, &catalog); err != nil {
+				t.Fatalf("decode catalog: %v", err)
+			}
+			for _, provider := range catalog.Providers {
+				if provider.Provider != webagent.ProviderChatGPT {
+					continue
+				}
+				if !test.wantChatGPT {
+					t.Fatalf("ordinary catalog included disabled ChatGPT: %+v", provider)
+				}
+				if provider.Reason != test.wantReason || provider.Availability != "disabled" {
+					t.Fatalf("diagnostic ChatGPT = %+v", provider)
+				}
+				test.wantChatGPT = false
+			}
+			if test.wantChatGPT {
+				t.Fatal("diagnostic catalog omitted disabled ChatGPT")
+			}
+		})
+	}
+}
+
+func TestWorkflowAgentDisabledProviderStopsBeforeBrowser(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"agents":{"disabled_providers":["chatgpt"]}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"--config", configPath,
+		"workflow", "agent", "chatgpt", "doctor", "--json",
+	}, &out, &errOut, cli.BuildInfo{Commit: "test-commit"})
+	if code != cli.ExitUsage {
+		t.Fatalf("exit = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	var result webagent.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode result: %v\n%s", err, out.String())
+	}
+	if result.OK || result.Error == nil || result.Error.Code != "provider_disabled" || result.Error.Reason != "disabled_by_config" || result.Operation != webagent.OperationDoctor {
+		t.Fatalf("disabled provider result = %+v", result)
+	}
+	if strings.Contains(out.String(), "headed browser") {
+		t.Fatalf("disabled provider reached browser readiness path: %s", out.String())
 	}
 }
 

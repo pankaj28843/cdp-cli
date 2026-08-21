@@ -2,7 +2,8 @@ package webagent
 
 import (
 	"fmt"
-	"strings"
+
+	"github.com/pankaj28843/cdp-cli/internal/providerpolicy"
 )
 
 type CapabilityStatus string
@@ -29,28 +30,14 @@ type Capabilities struct {
 	Provider             Provider              `json:"provider"`
 	DisplayName          string                `json:"display_name"`
 	ImplementationStatus string                `json:"implementation_status"`
+	Availability         string                `json:"availability,omitempty"`
+	Reason               string                `json:"reason,omitempty"`
 	Operations           []OperationCapability `json:"operations"`
 }
 
 type CatalogData struct {
 	SchemaVersion string         `json:"schema_version"`
 	Providers     []Capabilities `json:"providers"`
-}
-
-type providerSpec struct {
-	provider    Provider
-	displayName string
-}
-
-var providerSpecs = []providerSpec{
-	{provider: ProviderAlex, displayName: "Ask Alex"},
-	{provider: ProviderChatGPT, displayName: "ChatGPT"},
-	{provider: ProviderM365, displayName: "Microsoft 365 Copilot"},
-	{provider: ProviderClaude, displayName: "Claude"},
-	{provider: ProviderGemini, displayName: "Gemini"},
-	{provider: ProviderGrok, displayName: "Grok"},
-	{provider: ProviderPerplexity, displayName: "Perplexity"},
-	{provider: ProviderTripadvisor, displayName: "Tripadvisor"},
 }
 
 type operationSpec struct {
@@ -231,27 +218,42 @@ var operationSpecs = []operationSpec{
 }
 
 func Providers() []Provider {
-	out := make([]Provider, 0, len(providerSpecs))
-	for _, spec := range providerSpecs {
-		out = append(out, spec.provider)
-	}
-	return out
+	return ProvidersFor(providerpolicy.Default())
 }
 
 func ParseProvider(value string) (Provider, bool) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	for _, provider := range Providers() {
-		if string(provider) == value {
-			return provider, true
-		}
-	}
-	return "", false
+	canonical, ok := providerpolicy.Canonicalize(value)
+	return Provider(canonical), ok
 }
 
 func Catalog() CatalogData {
-	providers := make([]Capabilities, 0, len(providerSpecs))
-	for _, spec := range providerSpecs {
-		providers = append(providers, capabilitiesForSpec(spec))
+	return CatalogFor(providerpolicy.Default(), false)
+}
+
+func ProvidersFor(policy providerpolicy.Policy) []Provider {
+	descriptors := providerpolicy.Descriptors()
+	providers := make([]Provider, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		if policy.IsEnabled(string(descriptor.ID)) {
+			providers = append(providers, Provider(descriptor.ID))
+		}
+	}
+	return providers
+}
+
+func CatalogFor(policy providerpolicy.Policy, includeDisabled bool) CatalogData {
+	providers := make([]Capabilities, 0, len(providerpolicy.Descriptors()))
+	for _, descriptor := range providerpolicy.Descriptors() {
+		decision := policy.Decision(string(descriptor.ID))
+		if !decision.Enabled && !includeDisabled {
+			continue
+		}
+		capabilities := capabilitiesForSpec(descriptor)
+		if !decision.Enabled {
+			capabilities.Availability = "disabled"
+			capabilities.Reason = string(decision.Reason)
+		}
+		providers = append(providers, capabilities)
 	}
 	return CatalogData{
 		SchemaVersion: CapabilitySchemaVersion,
@@ -260,32 +262,32 @@ func Catalog() CatalogData {
 }
 
 func CapabilitiesFor(provider Provider) (Capabilities, bool) {
-	for _, spec := range providerSpecs {
-		if spec.provider == provider {
-			return capabilitiesForSpec(spec), true
-		}
+	descriptor, ok := providerpolicy.DescriptorFor(string(provider))
+	if !ok {
+		return Capabilities{}, false
 	}
-	return Capabilities{}, false
+	return capabilitiesForSpec(descriptor), true
 }
 
-func capabilitiesForSpec(spec providerSpec) Capabilities {
+func capabilitiesForSpec(spec providerpolicy.Descriptor) Capabilities {
+	provider := Provider(spec.ID)
 	operations := make([]OperationCapability, 0, len(operationSpecs))
 	for _, operation := range operationSpecs {
 		status := CapabilityPlanned
 		supported := false
 		unavailableBy := "provider migration is not implemented yet"
-		if !operationAppliesToProvider(operation, spec.provider) {
+		if !operationAppliesToProvider(operation, provider) {
 			status = CapabilityUnsupported
 			unavailableBy = "operation does not apply to this provider"
 		} else if operation.operation == OperationCapabilities ||
-			providerOperationImplemented(spec.provider, operation.operation) {
+			providerOperationImplemented(provider, operation.operation) {
 			status = CapabilityImplemented
 			supported = true
 			unavailableBy = ""
 		}
 		operations = append(operations, OperationCapability{
 			Operation:     operation.operation,
-			Command:       fmt.Sprintf("cdp workflow agent %s %s", spec.provider, operation.path),
+			Command:       fmt.Sprintf("cdp workflow agent %s %s", provider, operation.path),
 			Status:        status,
 			Supported:     supported,
 			SideEffect:    operation.sideEffect,
@@ -296,8 +298,8 @@ func capabilitiesForSpec(spec providerSpec) Capabilities {
 	}
 	return Capabilities{
 		SchemaVersion:        CapabilitySchemaVersion,
-		Provider:             spec.provider,
-		DisplayName:          spec.displayName,
+		Provider:             provider,
+		DisplayName:          spec.DisplayName,
 		ImplementationStatus: "partial",
 		Operations:           operations,
 	}

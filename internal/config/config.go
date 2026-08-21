@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/artifacts"
+	"github.com/pankaj28843/cdp-cli/internal/providerpolicy"
 )
 
 const (
@@ -72,8 +73,9 @@ type ArtifactConfig struct {
 }
 
 type AgentConfig struct {
-	Google  GoogleAgentConfig `json:"google,omitempty"`
-	ChatGPT ChatGPTConfig     `json:"chatgpt,omitempty"`
+	Google            GoogleAgentConfig `json:"google,omitempty"`
+	ChatGPT           ChatGPTConfig     `json:"chatgpt,omitempty"`
+	DisabledProviders []string          `json:"disabled_providers,omitempty"`
 }
 
 // GoogleAgentConfig contains machine-specific Google rendered-agent
@@ -226,8 +228,9 @@ type fileConfig struct {
 }
 
 type fileAgentConfig struct {
-	Google  *fileGoogleAgentConfig `json:"google,omitempty"`
-	ChatGPT *fileChatGPTConfig     `json:"chatgpt,omitempty"`
+	Google            *fileGoogleAgentConfig `json:"google,omitempty"`
+	ChatGPT           *fileChatGPTConfig     `json:"chatgpt,omitempty"`
+	DisabledProviders []string               `json:"disabled_providers,omitempty"`
 }
 
 type fileGoogleAgentConfig struct {
@@ -348,6 +351,13 @@ func decode(data []byte) (Config, error) {
 		}
 	}
 	if raw.Agents != nil {
+		if raw.Agents.DisabledProviders != nil {
+			disabledProviders, err := providerpolicy.Normalize(raw.Agents.DisabledProviders)
+			if err != nil {
+				return Config{}, err
+			}
+			cfg.Agents.DisabledProviders = disabledProviders
+		}
 		if raw.Agents.Google != nil {
 			cfg.Agents.Google.ExclusiveAIMode = raw.Agents.Google.ExclusiveAIMode
 			cfg.googleExclusiveAIModeSet = true
@@ -430,12 +440,18 @@ func encode(cfg Config) ([]byte, error) {
 			raw.Artifacts.MaxLogSize = artifacts.FormatByteSize(cfg.Artifacts.MaxLogSizeBytes)
 		}
 	}
+	disabledProviders, err := providerpolicy.Normalize(cfg.Agents.DisabledProviders)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.googleExclusiveAIModeSet ||
 		cfg.Agents.Google.ExclusiveAIMode ||
 		cfg.Agents.ChatGPT.Thinking != "" ||
 		cfg.Agents.ChatGPT.MinimumThinking != "" ||
-		cfg.Agents.ChatGPT.Model != "" {
+		cfg.Agents.ChatGPT.Model != "" ||
+		len(disabledProviders) > 0 {
 		raw.Agents = &fileAgentConfig{}
+		raw.Agents.DisabledProviders = disabledProviders
 		if cfg.googleExclusiveAIModeSet || cfg.Agents.Google.ExclusiveAIMode {
 			raw.Agents.Google = &fileGoogleAgentConfig{ExclusiveAIMode: cfg.Agents.Google.ExclusiveAIMode}
 		}

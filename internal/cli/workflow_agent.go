@@ -42,19 +42,32 @@ func (a *app) newWorkflowAgentCommand() *cobra.Command {
 }
 
 func (a *app) newWorkflowAgentProvidersCommand() *cobra.Command {
-	return &cobra.Command{
+	var includeDisabled bool
+	cmd := &cobra.Command{
 		Use:   "providers",
 		Short: "List provider workflow capabilities without probing Chrome",
 		Long: "List every provider and operation in the installed contract. " +
-			"Planned and unsupported operations remain explicit and are never treated as callable.",
+			"Planned and unsupported operations remain explicit and are never treated as callable. " +
+			"Disabled providers are omitted unless --include-disabled is requested for diagnosis.",
 		Example: "  cdp workflow agent providers --json\n" +
+			"  cdp workflow agent providers --include-disabled --json\n" +
 			"  cdp workflow agent providers --jq '.data.providers[] | {provider, implementation_status}'",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
 
-			catalog := webagent.Catalog()
+			policy, err := a.providerPolicy()
+			if err != nil {
+				return commandError(
+					"invalid_config",
+					"usage",
+					err.Error(),
+					ExitUsage,
+					[]string{"cdp workflow agent providers --json"},
+				)
+			}
+			catalog := webagent.CatalogFor(policy, includeDisabled)
 			result := webagent.NewMetadataResult(
 				webagent.ProviderCatalog,
 				webagent.OperationProviders,
@@ -73,6 +86,8 @@ func (a *app) newWorkflowAgentProvidersCommand() *cobra.Command {
 			return a.renderWebAgentResult(ctx, strings.Join(lines, "\n"), result)
 		},
 	}
+	cmd.Flags().BoolVar(&includeDisabled, "include-disabled", false, "include providers disabled by agents.disabled_providers with reason=disabled_by_config")
+	return cmd
 }
 
 func (a *app) newWorkflowAgentProviderCommand(provider webagent.Provider) *cobra.Command {

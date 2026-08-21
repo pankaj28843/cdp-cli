@@ -214,6 +214,10 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 }
 
 func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string, allowedProviders []string) (*transcriptionapi.Registry, error) {
+	policy, err := a.providerPolicy()
+	if err != nil {
+		return nil, err
+	}
 	providers := make([]transcriptionapi.Provider, 0, 3)
 	if strings.TrimSpace(localBaseURL) != "" {
 		localProvider, err := transcriptionapi.NewOpenAIHTTPProvider(
@@ -233,7 +237,7 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 		if filterErr != nil {
 			return nil, filterErr
 		}
-		return transcriptionapi.NewRegistry(providers...), nil
+		return transcriptionapi.NewRegistryWithPolicy(policy, providers...), nil
 	}
 	chatStore, chatErr := chatgpt.NewStore(stateStore.Dir)
 	if chatErr == nil {
@@ -247,7 +251,7 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 	if err != nil {
 		return nil, err
 	}
-	return transcriptionapi.NewRegistry(providers...), nil
+	return transcriptionapi.NewRegistryWithPolicy(policy, providers...), nil
 }
 
 func filterTranscriptionProviders(providers []transcriptionapi.Provider, requested []string) ([]transcriptionapi.Provider, error) {

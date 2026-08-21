@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/providerpolicy"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
@@ -90,9 +91,18 @@ func (a *app) newWorkflowAgentAggregateRefreshCommand(operation webagent.Operati
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 2*time.Minute)
 			defer cancel()
-			providers, err := parseAggregateProviders(requested)
+			policy, err := a.providerPolicy()
+			if err != nil {
+				return commandError("invalid_config", "usage", err.Error(), ExitUsage, []string{"cdp workflow agent providers --json"})
+			}
+			providers, err := parseAggregateProviders(requested, policy)
 			if err != nil {
 				return err
+			}
+			if !aggregateHasEnabledProvider(providers, policy) {
+				result := a.runAggregateRefresh(ctx, operation, providers, policy)
+				human := fmt.Sprintf("aggregate %s: %v", operation, result.State)
+				return a.renderWebAgentResult(ctx, human, result)
 			}
 			if !a.selectHeadedProviderRuntime() {
 				return a.renderWebAgentResult(
@@ -102,7 +112,7 @@ func (a *app) newWorkflowAgentAggregateRefreshCommand(operation webagent.Operati
 						"provider-neutral refresh requires the headed browser runtime"),
 				)
 			}
-			result := a.runAggregateRefresh(ctx, operation, providers)
+			result := a.runAggregateRefresh(ctx, operation, providers, policy)
 			human := fmt.Sprintf("aggregate %s: %v", operation, result.State)
 			return a.renderWebAgentResult(ctx, human, result)
 		},
@@ -111,9 +121,15 @@ func (a *app) newWorkflowAgentAggregateRefreshCommand(operation webagent.Operati
 	return cmd
 }
 
-func parseAggregateProviders(requested []string) ([]webagent.Provider, error) {
+func parseAggregateProviders(requested []string, policy providerpolicy.Policy) ([]webagent.Provider, error) {
 	if len(requested) == 0 {
-		return append([]webagent.Provider{}, aggregateRefreshProviders...), nil
+		providers := make([]webagent.Provider, 0, len(aggregateRefreshProviders))
+		for _, provider := range aggregateRefreshProviders {
+			if policy.IsEnabled(string(provider)) {
+				providers = append(providers, provider)
+			}
+		}
+		return providers, nil
 	}
 	seen := make(map[webagent.Provider]bool, len(requested))
 	providers := make([]webagent.Provider, 0, len(requested))
@@ -141,6 +157,7 @@ func (a *app) runAggregateRefresh(
 	ctx context.Context,
 	operation webagent.Operation,
 	providers []webagent.Provider,
+	policy providerpolicy.Policy,
 ) webagent.Result {
 	data := aggregateRefreshData{
 		SchemaVersion:   aggregateRefreshSchemaVersion,
@@ -153,6 +170,14 @@ func (a *app) runAggregateRefresh(
 	succeeded := 0
 	attempted := 0
 	for _, provider := range providers {
+		if policy.IsDisabled(string(provider)) {
+			data.Results = append(data.Results, aggregateProviderResult{
+				Provider: provider,
+				Status:   "disabled",
+				Reason:   string(providerpolicy.ReasonDisabledByConfig),
+			})
+			continue
+		}
 		if !aggregateProviderSupported(provider, operation) {
 			data.Results = append(data.Results, aggregateProviderResult{
 				Provider: provider,
@@ -199,6 +224,9 @@ func (a *app) runAggregateRefresh(
 	}
 	if result.OK {
 		result.State = webagent.StateReady
+	} else if len(providers) == 0 {
+		result.OK = true
+		result.State = webagent.StateIncomplete
 	} else if succeeded > 0 || attempted < len(providers) {
 		result.OK = true
 		result.State = webagent.StateIncomplete
@@ -213,6 +241,15 @@ func (a *app) runAggregateRefresh(
 		}
 	}
 	return result
+}
+
+func aggregateHasEnabledProvider(providers []webagent.Provider, policy providerpolicy.Policy) bool {
+	for _, provider := range providers {
+		if policy.IsEnabled(string(provider)) {
+			return true
+		}
+	}
+	return false
 }
 
 func aggregateProviderSupported(provider webagent.Provider, operation webagent.Operation) bool {

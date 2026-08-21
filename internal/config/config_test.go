@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -170,6 +171,34 @@ func TestLoadParsesArtifactRetentionConfig(t *testing.T) {
 	}
 }
 
+func TestLoadNormalizesDisabledProviderAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"agents":{"disabled_providers":[" Microsoft-365-web ","CHATGPT"]}}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	want := []string{"chatgpt", "m365"}
+	if !reflect.DeepEqual(cfg.Agents.DisabledProviders, want) {
+		t.Fatalf("DisabledProviders = %#v, want %#v", cfg.Agents.DisabledProviders, want)
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	saved := string(data)
+	chatGPTIndex := strings.Index(saved, `"chatgpt"`)
+	m365Index := strings.Index(saved, `"m365"`)
+	if chatGPTIndex < 0 || m365Index < 0 || chatGPTIndex > m365Index || strings.Contains(saved, "microsoft-365") {
+		t.Fatalf("saved config did not contain sorted canonical providers: %s", data)
+	}
+}
+
 func TestLoadAndSavePreserveExplicitGoogleExclusiveAIModeFalse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{"agents":{"google":{"exclusive_ai_mode":false}}}`), 0o600); err != nil {
@@ -219,6 +248,10 @@ func TestLoadRejectsMalformedConfig(t *testing.T) {
 		{"bad artifact retention", `{"artifacts":{"retention":"weekly"}}`},
 		{"zero artifact retention", `{"artifacts":{"retention":"0s"}}`},
 		{"bad artifact max log size", `{"artifacts":{"max_log_size":"huge"}}`},
+		{"blank disabled provider", `{"agents":{"disabled_providers":[" "]}}`},
+		{"unknown disabled provider", `{"agents":{"disabled_providers":["chat-gpt"]}}`},
+		{"local disabled provider", `{"agents":{"disabled_providers":["local"]}}`},
+		{"duplicate disabled provider", `{"agents":{"disabled_providers":["chatgpt","chatgpt-web"]}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

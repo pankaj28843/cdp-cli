@@ -15,10 +15,10 @@ func TestProviderCatalogIsStableAndHonest(t *testing.T) {
 	wantProviders := []Provider{
 		ProviderAlex,
 		ProviderChatGPT,
-		ProviderM365,
 		ProviderClaude,
 		ProviderGemini,
 		ProviderGrok,
+		ProviderM365,
 		ProviderPerplexity,
 		ProviderTripadvisor,
 	}

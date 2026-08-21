@@ -193,12 +193,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, APIError{Type: "invalid_request_error", Message: "method not allowed"})
 		return
 	}
-	capabilities := s.capabilities(r.Context())
+	ordinaryCapabilities := s.capabilitiesFor(r.Context(), false)
+	capabilities := ordinaryCapabilities
+	if includeDisabledProviders(r) {
+		capabilities = s.capabilitiesFor(r.Context(), true)
+	}
 	status := "ok"
-	if len(capabilities) == 0 {
+	if len(ordinaryCapabilities) == 0 {
 		status = "degraded"
 	}
-	for _, capability := range capabilities {
+	for _, capability := range ordinaryCapabilities {
 		if !capability.Ready {
 			status = "degraded"
 			break
@@ -259,7 +263,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	models := make([]Model, 0)
-	for _, capability := range s.capabilities(r.Context()) {
+	for _, capability := range s.capabilitiesFor(r.Context(), includeDisabledProviders(r)) {
 		for _, model := range capability.Models {
 			models = append(models, Model{
 				ID:       model,
@@ -274,10 +278,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) capabilities(ctx context.Context) []ProviderCapability {
+	return s.capabilitiesFor(ctx, false)
+}
+
+func (s *Server) capabilitiesFor(ctx context.Context, includeDisabled bool) []ProviderCapability {
 	if s == nil || s.config.Registry == nil {
 		return []ProviderCapability{}
 	}
 	capabilities := s.config.Registry.Capabilities(ctx)
+	if includeDisabled {
+		capabilities = s.config.Registry.DiagnosticCapabilities(ctx)
+	}
 	if s.config.ProbeHealth == nil {
 		return capabilities
 	}
@@ -285,6 +296,18 @@ func (s *Server) capabilities(ctx context.Context) []ProviderCapability {
 		capabilities[index] = s.config.ProbeHealth.Apply(capabilities[index], time.Now().UTC())
 	}
 	return capabilities
+}
+
+func includeDisabledProviders(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("include_disabled"))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {

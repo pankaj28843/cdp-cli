@@ -5,6 +5,13 @@ The public contract is compatible with the OpenAI Whisper file API and adds
 completed-file SSE plus an OpenAI-shaped realtime transcription WebSocket.
 The root page is a self-contained human dogfood app at `/demo.html` (also `/`).
 
+The service reads the owner cdp config's `agents.disabled_providers` policy.
+Disabled authenticated providers are omitted from ordinary `/healthz` and
+`/v1/models` output and are rejected before adapter dispatch with the stable
+`provider_disabled`/`disabled_by_config` error. Local providers remain
+independent. Use `cdp workflow agent providers --include-disabled --json` for
+the explicit diagnostic projection.
+
 ## Start the service
 
 The service defaults to the LAN-capable primary listener on `0.0.0.0:28765`
@@ -78,6 +85,13 @@ installed service selects one fixture from the least-recently-used weighted
 pool and exercises every configured provider every five minutes by default.
 `--probe-interval` can be changed for a deployment; setting it to zero uses the
 five-minute default rather than disabling the safety gate.
+
+`GET /healthz` and `GET /v1/models` accept the explicit diagnostic query
+`?include_disabled=true`. Ordinary responses omit providers disabled by
+`agents.disabled_providers`; diagnostic responses include them with
+`ready: false` and `reason: "disabled_by_config"`. The ordinary health status
+is calculated from enabled providers only. Diagnostic output is for repair and
+inspection, not an admission override.
 
 Desktop browsers generally allow microphone access on `localhost`. Mobile
 browsers require a secure origin for a LAN address. For private-LAN dogfooding,
