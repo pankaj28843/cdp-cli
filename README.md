@@ -580,6 +580,11 @@ cdp --config cdp.json cron install --dry-run --json
 cdp cron install --artifact-retention 168h --max-log-size 64MiB --dry-run --json
 ```
 
+When `--browser-mode headed` is explicit, cron status/install reuse the
+selected headed connection's persisted browser URL if `--browser-url` and
+`CDP_BROWSER_URL` are absent. This keeps a configured headed deployment stable
+across scheduled invocations; an auto-connect connection remains URL-less.
+
 The default artifact policy is exactly 168 hours of history and 64 MiB per
 managed active log. Configure it with `artifacts.retention` and
 `artifacts.max_log_size`, or override it with cron/prune flags:
