@@ -78,6 +78,11 @@ func TestProbeHealthRequiresARecentSuccessfulProbe(t *testing.T) {
 	if !ready.Ready || !ready.ProbeReady || ready.ProbeAgeSec > 1 || ready.FileProbe == nil || !ready.FileProbe.Ready {
 		t.Fatalf("recently probed provider was not ready: %+v", ready)
 	}
+	health.RecordPathAttempt(ProviderChatGPT, ProbePathFile, now.Add(time.Minute), "fixture-002")
+	pendingFresh := health.Apply(provider, now.Add(time.Minute))
+	if !pendingFresh.Ready || !pendingFresh.ProbeReady || pendingFresh.FileProbe == nil || !pendingFresh.FileProbe.Ready {
+		t.Fatalf("fresh evidence was invalidated while the next probe was pending: %+v", pendingFresh)
+	}
 	stale := health.Apply(provider, now.Add(maxAge+time.Second))
 	if stale.Ready || stale.ProbeReady || stale.ProbeReason != "file:synthetic probe is stale" || stale.FileProbe == nil || stale.FileProbe.Reason != "synthetic probe is stale" {
 		t.Fatalf("stale provider reported ready: %+v", stale)

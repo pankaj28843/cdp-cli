@@ -247,7 +247,12 @@ func applyPathStatus(state probeHealthState, found bool, now time.Time, maxAge t
 	success := state.LastSuccessAt.UTC()
 	status.LastSuccessAt = success.Format(time.RFC3339Nano)
 	status.AgeSec = max(0, int64(now.Sub(success)/time.Second))
-	if state.Reason != "" {
+	// A new probe is allowed to be in flight while the last successful
+	// evidence is still fresh. Marking that evidence unavailable at attempt
+	// start made /healthz oscillate to degraded during every normal probe and
+	// caused clients to observe a false outage. Real failures still invalidate
+	// the path immediately.
+	if state.Reason != "" && state.Reason != "probe_pending" {
 		status.Reason = safeProbeReason(state.Reason)
 		return status
 	}

@@ -194,9 +194,11 @@ Health is intentionally unauthenticated and contains capability/readiness
 metadata only; it never includes bearer tokens or provider session material.
 When synthetic probes are enabled, `status: "ok"` means every enabled,
 advertised provider path has recently completed a real fixture transcription
-successfully. The freshness window is fifteen minutes by default, so startup
+successfully. The freshness window is three minutes by default, so startup
 and any failed or stale path are reported as `status: "degraded"`; this is not
-a cached “service process is alive” signal. Each provider entry exposes the
+a cached “service process is alive” signal. A probe that is currently running
+does not invalidate a still-fresh last success, so normal one-minute probing
+does not create a false outage. Each provider entry exposes the
 aggregate `probe_ready`, `last_probe_at`, `probe_age_seconds`, and redacted
 `probe_reason`, plus `file_probe` and `realtime_probe` objects when those paths
 are advertised. Path status age is measured from the last successful probe, so
