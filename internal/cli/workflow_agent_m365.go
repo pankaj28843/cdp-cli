@@ -347,7 +347,7 @@ func (a *app) m365BrowserOperationConfig(
 		Client:          client,
 		Journal:         journal,
 		Budget:          a.browserResourceBudgetOptions(),
-		AllowOverBudget: a.opts.allowOverBudget,
+		AllowOverBudget: a.headedProviderRepairMayUseOwnedTarget(operation),
 		InputLockPath:   browserflow.HeadedInputLockPath(stateStore.Dir),
 	})
 	if err != nil {

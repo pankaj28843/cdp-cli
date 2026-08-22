@@ -53,6 +53,26 @@ func TestSelectHeadedProviderRuntimeOverridesAmbientDefaultOnly(t *testing.T) {
 	})
 }
 
+func TestHeadedProviderRepairIgnoresForeignBrowserBudget(t *testing.T) {
+	a := &app{opts: options{}}
+	for _, operation := range []webagent.Operation{
+		webagent.OperationTranscribe,
+		webagent.OperationAuthRefresh,
+		webagent.OperationCapabilities,
+	} {
+		if !a.headedProviderRepairMayUseOwnedTarget(operation) {
+			t.Fatalf("operation %q should use an owned target even when foreign tabs are over budget", operation)
+		}
+	}
+	if a.headedProviderRepairMayUseOwnedTarget(webagent.OperationAsk) {
+		t.Fatal("ordinary ask operation should retain the global budget guard")
+	}
+	a.opts.allowOverBudget = true
+	if !a.headedProviderRepairMayUseOwnedTarget(webagent.OperationAsk) {
+		t.Fatal("explicit allow-over-budget override was ignored")
+	}
+}
+
 func TestRenderWebAgentFailurePreservesEnvelopeAndNonzeroExit(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{

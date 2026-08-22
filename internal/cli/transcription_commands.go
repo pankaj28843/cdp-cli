@@ -266,6 +266,17 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 	return transcriptionapi.NewRegistryWithPolicy(policy, providers...), nil
 }
 
+// headedProviderRepairMayUseOwnedTarget keeps transcription independent of
+// unrelated Chrome work. The browserflow engine still creates one exact,
+// disposable target for the operation and closes it; this only prevents a
+// foreign tab or renderer from making the request wait behind a global budget.
+func (a *app) headedProviderRepairMayUseOwnedTarget(operation webagent.Operation) bool {
+	return a.opts.allowOverBudget ||
+		operation == webagent.OperationTranscribe ||
+		operation == webagent.OperationAuthRefresh ||
+		operation == webagent.OperationCapabilities
+}
+
 func filterTranscriptionProviders(providers []transcriptionapi.Provider, requested []string) ([]transcriptionapi.Provider, error) {
 	if len(requested) == 0 {
 		return providers, nil
