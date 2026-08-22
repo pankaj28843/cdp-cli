@@ -45,3 +45,22 @@ func TestWebAgentProviderErrorHidesProviderResponseShapeDetails(t *testing.T) {
 		t.Fatalf("message = %q", providerErr.APIError.Message)
 	}
 }
+
+func TestAuthRefreshScheduleSkipsSeparateLoopWhenSyntheticProbesAreEnabled(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		probeEnabled  bool
+		explicit      bool
+		wantScheduled bool
+	}{
+		{name: "probe default uses hot path", probeEnabled: true, explicit: false, wantScheduled: false},
+		{name: "probe explicit opt in", probeEnabled: true, explicit: true, wantScheduled: true},
+		{name: "no probe keeps maintenance loop", probeEnabled: false, explicit: false, wantScheduled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := authRefreshScheduleEnabled(test.probeEnabled, test.explicit); got != test.wantScheduled {
+				t.Fatalf("scheduled = %v, want %v", got, test.wantScheduled)
+			}
+		})
+	}
+}

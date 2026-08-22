@@ -122,10 +122,14 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				_ = store.Close()
 				return err
 			}
-			authCoordinator := transcriptionapi.NewAuthRefreshCoordinator(registry, authRefreshInterval)
+			probeEnabled := strings.TrimSpace(fixtureDir) != ""
+			var authCoordinator *transcriptionapi.AuthRefreshCoordinator
+			if authRefreshScheduleEnabled(probeEnabled, cmd.Flags().Changed("auth-refresh-interval")) {
+				authCoordinator = transcriptionapi.NewAuthRefreshCoordinator(registry, authRefreshInterval)
+			}
 			var probeCoordinator *transcriptionapi.SyntheticProbeCoordinator
 			var probeHealth *transcriptionapi.ProbeHealth
-			if strings.TrimSpace(fixtureDir) != "" {
+			if probeEnabled {
 				fixtures, fixtureErr := transcriptionapi.LoadFixtureCatalog(fixtureDir)
 				if fixtureErr != nil {
 					_ = store.Close()
@@ -211,6 +215,14 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&tlsRegenerate, "tls-regenerate", false, "replace the generated self-signed certificate and key")
 	cmd.Flags().BoolVar(&printReady, "print-ready", false, "print one readiness JSON object before serving")
 	return cmd
+}
+
+// authRefreshScheduleEnabled keeps the synthetic probe as the normal hot path:
+// every probe checks cached auth and refreshes only when it is actually stale.
+// A separate recurring auth loop remains available as an explicit opt-in for
+// deployments that do not want to rely on fixture probes.
+func authRefreshScheduleEnabled(probeEnabled, explicit bool) bool {
+	return !probeEnabled || explicit
 }
 
 func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string, allowedProviders []string) (*transcriptionapi.Registry, error) {

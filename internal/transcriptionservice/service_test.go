@@ -15,6 +15,7 @@ func testConfig() Config {
 		Provider:             "chatgpt-web",
 		AllowedProviders:     []string{"chatgpt-web"},
 		BrowserMode:          "headed",
+		BrowserURL:           "http://localhost:9223",
 		Display:              ":0",
 		XAuthority:           "/Users/test/.Xauthority",
 		AllowOverBudget:      true,
@@ -57,6 +58,8 @@ func TestRenderLaunchAgentIsOwnerScopedAndRestartable(t *testing.T) {
 		"5m0s",
 		"CDP_BROWSER_MODE",
 		"headed",
+		"CDP_BROWSER_URL",
+		"http://localhost:9223",
 		"DISPLAY",
 		":0",
 		"XAUTHORITY",
@@ -106,6 +109,7 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 		`CDP_TRANSCRIPTION_PROBE_INTERVAL="5m0s"`,
 		`CDP_TRANSCRIPTION_FIXTURE_DIR="/synthetic-user/cdp-fixtures"`,
 		`CDP_BROWSER_MODE="headed"`,
+		`CDP_BROWSER_URL="http://localhost:9223"`,
 		`CDP_ALLOW_OVER_BUDGET="true"`,
 		`DISPLAY=":0"`,
 		`XAUTHORITY="/Users/test/.Xauthority"`,
@@ -148,5 +152,40 @@ func TestRenderPropagatesTLSFilesToNativeServiceEnvironment(t *testing.T) {
 		if !strings.Contains(linuxEnvironment, want) {
 			t.Fatalf("systemd environment missing TLS value %q:\n%s", want, linuxEnvironment)
 		}
+	}
+}
+
+func TestRenderSystemLinuxServiceUsesSystemScopeAndRestartAlways(t *testing.T) {
+	paths := PathsForSystem()
+	artifacts, err := Render(PlatformLinux, testConfig(), paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 2 {
+		t.Fatalf("artifact count = %d, want 2", len(artifacts))
+	}
+	unit := string(artifacts[0].Data)
+	for _, want := range []string{
+		"After=network-online.target",
+		"User=cdp",
+		"Group=cdp",
+		"Environment=HOME=/var/lib/cdp-cli",
+		"Environment=XDG_CONFIG_HOME=/var/lib/cdp-cli/.config",
+		"Restart=always",
+		"WantedBy=multi-user.target",
+		"/etc/cdp-cli/transcription.env",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("system service unit missing %q:\n%s", want, unit)
+		}
+	}
+	if artifacts[0].Path != "/etc/systemd/system/cdp-transcription.service" {
+		t.Fatalf("unit path = %q, want system unit path", artifacts[0].Path)
+	}
+	if artifacts[1].Path != "/etc/cdp-cli/transcription.env" {
+		t.Fatalf("environment path = %q, want system environment path", artifacts[1].Path)
+	}
+	if artifacts[1].Mode != 0o640 {
+		t.Fatalf("system environment mode = %o, want 640", artifacts[1].Mode)
 	}
 }

@@ -297,18 +297,21 @@ The registry currently supports:
 
 Provider adapters are the effect boundary. The API core owns persistence,
 request validation, WebSocket framing, event reduction, and provider-neutral
-errors. A single service-owned auth coordinator checks every online provider
-proactively at startup and every ten minutes (configurable with
-`--auth-refresh-interval`), in parallel and with independent time bounds. A
-request also calls the same provider's freshness hook before dispatch or the
-first realtime chunk. ChatGPT and Microsoft 365 keep their existing
-provider-specific refresh owner, so an expiring session has a self-healing path
-without a provider-specific cron job. If the browser-free ChatGPT replay is
-rejected with a typed authentication/authorization response, the adapter makes
-one lazy headed-browser repair/retry; ordinary successful requests never open a
-browser. The shared retry policy is bounded at three total attempts with
-1-second and 2-second waits; its 4-second slot is retained for policies with a
-larger future attempt budget.
+errors. With a fixture corpus enabled, the synthetic probe is the normal hot
+path: each bounded probe checks cached auth and refreshes only when the
+provider's evidence is actually stale. This avoids a second browser-opening
+refresh loop. A separate service-owned coordinator remains available as an
+explicit `--auth-refresh-interval` opt-in and defaults to an hourly cadence
+when no fixture probe is configured. A request also calls the same provider's
+freshness hook before dispatch or the first realtime chunk. ChatGPT and
+Microsoft 365 keep their existing provider-specific refresh owner, so an
+expired session has an on-demand self-healing path without a provider-specific
+cron job. If the browser-free ChatGPT replay is rejected with a typed
+authentication/authorization response, the adapter makes one lazy headed-
+browser repair/retry; ordinary successful requests never open a browser. The
+shared retry policy is bounded at three total attempts with 1-second and
+2-second waits; its 4-second slot is retained for policies with a larger
+future attempt budget.
 
 Audio is copied to a bounded transaction file before dispatch. By default that
 file is removed when the request or WebSocket ends; JSON request/result records
@@ -319,13 +322,15 @@ from records.
 ## Linux deployment
 
 The service is a normal Go CLI process and does not require macOS APIs. Build
-the binary for the target Linux architecture, configure the cdp-cli state
-directory and provider runtime, and run `cdp transcription serve` under the
-host’s service manager. Browser-backed ChatGPT and Microsoft 365 providers
-also need the configured cdp-cli browser runtime and the provider’s existing
-auth evidence. The local OpenAI-compatible provider does not require a
-browser; browser-backed file adapters may need `ffprobe`/`ffmpeg` when
-`duration_ms` or audio decoding cannot be supplied by the caller.
+the binary for the target Linux architecture, create the dedicated `cdp`
+system account, and install the machine-wide unit with
+`cdp transcription service install --system`; the renderer places state under
+`/var/lib/cdp-cli` and runs the API and headed daemon as `cdp:cdp`, never as
+root. Browser-backed ChatGPT and Microsoft 365 providers also need the
+configured headed cdp-cli browser runtime and the provider's existing auth
+evidence. The local OpenAI-compatible provider does not require a browser;
+browser-backed file adapters may need `ffprobe`/`ffmpeg` when `duration_ms` or
+audio decoding cannot be supplied by the caller.
 
 ## Compatibility gate
 

@@ -1,4 +1,4 @@
-// Package transcriptionservice renders user-scoped service-manager artifacts
+// Package transcriptionservice renders native service-manager artifacts
 // for the cdp transcription API. It deliberately contains no process-control
 // code so the CLI can test rendering without starting launchd or systemd.
 package transcriptionservice
@@ -22,8 +22,21 @@ const (
 	PlatformMacOS Platform = "macos"
 	PlatformLinux Platform = "linux"
 
-	LaunchAgentLabel = "dev.pankaj.cdp.transcription"
-	SystemdUnitName  = "cdp-transcription.service"
+	LaunchAgentLabel   = "dev.pankaj.cdp.transcription"
+	SystemdUnitName    = "cdp-transcription.service"
+	SystemServiceUser  = "cdp"
+	SystemServiceGroup = "cdp"
+	SystemServiceHome  = "/var/lib/cdp-cli"
+)
+
+// Scope identifies whether a native service belongs to the logged-in user or
+// to the machine. System scope is intentionally Linux-only; it is used for
+// unattended servers where the API must start before a user session exists.
+type Scope string
+
+const (
+	ScopeUser   Scope = "user"
+	ScopeSystem Scope = "system"
 )
 
 type Config struct {
@@ -34,6 +47,7 @@ type Config struct {
 	Provider             string
 	AllowedProviders     []string
 	BrowserMode          string
+	BrowserURL           string
 	Display              string
 	XAuthority           string
 	AllowOverBudget      bool
@@ -51,6 +65,7 @@ type Config struct {
 }
 
 type Paths struct {
+	Scope        Scope
 	LaunchAgent  string
 	SystemdUnit  string
 	Environment  string
@@ -84,11 +99,24 @@ func PathsForHome(home string) (Paths, error) {
 	}
 	home = filepath.Clean(home)
 	return Paths{
+		Scope:        ScopeUser,
 		LaunchAgent:  filepath.Join(home, "Library", "LaunchAgents", LaunchAgentLabel+".plist"),
 		SystemdUnit:  filepath.Join(home, ".config", "systemd", "user", SystemdUnitName),
 		Environment:  filepath.Join(home, ".config", "cdp-cli", "transcription.env"),
 		LogDirectory: filepath.Join(home, ".cdp-cli", "logs"),
 	}, nil
+}
+
+// PathsForSystem returns the fixed Linux system-service locations. Keeping
+// these paths in the renderer prevents the CLI and deployment scripts from
+// drifting apart. Callers must still reject this scope on macOS.
+func PathsForSystem() Paths {
+	return Paths{
+		Scope:        ScopeSystem,
+		SystemdUnit:  filepath.Join(string(filepath.Separator), "etc", "systemd", "system", SystemdUnitName),
+		Environment:  filepath.Join(string(filepath.Separator), "etc", "cdp-cli", "transcription.env"),
+		LogDirectory: filepath.Join(string(filepath.Separator), "var", "log", "cdp-cli"),
+	}
 }
 
 func (c Config) Validate() error {
@@ -130,6 +158,7 @@ func (c Config) Environment() map[string]string {
 		"CDP_TRANSCRIPTION_PROVIDER":                c.Provider,
 		"CDP_TRANSCRIPTION_PROVIDERS":               strings.Join(c.AllowedProviders, ","),
 		"CDP_BROWSER_MODE":                          c.BrowserMode,
+		"CDP_BROWSER_URL":                           c.BrowserURL,
 		"CDP_ALLOW_OVER_BUDGET":                     strconv.FormatBool(c.AllowOverBudget),
 		"CDP_TRANSCRIPTION_LOCAL_BASE_URL":          c.LocalBaseURL,
 		"CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL": c.LocalRealtimeBaseURL,
@@ -172,9 +201,13 @@ func Render(platform Platform, c Config, paths Paths) ([]Artifact, error) {
 			return nil, err
 		}
 		env := renderEnvironmentFile(environment)
+		environmentMode := os.FileMode(0o600)
+		if paths.Scope == ScopeSystem {
+			environmentMode = 0o640
+		}
 		return []Artifact{
 			{Path: paths.SystemdUnit, Data: unit, Mode: 0o644},
-			{Path: paths.Environment, Data: env, Mode: 0o600},
+			{Path: paths.Environment, Data: env, Mode: environmentMode},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported transcription service platform %q", platform)
@@ -218,8 +251,18 @@ func renderSystemdUnit(c Config, paths Paths) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString("[Unit]\n")
 	b.WriteString("Description=cdp provider-neutral transcription API\n")
-	b.WriteString("After=default.target\n\n")
+	if paths.Scope == ScopeSystem {
+		b.WriteString("After=network-online.target\nWants=network-online.target\n\n")
+	} else {
+		b.WriteString("After=default.target\n\n")
+	}
 	b.WriteString("[Service]\n")
+	if paths.Scope == ScopeSystem {
+		b.WriteString("User=" + SystemServiceUser + "\n")
+		b.WriteString("Group=" + SystemServiceGroup + "\n")
+		b.WriteString("Environment=HOME=" + SystemServiceHome + "\n")
+		b.WriteString("Environment=XDG_CONFIG_HOME=" + filepath.Join(SystemServiceHome, ".config") + "\n")
+	}
 	b.WriteString("ExecStart=")
 	b.WriteString(systemdQuote(c.BinaryPath))
 	b.WriteString(" transcription serve\n")
@@ -228,10 +271,19 @@ func renderSystemdUnit(c Config, paths Paths) ([]byte, error) {
 	// path and ignore the environment file.
 	b.WriteString("EnvironmentFile=-")
 	b.WriteString(paths.Environment)
-	b.WriteString("\nRestart=on-failure\nRestartSec=2\n")
+	if paths.Scope == ScopeSystem {
+		b.WriteString("\nRestart=always\n")
+	} else {
+		b.WriteString("\nRestart=on-failure\n")
+	}
+	b.WriteString("RestartSec=2\n")
 	b.WriteString("KillSignal=SIGINT\nTimeoutStopSec=10\nUMask=0077\n")
 	b.WriteString("NoNewPrivileges=true\nPrivateTmp=true\n\n")
-	b.WriteString("[Install]\nWantedBy=default.target\n")
+	if paths.Scope == ScopeSystem {
+		b.WriteString("[Install]\nWantedBy=multi-user.target\n")
+	} else {
+		b.WriteString("[Install]\nWantedBy=default.target\n")
+	}
 	return b.Bytes(), nil
 }
 

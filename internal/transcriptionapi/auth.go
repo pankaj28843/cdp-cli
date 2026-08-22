@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	DefaultAuthRefreshInterval = 10 * time.Minute
+	DefaultAuthRefreshInterval = time.Hour
 	DefaultAuthRefreshTimeout  = 2 * time.Minute
 )
 
