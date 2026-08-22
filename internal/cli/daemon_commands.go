@@ -2036,6 +2036,9 @@ func (a *app) connectionStateName(ctx context.Context) string {
 		return preferredName
 	}
 	if strings.TrimSpace(a.opts.browserURL) != "" {
+		if runtime, ok, runtimeErr := a.connectionFromRunningManagedRuntime(ctx, store.Dir, browserMode); runtimeErr == nil && ok && runtime.BrowserURL == a.opts.browserURL {
+			return preferredName
+		}
 		if browserMode == "headless" {
 			return preferredName
 		}

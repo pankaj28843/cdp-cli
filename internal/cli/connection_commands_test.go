@@ -355,6 +355,46 @@ func TestConnectionResolveUsesManagedHeadlessRuntimeWhenNoStateConnection(t *tes
 	}
 }
 
+func TestConnectionResolvePrefersRunningManagedHeadedRuntimeOverStaleAutoConnect(t *testing.T) {
+	stateDir := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"connection", "add", "default", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection add default exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headed", daemon.Runtime{
+		PID:            os.Getpid(),
+		StartedAt:      time.Now().UTC().Format(time.RFC3339),
+		BrowserMode:    "headed",
+		ConnectionMode: "browser_url",
+		Endpoint:       "ws://headed-runtime.example/devtools/browser/runtime",
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"--browser-mode", "headed", "connection", "resolve", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("connection resolve headed runtime exit code = %d, want %d; stderr=%s output=%s", code, cli.ExitOK, errOut.String(), out.String())
+	}
+	var got struct {
+		OK         bool   `json:"ok"`
+		Source     string `json:"source"`
+		Connection struct {
+			Name       string `json:"name"`
+			Mode       string `json:"mode"`
+			BrowserURL string `json:"browser_url"`
+		} `json:"connection"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("connection resolve output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Source != "runtime" || got.Connection.Name != "default" || got.Connection.Mode != "browser_url" || got.Connection.BrowserURL != "http://headed-runtime.example" {
+		t.Fatalf("connection resolve = %+v, want running managed headed runtime", got)
+	}
+}
+
 func TestConnectionCurrentShowsEffectiveBrowserModeMismatchJSON(t *testing.T) {
 	stateDir := t.TempDir()
 	var out, errOut bytes.Buffer

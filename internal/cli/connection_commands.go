@@ -466,8 +466,22 @@ func (a *app) resolveConnection(ctx context.Context) (state.Connection, string, 
 		}
 		return withConnectionBrowserMode(conn, browserMode), "named", true, nil
 	}
+	managedRuntime, managedRuntimeOK, err := a.connectionFromRunningManagedRuntime(ctx, store.Dir, browserMode)
+	if err != nil {
+		return state.Connection{}, "", false, err
+	}
 	if conn, ok := connectionForBrowserMode(file.Connections, browserMode); ok {
+		// A running explicit-URL daemon is the authoritative headed path for
+		// unattended commands. Older installs may retain the default
+		// auto-connect connection, which points at a different browser flow and
+		// otherwise makes a healthy daemon look unavailable after Chrome restarts.
+		if managedRuntimeOK && conn.Mode == "auto_connect" {
+			return managedRuntime, "runtime", true, nil
+		}
 		return conn, "browser_mode", true, nil
+	}
+	if managedRuntimeOK {
+		return managedRuntime, "runtime", true, nil
 	}
 	cwd, cwdErr := filepath.Abs(".")
 	if cwdErr == nil {
@@ -515,6 +529,30 @@ func (a *app) connectionFromManagedRuntime(ctx context.Context, stateDir, browse
 		BrowserMode: browserMode,
 		BrowserURL:  browserURL,
 		AutoConnect: runtime.ConnectionMode == "auto_connect",
+		UserDataDir: runtime.UserDataDir,
+	}, true, nil
+}
+
+func (a *app) connectionFromRunningManagedRuntime(ctx context.Context, stateDir, browserMode string) (state.Connection, bool, error) {
+	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
+	if err != nil || !ok || !daemon.RuntimeRunning(runtime) || runtime.ConnectionMode != "browser_url" {
+		return state.Connection{}, false, err
+	}
+	browserURL := ""
+	if strings.TrimSpace(runtime.Endpoint) != "" {
+		browserURL = managedHTTPURL(runtime.Endpoint)
+	} else if strings.TrimSpace(runtime.ChromePort) != "" {
+		browserURL = "http://127.0.0.1:" + runtime.ChromePort
+	}
+	if browserURL == "" {
+		return state.Connection{}, false, nil
+	}
+	return state.Connection{
+		Name:        defaultConnectionNameForBrowserMode(browserMode),
+		Mode:        runtime.ConnectionMode,
+		BrowserMode: browserMode,
+		BrowserURL:  browserURL,
+		AutoConnect: false,
 		UserDataDir: runtime.UserDataDir,
 	}, true, nil
 }
