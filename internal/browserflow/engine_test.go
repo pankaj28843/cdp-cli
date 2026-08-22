@@ -1233,7 +1233,7 @@ func TestTargetCrashAndCanceledCallerStillSettleExactCleanup(t *testing.T) {
 		t.Fatalf("MarkPrepared: %v", err)
 	}
 	client.removeTarget("owned-1")
-	client.fail["Target.closeTarget"] = errors.New("target already gone")
+	client.fail["Target.closeTarget"] = errors.New("cdp Target.closeTarget failed: No target with given id found (-32602)")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cleanup, err := lease.Close(ctx)
@@ -1250,6 +1250,49 @@ func TestTargetCrashAndCanceledCallerStillSettleExactCleanup(t *testing.T) {
 	record, loadErr := journal.Load(context.Background(), "run-target-crash")
 	if loadErr != nil || record.Phase != PhaseClosed || record.Cleanup != CleanupClosed {
 		t.Fatalf("target-crash record=%+v err=%v", record, loadErr)
+	}
+}
+
+func TestClosePollUsesFreshContextAfterCloseTimeout(t *testing.T) {
+	base := newFakeBrowserClient("user-page")
+	client := &closeTimeoutBrowserClient{base: base}
+	journal, err := NewFileJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileJournal: %v", err)
+	}
+	engine, err := New(Config{
+		Client:  client,
+		Journal: journal,
+		Budget: cdp.BrowserResourceBudgetOptions{
+			MaxTabs: 15, MaxTabsSource: "test", MaxWindows: 5, BrowserMode: "headed",
+		},
+		CloseTimeout:        50 * time.Millisecond,
+		ClosePollInterval:   time.Millisecond,
+		MaxDispatchAttempts: 2,
+		AmbiguousCooldown:   time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	lease, err := engine.Acquire(context.Background(), AcquireRequest{
+		RunID:      "run-close-timeout",
+		Provider:   "chatgpt",
+		Operation:  "auth",
+		InitialURL: "https://chatgpt.test/",
+	})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := lease.MarkPrepared(context.Background()); err != nil {
+		t.Fatalf("MarkPrepared: %v", err)
+	}
+	// The browser has already removed the target, but the close command hangs
+	// until its own context expires. Cleanup must use a new context to observe
+	// that removal rather than polling with the expired close context.
+	base.removeTarget("owned-1")
+	cleanup, err := lease.Close(context.Background())
+	if err != nil || cleanup.State != CleanupClosed || !cleanup.TargetGone || !cleanup.TargetPollObserved {
+		t.Fatalf("Close cleanup=%+v err=%v", cleanup, err)
 	}
 }
 
@@ -1448,6 +1491,25 @@ type fakeBrowserClient struct {
 	markerListErr          error
 	markerListWaitContext  bool
 	nextID                 int
+}
+
+type closeTimeoutBrowserClient struct {
+	base *fakeBrowserClient
+}
+
+func (c *closeTimeoutBrowserClient) Call(ctx context.Context, method string, params any, result any) error {
+	if method == "Target.closeTarget" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if method == "Target.getTargets" && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return c.base.Call(ctx, method, params, result)
+}
+
+func (c *closeTimeoutBrowserClient) CallSession(ctx context.Context, sessionID, method string, params any, result any) error {
+	return c.base.CallSession(ctx, sessionID, method, params, result)
 }
 
 func newFakeBrowserClient(targetIDs ...string) *fakeBrowserClient {

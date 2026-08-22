@@ -580,7 +580,7 @@ func targetGoneError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	for _, needle := range []string{"target not found", "target closed", "no such target", "unknown target"} {
+	for _, needle := range []string{"target not found", "target closed", "no such target", "no target with given id", "unknown target"} {
 		if strings.Contains(message, needle) {
 			return true
 		}

@@ -885,22 +885,50 @@ func (e *Engine) closeExactTarget(session *cdp.PageSession, targetID string) Cle
 			context.Background(),
 			attemptBudget,
 		)
-		if err := cdp.CloseTargetWithClient(
+		err := cdp.CloseTargetWithClient(
 			attemptCtx,
 			e.client,
 			targetID,
-		); err != nil {
+		)
+		// A close call can consume its whole attempt budget while the browser
+		// is already processing the target removal. Do not reuse that exhausted
+		// context for the independent observation poll.
+		cancelAttempt()
+		if err != nil {
 			result.CloseError = err.Error()
+			if targetAlreadyGoneError(err) {
+				result.CloseSent = true
+				result.TargetGone = true
+				result.TargetPollObserved = true
+				result.State = CleanupClosed
+				result.CloseError = ""
+				result.FailurePhase = ""
+				return result
+			}
 		} else {
 			result.CloseSent = true
 		}
+		pollRemaining := time.Until(deadline)
+		if pollRemaining <= 0 {
+			result.PollError = context.DeadlineExceeded.Error()
+			result.FailurePhase = "poll"
+			continue
+		}
+		pollBudget := pollRemaining / time.Duration(3-attempt)
+		if pollBudget <= 0 {
+			pollBudget = pollRemaining
+		}
+		pollCtx, cancelPoll := context.WithTimeout(
+			context.Background(),
+			pollBudget,
+		)
 		gone, observed, err := waitTargetGone(
-			attemptCtx,
+			pollCtx,
 			e.client,
 			targetID,
 			e.closePollInterval,
 		)
-		cancelAttempt()
+		cancelPoll()
 		result.TargetPollObserved = result.TargetPollObserved || observed
 		result.TargetGone = gone
 		if err != nil {
@@ -925,6 +953,19 @@ func (e *Engine) closeExactTarget(session *cdp.PageSession, targetID string) Cle
 		}
 	}
 	return result
+}
+
+func targetAlreadyGoneError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, needle := range []string{"target not found", "target closed", "no such target", "no target with given id", "unknown target"} {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitTargetGone(

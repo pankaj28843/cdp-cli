@@ -132,6 +132,38 @@ func TestLeaseManagerRetainsFailedCleanupForRetry(t *testing.T) {
 	}
 }
 
+func TestLeaseManagerTreatsAlreadyGoneTargetAsCleaned(t *testing.T) {
+	manager, err := newLeaseManager(context.Background(), t.TempDir(), "headed", time.Now)
+	if err != nil {
+		t.Fatalf("newLeaseManager: %v", err)
+	}
+	info, err := manager.Begin(context.Background(), time.Minute)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := manager.RegisterTarget(context.Background(), info.LeaseID, LeaseTarget{TargetID: "already-gone", Disposable: true}); err != nil {
+		t.Fatalf("RegisterTarget: %v", err)
+	}
+	client := &leaseTestClient{
+		targets:  map[string]bool{},
+		failures: map[string]error{"already-gone": errors.New("cdp Target.closeTarget failed: No target with given id found (-32602)")},
+	}
+	result, err := manager.End(context.Background(), client, info.LeaseID)
+	if err != nil {
+		t.Fatalf("End returned an error for an already-gone target: %v", err)
+	}
+	if result.ClosedTargetCount != 1 || len(result.PendingTargetIDs) != 0 {
+		t.Fatalf("cleanup result = %+v, want one closed target and no pending target", result)
+	}
+	reloaded, err := newLeaseManager(context.Background(), manager.path[:len(manager.path)-len(InvocationLeaseFileName)], "headed", time.Now)
+	if err != nil {
+		t.Fatalf("reload manager: %v", err)
+	}
+	if len(reloaded.leases) != 0 {
+		t.Fatalf("reloaded leases = %+v, want empty after already-gone cleanup", reloaded.leases)
+	}
+}
+
 func TestLeaseManagerEndClosesOnlyRegisteredTargets(t *testing.T) {
 	manager, err := newLeaseManager(context.Background(), t.TempDir(), "headed", time.Now)
 	if err != nil {
