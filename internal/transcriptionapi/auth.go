@@ -9,6 +9,10 @@ import (
 const (
 	DefaultAuthRefreshInterval = time.Hour
 	DefaultAuthRefreshTimeout  = 2 * time.Minute
+	// Request-time auth repair must have a shorter bound than the listener's
+	// write timeout. A stale headed session should become a recoverable API
+	// error, not leave a mobile client in an endless finalizing state.
+	DefaultRequestAuthTimeout = 45 * time.Second
 )
 
 // AuthRefresher is an optional provider capability. Browser-backed providers

@@ -54,7 +54,7 @@ cdp transcription service install \
   --default-provider chatgpt-web \
   --providers chatgpt-web,microsoft-365-web \
   --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
-  --probe-interval 5m \
+  --probe-interval 1m \
   --tls-self-signed \
   --tls-host <this-machine-LAN-IP> \
   --tls-host localhost
@@ -84,11 +84,13 @@ headed Linux services can use the same authenticated browser owned by cdp.
 Native service installation requires the checked-in WebM corpus through
 `--fixture-dir`. The corpus must contain exactly 100 validated WebM files. The
 installed service selects one fixture from the least-recently-used weighted
-pool immediately at startup and then every five minutes by default. Each
+pool immediately at startup and then every minute by default. Each
 configured provider path is exercised independently: file upload for
 `file: true`, and the native paced PCM WebSocket path for `realtime: true`.
 `--probe-interval` can be changed for a deployment; setting it to zero uses the
-five-minute default rather than disabling the safety gate. One fixture is
+one-minute default rather than disabling the safety gate. Probe evidence is
+considered stale after three missed minutes, so the health supervisor can
+restart a degraded headed path promptly. One fixture is
 selected per cadence and the corpus rotates over time, keeping the recurring
 probe bounded while exercising all 100 checked-in inputs.
 
@@ -310,8 +312,9 @@ cron job. If the browser-free ChatGPT replay is rejected with a typed
 authentication/authorization response, the adapter makes one lazy headed-
 browser repair/retry; ordinary successful requests never open a browser. The
 shared retry policy is bounded at three total attempts with 1-second and
-2-second waits; its 4-second slot is retained for policies with a larger
-future attempt budget.
+2-second waits. Its 4-second slot is retained for policies with a larger
+future attempt budget. A stale-auth observation is therefore repaired and
+retried before the request is returned as unavailable.
 
 Audio is copied to a bounded transaction file before dispatch. By default that
 file is removed when the request or WebSocket ends; JSON request/result records

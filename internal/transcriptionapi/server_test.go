@@ -26,6 +26,8 @@ type fakeProvider struct {
 	result         Result
 	err            error
 	ensureErr      error
+	ensureSequence []error
+	ensureWait     time.Duration
 	realtime       *fakeRealtime
 	lastRequest    FileRequest
 	requestMu      sync.Mutex
@@ -60,11 +62,92 @@ func (p *fakeProvider) Transcribe(_ context.Context, request FileRequest) (Resul
 	return result, nil
 }
 
-func (p *fakeProvider) EnsureAuthFresh(context.Context) error {
+func (p *fakeProvider) EnsureAuthFresh(ctx context.Context) error {
+	if p.ensureWait > 0 {
+		timer := time.NewTimer(p.ensureWait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	p.requestMu.Lock()
 	defer p.requestMu.Unlock()
 	p.ensureCalls++
+	if len(p.ensureSequence) > 0 {
+		err := p.ensureSequence[0]
+		p.ensureSequence = p.ensureSequence[1:]
+		return err
+	}
 	return p.ensureErr
+}
+
+func TestEnsureProviderAuthRetriesWithinShortRequestBudget(t *testing.T) {
+	provider := &fakeProvider{
+		id:             ProviderChatGPT,
+		ensureSequence: []error{errors.New("headed browser is still repairing"), errors.New("auth evidence is not ready")},
+	}
+	if err := ensureProviderAuth(context.Background(), provider, 2*time.Second); err != nil {
+		t.Fatalf("ensureProviderAuth() error = %v", err)
+	}
+	provider.requestMu.Lock()
+	calls := provider.ensureCalls
+	provider.requestMu.Unlock()
+	if calls != 3 {
+		t.Fatalf("ensure auth calls = %d, want three bounded attempts", calls)
+	}
+}
+
+func TestServerBoundsRequestTimeAuthRepair(t *testing.T) {
+	provider := &fakeProvider{id: ProviderChatGPT, ensureWait: time.Second}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{
+		Registry:        NewRegistry(provider),
+		Store:           store,
+		DefaultProvider: ProviderChatGPT,
+		AuthTimeout:     25 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	started := time.Now()
+	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "req-auth-timeout-1", "speech.webm", []byte("fake-webm"), map[string]string{"model": DefaultModel})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d body = %s, want 504", response.StatusCode, body)
+	}
+	var envelope ErrorEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != "auth_refresh_timeout" {
+		t.Fatalf("error = %+v, want auth_refresh_timeout", envelope.Error)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("request took %v, want bounded auth timeout", elapsed)
+	}
+	record, err := store.LoadRecord(context.Background(), "req-auth-timeout-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Phase != PhaseFailed || record.Error == nil || record.Error.Code != "auth_refresh_timeout" {
+		t.Fatalf("record = %+v, want failed auth timeout", record)
+	}
 }
 
 func (p *fakeProvider) NewRealtime(context.Context, RealtimeSessionConfig) (RealtimeSession, error) {

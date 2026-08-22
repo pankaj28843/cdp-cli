@@ -32,6 +32,7 @@ type ServerConfig struct {
 	Registry         *Registry
 	Store            *Store
 	DefaultProvider  ProviderID
+	AuthTimeout      time.Duration
 	Address          string
 	HTTPAddress      string
 	TLSCertFile      string
@@ -55,6 +56,9 @@ func NewServer(config ServerConfig) (*Server, error) {
 	}
 	if strings.TrimSpace(config.Address) == "" {
 		config.Address = DefaultListenAddress
+	}
+	if config.AuthTimeout <= 0 {
+		config.AuthTimeout = DefaultRequestAuthTimeout
 	}
 	config.Address = strings.TrimSpace(config.Address)
 	config.HTTPAddress = strings.TrimSpace(config.HTTPAddress)
@@ -404,7 +408,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		writeProviderError(w, providerErr)
 		return
 	}
-	if err := ensureProviderAuth(r.Context(), provider); err != nil {
+	if err := ensureProviderAuth(r.Context(), provider, s.config.AuthTimeout); err != nil {
 		s.recordObservedFileFailure(provider, err)
 		s.failRecord(r.Context(), &record, err)
 		writeProviderError(w, err)
@@ -757,7 +761,7 @@ func (c *realtimeConnection) initialize(ctx context.Context, event realtimeClien
 	if err != nil {
 		return err
 	}
-	if err := ensureProviderAuth(ctx, provider); err != nil {
+	if err := ensureProviderAuth(ctx, provider, c.server.config.AuthTimeout); err != nil {
 		return err
 	}
 	session, attempts, err := runRealtimeProvider(ctx, provider, config)
@@ -906,12 +910,41 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 	return nil
 }
 
-func ensureProviderAuth(ctx context.Context, provider Provider) error {
+func ensureProviderAuth(ctx context.Context, provider Provider, timeout time.Duration) error {
 	refresher, ok := provider.(AuthRefresher)
 	if !ok {
 		return nil
 	}
-	return refresher.EnsureAuthFresh(ctx)
+	if timeout <= 0 {
+		timeout = DefaultRequestAuthTimeout
+	}
+	authContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_, _, err := resilience.Run(
+		authContext,
+		resilience.Policy{MaxAttempts: 3, Backoff: []time.Duration{250 * time.Millisecond, 500 * time.Millisecond}},
+		resilience.Hooks[struct{}]{
+			Attempt: func(attemptContext context.Context, _ int) (struct{}, error) {
+				return struct{}{}, refresher.EnsureAuthFresh(attemptContext)
+			},
+			Classify: func(attemptErr error) resilience.Decision {
+				if errors.Is(attemptErr, context.Canceled) || errors.Is(attemptErr, context.DeadlineExceeded) {
+					return resilience.Decision{}
+				}
+				// Auth evidence can be transiently unavailable while the headed
+				// browser repairs a session or sheds a stale target. Keep the
+				// request alive for the short bounded repair budget.
+				return resilience.Decision{Retry: true}
+			},
+		},
+	)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return providerError(http.StatusGatewayTimeout, "provider_unavailable", "auth_refresh_timeout", "transcription provider auth refresh timed out", true)
+		}
+		return err
+	}
+	return nil
 }
 
 func apiErrorPtr(value APIError) *APIError {

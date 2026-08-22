@@ -12,9 +12,12 @@ import (
 )
 
 const (
-	DefaultProbeInterval          = 5 * time.Minute
-	DefaultProbeTimeout           = 2 * time.Minute
-	DefaultProbeMaxAge            = 15 * time.Minute
+	// Keep provider evidence hot enough that a stale headed session is repaired
+	// before the next user turn, while bounding each provider attempt so a
+	// wedged browser cannot block the cadence indefinitely.
+	DefaultProbeInterval          = time.Minute
+	DefaultProbeTimeout           = 30 * time.Second
+	DefaultProbeMaxAge            = 3 * time.Minute
 	probeStateSchemaVersion       = "cdp-cli-transcription-probes/v2"
 	legacyProbeStateSchemaVersion = "cdp-cli-transcription-probes/v1"
 )
