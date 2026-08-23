@@ -432,6 +432,7 @@ func splitCSV(v string) []string {
 func (a *app) newProtocolExecCommand() *cobra.Command {
 	var params string
 	var targetID string
+	var targetType string
 	var urlContains string
 	var titleContains string
 	var savePath string
@@ -457,8 +458,15 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
 			}
-			if targetID != "" || urlContains != "" || titleContains != "" {
-				session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "" {
+				var session *cdp.PageSession
+				var target cdp.TargetInfo
+				var err error
+				if strings.TrimSpace(targetType) == "" {
+					session, target, err = a.attachPageSession(ctx, targetID, urlContains, titleContains)
+				} else {
+					session, target, err = a.attachProtocolTargetSession(ctx, targetID, urlContains, titleContains, targetType)
+				}
 				if err != nil {
 					return err
 				}
@@ -534,12 +542,117 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&params, "params", "{}", "JSON params object for the CDP method")
-	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix for target-scoped execution")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text for target-scoped execution")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text for target-scoped execution")
+	cmd.Flags().StringVar(&targetID, "target", "", "target id or unique prefix for target-scoped execution")
+	cmd.Flags().StringVar(&targetType, "target-type", "", "target type to include when selecting a target, such as page or service_worker")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first matching target whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first matching target whose title contains this text")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
 	cmd.Flags().BoolVar(&validate, "validate", false, "validate params against live protocol metadata before executing")
 	return cmd
+}
+
+func (a *app) attachProtocolTargetSession(ctx context.Context, targetID, urlContains, titleContains, targetType string) (*cdp.PageSession, cdp.TargetInfo, error) {
+	client, closeClient, err := a.browserCDPClient(ctx)
+	if err != nil {
+		return nil, cdp.TargetInfo{}, commandError(
+			"connection_not_configured",
+			"connection",
+			err.Error(),
+			ExitConnection,
+			a.connectionRemediationCommands(),
+		)
+	}
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
+		_ = closeClient(ctx)
+		return nil, cdp.TargetInfo{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("list targets: %v", err),
+			ExitConnection,
+			[]string{"cdp targets --json", "cdp doctor --json"},
+		)
+	}
+	target, err := resolveProtocolTarget(targets, targetID, urlContains, titleContains, targetType)
+	if err != nil {
+		_ = closeClient(ctx)
+		return nil, cdp.TargetInfo{}, err
+	}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+	if err != nil {
+		_ = closeClient(ctx)
+		return nil, target, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+			ExitConnection,
+			[]string{"cdp targets --json", "cdp protocol describe Target.attachToTarget --json"},
+		)
+	}
+	return session, target, nil
+}
+
+func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titleContains, targetType string) (cdp.TargetInfo, error) {
+	targetID = strings.TrimSpace(targetID)
+	urlContains = strings.TrimSpace(urlContains)
+	titleContains = strings.TrimSpace(titleContains)
+	targetType = strings.TrimSpace(targetType)
+	matches := make([]cdp.TargetInfo, 0, len(targets))
+	for _, target := range targets {
+		if targetType != "" && target.Type != targetType {
+			continue
+		}
+		if targetID != "" && target.TargetID != targetID && !strings.HasPrefix(target.TargetID, targetID) {
+			continue
+		}
+		if urlContains != "" && !strings.Contains(strings.ToLower(target.URL), strings.ToLower(urlContains)) {
+			continue
+		}
+		if titleContains != "" && !strings.Contains(strings.ToLower(target.Title), strings.ToLower(titleContains)) {
+			continue
+		}
+		matches = append(matches, target)
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	label := "target"
+	if targetType != "" {
+		label = targetType + " target"
+	}
+	if targetID != "" {
+		label = fmt.Sprintf("%s %q", label, targetID)
+	}
+	if urlContains != "" {
+		label += fmt.Sprintf(" with URL containing %q", urlContains)
+	}
+	if titleContains != "" {
+		label += fmt.Sprintf(" with title containing %q", titleContains)
+	}
+	if len(matches) == 0 {
+		return cdp.TargetInfo{}, commandError(
+			"target_not_found",
+			"usage",
+			"no "+label+" matched",
+			ExitUsage,
+			protocolTargetRemediation(targetType),
+		)
+	}
+	return cdp.TargetInfo{}, commandError(
+		"ambiguous_target",
+		"usage",
+		fmt.Sprintf("%s matched %d targets; pass a longer --target or add --url-contains/--title-contains", label, len(matches)),
+		ExitUsage,
+		protocolTargetRemediation(targetType),
+	)
+}
+
+func protocolTargetRemediation(targetType string) []string {
+	commands := []string{"cdp targets --json"}
+	if targetType = strings.TrimSpace(targetType); targetType != "" {
+		commands = append(commands, fmt.Sprintf("cdp protocol exec Runtime.evaluate --target-type %s --target <target-id> --json", targetType))
+	}
+	return commands
 }
 
 func saveProtocolExecArtifact(path string, result json.RawMessage) (map[string]any, any, error) {

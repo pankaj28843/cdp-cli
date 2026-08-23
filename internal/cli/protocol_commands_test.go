@@ -304,6 +304,115 @@ func TestProtocolExecTargetScopedJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExecServiceWorkerTargetScopedJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+		{"targetId": "worker-1", "type": "service_worker", "title": "Service Worker", "url": "chrome-extension://example/background.js", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"protocol", "exec", "Runtime.evaluate",
+		"--target", "worker",
+		"--target-type", "service_worker",
+		"--params", `{"expression":"Object.keys(globalThis).slice(0,3)","returnByValue":true}`,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("protocol exec service worker exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Scope  string `json:"scope"`
+		Target struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		} `json:"target"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("protocol exec service worker output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Scope != "target" || got.Target.ID != "worker-1" || got.Target.Type != "service_worker" || got.Target.URL != "chrome-extension://example/background.js" || got.SessionID != "session-worker-1" {
+		t.Fatalf("protocol exec service worker = %+v, want service_worker target evidence", got)
+	}
+}
+
+func TestProtocolExecTypedTargetAmbiguityUsesRequestedType(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "worker-a", "type": "worker", "title": "Worker A", "url": "https://example.test/worker-a", "attached": false},
+		{"targetId": "worker-b", "type": "worker", "title": "Worker B", "url": "https://example.test/worker-b", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"protocol", "exec", "Runtime.evaluate",
+		"--target-type", "worker",
+		"--params", `{"expression":"1","returnByValue":true}`,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("ambiguous typed target exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("ambiguous typed target output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if got.OK || got.Code != "ambiguous_target" {
+		t.Fatalf("ambiguous typed target = %+v, want ambiguous_target error", got)
+	}
+	remediation := strings.Join(got.RemediationCommands, "\n")
+	if !strings.Contains(remediation, "--target-type worker") || strings.Contains(remediation, "service_worker") {
+		t.Fatalf("ambiguous typed target remediation = %q, want requested worker type only", remediation)
+	}
+}
+
+func TestProtocolExecTypedTargetNotFoundSuggestsTargets(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example", "url": "https://example.test", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"protocol", "exec", "Runtime.evaluate",
+		"--target-type", "service_worker",
+		"--url-contains", "chrome-extension://",
+		"--params", `{"expression":"1","returnByValue":true}`,
+		"--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("missing typed target exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK                  bool     `json:"ok"`
+		Code                string   `json:"code"`
+		RemediationCommands []string `json:"remediation_commands"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("missing typed target output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if got.OK || got.Code != "target_not_found" {
+		t.Fatalf("missing typed target = %+v, want target_not_found error", got)
+	}
+	if len(got.RemediationCommands) == 0 || got.RemediationCommands[0] != "cdp targets --json" {
+		t.Fatalf("missing typed target remediation = %v, want cdp targets discovery", got.RemediationCommands)
+	}
+}
+
 func TestProtocolExecSaveArtifactJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
