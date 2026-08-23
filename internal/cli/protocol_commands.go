@@ -630,15 +630,29 @@ func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titl
 		label += fmt.Sprintf(" with title containing %q", titleContains)
 	}
 	if len(matches) == 0 {
-		return cdp.TargetInfo{}, targetNotFound("no " + label + " matched")
+		return cdp.TargetInfo{}, commandError(
+			"target_not_found",
+			"usage",
+			"no "+label+" matched",
+			ExitUsage,
+			protocolTargetRemediation(targetType),
+		)
 	}
 	return cdp.TargetInfo{}, commandError(
 		"ambiguous_target",
 		"usage",
 		fmt.Sprintf("%s matched %d targets; pass a longer --target or add --url-contains/--title-contains", label, len(matches)),
 		ExitUsage,
-		[]string{"cdp targets --json", "cdp protocol exec Runtime.evaluate --target-type service_worker --target <target-id> --json"},
+		protocolTargetRemediation(targetType),
 	)
+}
+
+func protocolTargetRemediation(targetType string) []string {
+	commands := []string{"cdp targets --json"}
+	if targetType = strings.TrimSpace(targetType); targetType != "" {
+		commands = append(commands, fmt.Sprintf("cdp protocol exec Runtime.evaluate --target-type %s --target <target-id> --json", targetType))
+	}
+	return commands
 }
 
 func saveProtocolExecArtifact(path string, result json.RawMessage) (map[string]any, any, error) {
