@@ -52,7 +52,7 @@ cdp transcription service install \
   --address '[::]:28765' \
   --http-address '[::]:28766' \
   --default-provider chatgpt-web \
-  --providers chatgpt-web,microsoft-365-web \
+  --providers chatgpt-web,microsoft-365-web,bing-web \
   --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
   --probe-interval 1m \
   --tls-self-signed \
@@ -75,9 +75,13 @@ Use `--providers` to persist an explicit provider allowlist in the user
 service. For a ChatGPT-only deployment, set `--default-provider chatgpt-web
 --providers chatgpt-web`; requests for every other provider are then rejected
 by the service boundary even if those adapters are available in the binary.
-For a provider-neutral cdp-cli demo or live check, allow both web adapters with
-`--providers chatgpt-web,microsoft-365-web` and choose ChatGPT or Microsoft 365
-in the rendered provider selector. VoxKey itself remains ChatGPT-only in v1.
+For a provider-neutral cdp-cli demo or live check, allow the available web
+adapters with `--providers chatgpt-web,microsoft-365-web,bing-web` and choose
+ChatGPT, Microsoft 365, or Bing Voice in the rendered provider selector. Bing
+Voice is a direct, unauthenticated Speech WebSocket file adapter; it does not
+submit a Bing search. Google voice input is intentionally not advertised here:
+the public Google control observed in development turns speech into a Google
+search, and no standalone transcription boundary was found.
 The service also persists the selected browser mode and display session so
 headed Linux services can use the same authenticated browser owned by cdp.
 
@@ -135,7 +139,7 @@ cdp transcription service install \
   --address '[::]:28765' \
   --http-address '[::]:28766' \
   --default-provider chatgpt-web \
-  --providers chatgpt-web,microsoft-365-web \
+  --providers chatgpt-web,microsoft-365-web,bing-web \
   --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
   --tls-self-signed \
   --tls-host 192.168.5.249 \
@@ -323,6 +327,14 @@ The registry currently supports:
 - `local`: any configured OpenAI-compatible HTTP/WebSocket service.
 - `chatgpt-web`: the existing cdp-cli ChatGPT workflow and auth evidence.
 - `microsoft-365-web`: the existing cdp-cli Microsoft 365/AugLoop workflow.
+- `bing-web`: direct public Bing Speech SDK WebSocket transcription. It
+  accepts completed audio files, decodes them to paced 16 kHz mono PCM, and
+  does not require a Bing account session. It does not expose translation or
+  the cdp realtime session contract.
+
+Google is not a transcription provider. Its public voice affordance is a
+search input that navigates to search results after recognition; keeping that
+surface in search workflows does not make it a standalone STT adapter.
 
 Provider adapters are the effect boundary. The API core owns persistence,
 request validation, WebSocket framing, event reduction, and provider-neutral

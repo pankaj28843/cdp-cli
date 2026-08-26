@@ -56,8 +56,8 @@ func TestPolicyDecisionsAreDefaultEnabledAndExplicitlyDisabled(t *testing.T) {
 
 func TestDescriptorsAreCanonicalAndDeterministicallySorted(t *testing.T) {
 	descriptors := Descriptors()
-	if len(descriptors) != 8 {
-		t.Fatalf("descriptor count = %d, want 8", len(descriptors))
+	if len(descriptors) != 9 {
+		t.Fatalf("descriptor count = %d, want 9", len(descriptors))
 	}
 	for index := 1; index < len(descriptors); index++ {
 		if descriptors[index-1].ID >= descriptors[index].ID {
@@ -71,5 +71,9 @@ func TestDescriptorsAreCanonicalAndDeterministicallySorted(t *testing.T) {
 	m365, ok := DescriptorFor("microsoft-365-web")
 	if !ok || m365.ID != ProviderM365 || m365.TranscriptionID != "microsoft-365-web" {
 		t.Fatalf("M365 descriptor = %+v, ok=%v", m365, ok)
+	}
+	bing, ok := DescriptorFor("bing-web")
+	if !ok || bing.ID != ProviderBing || bing.TranscriptionID != "bing-web" || !bing.TranscriptionOnly {
+		t.Fatalf("Bing descriptor = %+v, ok=%v", bing, ok)
 	}
 }

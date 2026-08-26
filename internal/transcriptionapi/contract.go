@@ -28,6 +28,7 @@ type ProviderID string
 
 const (
 	ProviderLocal   ProviderID = "local"
+	ProviderBing    ProviderID = "bing-web"
 	ProviderChatGPT ProviderID = "chatgpt-web"
 	ProviderM365    ProviderID = "microsoft-365-web"
 )

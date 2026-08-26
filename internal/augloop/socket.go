@@ -30,9 +30,13 @@ type Socket interface {
 }
 
 func Dial(ctx context.Context, rawURL, userAgent string) (Socket, error) {
+	return DialWithOrigin(ctx, rawURL, userAgent, "https://m365.cloud.microsoft")
+}
+
+func DialWithOrigin(ctx context.Context, rawURL, userAgent, origin string) (Socket, error) {
 	conn, _, err := websocket.Dial(ctx, rawURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Origin":     []string{"https://m365.cloud.microsoft"},
+			"Origin":     []string{origin},
 			"User-Agent": []string{userAgent},
 		},
 	})

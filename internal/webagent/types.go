@@ -20,6 +20,7 @@ type Provider string
 
 const (
 	ProviderCatalog     Provider = "catalog"
+	ProviderBing        Provider = "bing"
 	ProviderAlex        Provider = "alex"
 	ProviderChatGPT     Provider = "chatgpt"
 	ProviderM365        Provider = "m365"

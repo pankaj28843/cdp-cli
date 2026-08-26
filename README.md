@@ -80,7 +80,7 @@ cdp workflow agent gemini capabilities --json
 cdp workflow agent gemini capabilities refresh --json
 cdp workflow agent grok capabilities --json
 cdp workflow agent grok capabilities refresh --json
-cdp transcription serve --default-provider chatgpt-web
+cdp transcription serve --default-provider chatgpt-web --providers chatgpt-web,microsoft-365-web,bing-web
 cdp transcription spec > openapi.json
 cdp schema webagent-operation --json
 cdp protocol search screenshot --json
@@ -228,8 +228,11 @@ Unusable authenticated providers can be disabled in the same owner-only
 config. On macOS the default file is
 `~/Library/Application Support/cdp-cli/config.json`; use `--config <path>` for
 another file. Values are canonicalized and aliases such as `chatgpt-web` and
-`microsoft-365-web` are accepted; local transcription is independent and
-cannot be disabled through this list:
+`microsoft-365-web`, and `bing-web` are accepted; local transcription is
+independent and cannot be disabled through this list. Bing Voice is
+transcription-only: its direct public Speech WebSocket is available to the
+transcription service, but it is not exposed as a general web-agent/search
+provider.
 
 The default config is self-maintaining: a first run writes the current
 `schema_version`, and a valid legacy file is upgraded atomically while

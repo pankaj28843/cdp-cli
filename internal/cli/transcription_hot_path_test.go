@@ -6,8 +6,44 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/bing"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 )
+
+func TestBingTranscriptionUsesDirectWebSocketAdapter(t *testing.T) {
+	app := &app{build: BuildInfo{Commit: "test"}}
+	var captured bing.TranscribeConfig
+	provider := &bingTranscriptionProvider{
+		app: app,
+		transcribe: func(_ context.Context, config bing.TranscribeConfig, path string, duration int64) webagent.Result {
+			captured = config
+			if path != "synthetic-fixture.webm" || duration != 1_200 {
+				t.Fatalf("Bing audio arguments = %q/%d", path, duration)
+			}
+			return webagent.Result{OK: true, Data: bing.TranscriptionData{Transcript: "direct Bing"}}
+		},
+	}
+
+	result, err := provider.Transcribe(context.Background(), transcriptionapi.FileRequest{
+		Task:     transcriptionapi.TaskTranscribe,
+		Language: "en-US",
+		Audio: transcriptionapi.AudioAsset{
+			FileName:      "recording.webm",
+			MIMEType:      "audio/webm;codecs=opus",
+			PersistedPath: "synthetic-fixture.webm",
+			DurationMS:    1_200,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != "direct Bing" {
+		t.Fatalf("transcript = %q, want direct Bing", result.Text)
+	}
+	if captured.Dial == nil || captured.Language != "en-US" {
+		t.Fatalf("Bing transport config = %+v, want direct dial and language", captured)
+	}
+}
 
 func TestChatGPTTranscriptionUsesDirectTransportByDefault(t *testing.T) {
 	store, err := chatgpt.NewStore(t.TempDir())

@@ -234,6 +234,9 @@ func ProvidersFor(policy providerpolicy.Policy) []Provider {
 	descriptors := providerpolicy.Descriptors()
 	providers := make([]Provider, 0, len(descriptors))
 	for _, descriptor := range descriptors {
+		if descriptor.TranscriptionOnly {
+			continue
+		}
 		if policy.IsEnabled(string(descriptor.ID)) {
 			providers = append(providers, Provider(descriptor.ID))
 		}
@@ -244,6 +247,9 @@ func ProvidersFor(policy providerpolicy.Policy) []Provider {
 func CatalogFor(policy providerpolicy.Policy, includeDisabled bool) CatalogData {
 	providers := make([]Capabilities, 0, len(providerpolicy.Descriptors()))
 	for _, descriptor := range providerpolicy.Descriptors() {
+		if descriptor.TranscriptionOnly {
+			continue
+		}
 		decision := policy.Decision(string(descriptor.ID))
 		if !decision.Enabled && !includeDisabled {
 			continue

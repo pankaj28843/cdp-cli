@@ -12,6 +12,7 @@ type ProviderID string
 
 const (
 	ProviderAlex        ProviderID = "alex"
+	ProviderBing        ProviderID = "bing"
 	ProviderChatGPT     ProviderID = "chatgpt"
 	ProviderClaude      ProviderID = "claude"
 	ProviderGemini      ProviderID = "gemini"
@@ -30,14 +31,16 @@ const (
 )
 
 type Descriptor struct {
-	ID              ProviderID
-	DisplayName     string
-	Aliases         []string
-	TranscriptionID string
+	ID                ProviderID
+	DisplayName       string
+	Aliases           []string
+	TranscriptionID   string
+	TranscriptionOnly bool
 }
 
 var descriptors = []Descriptor{
 	{ID: ProviderAlex, DisplayName: "Ask Alex", Aliases: []string{"alex", "ask-alex"}},
+	{ID: ProviderBing, DisplayName: "Bing Voice", Aliases: []string{"bing", "bing-web", "bing-voice"}, TranscriptionID: "bing-web", TranscriptionOnly: true},
 	{ID: ProviderChatGPT, DisplayName: "ChatGPT", Aliases: []string{"chatgpt", "chatgpt-web"}, TranscriptionID: "chatgpt-web"},
 	{ID: ProviderClaude, DisplayName: "Claude", Aliases: []string{"claude", "claude-web"}},
 	{ID: ProviderGemini, DisplayName: "Gemini", Aliases: []string{"gemini", "gemini-web"}, TranscriptionID: "gemini-web"},
@@ -66,10 +69,11 @@ func Descriptors() []Descriptor {
 	result := make([]Descriptor, len(descriptors))
 	for index, descriptor := range descriptors {
 		result[index] = Descriptor{
-			ID:              descriptor.ID,
-			DisplayName:     descriptor.DisplayName,
-			Aliases:         append([]string(nil), descriptor.Aliases...),
-			TranscriptionID: descriptor.TranscriptionID,
+			ID:                descriptor.ID,
+			DisplayName:       descriptor.DisplayName,
+			Aliases:           append([]string(nil), descriptor.Aliases...),
+			TranscriptionID:   descriptor.TranscriptionID,
+			TranscriptionOnly: descriptor.TranscriptionOnly,
 		}
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].ID < result[right].ID })

@@ -69,9 +69,9 @@ PY
 )"
 service_url="http://127.0.0.1:$port"
 
-# This is intentionally a transient provider-neutral server. VoxKey's client
-# selects ChatGPT for full-file transcription; the cdp service also exposes
-# Microsoft 365 for live/realtime transcription. The API is unauthenticated.
+# This is intentionally a transient provider-neutral server. The cdp service
+# exercises ChatGPT and Bing through completed-file transcription and
+# Microsoft 365 through its live/realtime path. The API is unauthenticated.
 env -u CDP_STATE_DIR \
   -u CDP_TRANSCRIPTION_ADDRESS \
   -u CDP_TRANSCRIPTION_HTTP_ADDRESS \
@@ -82,7 +82,7 @@ env -u CDP_STATE_DIR \
   --address "127.0.0.1:$port" \
   --http-address "" \
   --default-provider chatgpt-web \
-  --providers chatgpt-web,microsoft-365-web \
+  --providers chatgpt-web,microsoft-365-web,bing-web \
   --auth-refresh-interval 0s \
   --max-audio-bytes 1073741824 \
   --print-ready >"$state_dir/service-ready.json" 2>"$state_dir/service.stderr" &
@@ -95,17 +95,17 @@ for _ in $(seq 1 120); do
     exit 1
   fi
   health="$(curl -fsS --max-time 2 "$service_url/healthz" 2>/dev/null || true)"
-  if jq -e '.status == "ok" and ([.providers[]] | length == 2)' <<<"$health" >/dev/null 2>&1; then
+  if jq -e '.status == "ok" and ([.providers[]] | length == 3)' <<<"$health" >/dev/null 2>&1; then
     break
   fi
   sleep 0.25
 done
-jq -e '.status == "ok" and ([.providers[].provider] | sort == ["chatgpt-web", "microsoft-365-web"])' <<<"$health" >/dev/null || {
-  printf 'transient transcription service did not expose both requested providers\n' >&2
+jq -e '.status == "ok" and ([.providers[].provider] | sort == ["bing-web", "chatgpt-web", "microsoft-365-web"])' <<<"$health" >/dev/null || {
+  printf 'transient transcription service did not expose all requested providers\n' >&2
   exit 1
 }
 
-for provider in chatgpt-web microsoft-365-web; do
+for provider in chatgpt-web microsoft-365-web bing-web; do
   if ! jq -e --arg provider "$provider" 'any(.providers[]; .provider == $provider and .ready == true)' <<<"$health" >/dev/null; then
     printf 'provider is not ready for live e2e: %s\n' "$provider" >&2
     exit 1
@@ -202,4 +202,13 @@ sleep 0.5
 cdp click '#talkButton' --target "$page_id" --json >/dev/null
 assert_transcript microsoft-365-web realtime
 
-printf 'live transcription e2e passed: ChatGPT file + Microsoft 365 realtime; audio source=%s\n' "$default_source"
+select_provider bing-web
+cdp click '#talkButton' --target "$page_id" --activate --json >/dev/null
+wait_for_state "$transcript_state" '.label == "Stop and transcribe"'
+sleep 0.5
+paplay "$audio_file"
+sleep 0.5
+cdp click '#talkButton' --target "$page_id" --json >/dev/null
+assert_transcript bing-web file
+
+printf 'live transcription e2e passed: ChatGPT file + Microsoft 365 realtime + Bing file; audio source=%s\n' "$default_source"

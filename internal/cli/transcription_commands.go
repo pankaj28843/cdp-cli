@@ -14,6 +14,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/augloop"
 	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/bing"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
 	"github.com/spf13/cobra"
@@ -199,7 +200,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "primary listen address; defaults to [::]:28765 (dual-stack wildcard where IPv6 is enabled)")
 	cmd.Flags().StringVar(&httpAddress, "http-address", envDefault("CDP_TRANSCRIPTION_HTTP_ADDRESS", transcriptionapi.DefaultHTTPListenAddress), "cleartext companion listen address; defaults to [::]:28766 (dual-stack wildcard where IPv6 is enabled)")
-	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, or microsoft-365-web")
+	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, microsoft-365-web, or bing-web")
 	cmd.Flags().StringSliceVar(&allowedProviders, "providers", envStringSlice("CDP_TRANSCRIPTION_PROVIDERS"), "provider allowlist; repeat or comma-separate (default: all configured providers)")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
@@ -230,7 +231,7 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 	if err != nil {
 		return nil, err
 	}
-	providers := make([]transcriptionapi.Provider, 0, 3)
+	providers := make([]transcriptionapi.Provider, 0, 4)
 	if strings.TrimSpace(localBaseURL) != "" {
 		localProvider, err := transcriptionapi.NewOpenAIHTTPProvider(
 			transcriptionapi.ProviderLocal,
@@ -243,6 +244,7 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 		localProvider.RealtimeBaseURL = strings.TrimRight(strings.TrimSpace(localRealtimeBaseURL), "/")
 		providers = append(providers, localProvider)
 	}
+	providers = append(providers, &bingTranscriptionProvider{app: a})
 	stateStore, err := a.stateStore()
 	if err != nil {
 		providers, filterErr := filterTranscriptionProviders(providers, allowedProviders)
@@ -321,6 +323,58 @@ func filterTranscriptionProviders(providers []transcriptionapi.Provider, request
 		)
 	}
 	return selected, nil
+}
+
+type bingTranscriptionProvider struct {
+	app        *app
+	transcribe func(context.Context, bing.TranscribeConfig, string, int64) webagent.Result
+}
+
+func (p *bingTranscriptionProvider) ID() transcriptionapi.ProviderID {
+	return transcriptionapi.ProviderBing
+}
+
+func (p *bingTranscriptionProvider) Capabilities(context.Context) transcriptionapi.ProviderCapability {
+	return transcriptionapi.ProviderCapability{
+		Provider:    p.ID(),
+		Models:      []string{transcriptionapi.DefaultModel},
+		File:        true,
+		Translation: false,
+		Streaming:   false,
+		Realtime:    false,
+		Ready:       true,
+	}
+}
+
+func (p *bingTranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
+	if request.Task == transcriptionapi.TaskTranslate {
+		return transcriptionapi.Result{}, transcriptionProviderError(501, "unsupported", "translation_unsupported", "Bing voice transcription does not expose translation", false)
+	}
+	duration, err := providerAudioDuration(ctx, request)
+	if err != nil {
+		return transcriptionapi.Result{}, err
+	}
+	transcribe := p.transcribe
+	if transcribe == nil {
+		transcribe = bing.Transcribe
+	}
+	result := transcribe(ctx, bing.TranscribeConfig{
+		BuildCommit: p.app.build.Commit,
+		Dial:        bing.Dial,
+		Language:    request.Language,
+	}, request.Audio.PersistedPath, duration)
+	if !result.OK {
+		return transcriptionapi.Result{}, webAgentProviderError(result)
+	}
+	data, ok := result.Data.(bing.TranscriptionData)
+	if !ok {
+		return transcriptionapi.Result{}, transcriptionProviderError(502, "provider", "response_changed", "Bing transcription result shape changed", true)
+	}
+	return transcriptionapi.Result{Task: request.Task, Text: data.Transcript}, nil
+}
+
+func (p *bingTranscriptionProvider) NewRealtime(context.Context, transcriptionapi.RealtimeSessionConfig) (transcriptionapi.RealtimeSession, error) {
+	return nil, transcriptionProviderError(501, "unsupported", "realtime_unsupported", "Bing voice transcription currently accepts completed audio files", false)
 }
 
 type chatGPTTranscriptionProvider struct {
@@ -663,7 +717,7 @@ func providerAudioDuration(ctx context.Context, request transcriptionapi.FileReq
 	}
 	ffprobe, err := exec.LookPath("ffprobe")
 	if err != nil {
-		return 0, transcriptionProviderError(422, "usage", "duration_required", "ChatGPT and Microsoft 365 adapters need audio duration_ms or ffprobe on PATH", false)
+		return 0, transcriptionProviderError(422, "usage", "duration_required", "browser-backed transcription adapters need audio duration_ms or ffprobe on PATH", false)
 	}
 	output, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_entries", "format=duration:stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", request.Audio.PersistedPath).Output()
 	if err == nil {
