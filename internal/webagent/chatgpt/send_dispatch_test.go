@@ -172,10 +172,10 @@ func TestSendDispatcherUsesFocusedComposerEnterAfterAttachmentTelemetry(t *testi
 	if !strings.Contains(string(client.calls[3].params), "#prompt-textarea") {
 		t.Fatalf("composer focus evaluation=%s", client.calls[3].params)
 	}
-	if !strings.Contains(string(client.calls[4].params), `"type":"rawKeyDown"`) ||
+	if !strings.Contains(string(client.calls[4].params), `"type":"keyDown"`) ||
 		!strings.Contains(string(client.calls[4].params), `"key":"Enter"`) ||
 		!strings.Contains(string(client.calls[5].params), `"type":"keyUp"`) {
-		t.Fatalf("raw Enter events=%s %s", client.calls[4].params, client.calls[5].params)
+		t.Fatalf("Enter events=%s %s", client.calls[4].params, client.calls[5].params)
 	}
 }
 

@@ -1766,11 +1766,16 @@ func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) 
 	if !ok || strings.TrimSpace(selection.TargetID) == "" {
 		return cdp.TargetInfo{}, false
 	}
-	target, err := cdp.TargetInfoWithClient(ctx, client, selection.TargetID)
-	if err != nil || target.Type != "page" {
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
 		return cdp.TargetInfo{}, false
 	}
-	return target, true
+	for _, target := range targets {
+		if target.TargetID == selection.TargetID && target.Type == "page" {
+			return target, true
+		}
+	}
+	return cdp.TargetInfo{}, false
 }
 
 func (a *app) createPageTarget(ctx context.Context, client cdp.CommandClient, rawURL string) (string, error) {

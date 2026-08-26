@@ -90,9 +90,12 @@ configured provider path is exercised independently: file upload for
 A synthetic probe uses cached provider capability/auth evidence only; it never
 invokes a provider's auth or capability refresh hook and therefore never opens
 a headed browser target as a health-check side effect. The installed service's
-headed auth/capability schedule is off unless `--auth-refresh-interval` was
-explicitly supplied at installation. Run an explicit provider refresh command,
-or make an explicit request, when headed repair is intended.
+headed auth/capability schedule is enabled by default and runs the providers
+independently on the shared `--auth-refresh-interval` cadence. Use
+`--auth-refresh-interval 0s` only for a deliberately transient, browser-free
+service; normal installations should keep the schedule enabled so an expired
+ChatGPT or Microsoft 365 session is repaired before it breaks the next turn.
+The first synthetic probe waits for the first lifecycle pass to finish.
 `--probe-interval` can be changed for a deployment; setting it to zero uses the
 one-minute default rather than disabling the safety gate. Probe evidence is
 considered stale after three missed minutes, so the health supervisor can
@@ -321,18 +324,22 @@ errors. With a fixture corpus enabled, the synthetic probe is the normal hot
 path, but it is deliberately browser-free: each bounded probe tests the cached
 provider capability snapshot and records a redacted readiness failure when
 that evidence is stale. It never opens a target or calls a provider refresh
-hook. A separate service-owned coordinator is disabled by default and remains
-available only as an explicit `--auth-refresh-interval` opt-in; native service
-installation persists that opt-in separately from the duration so a default
-environment value cannot accidentally enable headed work. A request also
-calls the same provider's freshness hook before dispatch or the first
-realtime chunk. ChatGPT and
+hook. A separate service-owned coordinator is enabled by default whenever
+`--auth-refresh-interval` is positive; `--auth-refresh-interval 0s` is the
+explicit transient-service opt-out. Native service installation persists the
+same derived setting, so a stale legacy environment flag cannot silently
+disable lifecycle repair. The first probe is ordered after the coordinator's
+initial auth/capability pass, and capabilities are refreshed only after that
+provider's auth refresh succeeds. A request also calls the same provider's
+freshness hook before dispatch or the first realtime chunk. ChatGPT and
 Microsoft 365 keep their existing provider-specific refresh owner, so an
-expired session has an on-demand self-healing path without a provider-specific
-cron job. If the browser-free ChatGPT replay is rejected with a typed
-authentication/authorization response, the adapter makes one lazy headed-
-browser repair/retry; ordinary successful requests never open a browser. The
-shared retry policy is bounded at three total attempts with 1-second and
+expired session has both a scheduled and an on-demand self-healing path without
+a provider-specific cron job. Provider lifecycle work is serialized per
+provider with request cancellation, while ChatGPT and Microsoft 365 remain
+isolated from one another. If the browser-free ChatGPT replay is rejected with
+a typed authentication/authorization response, the adapter makes one lazy
+headed-browser repair/retry; ordinary successful requests never open a browser.
+The shared retry policy is bounded at three total attempts with 1-second and
 2-second waits. Its 4-second slot is retained for policies with a larger
 future attempt budget. A stale-auth observation is therefore repaired and
 retried before the request is returned as unavailable.

@@ -107,15 +107,16 @@ type dictationControlState struct {
 // M365's current web composer renders the voice control as a Fluent button
 // with a tooltip and microphone SVG, not a stable aria-label. Keep the legacy
 // labels for older deployments, but scope the icon fallback to the composer
-// and require a visible button so unrelated page controls cannot be clicked.
+// and require a visible button-like control so unrelated page controls cannot
+// be clicked.
 const m365DictationControlExpression = `(() => {
-  const composer = document.querySelector('[contenteditable="true"], textarea');
   const root = document.querySelector('#m365-chat-input-shared-container');
   const visible = element => {
     if (!element || element.disabled) return false;
     const style = window.getComputedStyle(element);
     return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
   };
+  const composer = [...document.querySelectorAll('[contenteditable="true"], textarea')].find(visible);
   const label = button => [
     button.getAttribute('aria-label'),
     button.getAttribute('title'),
@@ -126,7 +127,8 @@ const m365DictationControlExpression = `(() => {
     (path.getAttribute('d') || '').startsWith('M10 13a3 3 0 0 0 3-3V5')
   );
   const inComposer = button => !root || root.contains(button);
-  const candidates = [...document.querySelectorAll('button')].filter(button =>
+  const controls = root ? [...root.querySelectorAll('button,[role="button"]')] : [...document.querySelectorAll('button,[role="button"]')];
+  const candidates = controls.filter(button =>
     visible(button) && inComposer(button) && (
       /microphone|dictation|voice input|start dictation|stop dictation/i.test(label(button)) ||
       hasMicrophoneIcon(button)
@@ -143,6 +145,11 @@ const m365DictationControlExpression = `(() => {
 
 const m365DictationClickExpression = `(() => {
   const root = document.querySelector('#m365-chat-input-shared-container');
+  const visible = element => {
+    if (!element || element.disabled) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+  };
   const label = button => [
     button.getAttribute('aria-label'),
     button.getAttribute('title'),
@@ -153,8 +160,9 @@ const m365DictationClickExpression = `(() => {
     (path.getAttribute('d') || '').startsWith('M10 13a3 3 0 0 0 3-3V5')
   );
   const inComposer = button => !root || root.contains(button);
-  const candidates = [...document.querySelectorAll('button')].filter(button =>
-    !button.disabled && inComposer(button) && (
+  const controls = root ? [...root.querySelectorAll('button,[role="button"]')] : [...document.querySelectorAll('button,[role="button"]')];
+  const candidates = controls.filter(button =>
+    visible(button) && inComposer(button) && (
       /microphone|dictation|voice input|start dictation|stop dictation/i.test(label(button)) ||
       hasMicrophoneIcon(button)
     )
@@ -170,6 +178,11 @@ const m365DictationClickExpression = `(() => {
 
 const m365DictationStopExpression = `(() => {
   const root = document.querySelector('#m365-chat-input-shared-container');
+  const visible = element => {
+    if (!element || element.disabled) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+  };
   const label = button => [
     button.getAttribute('aria-label'),
     button.getAttribute('title'),
@@ -180,8 +193,9 @@ const m365DictationStopExpression = `(() => {
     (path.getAttribute('d') || '').startsWith('M10 13a3 3 0 0 0 3-3V5')
   );
   const inComposer = button => !root || root.contains(button);
-  const candidates = [...document.querySelectorAll('button')].filter(button =>
-    !button.disabled && inComposer(button) && (
+  const controls = root ? [...root.querySelectorAll('button,[role="button"]')] : [...document.querySelectorAll('button,[role="button"]')];
+  const candidates = controls.filter(button =>
+    visible(button) && inComposer(button) && (
       /microphone|dictation|voice input|start dictation|stop dictation/i.test(label(button)) ||
       hasMicrophoneIcon(button)
     )

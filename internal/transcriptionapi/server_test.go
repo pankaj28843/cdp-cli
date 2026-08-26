@@ -101,6 +101,27 @@ func TestEnsureProviderAuthRetriesWithinShortRequestBudget(t *testing.T) {
 	}
 }
 
+func TestEnsureProviderAuthDoesNotRetryNonRetryableProviderError(t *testing.T) {
+	provider := &fakeProvider{
+		id:        ProviderM365,
+		ensureErr: providerError(401, "authentication_error", "voice_input_unavailable", "account cannot use dictation", false),
+	}
+	err := ensureProviderAuth(context.Background(), provider, 2*time.Second)
+	if err == nil {
+		t.Fatal("ensureProviderAuth() returned nil for a non-retryable provider error")
+	}
+	provider.requestMu.Lock()
+	calls := provider.ensureCalls
+	provider.requestMu.Unlock()
+	if calls != 1 {
+		t.Fatalf("ensure auth calls = %d, want one non-retryable attempt", calls)
+	}
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.APIError.Code != "voice_input_unavailable" {
+		t.Fatalf("error = %T %+v, want original provider error", err, err)
+	}
+}
+
 func TestServerBoundsRequestTimeAuthRepair(t *testing.T) {
 	provider := &fakeProvider{id: ProviderChatGPT, ensureWait: time.Second}
 	store, err := NewEphemeralStore(t.TempDir(), 8<<20)

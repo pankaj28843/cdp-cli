@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/augloop"
@@ -26,7 +25,7 @@ func (a *app) newTranscriptionCommand() *cobra.Command {
 		Short: "Run the provider-neutral OpenAI-compatible transcription service",
 		Long: "Expose one local REST, SSE, and realtime WebSocket boundary for VoxInput. " +
 			"Audio is ephemeral transaction media by default and can be explicitly retained with --persist-audio; " +
-			"provider-specific auth refresh remains inside the cdp workflow adapter.",
+			"online provider auth and capability refresh is shared by the service and remains inside the cdp workflow adapter.",
 		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --local-base-url http://localhost:9000/v1\n" +
 			"  cdp transcription service install --address '[::]:28765' --http-address '[::]:28766' --tls-self-signed --tls-host 192.168.5.249\n" +
@@ -80,8 +79,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			"LAN-capable primary and cleartext companion listeners without bearer-token authentication, and retains result records under " +
 			"<state-dir>/transcription; uploaded media is ephemeral unless --persist-audio is set. " +
 			"When --fixture-dir is configured, the service runs a bounded synthetic probe for every configured provider on a recurring cadence; " +
-			"the probe is browser-free and health is green only after a recent probe succeeds. The separate headed auth/capability schedule " +
-			"is disabled unless --auth-refresh-interval is explicitly supplied. Configure a local OpenAI-compatible backend with " +
+			"the probe is browser-free and health is green only after a recent probe succeeds. The shared headed auth/capability schedule " +
+			"runs by default and can be disabled with --auth-refresh-interval 0s. Configure a local OpenAI-compatible backend with " +
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
 		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --local-base-url http://localhost:9000/v1 --print-ready\n" +
@@ -125,8 +124,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			}
 			probeEnabled := strings.TrimSpace(fixtureDir) != ""
 			var authCoordinator *transcriptionapi.AuthRefreshCoordinator
-			authRefreshExplicit := cmd.Flags().Changed("auth-refresh-interval") || envBool("CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED")
-			if authRefreshScheduleEnabled(probeEnabled, authRefreshExplicit) {
+			if authRefreshScheduleEnabled(authRefreshInterval) {
 				authCoordinator = transcriptionapi.NewAuthRefreshCoordinator(registry, authRefreshInterval)
 			}
 			var probeCoordinator *transcriptionapi.SyntheticProbeCoordinator
@@ -176,6 +174,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 					"contract_version":      transcriptionapi.ContractVersion,
 					"state_dir":             store.Root(),
 					"auth_refresh_interval": authRefreshInterval.String(),
+					"auth_refresh_enabled":  authCoordinator != nil,
 					"probe_interval":        probeInterval.String(),
 					"probe_enabled":         probeCoordinator != nil,
 					"audio_persisted":       persistAudio,
@@ -206,7 +205,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes; transcript records are retained independently")
-	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "explicit shared recurring freshness check for all online providers")
+	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers; use 0s to disable")
 	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", os.Getenv("CDP_TRANSCRIPTION_FIXTURE_DIR"), "checked-in WebM corpus used by the bounded provider health probe; empty disables probe scheduling for transient runs")
 	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
@@ -219,14 +218,11 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	return cmd
 }
 
-// authRefreshScheduleEnabled keeps the transcription service browser-free by
-// default. Synthetic probes never refresh lifecycle state; the separate
-// headed auth/capability loop is available only after an explicit opt-in. The
-// probeEnabled argument remains part of the small policy seam so callers can
-// test the interaction without duplicating service setup.
-func authRefreshScheduleEnabled(probeEnabled, explicit bool) bool {
-	_ = probeEnabled
-	return explicit
+// authRefreshScheduleEnabled makes lifecycle repair default-on for online
+// providers. The explicit zero interval is the only opt-out; synthetic probes
+// remain browser-free and are ordered behind the first lifecycle pass.
+func authRefreshScheduleEnabled(interval time.Duration) bool {
+	return interval > 0
 }
 
 func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string, allowedProviders []string) (*transcriptionapi.Registry, error) {
@@ -330,7 +326,7 @@ func filterTranscriptionProviders(providers []transcriptionapi.Provider, request
 type chatGPTTranscriptionProvider struct {
 	app        *app
 	store      *chatgpt.Store
-	authMu     sync.Mutex
+	authMu     contextMutex
 	transcribe func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
 }
 
@@ -353,9 +349,15 @@ func (p *chatGPTTranscriptionProvider) Capabilities(ctx context.Context) transcr
 }
 
 func (p *chatGPTTranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
-	now := time.Now()
-	p.authMu.Lock()
+	if err := p.authMu.Lock(ctx); err != nil {
+		return err
+	}
 	defer p.authMu.Unlock()
+	return p.ensureAuthFreshLocked(ctx)
+}
+
+func (p *chatGPTTranscriptionProvider) ensureAuthFreshLocked(ctx context.Context) error {
+	now := time.Now()
 	status := p.store.AuthStatus(ctx, now, chatgpt.DefaultAuthTTL)
 	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
 		return nil
@@ -371,9 +373,14 @@ func (p *chatGPTTranscriptionProvider) EnsureAuthFresh(ctx context.Context) erro
 }
 
 func (p *chatGPTTranscriptionProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
-	now := time.Now()
-	p.authMu.Lock()
+	if err := p.authMu.Lock(ctx); err != nil {
+		return err
+	}
 	defer p.authMu.Unlock()
+	if err := p.ensureAuthFreshLocked(ctx); err != nil {
+		return err
+	}
+	now := time.Now()
 	status := p.store.RuntimeStatus(ctx, now, chatgpt.DefaultCapabilitiesTTL)
 	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
 		return nil
@@ -452,7 +459,9 @@ func (p *chatGPTTranscriptionProvider) NewRealtime(context.Context, transcriptio
 }
 
 func (p *chatGPTTranscriptionProvider) refreshAuth(ctx context.Context) error {
-	p.authMu.Lock()
+	if err := p.authMu.Lock(ctx); err != nil {
+		return err
+	}
 	defer p.authMu.Unlock()
 	return p.refreshAuthLocked(ctx)
 }
@@ -496,7 +505,7 @@ func (p *chatGPTTranscriptionProvider) refreshCapabilitiesLocked(ctx context.Con
 type m365TranscriptionProvider struct {
 	app    *app
 	store  *m365.Store
-	authMu sync.Mutex
+	authMu contextMutex
 }
 
 func (p *m365TranscriptionProvider) ID() transcriptionapi.ProviderID {
@@ -524,9 +533,15 @@ func (p *m365TranscriptionProvider) Capabilities(ctx context.Context) transcript
 }
 
 func (p *m365TranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
-	now := time.Now()
-	p.authMu.Lock()
+	if err := p.authMu.Lock(ctx); err != nil {
+		return err
+	}
 	defer p.authMu.Unlock()
+	return p.ensureAuthFreshLocked(ctx)
+}
+
+func (p *m365TranscriptionProvider) ensureAuthFreshLocked(ctx context.Context) error {
+	now := time.Now()
 	status := p.store.AuthStatus(ctx, now, m365.DefaultAuthTTL)
 	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
 		return nil
@@ -542,9 +557,14 @@ func (p *m365TranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
 }
 
 func (p *m365TranscriptionProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
-	now := time.Now()
-	p.authMu.Lock()
+	if err := p.authMu.Lock(ctx); err != nil {
+		return err
+	}
 	defer p.authMu.Unlock()
+	if err := p.ensureAuthFreshLocked(ctx); err != nil {
+		return err
+	}
+	now := time.Now()
 	status := p.store.RuntimeStatus(ctx, now, m365.DefaultCapabilitiesTTL)
 	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
 		return nil
@@ -594,7 +614,9 @@ func (p *m365TranscriptionProvider) NewRealtime(ctx context.Context, config tran
 }
 
 func (p *m365TranscriptionProvider) refreshAuth(ctx context.Context) error {
-	p.authMu.Lock()
+	if err := p.authMu.Lock(ctx); err != nil {
+		return err
+	}
 	defer p.authMu.Unlock()
 	return p.refreshAuthLocked(ctx)
 }

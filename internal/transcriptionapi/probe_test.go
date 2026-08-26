@@ -230,6 +230,67 @@ func TestSyntheticProbeCoordinatorDoesNotRefreshProviderLifecycleHooks(t *testin
 	}
 }
 
+func TestSyntheticProbeCoordinatorWaitsForInitialLifecycleRepair(t *testing.T) {
+	provider := &fakeProvider{
+		id:     ProviderChatGPT,
+		result: Result{Text: "after lifecycle repair"},
+	}
+	coordinator, err := NewSyntheticProbeCoordinator(
+		NewRegistry(provider),
+		[]ProbeFixture{{ID: "fixture-001", Path: "/tmp/fixture-001.webm", FileName: "fixture-001.webm", MIMEType: "audio/webm", Bytes: 32}},
+		t.TempDir(),
+		time.Hour,
+		time.Second,
+		15*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateStarted := make(chan struct{})
+	releaseGate := make(chan struct{})
+	coordinator.SetInitialGate(func(ctx context.Context) error {
+		close(gateStarted)
+		select {
+		case <-releaseGate:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	coordinator.Start(ctx)
+	select {
+	case <-gateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("initial lifecycle gate did not start")
+	}
+	provider.requestMu.Lock()
+	callsBeforeRelease := provider.transcribeCall
+	provider.requestMu.Unlock()
+	if callsBeforeRelease != 0 {
+		t.Fatalf("probe calls before lifecycle repair = %d, want zero", callsBeforeRelease)
+	}
+	close(releaseGate)
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		provider.requestMu.Lock()
+		calls := provider.transcribeCall
+		provider.requestMu.Unlock()
+		if calls == 1 {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("probe calls after lifecycle repair = %d, want one", calls)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	coordinator.Wait()
+}
+
 type realtimeProbeFakeProvider struct {
 	*fakeProvider
 	realtimeErr error

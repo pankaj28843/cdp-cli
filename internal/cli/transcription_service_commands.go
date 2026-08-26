@@ -82,7 +82,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			if probeInterval == 0 {
 				probeInterval = transcriptionapi.DefaultProbeInterval
 			}
-			authRefreshEnabled := cmd.Flags().Changed("auth-refresh-interval") || envBool("CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED")
+			authRefreshEnabled := authRefreshInterval > 0
 			platform, paths, config, err := a.transcriptionServiceConfig(systemScope, binaryPath, address, httpAddress, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, authRefreshEnabled, fixtureDir, probeInterval, persistAudio, tlsCertFile, tlsKeyFile)
 			if err != nil {
 				return err
@@ -147,7 +147,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes")
-	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "explicit shared recurring freshness check for online providers")
+	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers; use 0s to disable")
 	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", envDefault("CDP_TRANSCRIPTION_FIXTURE_DIR", defaultTranscriptionFixtureDir()), "checked-in WebM corpus used by the bounded provider health probe")
 	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")

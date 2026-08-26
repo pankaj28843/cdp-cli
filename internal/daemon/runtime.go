@@ -1194,16 +1194,35 @@ func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration)
 	}
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
+	heartbeatFailures := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-client.Done():
+			if err := client.Err(); err != nil {
+				return fmt.Errorf("browser CDP transport ended: %w", err)
+			}
+			return fmt.Errorf("browser CDP transport ended")
 		case <-ticker.C:
 			var result json.RawMessage
-			err := client.Call(ctx, "Browser.getVersion", map[string]any{}, &result)
+			heartbeatCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := client.Call(heartbeatCtx, "Browser.getVersion", map[string]any{}, &result)
+			cancel()
 			if err != nil {
-				return err
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				if transportErr := client.Err(); transportErr != nil {
+					return fmt.Errorf("browser heartbeat failed: %w", transportErr)
+				}
+				heartbeatFailures++
+				if heartbeatFailures >= 3 {
+					return fmt.Errorf("browser heartbeat failed %d consecutive times: %w", heartbeatFailures, err)
+				}
+				continue
 			}
+			heartbeatFailures = 0
 		}
 	}
 }

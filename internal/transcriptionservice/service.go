@@ -56,13 +56,15 @@ type Config struct {
 	LocalAPIKey          string
 	MaxAudioBytes        int64
 	AuthRefreshInterval  time.Duration
-	AuthRefreshEnabled   bool
-	FixtureDir           string
-	ProbeInterval        time.Duration
-	PersistAudio         bool
-	TLSCertFile          string
-	TLSKeyFile           string
-	Path                 string
+	// AuthRefreshEnabled is retained for renderer compatibility; the positive
+	// interval is the authoritative enablement switch.
+	AuthRefreshEnabled bool
+	FixtureDir         string
+	ProbeInterval      time.Duration
+	PersistAudio       bool
+	TLSCertFile        string
+	TLSKeyFile         string
+	Path               string
 }
 
 type Paths struct {
@@ -166,12 +168,15 @@ func (c Config) Environment() map[string]string {
 		"CDP_TRANSCRIPTION_LOCAL_API_KEY":           c.LocalAPIKey,
 		"CDP_TRANSCRIPTION_MAX_AUDIO_BYTES":         strconv.FormatInt(c.MaxAudioBytes, 10),
 		"CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL":   c.AuthRefreshInterval.String(),
-		"CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED":    strconv.FormatBool(c.AuthRefreshEnabled),
-		"CDP_TRANSCRIPTION_FIXTURE_DIR":             c.FixtureDir,
-		"CDP_TRANSCRIPTION_PROBE_INTERVAL":          c.ProbeInterval.String(),
-		"CDP_TRANSCRIPTION_PERSIST_AUDIO":           strconv.FormatBool(c.PersistAudio),
-		"CDP_TRANSCRIPTION_TLS_CERT":                c.TLSCertFile,
-		"CDP_TRANSCRIPTION_TLS_KEY":                 c.TLSKeyFile,
+		// The interval is the source of truth. Deriving this compatibility
+		// marker prevents a stale generated plist from disabling lifecycle
+		// repair while retaining the field for callers of the renderer.
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED": strconv.FormatBool(c.AuthRefreshInterval > 0),
+		"CDP_TRANSCRIPTION_FIXTURE_DIR":          c.FixtureDir,
+		"CDP_TRANSCRIPTION_PROBE_INTERVAL":       c.ProbeInterval.String(),
+		"CDP_TRANSCRIPTION_PERSIST_AUDIO":        strconv.FormatBool(c.PersistAudio),
+		"CDP_TRANSCRIPTION_TLS_CERT":             c.TLSCertFile,
+		"CDP_TRANSCRIPTION_TLS_KEY":              c.TLSKeyFile,
 	}
 	if strings.TrimSpace(c.Display) != "" {
 		environment["DISPLAY"] = c.Display

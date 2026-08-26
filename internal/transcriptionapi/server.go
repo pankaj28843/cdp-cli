@@ -129,6 +129,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.config.AuthCoordinator.Start(ctx)
 	}
 	if s.config.ProbeCoordinator != nil {
+		if s.config.AuthCoordinator != nil {
+			s.config.ProbeCoordinator.SetInitialGate(s.config.AuthCoordinator.WaitInitial)
+		}
 		s.config.ProbeCoordinator.Start(ctx)
 	}
 	rawListener, err := net.Listen("tcp", s.httpServer.Addr)
@@ -930,6 +933,10 @@ func ensureProviderAuth(ctx context.Context, provider Provider, timeout time.Dur
 			Classify: func(attemptErr error) resilience.Decision {
 				if errors.Is(attemptErr, context.Canceled) || errors.Is(attemptErr, context.DeadlineExceeded) {
 					return resilience.Decision{}
+				}
+				var providerErr *ProviderError
+				if errors.As(attemptErr, &providerErr) && providerErr != nil {
+					return resilience.Decision{Retry: providerErr.Retryable}
 				}
 				// Auth evidence can be transiently unavailable while the headed
 				// browser repairs a session or sheds a stale target. Keep the

@@ -507,7 +507,7 @@ func (a *app) commandContext(cmd *cobra.Command) (context.Context, context.Cance
 }
 
 func (a *app) browserCommandContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
-	return a.commandContextWithDefault(cmd, 10*time.Second)
+	return a.commandContextWithDefault(cmd, 30*time.Second)
 }
 
 func (a *app) commandContextWithDefault(cmd *cobra.Command, fallback time.Duration) (context.Context, context.CancelFunc) {

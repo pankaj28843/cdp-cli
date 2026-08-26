@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -46,20 +47,18 @@ func TestWebAgentProviderErrorHidesProviderResponseShapeDetails(t *testing.T) {
 	}
 }
 
-func TestAuthRefreshScheduleSkipsSeparateLoopWhenSyntheticProbesAreEnabled(t *testing.T) {
+func TestAuthRefreshScheduleDefaultsOnAndAllowsExplicitDisable(t *testing.T) {
 	for _, test := range []struct {
 		name          string
-		probeEnabled  bool
-		explicit      bool
+		interval      time.Duration
 		wantScheduled bool
 	}{
-		{name: "probe default stays browser free", probeEnabled: true, explicit: false, wantScheduled: false},
-		{name: "probe explicit opt in", probeEnabled: true, explicit: true, wantScheduled: true},
-		{name: "no probe still requires explicit opt in", probeEnabled: false, explicit: false, wantScheduled: false},
-		{name: "no probe explicit opt in", probeEnabled: false, explicit: true, wantScheduled: true},
+		{name: "default cadence enables lifecycle repair", interval: time.Hour, wantScheduled: true},
+		{name: "custom cadence enables lifecycle repair", interval: 10 * time.Minute, wantScheduled: true},
+		{name: "zero explicitly disables lifecycle repair", interval: 0, wantScheduled: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := authRefreshScheduleEnabled(test.probeEnabled, test.explicit); got != test.wantScheduled {
+			if got := authRefreshScheduleEnabled(test.interval); got != test.wantScheduled {
 				t.Fatalf("scheduled = %v, want %v", got, test.wantScheduled)
 			}
 		})

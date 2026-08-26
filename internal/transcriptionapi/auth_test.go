@@ -135,9 +135,12 @@ func TestAuthRefreshCoordinatorRefreshesAuthAndCapabilitiesPerProvider(t *testin
 		if provider.calls.Load() != 1 {
 			t.Fatalf("provider %s auth calls = %d, want one", provider.id, provider.calls.Load())
 		}
-		if provider.capabilityCalls.Load() != 1 {
-			t.Fatalf("provider %s capability calls = %d, want one", provider.id, provider.capabilityCalls.Load())
-		}
+	}
+	if first.capabilityCalls.Load() != 1 {
+		t.Fatalf("provider %s capability calls = %d, want one after auth success", first.id, first.capabilityCalls.Load())
+	}
+	if second.capabilityCalls.Load() != 0 {
+		t.Fatalf("provider %s capability calls = %d, want zero after auth failure", second.id, second.capabilityCalls.Load())
 	}
 }
 

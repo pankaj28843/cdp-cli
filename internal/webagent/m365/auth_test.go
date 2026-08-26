@@ -21,6 +21,8 @@ func TestM365DictationControlExpressionKeepsCurrentAndLegacySignals(t *testing.T
 	for _, signal := range []string{
 		"m365-chat-input-shared-container",
 		"aria-label",
+		"[role=\"button\"]",
+		"find(visible)",
 		"start dictation",
 		"stop dictation",
 		"M10 13a3 3 0 0 0 3-3V5",

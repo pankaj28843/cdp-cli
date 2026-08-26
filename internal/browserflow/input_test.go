@@ -53,7 +53,11 @@ func TestInputHelpersPreservePreparationAndDispatchClassification(t *testing.T) 
 		if err != nil ||
 			outcome.Dispatch != DispatchPerformed ||
 			!outcome.RawInputAttempted ||
-			len(input.calls) != 2 {
+			len(input.calls) != 2 ||
+			strings.Contains(string(input.calls[0].params), "windowsVirtualKeyCode") ||
+			strings.Contains(string(input.calls[0].params), "nativeVirtualKeyCode") ||
+			strings.Contains(string(input.calls[1].params), "windowsVirtualKeyCode") ||
+			strings.Contains(string(input.calls[1].params), "nativeVirtualKeyCode") {
 			t.Fatalf("success outcome=%+v err=%v calls=%+v", outcome, err, input.calls)
 		}
 	})
@@ -94,7 +98,7 @@ func TestSelectorBoundEnterPreservesTriStateBoundary(t *testing.T) {
 		}
 	})
 
-	t.Run("rawKeyDown transport failure is ambiguous", func(t *testing.T) {
+	t.Run("keyDown transport failure is ambiguous", func(t *testing.T) {
 		session, input := newInputSession(t)
 		input.evaluateValue = json.RawMessage(
 			`{"target_found":true,"focused":true}`,
@@ -150,7 +154,11 @@ func TestSelectorBoundEnterPreservesTriStateBoundary(t *testing.T) {
 			input.calls[1].method != "Input.dispatchKeyEvent" ||
 			input.calls[2].method != "Input.dispatchKeyEvent" ||
 			!strings.Contains(string(input.calls[0].params), "#ask-input") ||
-			!strings.Contains(string(input.calls[1].params), "rawKeyDown") {
+			!strings.Contains(string(input.calls[1].params), `"type":"keyDown"`) ||
+			strings.Contains(string(input.calls[1].params), "windowsVirtualKeyCode") ||
+			strings.Contains(string(input.calls[1].params), "nativeVirtualKeyCode") ||
+			strings.Contains(string(input.calls[2].params), "windowsVirtualKeyCode") ||
+			strings.Contains(string(input.calls[2].params), "nativeVirtualKeyCode") {
 			t.Fatalf("outcome=%+v err=%v calls=%+v", outcome, err, input.calls)
 		}
 	})

@@ -268,20 +268,21 @@ func applyPathStatus(state probeHealthState, found bool, now time.Time, maxAge t
 // path with one weighted-LRU WebM on a bounded cadence. It is deliberately
 // browser-free: probes use the provider's cached capability snapshot and never
 // invoke AuthRefresher or CapabilityRefresher hooks. Headed auth/capability
-// repair is an explicit operation or request-time action, not a health-probe
-// side effect. It persists only timestamps, fixture ids, and redacted result
-// codes; audio and transcript text never enter probe state.
+// repair belongs to the service lifecycle coordinator or request-time action,
+// not to a health-probe side effect. It persists only timestamps, fixture ids,
+// and redacted result codes; audio and transcript text never enter probe state.
 type SyntheticProbeCoordinator struct {
-	registry  *Registry
-	selector  *fixtureSelector
-	health    *ProbeHealth
-	statePath string
-	interval  time.Duration
-	timeout   time.Duration
-	startOnce sync.Once
-	runMu     sync.Mutex
-	stateMu   sync.Mutex
-	done      chan struct{}
+	registry    *Registry
+	selector    *fixtureSelector
+	health      *ProbeHealth
+	statePath   string
+	interval    time.Duration
+	timeout     time.Duration
+	startOnce   sync.Once
+	runMu       sync.Mutex
+	stateMu     sync.Mutex
+	done        chan struct{}
+	initialGate func(context.Context) error
 }
 
 func NewSyntheticProbeCoordinator(
@@ -348,6 +349,16 @@ func (c *SyntheticProbeCoordinator) RecordObservedFileFailure(provider ProviderI
 	_ = c.persistState()
 }
 
+// SetInitialGate installs the one-shot service-start gate. It must be called
+// before Start. The gate may wait for provider lifecycle repair, but it must
+// not perform a probe itself; the synthetic probe remains browser-free.
+func (c *SyntheticProbeCoordinator) SetInitialGate(gate func(context.Context) error) {
+	if c == nil {
+		return
+	}
+	c.initialGate = gate
+}
+
 func (c *SyntheticProbeCoordinator) Start(ctx context.Context) {
 	if c == nil || c.interval <= 0 {
 		return
@@ -359,6 +370,11 @@ func (c *SyntheticProbeCoordinator) Start(ctx context.Context) {
 		c.done = make(chan struct{})
 		go func() {
 			defer close(c.done)
+			if c.initialGate != nil {
+				if err := c.initialGate(ctx); err != nil {
+					return
+				}
+			}
 			c.RunOnce(ctx)
 			ticker := time.NewTicker(c.interval)
 			defer ticker.Stop()

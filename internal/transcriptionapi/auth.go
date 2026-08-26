@@ -28,11 +28,13 @@ type AuthRefresher interface {
 // provider cannot prevent other providers from being refreshed, and adding a
 // provider does not add a process-level cron job.
 type AuthRefreshCoordinator struct {
-	targets   []providerRefreshTarget
-	interval  time.Duration
-	timeout   time.Duration
-	startOnce sync.Once
-	runMu     sync.Mutex
+	targets       []providerRefreshTarget
+	interval      time.Duration
+	timeout       time.Duration
+	startOnce     sync.Once
+	initialDone   chan struct{}
+	initialDoneMu sync.Once
+	runMu         sync.Mutex
 }
 
 func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *AuthRefreshCoordinator {
@@ -43,10 +45,15 @@ func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *Auth
 	if registry != nil {
 		targets = registry.refreshTargets()
 	}
+	initialDone := make(chan struct{})
+	if interval <= 0 || len(targets) == 0 {
+		close(initialDone)
+	}
 	return &AuthRefreshCoordinator{
-		targets:  targets,
-		interval: interval,
-		timeout:  DefaultAuthRefreshTimeout,
+		targets:     targets,
+		interval:    interval,
+		timeout:     DefaultAuthRefreshTimeout,
+		initialDone: initialDone,
 	}
 }
 
@@ -64,6 +71,7 @@ func (c *AuthRefreshCoordinator) Start(ctx context.Context) {
 	c.startOnce.Do(func() {
 		go func() {
 			c.RefreshAll(ctx)
+			c.markInitialDone()
 			ticker := time.NewTicker(c.interval)
 			defer ticker.Stop()
 			for {
@@ -76,6 +84,33 @@ func (c *AuthRefreshCoordinator) Start(ctx context.Context) {
 			}
 		}()
 	})
+}
+
+// WaitInitial waits until the first proactive pass has finished. The
+// transcription health probe uses this once at service startup so it cannot
+// publish a stale provider_not_ready result while auth/capability repair is in
+// flight. Provider errors remain isolated and are reflected by the provider's
+// cached readiness state; only cancellation is returned here.
+func (c *AuthRefreshCoordinator) WaitInitial(ctx context.Context) error {
+	if c == nil || c.interval <= 0 || len(c.targets) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-c.initialDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *AuthRefreshCoordinator) markInitialDone() {
+	if c == nil || c.initialDone == nil {
+		return
+	}
+	c.initialDoneMu.Do(func() { close(c.initialDone) })
 }
 
 // RefreshAll refreshes auth and capability evidence for every configured online
@@ -107,7 +142,12 @@ func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
 			}
 			defer cancel()
 			if target.auth != nil {
-				_ = target.auth.EnsureAuthFresh(refreshContext)
+				// Capability evidence is meaningful only after the provider's
+				// auth evidence is fresh. A failed provider stays isolated and
+				// will be retried on the next bounded cadence.
+				if err := target.auth.EnsureAuthFresh(refreshContext); err != nil {
+					return
+				}
 			}
 			if target.capabilities != nil {
 				_ = target.capabilities.EnsureCapabilitiesFresh(refreshContext)

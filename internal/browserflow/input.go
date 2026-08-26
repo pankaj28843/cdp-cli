@@ -34,11 +34,14 @@ func PressEnter(ctx context.Context, session *cdp.PageSession) (DispatchOutcome,
 	if session == nil {
 		return DispatchOutcome{Dispatch: DispatchNotPerformed}, fmt.Errorf("page session is required")
 	}
-	keyDown := json.RawMessage(`{"type":"keyDown","key":"Enter","code":"Enter","windowsVirtualKeyCode":13,"nativeVirtualKeyCode":13}`)
+	// The DOM key/code pair is sufficient for Enter. Supplying the optional
+	// Windows/native virtual-key fields makes headless Chrome on macOS route
+	// repeated synthetic Enter events through its native menu machinery.
+	keyDown := json.RawMessage(`{"type":"keyDown","key":"Enter","code":"Enter"}`)
 	if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", keyDown); err != nil {
 		return DispatchOutcome{Dispatch: DispatchUnknown, RawInputAttempted: true}, fmt.Errorf("Enter keyDown outcome is ambiguous")
 	}
-	keyUp := json.RawMessage(`{"type":"keyUp","key":"Enter","code":"Enter","windowsVirtualKeyCode":13,"nativeVirtualKeyCode":13}`)
+	keyUp := json.RawMessage(`{"type":"keyUp","key":"Enter","code":"Enter"}`)
 	if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", keyUp); err != nil {
 		return DispatchOutcome{Dispatch: DispatchPerformed, RawInputAttempted: true}, fmt.Errorf("Enter keyUp confirmation failed after keyDown")
 	}
@@ -82,7 +85,7 @@ func PressEscape(
 
 // PressEnterOnSelector focuses one provider-validated DOM control and dispatches
 // one logical browser-level Enter action. The focus evaluation is reversible,
-// so any failure before rawKeyDown is explicitly not performed. Any rawKeyDown
+// so any failure before keyDown is explicitly not performed. Any keyDown
 // transport error is ambiguous because Chrome may already have received it.
 func PressEnterOnSelector(
 	ctx context.Context,
@@ -132,23 +135,23 @@ func PressEnterOnSelector(
 		return DispatchOutcome{Dispatch: DispatchNotPerformed},
 			fmt.Errorf("exact selector was not focused before Enter")
 	}
-	rawKeyDown := json.RawMessage(
-		`{"type":"rawKeyDown","key":"Enter","code":"Enter","windowsVirtualKeyCode":13,"nativeVirtualKeyCode":13}`,
+	keyDown := json.RawMessage(
+		`{"type":"keyDown","key":"Enter","code":"Enter"}`,
 	)
-	if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", rawKeyDown); err != nil {
+	if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", keyDown); err != nil {
 		return DispatchOutcome{
 			Dispatch:          DispatchUnknown,
 			RawInputAttempted: true,
-		}, fmt.Errorf("selector-bound Enter rawKeyDown outcome is ambiguous")
+		}, fmt.Errorf("selector-bound Enter keyDown outcome is ambiguous")
 	}
 	keyUp := json.RawMessage(
-		`{"type":"keyUp","key":"Enter","code":"Enter","windowsVirtualKeyCode":13,"nativeVirtualKeyCode":13}`,
+		`{"type":"keyUp","key":"Enter","code":"Enter"}`,
 	)
 	if _, err := session.Exec(ctx, "Input.dispatchKeyEvent", keyUp); err != nil {
 		return DispatchOutcome{
 			Dispatch:          DispatchPerformed,
 			RawInputAttempted: true,
-		}, fmt.Errorf("selector-bound Enter keyUp confirmation failed after rawKeyDown")
+		}, fmt.Errorf("selector-bound Enter keyUp confirmation failed after keyDown")
 	}
 	return DispatchOutcome{Dispatch: DispatchPerformed, RawInputAttempted: true}, nil
 }

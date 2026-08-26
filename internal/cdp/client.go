@@ -3,9 +3,11 @@ package cdp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
@@ -14,13 +16,14 @@ import (
 const (
 	maxBufferedEvents = 500
 	maxReadBytes      = 100 << 20
+	cdpWriteTimeout   = 5 * time.Second
 )
 
 type Client struct {
 	conn         *websocket.Conn
 	endpoint     string
 	next         atomic.Int64
-	writeMu      sync.Mutex
+	writeGate    chan struct{}
 	pendingMu    sync.Mutex
 	pending      map[int64]chan pendingResponse
 	readCancel   context.CancelFunc
@@ -29,6 +32,8 @@ type Client struct {
 	eventNotify  chan struct{}
 	terminalErr  error
 	terminalDone bool
+	terminalWait chan struct{}
+	terminalOnce sync.Once
 }
 
 type CommandClient interface {
@@ -69,18 +74,35 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	conn.SetReadLimit(maxReadBytes)
 	readCtx, cancel := context.WithCancel(context.Background())
 	client := &Client{
-		conn:        conn,
-		endpoint:    endpoint,
-		pending:     map[int64]chan pendingResponse{},
-		readCancel:  cancel,
-		eventNotify: make(chan struct{}, 1),
+		conn:         conn,
+		endpoint:     endpoint,
+		writeGate:    make(chan struct{}, 1),
+		pending:      map[int64]chan pendingResponse{},
+		readCancel:   cancel,
+		eventNotify:  make(chan struct{}, 1),
+		terminalWait: make(chan struct{}),
 	}
+	client.writeGate <- struct{}{}
 	go client.readLoop(readCtx)
 	return client, nil
 }
 
 func (c *Client) Endpoint() string {
 	return c.endpoint
+}
+
+// Done is closed when the shared browser transport becomes unusable. Daemon
+// owners can use it to stop serving a stale connection and reconnect instead
+// of waiting for an unrelated heartbeat or command to notice.
+func (c *Client) Done() <-chan struct{} {
+	return c.terminalWait
+}
+
+// Err returns the terminal transport error, if the client has stopped.
+func (c *Client) Err() error {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	return c.terminalErr
 }
 
 func (c *Client) Close(status websocket.StatusCode, reason string) error {
@@ -115,21 +137,31 @@ func (c *Client) CallSession(ctx context.Context, sessionID, method string, para
 		Method:    method,
 		Params:    params,
 	}
-	c.writeMu.Lock()
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		c.writeMu.Unlock()
-		c.removePending(id)
-		return fmt.Errorf("write cdp command %s: %w", method, ctxErr)
-	}
-	// A canceled command must not cancel the shared websocket write. nhooyr
-	// closes a connection when a write context expires, which would tear down
-	// the daemon's browser transport for every other invocation.
-	if err := wsjson.Write(context.WithoutCancel(ctx), c.conn, req); err != nil {
-		c.writeMu.Unlock()
+	if err := c.acquireWrite(ctx); err != nil {
 		c.removePending(id)
 		return fmt.Errorf("write cdp command %s: %w", method, err)
 	}
-	c.writeMu.Unlock()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		c.releaseWrite()
+		c.removePending(id)
+		return fmt.Errorf("write cdp command %s: %w", method, ctxErr)
+	}
+	// A caller timeout must not tear down the shared transport merely because
+	// the command response was slow. A separate write bound still prevents a
+	// blocked websocket write from holding the gate forever; nhooyr closes the
+	// connection when this bound expires, which lets the daemon reconnect.
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), cdpWriteTimeout)
+	err := wsjson.Write(writeCtx, c.conn, req)
+	writeTimedOut := errors.Is(writeCtx.Err(), context.DeadlineExceeded)
+	cancelWrite()
+	c.releaseWrite()
+	if err != nil {
+		if writeTimedOut {
+			_ = c.conn.CloseNow()
+		}
+		c.removePending(id)
+		return fmt.Errorf("write cdp command %s: %w", method, err)
+	}
 
 	var pending pendingResponse
 	select {
@@ -152,6 +184,28 @@ func (c *Client) CallSession(ctx context.Context, sessionID, method string, para
 		return fmt.Errorf("decode cdp response %s: %w", method, err)
 	}
 	return nil
+}
+
+func (c *Client) acquireWrite(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.terminalWait:
+		if err := c.Err(); err != nil {
+			return err
+		}
+		return fmt.Errorf("cdp connection is closed")
+	case <-c.writeGate:
+		if err := c.Err(); err != nil {
+			c.releaseWrite()
+			return err
+		}
+		return nil
+	}
+}
+
+func (c *Client) releaseWrite() {
+	c.writeGate <- struct{}{}
 }
 
 func (c *Client) addPending(id int64, ch chan pendingResponse) error {
@@ -199,13 +253,16 @@ func (c *Client) readLoop(ctx context.Context) {
 
 func (c *Client) failPending(err error) {
 	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
 	c.terminalDone = true
 	c.terminalErr = err
+	c.terminalOnce.Do(func() {
+		close(c.terminalWait)
+	})
 	for id, ch := range c.pending {
 		ch <- pendingResponse{err: err}
 		delete(c.pending, id)
 	}
+	c.pendingMu.Unlock()
 }
 
 func (c *Client) DrainEvents() []Event {
