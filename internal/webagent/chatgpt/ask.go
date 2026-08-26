@@ -198,10 +198,10 @@ func (d chatgptSendDispatcher) Dispatch(
 		&attachment,
 	); err != nil || !attachment.OK {
 		return browserflow.DispatchOutcome{
-				Dispatch: browserflow.DispatchNotPerformed,
-			}, fmt.Errorf(
-				"exact ChatGPT attachment was not retained and ready at Send",
-			)
+			Dispatch: browserflow.DispatchNotPerformed,
+		}, fmt.Errorf(
+			"exact ChatGPT attachment was not retained and ready at Send",
+		)
 	}
 	// Keep the composer observation immediately before the one raw Send input.
 	// ChatGPT's current composer is a ProseMirror textbox whose Enter handler
