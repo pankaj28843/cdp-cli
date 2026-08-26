@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/availability"
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
@@ -92,6 +93,7 @@ type daemonMaintenanceReport struct {
 	Phases        []daemonMaintenancePhase         `json:"phases"`
 	Artifacts     map[string]string                `json:"artifacts"`
 	NextCommands  []string                         `json:"next_commands"`
+	Environment   *availability.Result             `json:"environment,omitempty"`
 	Warnings      []string                         `json:"warnings,omitempty"`
 }
 
@@ -99,6 +101,7 @@ type daemonMaintenanceOperations struct {
 	Now                 func() time.Time
 	AcquireLock         func(context.Context) (daemon.LockHandle, bool, daemon.LockMetadata, error)
 	ReleaseLock         func(daemon.LockHandle) error
+	Environment         func(context.Context) (availability.Result, func() error, error)
 	DaemonHealth        func(context.Context) (daemon.Status, map[string]any, error)
 	ManagedProcessSweep func(context.Context, daemon.LockHandle, daemon.Status) (browser.ManagedProcessReconcileResult, error)
 	ResourcePreflight   func(context.Context, daemon.Status, map[string]any, *browser.ManagedProcessReconcileResult) resourcePreflightResult
@@ -128,7 +131,7 @@ func (a *app) newDaemonMaintenanceCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "maintenance",
 		Short: "Plan and run unattended managed headless maintenance",
-		Long:  "Plan and run the canonical unattended managed headless maintenance flow used by cron. The flow is ordered as lock, managed-process sweep, resource preflight, profile seed, daemon keepalive repair, synthetic health-check, page cleanup, and summary artifact write.",
+		Long:  "Plan and run the canonical unattended managed headless maintenance flow used by cron. The flow is ordered as lock, managed-process sweep, resource preflight, profile seed, daemon keepalive repair, synthetic health-check, page cleanup, and summary artifact write. Live maintenance first checks internet reachability and a persisted awake observation; offline or post-wake hosts skip every browser/process mutation and write a structured summary.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.Reconnect < 0 || opts.ProfileSeedIfOlderThan < 0 || opts.CleanupIdleFor < 0 || opts.CleanupMax < 0 || opts.CleanupMaxAttempts <= 0 || opts.CleanupConcurrency <= 0 || opts.LockTimeout < 0 || opts.StaleLockAfter < 0 {
@@ -296,6 +299,9 @@ func (a *app) daemonMaintenanceOperations(ctx context.Context, opts daemonMainte
 		ReleaseLock: func(lock daemon.LockHandle) error {
 			return lock.Release()
 		},
+		Environment: func(ctx context.Context) (availability.Result, func() error, error) {
+			return a.checkAndAcquireAutoHealEnvironment(ctx, store.Dir)
+		},
 		DaemonHealth: func(ctx context.Context) (daemon.Status, map[string]any, error) {
 			return a.selectedDaemonHealth(ctx)
 		},
@@ -379,6 +385,7 @@ func runDaemonMaintenanceFlow(ctx context.Context, report daemonMaintenanceRepor
 	var sweep *browser.ManagedProcessReconcileResult
 	var resourcePreflight resourcePreflightResult
 	var releaseErr error
+	var autoHealLeaseHeld bool
 
 	fail := func(phaseName, code, class, message string, exit int, next []string, result any, cause error) (daemonMaintenanceReport, error) {
 		if cause != nil && message == "" {
@@ -440,6 +447,43 @@ func runDaemonMaintenanceFlow(ctx context.Context, report daemonMaintenanceRepor
 			_ = ops.ReleaseLock(lock)
 		}
 	}()
+
+	if ops.Environment != nil {
+		environment, releaseAutoHealLease, environmentErr := ops.Environment(ctx)
+		if environmentErr != nil {
+			failedEnvironment := autoHealEnvironmentFailure(environmentErr)
+			report.Environment = &failedEnvironment
+			return fail(
+				"environment_check",
+				"auto_heal_environment_unavailable",
+				"connection",
+				"Auto Heal environment check failed; no browser repair was attempted",
+				ExitConnection,
+				autoHealEnvironmentNextCommands("headless"),
+				failedEnvironment,
+				nil,
+			)
+		}
+		report.Environment = &environment
+		if !environment.Allowed {
+			report.OK = true
+			report.State = "environment_unavailable"
+			report.Status = "skipped"
+			report.Action = "skipped"
+			report.NextCommands = uniqueCommands(report.NextCommands, autoHealEnvironmentNextCommands("headless"))
+			skipPhases(&report, []string{"managed_process_sweep", "resource_preflight", "profile_seed", "daemon_keepalive", "daemon_health_check", "page_cleanup"}, ops.Now(), "environment_unavailable")
+			phaseStart(&report, "write_artifact", ops.Now())
+			phasePass(&report, "write_artifact", ops.Now(), summaryPath)
+			if err := writeMaintenanceSummary(ctx, ops, summaryPath, &report); err != nil {
+				return fail("write_artifact", "artifact_write_failed", "internal", err.Error(), ExitInternal, []string{"cdp --browser-mode headless daemon maintenance --json"}, nil, err)
+			}
+			return report, nil
+		}
+		if releaseAutoHealLease != nil {
+			autoHealLeaseHeld = true
+			defer func() { _ = releaseAutoHealLease() }()
+		}
+	}
 
 	if ops.DaemonHealth != nil {
 		status, health, healthErr = ops.DaemonHealth(ctx)
@@ -561,7 +605,11 @@ func runDaemonMaintenanceFlow(ctx context.Context, report daemonMaintenanceRepor
 		if ops.HealthCheck == nil {
 			return fail("daemon_health_check", "headless_maintenance_failed", "internal", "daemon health-check operation is unavailable", ExitInternal, []string{"cdp --browser-mode headless daemon health-check --repair --json"}, nil, nil)
 		}
-		healthHuman, healthData, err := ops.HealthCheck(ctx)
+		healthContext := ctx
+		if autoHealLeaseHeld {
+			healthContext = withAutoHealLease(ctx)
+		}
+		healthHuman, healthData, err := ops.HealthCheck(healthContext)
 		healthResult := map[string]any{"human": healthHuman, "data": healthData}
 		if err != nil {
 			return fail("daemon_health_check", "daemon_health_check_failed", "check_failed", fmt.Sprintf("daemon health-check failed: %v", err), ExitCheckFailed, mapNextCommands(healthData), healthResult, err)

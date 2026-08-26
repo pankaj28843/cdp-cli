@@ -55,6 +55,26 @@ or starting another hold. Only an unhealthy runtime enters repair. That repair
 owns a 20-second lease, so a wedged process cannot accumulate a permanent lock
 or keep an old handle able to remove a later owner's lock.
 
+Before any launch-capable Auto Heal path is allowed to reach Chrome lifecycle
+or the approval-sheet adapter, cdp checks host availability. A short
+connectivity probe blocks repair while the machine is offline. cdp also stores
+its last observation in the owner-only state directory; after a wall-clock gap
+longer than two minutes, the next tick conservatively treats the host as just
+resumed from sleep (or as a paused scheduler), skips repair, and starts a
+two-minute shared cooldown. The headed and headless tasks share an owner-only
+repair lease, so concurrent scheduled jobs cannot both launch browsers. The
+machine cannot run a cron process while it is actually suspended; the persisted
+gap is the safe post-wake signal on the first tick after resume. These checks
+are the same on macOS and Linux and never emit endpoint URLs, response bodies,
+or browser state.
+
+The default connectivity endpoint is
+`https://connectivitycheck.gstatic.com/generate_204`. Enterprise or restricted
+networks can provide an equivalent small endpoint with
+`CDP_AUTO_HEAL_CONNECTIVITY_URL`. A normal offline tick updates the observation
+and returns a successful `state=environment_unavailable` skip; it does not
+activate Chrome, change Chrome preferences, or ask for `Allow`.
+
 ## Commands
 
 One-shot repair and verification on macOS:

@@ -514,6 +514,7 @@ func (a *app) newCronHealHeadedCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "headed",
 		Short: "Heal the headed daemon keepalive path for scheduled tasks",
+		Long:  "Heal the headed daemon keepalive path for scheduled tasks. Auto Heal checks internet reachability and a persisted awake observation before Chrome lifecycle or remote-debugging approval work; offline and post-wake hosts return a safe structured skip.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reconnect < 0 || lockTimeout < 0 || staleLockAfter < 0 {
@@ -544,6 +545,39 @@ func (a *app) newCronHealHeadedCommand() *cobra.Command {
 				})
 			}
 			defer lock.Release()
+
+			environment, releaseAutoHealLease, environmentErr := a.checkAndAcquireAutoHealEnvironment(ctx, store.Dir)
+			if environmentErr != nil {
+				return commandErrorWithData(
+					"auto_heal_environment_unavailable",
+					"connection",
+					"Auto Heal environment check failed; no browser repair was attempted",
+					ExitConnection,
+					autoHealEnvironmentNextCommands("headed"),
+					map[string]any{
+						"browser_mode":      "headed",
+						"environment":       autoHealEnvironmentFailure(environmentErr),
+						"human_required":    false,
+						"agent_should_stop": false,
+					},
+				)
+			}
+			if !environment.Allowed {
+				return a.render(ctx, "cron heal headed environment-unavailable", map[string]any{
+					"ok":            true,
+					"browser_mode":  "headed",
+					"state":         "environment_unavailable",
+					"status":        "skipped",
+					"action":        "skipped",
+					"locked":        false,
+					"environment":   environment,
+					"next_commands": autoHealEnvironmentNextCommands("headed"),
+					"lock":          map[string]any{"name": lockName, "acquired": true},
+				})
+			}
+			if releaseAutoHealLease != nil {
+				defer func() { _ = releaseAutoHealLease() }()
+			}
 
 			a.opts.activeProbe = false
 			probe, err := a.browserProbe(ctx)

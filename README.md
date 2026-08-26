@@ -529,6 +529,14 @@ another keepalive already owns that lock, and starts or repairs the selected-mod
 daemon only when the selected connection is not healthy. A healthy headed tick is
 a no-op: it does not activate Chrome, touch the remote-debugging preference, or
 spawn another hold. Headed repair is bounded by a 20-second lease.
+Before launch-capable Auto Heal work, cdp also requires a short
+internet-reachability check and a recent awake observation. Offline ticks and
+the first tick after a long wake/suspend gap return a structured
+`state=environment_unavailable` skip, so they cannot activate Chrome or
+request remote-debugging approval. Headed and headless repair share an
+owner-only lease while the operation runs. Override the default connectivity
+endpoint with `CDP_AUTO_HEAL_CONNECTIVITY_URL` when a network uses an approved
+internal reachability URL.
 
 For headed auto-connect, the managed cron task uses `--probe auto` and, on
 macOS, `--macos-self-heal-approval`: it passively checks the existing runtime

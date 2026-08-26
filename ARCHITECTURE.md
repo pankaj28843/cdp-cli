@@ -138,6 +138,14 @@ artifact writes as ordered phases. Phase results stay inside the maintenance
 phase array; top-level cron status links to task definitions, managed process
 lifecycle state, and recent artifact paths for troubleshooting.
 
+Launch-capable Auto Heal is host-gated before browser lifecycle work. The
+shared `internal/availability` package records only owner-local observation
+timestamps, checks short internet reachability, detects a conservative
+post-wake wall-clock gap, and serializes headed/headless repair with an
+owner-only lease. Offline and post-wake results are successful structured
+skips; passive diagnostics and dry-run plans remain available, and no Chrome
+approval action is attempted while the gate is blocked.
+
 Managed process health is generation-scoped. The current owned generation is
 identified independently of PID reuse; terminal exited/superseded generations
 are diagnostic history and are never connection-probed as current dependencies.

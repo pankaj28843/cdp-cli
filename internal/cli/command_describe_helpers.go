@@ -109,6 +109,7 @@ func commandExamples(path string) []string {
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe passive --reconnect 30s --display :0 --json",
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --reconnect 30s --display :0 --json",
 			"CDP_MACOS_SELF_HEAL_APPROVAL=1 cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --macos-self-heal-approval --reconnect 30s --json",
+			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --json | jq '{state,environment}'",
 			"cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json",
 			"cdp --browser-mode headless daemon keepalive --repair --force --json",
 			"cdp cron install --json",
@@ -118,6 +119,7 @@ func commandExamples(path string) []string {
 		"cdp daemon maintenance": {
 			"cdp --browser-mode headless daemon maintenance --dry-run --json",
 			"cdp --browser-mode headless daemon maintenance --json",
+			"cdp --browser-mode headless daemon maintenance --json | jq '{state,environment}'",
 			"cdp --browser-mode headless daemon maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 6h --dry-run --json",
 			"cdp --browser-mode headless daemon maintenance --stale-lock-after 1s --json",
 		},

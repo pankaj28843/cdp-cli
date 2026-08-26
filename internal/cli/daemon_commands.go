@@ -661,6 +661,7 @@ func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "health-check",
 		Short: "Repair and validate the managed headless daemon runtime",
+		Long:  "Repair and validate the managed headless daemon runtime. When --repair or --managed-process-sweep is enabled, Auto Heal first checks internet reachability and a persisted awake observation; offline or post-wake hosts receive a safe structured skip without launching Chrome.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.FailureThreshold <= 0 || opts.LockTimeout < 0 || opts.StaleLockAfter < 0 || opts.Reconnect < 0 {
@@ -777,6 +778,45 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 		}
 		steps = append(steps, step)
 		report["steps"] = steps
+	}
+
+	if opts.Repair || opts.ManagedProcessSweep {
+		environment, releaseAutoHealLease, environmentErr := a.checkAndAcquireAutoHealEnvironment(ctx, store.Dir)
+		if environmentErr != nil {
+			report["environment"] = autoHealEnvironmentFailure(environmentErr)
+			report["failure"] = "environment_check_failed"
+			_ = writeJSONArtifact(summaryPath, report)
+			return "", report, commandErrorWithData(
+				"auto_heal_environment_unavailable",
+				"connection",
+				"Auto Heal environment check failed; no browser repair was attempted",
+				ExitConnection,
+				autoHealEnvironmentNextCommands("headless"),
+				report,
+			)
+		}
+		report["environment"] = environment
+		if !environment.Allowed {
+			report["ok"] = true
+			report["state"] = "environment_unavailable"
+			report["status"] = "skipped"
+			report["action"] = "skipped"
+			report["next_commands"] = uniqueCommands(headlessHealthCheckNextCommands(), autoHealEnvironmentNextCommands("headless"))
+			if err := writeJSONArtifact(summaryPath, report); err != nil {
+				return "", report, commandErrorWithData(
+					"artifact_write_failed",
+					"internal",
+					"write health-check summary: "+err.Error(),
+					ExitInternal,
+					headlessHealthCheckNextCommands(),
+					report,
+				)
+			}
+			return "headless-health-check\tenvironment-unavailable", report, nil
+		}
+		if releaseAutoHealLease != nil {
+			defer func() { _ = releaseAutoHealLease() }()
+		}
 	}
 
 	status, health, err := a.selectedDaemonHealth(ctx)
@@ -1386,6 +1426,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "keepalive",
 		Short: "Idempotently keep the daemon healthy for cron",
+		Long:  "Idempotently keep the daemon healthy for cron. Launch-capable Auto Heal checks internet reachability and a persisted awake observation before it can activate headed Chrome, request remote-debugging approval, or start managed headless Chrome; offline and post-wake hosts return a safe structured skip.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reconnect < 0 || lockTimeout < 0 || staleLockAfter < 0 {
 				return commandError(
@@ -1446,6 +1487,50 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				})
 			}
 			defer lock.Release()
+
+			// Every auto-connect headed keepalive and every headless keepalive can
+			// reach launch-capable repair code. Check the host before probing in a
+			// way that could activate Chrome or ask for remote-debugging approval.
+			// Browser-URL mode is an explicit endpoint operation and does not own
+			// Chrome lifecycle, so it remains available for diagnostics.
+			launchCapable := browserMode == "headless" || (browserMode == "headed" && a.opts.autoConnect)
+			if launchCapable {
+				environment, releaseAutoHealLease, environmentErr := a.checkAndAcquireAutoHealEnvironment(ctx, store.Dir)
+				if environmentErr != nil {
+					return commandErrorWithData(
+						"auto_heal_environment_unavailable",
+						"connection",
+						"Auto Heal environment check failed; no browser repair was attempted",
+						ExitConnection,
+						autoHealEnvironmentNextCommands(browserMode),
+						map[string]any{
+							"browser_mode":      browserMode,
+							"environment":       autoHealEnvironmentFailure(environmentErr),
+							"human_required":    false,
+							"agent_should_stop": false,
+						},
+					)
+				}
+				if !environment.Allowed {
+					return a.render(ctx, fmt.Sprintf("keepalive\t%s\tenvironment-unavailable", connectionName), map[string]any{
+						"ok":            true,
+						"browser_mode":  browserMode,
+						"connection":    connectionName,
+						"mode":          mode,
+						"state":         "environment_unavailable",
+						"status":        "skipped",
+						"action":        "skipped",
+						"locked":        false,
+						"environment":   environment,
+						"chrome":        keepaliveChromeStatus{Skipped: true, Reason: "auto-heal environment unavailable: " + environment.Reason},
+						"next_commands": autoHealEnvironmentNextCommands(browserMode),
+						"lock":          map[string]any{"name": lock.Metadata.Name, "acquired": true},
+					})
+				}
+				if releaseAutoHealLease != nil {
+					defer func() { _ = releaseAutoHealLease() }()
+				}
+			}
 
 			selfHealApproval := remoteDebuggingApprovalEnabled(cmd, macOSSelfHealApproval)
 			initialActiveProbe := a.opts.activeProbe
