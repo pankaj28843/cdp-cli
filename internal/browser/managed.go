@@ -1917,13 +1917,10 @@ func signalProcess(pid int) error {
 		}
 		return fmt.Errorf("stop managed chrome: interrupt: %v; kill: %w", interruptErr, killErr)
 	}
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := process.Signal(syscall.Signal(0)); err != nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	// StopManagedChrome performs an independent process-tree and endpoint
+	// verification. Polling Signal(0) after SIGKILL is not useful for a direct
+	// child that has exited but is still awaiting reaping, and it serializes a
+	// needless delay across every managed descendant.
 	return nil
 }
 
