@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/augloop"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -37,6 +38,7 @@ type AuthRefreshConfig struct {
 	BrowserConfig
 	Store              *Store
 	ObservationTimeout time.Duration
+	Dial               SocketDialer
 }
 
 type AuthRefreshData struct {
@@ -44,6 +46,8 @@ type AuthRefreshData struct {
 	AuthState               string `json:"auth_state"`
 	TemplatePath            string `json:"template_path"`
 	DictationButtonObserved bool   `json:"dictation_button_observed"`
+	TokenProviderObserved   bool   `json:"token_provider_observed"`
+	DirectWebSocketObserved bool   `json:"direct_websocket_observed"`
 	WebSocketObserved       bool   `json:"websocket_observed"`
 	TokenProvisioned        bool   `json:"token_provisioned"`
 	ClientMetadataObserved  bool   `json:"client_metadata_observed"`
@@ -90,11 +94,13 @@ type clientMetadataWire struct {
 }
 
 type observedProbe struct {
-	Template          AuthTemplate
-	Runtime           RuntimeCapabilities
-	DictationObserved bool
-	WebSocketObserved bool
-	TokenProvisioned  bool
+	Template                AuthTemplate
+	Runtime                 RuntimeCapabilities
+	DictationButtonObserved bool
+	DictationObserved       bool
+	TokenProviderObserved   bool
+	WebSocketObserved       bool
+	TokenProvisioned        bool
 }
 
 type dictationControlState struct {
@@ -309,7 +315,9 @@ func refresh(
 					SchemaVersion:           AuthRefreshSchemaVersion,
 					AuthState:               "ready",
 					TemplatePath:            RelativeTemplatePath,
-					DictationButtonObserved: probe.DictationObserved,
+					DictationButtonObserved: probe.DictationButtonObserved,
+					TokenProviderObserved:   probe.TokenProviderObserved,
+					DirectWebSocketObserved: probe.WebSocketObserved,
 					WebSocketObserved:       probe.WebSocketObserved,
 					TokenProvisioned:        probe.TokenProvisioned,
 					ClientMetadataObserved:  probe.Template.ClientMetadata.AppName != "",
@@ -410,6 +418,117 @@ func observeProbe(
 	if strings.TrimSpace(userAgent.UserAgent) == "" {
 		return observedProbe{}, fmt.Errorf("browser user agent was empty")
 	}
+	directProbe, directErr := observeDirectProbe(ctx, config, session, userAgent.UserAgent)
+	if directErr == nil {
+		return directProbe, nil
+	}
+	if !isDirectProviderUnavailable(directErr) {
+		return observedProbe{}, directErr
+	}
+	legacyProbe, legacyErr := observeLegacyProbe(ctx, config, session, userAgent.UserAgent)
+	if legacyErr != nil {
+		return observedProbe{}, fmt.Errorf("direct M365 auth provider unavailable: %v; legacy dictation probe failed: %w", directErr, legacyErr)
+	}
+	return legacyProbe, nil
+}
+
+func observeDirectProbe(
+	ctx context.Context,
+	config AuthRefreshConfig,
+	session *cdp.PageSession,
+	userAgent string,
+) (observedProbe, error) {
+	var observation directAuthObservation
+	timeout := config.ObservationTimeout
+	if timeout <= 0 {
+		timeout = defaultObservationTimeout
+	}
+	if err := pollUntil(ctx, timeout, dictationControlPoll, func() (bool, error) {
+		var current directAuthObservation
+		if err := evaluateInto(ctx, session, m365DirectAuthExpression, &current); err != nil {
+			return false, err
+		}
+		observation = current
+		if !observation.TokenProviderFound {
+			return false, nil
+		}
+		if observation.TokenProviderError {
+			return false, nil
+		}
+		return strings.TrimSpace(observation.AuthToken) != "", nil
+	}); err != nil {
+		if !observation.TokenProviderFound {
+			return observedProbe{}, fmt.Errorf("Microsoft 365 direct auth token provider was not found: %w", err)
+		}
+		return observedProbe{}, fmt.Errorf("Microsoft 365 direct auth token provider failed: %w", err)
+	}
+	metadata := observation.ClientMetadata
+	if err := metadata.Validate(); err != nil {
+		return observedProbe{}, fmt.Errorf("validate direct Microsoft 365 client metadata: %w", err)
+	}
+	now := time.Now().UTC()
+	template := AuthTemplate{
+		SchemaVersion:    AuthTemplateSchemaVersion,
+		AuthToken:        strings.TrimSpace(observation.AuthToken),
+		ClientMetadata:   metadata,
+		BrowserUserAgent: userAgent,
+		CapturedAt:       now.Format(time.RFC3339Nano),
+		Source:           directAuthTemplateSource,
+	}
+	if err := template.Validate(); err != nil {
+		return observedProbe{}, fmt.Errorf("validate direct Microsoft 365 auth: %w", err)
+	}
+	if err := probeDirectTransport(ctx, template, config.Dial); err != nil {
+		return observedProbe{}, fmt.Errorf("Microsoft 365 direct AugLoop WebSocket probe failed: %w", err)
+	}
+	runtime := RuntimeCapabilities{
+		SchemaVersion:     RuntimeCapabilitiesSchemaVersion,
+		State:             "ready",
+		CapturedAt:        now.Format(time.RFC3339Nano),
+		ComposerObserved:  observation.ComposerFound,
+		DictationObserved: true,
+		WebSocketObserved: true,
+		TokenProvisioned:  true,
+		AudioProtocol:     "AugLoop_Voice_VoiceTile/v2",
+		Source:            directRuntimeSource,
+		Message:           "Observed the live M365 AugLoop token provider and direct VoiceTile WebSocket session.",
+	}
+	if err := runtime.Validate(); err != nil {
+		return observedProbe{}, fmt.Errorf("validate direct Microsoft 365 capabilities: %w", err)
+	}
+	return observedProbe{
+		Template:                template,
+		Runtime:                 runtime,
+		DictationButtonObserved: false,
+		DictationObserved:       true,
+		TokenProviderObserved:   true,
+		WebSocketObserved:       true,
+		TokenProvisioned:        true,
+	}, nil
+}
+
+func probeDirectTransport(ctx context.Context, template AuthTemplate, dial SocketDialer) error {
+	if dial == nil {
+		dial = augloop.Dial
+	}
+	session, failure := openLiveSession(ctx, template, TranscribeConfig{Dial: dial})
+	if failure != nil {
+		return failure
+	}
+	session.close()
+	return nil
+}
+
+func isDirectProviderUnavailable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "direct auth token provider was not found")
+}
+
+func observeLegacyProbe(
+	ctx context.Context,
+	config AuthRefreshConfig,
+	session *cdp.PageSession,
+	userAgent string,
+) (observedProbe, error) {
 	var control dictationControlState
 	composerObservedAt := time.Time{}
 	if err := pollUntil(ctx, dictationControlTimeout, dictationControlPoll, func() (bool, error) {
@@ -494,9 +613,9 @@ func observeProbe(
 		SchemaVersion:    AuthTemplateSchemaVersion,
 		AuthToken:        authToken,
 		ClientMetadata:   metadata,
-		BrowserUserAgent: userAgent.UserAgent,
+		BrowserUserAgent: userAgent,
 		CapturedAt:       now.Format(time.RFC3339Nano),
-		Source:           "headed-cdp-observed-token-provision",
+		Source:           legacyAuthTemplateSource,
 	}
 	if err := template.Validate(); err != nil {
 		return observedProbe{}, fmt.Errorf("validate observed Microsoft 365 auth: %w", err)
@@ -510,18 +629,20 @@ func observeProbe(
 		WebSocketObserved: websocketObserved,
 		TokenProvisioned:  true,
 		AudioProtocol:     "AugLoop_Voice_VoiceTile/v2",
-		Source:            "headed-cdp-dictation-probe",
+		Source:            legacyRuntimeSource,
 		Message:           "Observed M365 Copilot dictation session initialization and auth token provision.",
 	}
 	if err := runtime.Validate(); err != nil {
 		return observedProbe{}, fmt.Errorf("validate observed Microsoft 365 capabilities: %w", err)
 	}
 	return observedProbe{
-		Template:          template,
-		Runtime:           runtime,
-		DictationObserved: true,
-		WebSocketObserved: websocketObserved,
-		TokenProvisioned:  true,
+		Template:                template,
+		Runtime:                 runtime,
+		DictationButtonObserved: true,
+		DictationObserved:       true,
+		TokenProviderObserved:   false,
+		WebSocketObserved:       websocketObserved,
+		TokenProvisioned:        true,
 	}, nil
 }
 
@@ -672,11 +793,14 @@ func replaceCleanupFailure(result webagent.Result, target *webagent.TargetEviden
 }
 
 func probeErrorCode(err error) string {
-	if strings.Contains(err.Error(), "token") {
-		return "m365_auth_token_not_observed"
-	}
 	if strings.Contains(err.Error(), "voice input was unavailable") {
 		return "m365_voice_input_unavailable"
+	}
+	if strings.Contains(err.Error(), "direct AugLoop WebSocket probe failed") {
+		return "m365_direct_websocket_probe_failed"
+	}
+	if strings.Contains(err.Error(), "token") {
+		return "m365_auth_token_not_observed"
 	}
 	if strings.Contains(err.Error(), "dictation") {
 		return "m365_dictation_probe_failed"
@@ -685,11 +809,14 @@ func probeErrorCode(err error) string {
 }
 
 func probeErrorMessage(err error) string {
+	if strings.Contains(err.Error(), "voice input was unavailable") {
+		return "Microsoft 365 Copilot did not expose its voice-input control or runtime token provider on the exact headed target; the current account or runtime may not be eligible for dictation"
+	}
+	if strings.Contains(err.Error(), "direct AugLoop WebSocket probe failed") {
+		return "Microsoft 365 exposed its live auth provider, but the direct AugLoop VoiceTile WebSocket probe failed"
+	}
 	if strings.Contains(err.Error(), "token") {
 		return "Microsoft 365 did not expose a fresh AugLoop auth token during the bounded dictation probe"
-	}
-	if strings.Contains(err.Error(), "voice input was unavailable") {
-		return "Microsoft 365 Copilot did not expose its voice-input control on the exact headed target; the current account or runtime may not be eligible for dictation"
 	}
 	if strings.Contains(err.Error(), "dictation") {
 		return "Microsoft 365 Copilot dictation was not observable on the exact headed target"

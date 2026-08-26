@@ -333,10 +333,15 @@ func (a *app) connectionMode() string {
 }
 
 func (a *app) daemonStatus(ctx context.Context, probe browser.ProbeResult) daemon.Status {
+	// A listening Unix socket is not proof that the daemon can answer RPC. Keep
+	// status useful when a stale or wedged daemon accepts a connection but never
+	// returns a browser-budget response.
+	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	browserMode := a.browserModeName()
 	status := daemon.SnapshotForMode(browserMode, a.connectionMode(), a.opts.autoConnect, probe)
-	status = a.statusWithModeRuntime(ctx, status, probe)
-	status.Health = a.browserHealthSnapshot(ctx, status, false)
+	status = a.statusWithModeRuntime(statusCtx, status, probe)
+	status.Health = a.browserHealthSnapshot(statusCtx, status, false)
 	return status
 }
 

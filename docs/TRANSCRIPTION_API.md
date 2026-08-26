@@ -106,6 +106,12 @@ If an explicit Microsoft 365 refresh targets an account/runtime that does not
 expose voice input, it returns `m365_voice_input_unavailable` with
 `retry_safe: false` after exact target cleanup; callers should repair account
 eligibility or runtime configuration rather than retrying on a timer.
+The refresh path is account-agnostic: it first reads the live app-owned
+`tokenProviders.augloop` provider and proves a direct AugLoop VoiceTile
+WebSocket session, so a visible microphone button is not required. The same
+path supports signed-in Microsoft 365 Personal and Work sessions; account
+eligibility remains controlled by Microsoft. A legacy visible-control probe is
+retained only for runtimes that do not expose the provider.
 
 `GET /healthz` and `GET /v1/models` accept the explicit diagnostic query
 `?include_disabled=true`. Ordinary responses omit providers disabled by

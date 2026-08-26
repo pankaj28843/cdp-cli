@@ -60,8 +60,8 @@ func (a *app) m365CapabilitiesData(
 func (a *app) newWorkflowAgentM365DoctorCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
-		Short: "Report Microsoft 365 dictation readiness from owner-only local evidence",
-		Long: "Read owner-only Microsoft 365 auth and AugLoop dictation evidence without opening or probing Chrome. " +
+		Short: "Report Microsoft 365 AugLoop voice readiness from owner-only local evidence",
+		Long: "Read owner-only Microsoft 365 auth and AugLoop voice evidence without opening or probing Chrome. " +
 			"Browser submission remains an explicit headed-runtime operation.",
 		Example: "  cdp workflow agent m365 doctor --json",
 		Args:    cobra.NoArgs,
@@ -106,9 +106,10 @@ func (a *app) newWorkflowAgentM365AuthCommand() *cobra.Command {
 func (a *app) newWorkflowAgentM365AuthRefreshCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh",
-		Short: "Refresh Microsoft 365 AugLoop auth evidence with a bounded dictation probe",
-		Long: "Open one owned Microsoft 365 target, trigger the exact dictation control, observe the AugLoop " +
-			"session metadata and token provision, persist owner-only evidence, and exact-close the target.",
+		Short: "Refresh Microsoft 365 AugLoop auth through the live token provider",
+		Long: "Open one owned Microsoft 365 target, observe the app-owned AugLoop token provider, validate a " +
+			"direct WebSocket session, persist owner-only evidence, and exact-close the target. Use the legacy " +
+			"dictation-control probe only when the runtime does not expose the provider.",
 		Example: "  cdp workflow agent m365 auth refresh --json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -143,9 +144,10 @@ func (a *app) newWorkflowAgentM365AuthRefreshCommand() *cobra.Command {
 func (a *app) newWorkflowAgentM365CapabilitiesRefreshCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh",
-		Short: "Refresh Microsoft 365 AugLoop dictation capability evidence",
-		Long: "Run the bounded Microsoft 365 dictation probe and persist the observed AugLoop VoiceTile " +
-			"protocol and result subscriptions without submitting a user prompt.",
+		Short: "Refresh Microsoft 365 AugLoop voice capability evidence",
+		Long: "Observe the live Microsoft 365 token provider, validate the direct AugLoop VoiceTile " +
+			"WebSocket protocol, and persist capability evidence without submitting a user prompt. A " +
+			"legacy dictation-control probe is used only when the provider is unavailable.",
 		Example: "  cdp workflow agent m365 capabilities refresh --json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

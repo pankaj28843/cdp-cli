@@ -27,6 +27,10 @@ const (
 	DefaultCapabilitiesTTL           = 14 * 24 * time.Hour
 	RelativeTemplatePath             = "webagent/m365/auth-template.json"
 	RelativeCapabilitiesPath         = "webagent/m365/capabilities.json"
+	legacyAuthTemplateSource         = "headed-cdp-observed-token-provision"
+	directAuthTemplateSource         = "headed-cdp-runtime-token-provider"
+	legacyRuntimeSource              = "headed-cdp-dictation-probe"
+	directRuntimeSource              = "headed-cdp-direct-websocket-probe"
 	maxAuthTokenBytes                = 128 << 10
 )
 
@@ -249,7 +253,7 @@ func (t AuthTemplate) Validate() error {
 	if _, err := time.Parse(time.RFC3339Nano, t.CapturedAt); err != nil {
 		return fmt.Errorf("captured_at must be RFC3339")
 	}
-	if t.Source != "headed-cdp-observed-token-provision" {
+	if t.Source != legacyAuthTemplateSource && t.Source != directAuthTemplateSource {
 		return fmt.Errorf("source is not an accepted Microsoft 365 token observation")
 	}
 	return nil
@@ -292,7 +296,7 @@ func (r RuntimeCapabilities) Validate() error {
 	if !r.DictationObserved || !r.WebSocketObserved || !r.TokenProvisioned {
 		return fmt.Errorf("runtime capability evidence is incomplete")
 	}
-	if r.Source != "headed-cdp-dictation-probe" {
+	if r.Source != legacyRuntimeSource && r.Source != directRuntimeSource {
 		return fmt.Errorf("source is not an accepted Microsoft 365 capability observation")
 	}
 	return nil
