@@ -80,7 +80,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			"LAN-capable primary and cleartext companion listeners without bearer-token authentication, and retains result records under " +
 			"<state-dir>/transcription; uploaded media is ephemeral unless --persist-audio is set. " +
 			"When --fixture-dir is configured, the service runs a bounded synthetic probe for every configured provider on a recurring cadence; " +
-			"health is green only after a recent probe succeeds. Configure a local OpenAI-compatible backend with " +
+			"the probe is browser-free and health is green only after a recent probe succeeds. The separate headed auth/capability schedule " +
+			"is disabled unless --auth-refresh-interval is explicitly supplied. Configure a local OpenAI-compatible backend with " +
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
 		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --local-base-url http://localhost:9000/v1 --print-ready\n" +
@@ -124,7 +125,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			}
 			probeEnabled := strings.TrimSpace(fixtureDir) != ""
 			var authCoordinator *transcriptionapi.AuthRefreshCoordinator
-			if authRefreshScheduleEnabled(probeEnabled, cmd.Flags().Changed("auth-refresh-interval")) {
+			authRefreshExplicit := cmd.Flags().Changed("auth-refresh-interval") || envBool("CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED")
+			if authRefreshScheduleEnabled(probeEnabled, authRefreshExplicit) {
 				authCoordinator = transcriptionapi.NewAuthRefreshCoordinator(registry, authRefreshInterval)
 			}
 			var probeCoordinator *transcriptionapi.SyntheticProbeCoordinator
@@ -204,7 +206,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes; transcript records are retained independently")
-	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers")
+	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "explicit shared recurring freshness check for all online providers")
 	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", os.Getenv("CDP_TRANSCRIPTION_FIXTURE_DIR"), "checked-in WebM corpus used by the bounded provider health probe; empty disables probe scheduling for transient runs")
 	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
@@ -217,12 +219,14 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	return cmd
 }
 
-// authRefreshScheduleEnabled keeps the synthetic probe as the normal hot path:
-// every probe checks cached auth and refreshes only when it is actually stale.
-// A separate recurring auth loop remains available as an explicit opt-in for
-// deployments that do not want to rely on fixture probes.
+// authRefreshScheduleEnabled keeps the transcription service browser-free by
+// default. Synthetic probes never refresh lifecycle state; the separate
+// headed auth/capability loop is available only after an explicit opt-in. The
+// probeEnabled argument remains part of the small policy seam so callers can
+// test the interaction without duplicating service setup.
 func authRefreshScheduleEnabled(probeEnabled, explicit bool) bool {
-	return !probeEnabled || explicit
+	_ = probeEnabled
+	return explicit
 }
 
 func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string, allowedProviders []string) (*transcriptionapi.Registry, error) {
@@ -392,13 +396,12 @@ func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request t
 	if transcribe == nil {
 		transcribe = chatgpt.Transcribe
 	}
-	result := transcribe(ctx, chatgpt.TranscribeConfig{
-		Store:         p.store,
-		BuildCommit:   p.app.build.Commit,
-		RefreshAuth:   p.refreshAuth,
-		AudioFileName: request.Audio.FileName,
-		AudioMIMEType: request.Audio.MIMEType,
-		BrowserFallback: func(
+	refreshAuth := p.refreshAuth
+	var browserFallback func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
+	if request.SyntheticProbe {
+		refreshAuth = nil
+	} else {
+		browserFallback = func(
 			fallbackContext context.Context,
 			fallbackConfig chatgpt.TranscribeConfig,
 			filePath string,
@@ -424,7 +427,15 @@ func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request t
 			fallbackConfig.Store = refreshedStore
 			fallbackConfig.BrowserFallback = nil
 			return transcribe(fallbackContext, fallbackConfig, filePath, durationMilliseconds)
-		},
+		}
+	}
+	result := transcribe(ctx, chatgpt.TranscribeConfig{
+		Store:           p.store,
+		BuildCommit:     p.app.build.Commit,
+		RefreshAuth:     refreshAuth,
+		AudioFileName:   request.Audio.FileName,
+		AudioMIMEType:   request.Audio.MIMEType,
+		BrowserFallback: browserFallback,
 	}, request.Audio.PersistedPath, duration)
 	if !result.OK {
 		return transcriptionapi.Result{}, webAgentProviderError(result)
@@ -549,10 +560,14 @@ func (p *m365TranscriptionProvider) Transcribe(ctx context.Context, request tran
 	if err != nil {
 		return transcriptionapi.Result{}, err
 	}
+	refreshAuth := p.refreshAuth
+	if request.SyntheticProbe {
+		refreshAuth = nil
+	}
 	result := m365.Transcribe(ctx, m365.TranscribeConfig{
 		Store:       p.store,
 		BuildCommit: p.app.build.Commit,
-		RefreshAuth: p.refreshAuth,
+		RefreshAuth: refreshAuth,
 		Dial:        augloop.Dial,
 	}, request.Audio.PersistedPath, duration)
 	if !result.OK {

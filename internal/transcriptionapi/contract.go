@@ -74,6 +74,9 @@ type FileRequest struct {
 	Stream                 bool                   `json:"stream,omitempty"`
 	TimestampGranularities []TimestampGranularity `json:"timestamp_granularities,omitempty"`
 	Include                []string               `json:"include,omitempty"`
+	// SyntheticProbe is an internal adapter signal. Health probes must not
+	// trigger a headed auth repair from inside a provider's lazy retry path.
+	SyntheticProbe bool `json:"-"`
 }
 
 func (r FileRequest) Normalized() FileRequest {
@@ -264,6 +267,9 @@ type RealtimeSessionConfig struct {
 	Prompt        string              `json:"prompt,omitempty"`
 	InputFormat   RealtimeAudioFormat `json:"input_format,omitempty"`
 	TurnDetection any                 `json:"turn_detection,omitempty"`
+	// SyntheticProbe is an internal adapter signal. Health probes must not
+	// trigger a headed auth repair from inside a provider's lazy setup path.
+	SyntheticProbe bool `json:"-"`
 }
 
 func (c RealtimeSessionConfig) Validate() error {

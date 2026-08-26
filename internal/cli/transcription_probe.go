@@ -23,9 +23,10 @@ func (p *m365TranscriptionProvider) ProbeRealtime(ctx context.Context, fixture t
 		return err
 	}
 	session, err := p.NewRealtime(ctx, transcriptionapi.RealtimeSessionConfig{
-		Type:        "transcription",
-		Model:       transcriptionapi.DefaultModel,
-		InputFormat: transcriptionapi.RealtimeAudioFormat{Type: "audio/pcm", Rate: transcriptionProbeRealtimeSampleRate},
+		Type:           "transcription",
+		Model:          transcriptionapi.DefaultModel,
+		SyntheticProbe: true,
+		InputFormat:    transcriptionapi.RealtimeAudioFormat{Type: "audio/pcm", Rate: transcriptionProbeRealtimeSampleRate},
 	})
 	if err != nil {
 		return err

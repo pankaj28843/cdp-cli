@@ -56,6 +56,7 @@ type Config struct {
 	LocalAPIKey          string
 	MaxAudioBytes        int64
 	AuthRefreshInterval  time.Duration
+	AuthRefreshEnabled   bool
 	FixtureDir           string
 	ProbeInterval        time.Duration
 	PersistAudio         bool
@@ -165,6 +166,7 @@ func (c Config) Environment() map[string]string {
 		"CDP_TRANSCRIPTION_LOCAL_API_KEY":           c.LocalAPIKey,
 		"CDP_TRANSCRIPTION_MAX_AUDIO_BYTES":         strconv.FormatInt(c.MaxAudioBytes, 10),
 		"CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL":   c.AuthRefreshInterval.String(),
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED":    strconv.FormatBool(c.AuthRefreshEnabled),
 		"CDP_TRANSCRIPTION_FIXTURE_DIR":             c.FixtureDir,
 		"CDP_TRANSCRIPTION_PROBE_INTERVAL":          c.ProbeInterval.String(),
 		"CDP_TRANSCRIPTION_PERSIST_AUDIO":           strconv.FormatBool(c.PersistAudio),

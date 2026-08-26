@@ -118,7 +118,7 @@ func browserModeForTarget(target *webagent.TargetEvidence) string {
 	return "headed"
 }
 
-func cleanupCommands(runID string, cleanup webagent.CleanupEvidence) []string {
+func cleanupCommands(runID string, operation webagent.Operation, cleanup webagent.CleanupEvidence) []string {
 	commands := []string{"cdp workflow agent m365 doctor --json"}
 	if cleanup.TargetID != "" {
 		commands = append(commands, fmt.Sprintf(
@@ -127,7 +127,11 @@ func cleanupCommands(runID string, cleanup webagent.CleanupEvidence) []string {
 		))
 	}
 	if runID != "" {
-		commands = append(commands, "cdp workflow agent m365 auth refresh --json")
+		if operation == webagent.OperationCapabilities {
+			commands = append(commands, "cdp workflow agent m365 capabilities refresh --json")
+		} else {
+			commands = append(commands, "cdp workflow agent m365 auth refresh --json")
+		}
 	}
 	return commands
 }

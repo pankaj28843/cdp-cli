@@ -189,6 +189,47 @@ func TestSyntheticProbeCoordinatorIsolatesProvidersAndPersistsRedactedState(t *t
 	}
 }
 
+type lifecycleRefreshingProbeProvider struct {
+	*fakeProvider
+	capabilityRefreshCalls int
+}
+
+func (p *lifecycleRefreshingProbeProvider) EnsureCapabilitiesFresh(context.Context) error {
+	p.capabilityRefreshCalls++
+	return nil
+}
+
+func TestSyntheticProbeCoordinatorDoesNotRefreshProviderLifecycleHooks(t *testing.T) {
+	provider := &lifecycleRefreshingProbeProvider{
+		fakeProvider: &fakeProvider{
+			id:     ProviderM365,
+			result: Result{Text: "cached-capability probe"},
+		},
+	}
+	coordinator, err := NewSyntheticProbeCoordinator(
+		NewRegistry(provider),
+		[]ProbeFixture{{ID: "fixture-001", Path: "/tmp/fixture-001.webm", FileName: "fixture-001.webm", MIMEType: "audio/webm", Bytes: 32}},
+		t.TempDir(),
+		5*time.Minute,
+		time.Second,
+		15*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.RunOnce(context.Background())
+
+	provider.requestMu.Lock()
+	authRefreshCalls := provider.ensureCalls
+	provider.requestMu.Unlock()
+	if authRefreshCalls != 0 || provider.capabilityRefreshCalls != 0 {
+		t.Fatalf("lifecycle refresh calls = auth %d/capabilities %d, want zero", authRefreshCalls, provider.capabilityRefreshCalls)
+	}
+	if provider.transcribeCall != 1 {
+		t.Fatalf("transcribe calls = %d, want one cached-capability probe", provider.transcribeCall)
+	}
+}
+
 type realtimeProbeFakeProvider struct {
 	*fakeProvider
 	realtimeErr error

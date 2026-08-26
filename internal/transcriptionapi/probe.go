@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	// Keep provider evidence hot enough that a stale headed session is repaired
-	// before the next user turn, while bounding each provider attempt so a
-	// wedged browser cannot block the cadence indefinitely.
+	// Keep cached provider evidence fresh enough to detect a stale headed
+	// session before the next user turn, while bounding each provider attempt
+	// so a wedged provider cannot block the cadence indefinitely.
 	DefaultProbeInterval          = time.Minute
 	DefaultProbeTimeout           = 30 * time.Second
 	DefaultProbeMaxAge            = 3 * time.Minute
@@ -265,9 +265,12 @@ func applyPathStatus(state probeHealthState, found bool, now time.Time, maxAge t
 }
 
 // SyntheticProbeCoordinator exercises every advertised provider transcription
-// path with one weighted-LRU WebM on a bounded cadence. It persists only
-// timestamps, fixture ids, and redacted result codes; audio and transcript text
-// never enter probe state.
+// path with one weighted-LRU WebM on a bounded cadence. It is deliberately
+// browser-free: probes use the provider's cached capability snapshot and never
+// invoke AuthRefresher or CapabilityRefresher hooks. Headed auth/capability
+// repair is an explicit operation or request-time action, not a health-probe
+// side effect. It persists only timestamps, fixture ids, and redacted result
+// codes; audio and transcript text never enter probe state.
 type SyntheticProbeCoordinator struct {
 	registry  *Registry
 	selector  *fixtureSelector
@@ -429,36 +432,17 @@ func (c *SyntheticProbeCoordinator) probeProvider(ctx context.Context, provider 
 	if len(paths) == 0 {
 		return
 	}
-	if refresher, ok := provider.(AuthRefresher); ok {
-		if err := refresher.EnsureAuthFresh(probeContext); err != nil {
-			c.recordProviderFailure(providerID, paths, fixture, probeReason(err))
-			return
-		}
-	}
-	if refresher, ok := provider.(CapabilityRefresher); ok {
-		if err := refresher.EnsureCapabilitiesFresh(probeContext); err != nil {
-			c.recordProviderFailure(providerID, paths, fixture, probeReason(err))
-			return
-		}
-	}
-	capability = provider.Capabilities(probeContext)
-	paths = probePathsForCapability(capability)
-	for _, path := range paths {
-		c.recordPathAttempt(providerID, path, fixture)
-	}
-	if len(paths) == 0 {
-		return
-	}
 	if !capability.Ready {
 		c.recordProviderFailure(providerID, paths, fixture, "provider_not_ready")
 		return
 	}
 	if capability.File {
 		result, err := provider.Transcribe(probeContext, FileRequest{
-			RequestID: NewRequestID(),
-			Task:      TaskTranscribe,
-			Provider:  providerID,
-			Model:     DefaultModel,
+			RequestID:      NewRequestID(),
+			Task:           TaskTranscribe,
+			Provider:       providerID,
+			Model:          DefaultModel,
+			SyntheticProbe: true,
 			Audio: AudioAsset{
 				FileName:      fixture.FileName,
 				MIMEType:      fixture.MIMEType,

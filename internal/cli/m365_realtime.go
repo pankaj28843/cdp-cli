@@ -45,7 +45,7 @@ type m365RealtimeSession struct {
 	closeOnce sync.Once
 }
 
-func newM365RealtimeSession(ctx context.Context, provider *m365TranscriptionProvider, _ transcriptionapi.RealtimeSessionConfig) (transcriptionapi.RealtimeSession, error) {
+func newM365RealtimeSession(ctx context.Context, provider *m365TranscriptionProvider, config transcriptionapi.RealtimeSessionConfig) (transcriptionapi.RealtimeSession, error) {
 	if provider == nil || provider.store == nil {
 		return nil, transcriptionProviderError(503, "provider_unavailable", "m365_state_unavailable", "Microsoft 365 owner-only auth state is unavailable", false)
 	}
@@ -63,10 +63,14 @@ func newM365RealtimeSession(ctx context.Context, provider *m365TranscriptionProv
 		cancel:        cancel,
 		streamDone:    make(chan struct{}),
 	}
+	refreshAuth := provider.refreshAuth
+	if config.SyntheticProbe {
+		refreshAuth = nil
+	}
 	streamConfig := m365.TranscribeConfig{
 		Store:       provider.store,
 		BuildCommit: provider.app.build.Commit,
-		RefreshAuth: provider.refreshAuth,
+		RefreshAuth: refreshAuth,
 		Dial:        augloop.Dial,
 		PaceTiles:   false,
 	}

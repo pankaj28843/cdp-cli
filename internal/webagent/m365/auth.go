@@ -16,6 +16,9 @@ const (
 	AuthRefreshSchemaVersion  = "m365-auth-refresh/v1"
 	DoctorSchemaVersion       = "m365-doctor/v1"
 	defaultObservationTimeout = 20 * time.Second
+	dictationControlTimeout   = 30 * time.Second
+	dictationControlGrace     = 8 * time.Second
+	dictationControlPoll      = 250 * time.Millisecond
 )
 
 type EventClient interface {
@@ -94,6 +97,103 @@ type observedProbe struct {
 	TokenProvisioned  bool
 }
 
+type dictationControlState struct {
+	ComposerFound  bool `json:"composer_found"`
+	ButtonFound    bool `json:"button_found"`
+	CandidateCount int  `json:"candidate_count"`
+	ButtonPressed  bool `json:"button_pressed"`
+}
+
+// M365's current web composer renders the voice control as a Fluent button
+// with a tooltip and microphone SVG, not a stable aria-label. Keep the legacy
+// labels for older deployments, but scope the icon fallback to the composer
+// and require a visible button so unrelated page controls cannot be clicked.
+const m365DictationControlExpression = `(() => {
+  const composer = document.querySelector('[contenteditable="true"], textarea');
+  const root = document.querySelector('#m365-chat-input-shared-container');
+  const visible = element => {
+    if (!element || element.disabled) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+  };
+  const label = button => [
+    button.getAttribute('aria-label'),
+    button.getAttribute('title'),
+    button.getAttribute('data-testid'),
+    button.innerText,
+  ].filter(Boolean).join(' ').toLowerCase();
+  const hasMicrophoneIcon = button => [...button.querySelectorAll('svg path')].some(path =>
+    (path.getAttribute('d') || '').startsWith('M10 13a3 3 0 0 0 3-3V5')
+  );
+  const inComposer = button => !root || root.contains(button);
+  const candidates = [...document.querySelectorAll('button')].filter(button =>
+    visible(button) && inComposer(button) && (
+      /microphone|dictation|voice input|start dictation|stop dictation/i.test(label(button)) ||
+      hasMicrophoneIcon(button)
+    )
+  );
+  const button = candidates[0];
+  return {
+    composer_found: visible(composer),
+    button_found: Boolean(button),
+    candidate_count: candidates.length,
+    button_pressed: button?.getAttribute('aria-pressed') === 'true',
+  };
+})()`
+
+const m365DictationClickExpression = `(() => {
+  const root = document.querySelector('#m365-chat-input-shared-container');
+  const label = button => [
+    button.getAttribute('aria-label'),
+    button.getAttribute('title'),
+    button.getAttribute('data-testid'),
+    button.innerText,
+  ].filter(Boolean).join(' ').toLowerCase();
+  const hasMicrophoneIcon = button => [...button.querySelectorAll('svg path')].some(path =>
+    (path.getAttribute('d') || '').startsWith('M10 13a3 3 0 0 0 3-3V5')
+  );
+  const inComposer = button => !root || root.contains(button);
+  const candidates = [...document.querySelectorAll('button')].filter(button =>
+    !button.disabled && inComposer(button) && (
+      /microphone|dictation|voice input|start dictation|stop dictation/i.test(label(button)) ||
+      hasMicrophoneIcon(button)
+    )
+  );
+  const button = candidates.find(candidate =>
+    /start dictation/i.test(label(candidate)) ||
+    !/stop dictation/i.test(label(candidate))
+  );
+  if (!button) return {clicked: false};
+  button.click();
+  return {clicked: true};
+})()`
+
+const m365DictationStopExpression = `(() => {
+  const root = document.querySelector('#m365-chat-input-shared-container');
+  const label = button => [
+    button.getAttribute('aria-label'),
+    button.getAttribute('title'),
+    button.getAttribute('data-testid'),
+    button.innerText,
+  ].filter(Boolean).join(' ').toLowerCase();
+  const hasMicrophoneIcon = button => [...button.querySelectorAll('svg path')].some(path =>
+    (path.getAttribute('d') || '').startsWith('M10 13a3 3 0 0 0 3-3V5')
+  );
+  const inComposer = button => !root || root.contains(button);
+  const candidates = [...document.querySelectorAll('button')].filter(button =>
+    !button.disabled && inComposer(button) && (
+      /microphone|dictation|voice input|start dictation|stop dictation/i.test(label(button)) ||
+      hasMicrophoneIcon(button)
+    )
+  );
+  const button = candidates.find(candidate =>
+    /stop dictation/i.test(label(candidate)) || candidate.getAttribute('aria-pressed') === 'true'
+  );
+  if (!button) return {stopped: false};
+  button.click();
+  return {stopped: true};
+})()`
+
 func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result {
 	data := AuthRefreshData{
 		SchemaVersion: AuthRefreshSchemaVersion,
@@ -146,15 +246,31 @@ func refresh(
 		) webagent.Result {
 			probe, err := observeProbe(ctx, config, lease.Session())
 			if err != nil {
-				return operationFailure(
+				probeCode := probeErrorCode(err)
+				errClass := "auth"
+				nextCommands := []string{
+					"cdp workflow agent m365 auth refresh --json",
+					"cdp workflow agent m365 doctor --json",
+				}
+				if operation == webagent.OperationCapabilities {
+					errClass = "capability"
+					nextCommands = []string{
+						"cdp workflow agent m365 capabilities refresh --json",
+						"cdp workflow agent m365 doctor --json",
+					}
+				}
+				if probeCode == "m365_voice_input_unavailable" {
+					nextCommands = []string{"cdp workflow agent m365 doctor --json"}
+				}
+				result := operationFailure(
 					runID, config.BuildCommit, operation, webagent.StageObserveTerminal,
 					"browser_observed_auth", target, pending,
-					probeErrorCode(err), "auth", probeErrorMessage(err), data,
-					[]string{
-						"cdp workflow agent m365 auth refresh --json",
-						"cdp workflow agent m365 doctor --json",
-					},
+					probeCode, errClass, probeErrorMessage(err), data, nextCommands,
 				)
+				if probeCode == "m365_voice_input_unavailable" && result.Error != nil {
+					result.Error.RetrySafe = false
+				}
+				return result
 			}
 			if err := config.Store.SaveTemplate(ctx, probe.Template); err != nil {
 				return operationFailure(
@@ -280,19 +396,34 @@ func observeProbe(
 	if strings.TrimSpace(userAgent.UserAgent) == "" {
 		return observedProbe{}, fmt.Errorf("browser user agent was empty")
 	}
-	var button struct {
-		Found bool `json:"found"`
-	}
-	if err := pollUntil(ctx, 30*time.Second, 250*time.Millisecond, func() (bool, error) {
-		err := evaluateInto(ctx, session, `(() => ({found: Boolean(document.querySelector('button[aria-label="Start dictation"]'))}))()`, &button)
-		return button.Found, err
+	var control dictationControlState
+	composerObservedAt := time.Time{}
+	if err := pollUntil(ctx, dictationControlTimeout, dictationControlPoll, func() (bool, error) {
+		if err := evaluateInto(ctx, session, m365DictationControlExpression, &control); err != nil {
+			return false, err
+		}
+		if control.ButtonFound {
+			return true, nil
+		}
+		if !control.ComposerFound {
+			composerObservedAt = time.Time{}
+			return false, nil
+		}
+		if composerObservedAt.IsZero() {
+			composerObservedAt = time.Now()
+			return false, nil
+		}
+		if time.Since(composerObservedAt) >= dictationControlGrace {
+			return false, fmt.Errorf("Microsoft 365 voice input was unavailable on the exact headed target")
+		}
+		return false, nil
 	}); err != nil {
 		return observedProbe{}, fmt.Errorf("Microsoft 365 dictation control was not observed: %w", err)
 	}
 	var clicked struct {
 		Clicked bool `json:"clicked"`
 	}
-	if err := evaluateInto(ctx, session, `(() => { const button = document.querySelector('button[aria-label="Start dictation"]'); if (!button) return {clicked:false}; button.click(); return {clicked:true}; })()`, &clicked); err != nil || !clicked.Clicked {
+	if err := evaluateInto(ctx, session, m365DictationClickExpression, &clicked); err != nil || !clicked.Clicked {
 		return observedProbe{}, fmt.Errorf("Microsoft 365 dictation control could not be triggered")
 	}
 
@@ -338,7 +469,7 @@ func observeProbe(
 			}
 		}
 	}
-	_ = evaluateInto(ctx, session, `(() => { const button = document.querySelector('button[aria-label="Stop dictation"]'); if (!button) return {stopped:false}; button.click(); return {stopped:true}; })()`, &struct {
+	_ = evaluateInto(ctx, session, m365DictationStopExpression, &struct {
 		Stopped bool `json:"stopped"`
 	}{})
 	if metadata.AppName == "" {
@@ -522,13 +653,16 @@ func replaceCleanupFailure(result webagent.Result, target *webagent.TargetEviden
 		TargetPollObserved: cleanup.TargetPollObserved, FailurePhase: cleanup.FailurePhase,
 	}
 	result.Stage = webagent.StageCleanupPending
-	result.NextCommands = cleanupCommands(runID, result.Cleanup)
+	result.NextCommands = cleanupCommands(runID, result.Operation, result.Cleanup)
 	return result
 }
 
 func probeErrorCode(err error) string {
 	if strings.Contains(err.Error(), "token") {
 		return "m365_auth_token_not_observed"
+	}
+	if strings.Contains(err.Error(), "voice input was unavailable") {
+		return "m365_voice_input_unavailable"
 	}
 	if strings.Contains(err.Error(), "dictation") {
 		return "m365_dictation_probe_failed"
@@ -539,6 +673,9 @@ func probeErrorCode(err error) string {
 func probeErrorMessage(err error) string {
 	if strings.Contains(err.Error(), "token") {
 		return "Microsoft 365 did not expose a fresh AugLoop auth token during the bounded dictation probe"
+	}
+	if strings.Contains(err.Error(), "voice input was unavailable") {
+		return "Microsoft 365 Copilot did not expose its voice-input control on the exact headed target; the current account or runtime may not be eligible for dictation"
 	}
 	if strings.Contains(err.Error(), "dictation") {
 		return "Microsoft 365 Copilot dictation was not observable on the exact headed target"

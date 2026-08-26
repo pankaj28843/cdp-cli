@@ -106,6 +106,7 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	}
 	for _, want := range []string{
 		`CDP_TRANSCRIPTION_PROVIDERS="chatgpt-web"`,
+		`CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED="false"`,
 		`CDP_TRANSCRIPTION_PROBE_INTERVAL="5m0s"`,
 		`CDP_TRANSCRIPTION_FIXTURE_DIR="/synthetic-user/cdp-fixtures"`,
 		`CDP_BROWSER_MODE="headed"`,
@@ -120,6 +121,22 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	}
 	if artifacts[1].Mode != 0o600 {
 		t.Fatalf("environment mode = %o, want 600", artifacts[1].Mode)
+	}
+}
+
+func TestRenderPersistsExplicitAuthRefreshOptIn(t *testing.T) {
+	paths, err := PathsForHome("/synthetic-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := testConfig()
+	config.AuthRefreshEnabled = true
+	artifacts, err := Render(PlatformLinux, config, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(artifacts[1].Data), `CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED="true"`) {
+		t.Fatalf("environment file did not persist explicit auth refresh opt-in: %s", artifacts[1].Data)
 	}
 }
 

@@ -87,12 +87,22 @@ installed service selects one fixture from the least-recently-used weighted
 pool immediately at startup and then every minute by default. Each
 configured provider path is exercised independently: file upload for
 `file: true`, and the native paced PCM WebSocket path for `realtime: true`.
+A synthetic probe uses cached provider capability/auth evidence only; it never
+invokes a provider's auth or capability refresh hook and therefore never opens
+a headed browser target as a health-check side effect. The installed service's
+headed auth/capability schedule is off unless `--auth-refresh-interval` was
+explicitly supplied at installation. Run an explicit provider refresh command,
+or make an explicit request, when headed repair is intended.
 `--probe-interval` can be changed for a deployment; setting it to zero uses the
 one-minute default rather than disabling the safety gate. Probe evidence is
 considered stale after three missed minutes, so the health supervisor can
-restart a degraded headed path promptly. One fixture is
+detect a degraded headed path promptly for explicit repair. One fixture is
 selected per cadence and the corpus rotates over time, keeping the recurring
 probe bounded while exercising all 100 checked-in inputs.
+If an explicit Microsoft 365 refresh targets an account/runtime that does not
+expose voice input, it returns `m365_voice_input_unavailable` with
+`retry_safe: false` after exact target cleanup; callers should repair account
+eligibility or runtime configuration rather than retrying on a timer.
 
 `GET /healthz` and `GET /v1/models` accept the explicit diagnostic query
 `?include_disabled=true`. Ordinary responses omit providers disabled by
@@ -302,12 +312,15 @@ The registry currently supports:
 Provider adapters are the effect boundary. The API core owns persistence,
 request validation, WebSocket framing, event reduction, and provider-neutral
 errors. With a fixture corpus enabled, the synthetic probe is the normal hot
-path: each bounded probe checks cached auth and refreshes only when the
-provider's evidence is actually stale. This avoids a second browser-opening
-refresh loop. A separate service-owned coordinator remains available as an
-explicit `--auth-refresh-interval` opt-in and defaults to an hourly cadence
-when no fixture probe is configured. A request also calls the same provider's
-freshness hook before dispatch or the first realtime chunk. ChatGPT and
+path, but it is deliberately browser-free: each bounded probe tests the cached
+provider capability snapshot and records a redacted readiness failure when
+that evidence is stale. It never opens a target or calls a provider refresh
+hook. A separate service-owned coordinator is disabled by default and remains
+available only as an explicit `--auth-refresh-interval` opt-in; native service
+installation persists that opt-in separately from the duration so a default
+environment value cannot accidentally enable headed work. A request also
+calls the same provider's freshness hook before dispatch or the first
+realtime chunk. ChatGPT and
 Microsoft 365 keep their existing provider-specific refresh owner, so an
 expired session has an on-demand self-healing path without a provider-specific
 cron job. If the browser-free ChatGPT replay is rejected with a typed

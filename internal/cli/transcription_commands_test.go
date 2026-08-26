@@ -53,9 +53,10 @@ func TestAuthRefreshScheduleSkipsSeparateLoopWhenSyntheticProbesAreEnabled(t *te
 		explicit      bool
 		wantScheduled bool
 	}{
-		{name: "probe default uses hot path", probeEnabled: true, explicit: false, wantScheduled: false},
+		{name: "probe default stays browser free", probeEnabled: true, explicit: false, wantScheduled: false},
 		{name: "probe explicit opt in", probeEnabled: true, explicit: true, wantScheduled: true},
-		{name: "no probe keeps maintenance loop", probeEnabled: false, explicit: false, wantScheduled: true},
+		{name: "no probe still requires explicit opt in", probeEnabled: false, explicit: false, wantScheduled: false},
+		{name: "no probe explicit opt in", probeEnabled: false, explicit: true, wantScheduled: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := authRefreshScheduleEnabled(test.probeEnabled, test.explicit); got != test.wantScheduled {
