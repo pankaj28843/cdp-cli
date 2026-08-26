@@ -1756,6 +1756,7 @@ func managedProcessSnapshots(ctx context.Context) ([]managedProcessSnapshot, err
 		return nil, nil
 	}
 	cmd := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,command=")
+	cmd.WaitDelay = 500 * time.Millisecond
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -1858,6 +1859,7 @@ func managedChromeProcessesLinux(ctx context.Context, managedProfile string) ([]
 
 func managedChromeProcessesPS(ctx context.Context, managedProfile string) ([]int, error) {
 	cmd := exec.CommandContext(ctx, "ps", "-axo", "pid=,command=")
+	cmd.WaitDelay = 500 * time.Millisecond
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, nil
