@@ -11,13 +11,17 @@ import (
 )
 
 const (
-	ContractVersion             = "voxinput-transcription/v1"
-	DefaultModel                = "whisper-1"
-	MaxUploadBytes        int64 = 25 * 1024 * 1024
-	MaxSessionDuration          = 10 * time.Minute
-	MaxChunkBytes         int64 = 1 * 1024 * 1024
-	MaxTranscriptChars          = 100_000
-	MaxRealtimeAudioBytes int64 = 64 * 1024 * 1024
+	ContractVersion          = "voxinput-transcription/v1"
+	DefaultModel             = "whisper-1"
+	MaxUploadBytes     int64 = 25 * 1024 * 1024
+	MaxSessionDuration       = 10 * time.Minute
+	// DefaultFileRequestTimeout covers the maximum paced provider replay plus
+	// auth/session setup and final-result settling. A two-minute listener
+	// deadline is shorter than a supported two-minute M365 WebM request.
+	DefaultFileRequestTimeout       = MaxSessionDuration + 2*time.Minute
+	MaxChunkBytes             int64 = 1 * 1024 * 1024
+	MaxTranscriptChars              = 100_000
+	MaxRealtimeAudioBytes     int64 = 64 * 1024 * 1024
 )
 
 type ProviderID string

@@ -24,6 +24,7 @@ const (
 	maxPCMBytes                = pcmSampleRate * 2 * 10 * 60
 	defaultSessionTimeout      = 90 * time.Second
 	finalResultSettleTimeout   = 10 * time.Second
+	finalResultQuietTimeout    = 250 * time.Millisecond
 )
 
 type TranscribeConfig struct {
@@ -235,6 +236,9 @@ type liveSession struct {
 	readerContext     context.Context
 	readerCancel      context.CancelFunc
 	closeOnce         sync.Once
+	readerFailureMu   sync.Mutex
+	readerFailure     *transcribeFailure
+	eventSignal       chan struct{}
 	transcriptMu      sync.Mutex
 	finalSegments     []string
 	partialText       string
@@ -271,9 +275,10 @@ func openLiveSession(
 		}
 	}
 	session := &liveSession{
-		socket:    socket,
-		paceTiles: config.PaceTiles,
-		sleep:     config.Sleep,
+		socket:      socket,
+		paceTiles:   config.PaceTiles,
+		sleep:       config.Sleep,
+		eventSignal: make(chan struct{}, 1),
 	}
 	writeText := func(payload []byte) error {
 		return session.write(ctx, augloop.MessageText, payload)
@@ -418,10 +423,36 @@ func (s *liveSession) startReader(ctx context.Context) {
 }
 
 func (s *liveSession) emit(event liveEvent) {
+	if event.failure != nil {
+		s.readerFailureMu.Lock()
+		if s.readerFailure == nil {
+			s.readerFailure = event.failure
+		}
+		s.readerFailureMu.Unlock()
+	}
+	// Saved-file replay does not have a consumer for partial events while it
+	// is pacing the upload. Keep the transcript in the synchronized session
+	// state, and signal only terminal/error state so a long recording cannot
+	// fill the bounded live-event channel and backpressure the WebSocket.
+	if s.paceTiles {
+		if event.failure != nil || event.final != "" || event.stopped {
+			select {
+			case s.eventSignal <- struct{}{}:
+			default:
+			}
+		}
+		return
+	}
 	select {
 	case s.events <- event:
 	case <-s.readerContext.Done():
 	}
+}
+
+func (s *liveSession) readerFailureSnapshot() *transcribeFailure {
+	s.readerFailureMu.Lock()
+	defer s.readerFailureMu.Unlock()
+	return s.readerFailure
 }
 
 func (s *liveSession) recordPartial(text string) string {
@@ -467,6 +498,9 @@ func (s *liveSession) appendPCM(ctx context.Context, pcm []byte) *transcribeFail
 	}
 	s.pendingPCM = append(s.pendingPCM, pcm...)
 	for len(s.pendingPCM) >= pcmBytesPerTile {
+		if failure := s.readerFailureSnapshot(); failure != nil {
+			return failure
+		}
 		if failure := s.sendTile(ctx, s.pendingPCM[:pcmBytesPerTile], false); failure != nil {
 			return failure
 		}
@@ -474,6 +508,9 @@ func (s *liveSession) appendPCM(ctx context.Context, pcm []byte) *transcribeFail
 		if failure := s.pace(ctx); failure != nil {
 			return failure
 		}
+	}
+	if failure := s.readerFailureSnapshot(); failure != nil {
+		return failure
 	}
 	return nil
 }
@@ -523,6 +560,9 @@ func (s *liveSession) sendTile(ctx context.Context, pcm []byte, end bool) *trans
 }
 
 func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
+	if failure := s.readerFailureSnapshot(); failure != nil {
+		return "", failure
+	}
 	if len(s.pendingPCM) > 0 {
 		if failure := s.sendTile(ctx, s.pendingPCM, false); failure != nil {
 			return "", failure
@@ -534,6 +574,9 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 		failure.message = "Microsoft 365 voice session could not be ended safely"
 		return "", failure
 	}
+	if failure := s.readerFailureSnapshot(); failure != nil {
+		return "", failure
+	}
 	if s.hasSpeechStopped() {
 		if transcript := s.finalTranscript(); transcript != "" {
 			return transcript, nil
@@ -541,9 +584,36 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 	}
 	deadline, cancel := context.WithTimeout(ctx, finalResultSettleTimeout)
 	defer cancel()
+	var quietTimer *time.Timer
+	var quietTimerC <-chan time.Time
+	resetQuietTimer := func() {
+		if quietTimer == nil {
+			quietTimer = time.NewTimer(finalResultQuietTimeout)
+		} else {
+			if !quietTimer.Stop() {
+				select {
+				case <-quietTimer.C:
+				default:
+				}
+			}
+			quietTimer.Reset(finalResultQuietTimeout)
+		}
+		quietTimerC = quietTimer.C
+	}
+	defer func() {
+		if quietTimer != nil {
+			quietTimer.Stop()
+		}
+	}()
+	if transcript := s.finalTranscript(); transcript != "" {
+		resetQuietTimer()
+	}
 	for {
 		select {
 		case <-deadline.Done():
+			if failure := s.readerFailureSnapshot(); failure != nil {
+				return "", failure
+			}
 			if transcript := s.finalTranscript(); transcript != "" {
 				return transcript, nil
 			}
@@ -553,8 +623,26 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 				message:   "Microsoft 365 did not return a final dictation result",
 				retryable: true,
 			}
+		case <-quietTimerC:
+			quietTimerC = nil
+			if transcript := s.finalTranscript(); transcript != "" {
+				return transcript, nil
+			}
+		case <-s.eventSignal:
+			if failure := s.readerFailureSnapshot(); failure != nil {
+				return "", failure
+			}
+			if transcript := s.finalTranscript(); transcript != "" {
+				if s.hasSpeechStopped() {
+					return transcript, nil
+				}
+				resetQuietTimer()
+			}
 		case event, ok := <-s.events:
 			if !ok {
+				if failure := s.readerFailureSnapshot(); failure != nil {
+					return "", failure
+				}
 				if transcript := s.finalTranscript(); transcript != "" {
 					return transcript, nil
 				}
@@ -563,17 +651,14 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 			if event.failure != nil {
 				return "", event.failure
 			}
-			// A final transcription is sufficient completion evidence. The
-			// provider may emit it before the separate speech-stopped lifecycle
-			// event; waiting for both needlessly burns the settle timeout.
-			if event.final != "" {
+			if event.stopped {
 				if transcript := s.finalTranscript(); transcript != "" {
 					return transcript, nil
 				}
 			}
-			if event.stopped {
+			if event.final != "" || event.partial != "" {
 				if transcript := s.finalTranscript(); transcript != "" {
-					return transcript, nil
+					resetQuietTimer()
 				}
 			}
 		}

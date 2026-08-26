@@ -111,6 +111,12 @@ eligibility or runtime configuration rather than retrying on a timer.
 is calculated from enabled providers only. Diagnostic output is for repair and
 inspection, not an admission override.
 
+Completed-file requests have a twelve-minute transport budget, covering the
+advertised ten-minute audio bound plus provider setup and final-result
+settling. This is intentional for Microsoft 365 WebM replay: its saved-file
+adapter sends audio tiles at capture rate, so a one- or two-minute recording
+must not be cut off by a two-minute HTTP listener deadline.
+
 Desktop browsers generally allow microphone access on `localhost`. Mobile
 browsers require a secure origin for a LAN address. For private-LAN dogfooding,
 the CLI can generate and reuse a self-signed certificate in one command:

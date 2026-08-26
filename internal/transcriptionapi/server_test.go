@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -368,6 +370,98 @@ func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testin
 	if record.Phase != PhaseCompleted || record.Text != result.Text || record.Attempts != 1 {
 		t.Fatalf("record = %+v", record)
 	}
+}
+
+func TestServerRequestTimeoutCoversMaximumPacedFileReplay(t *testing.T) {
+	provider := &fakeProvider{id: ProviderM365, result: Result{Text: "ready"}}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{
+		Registry:        NewRegistry(provider),
+		Store:           store,
+		DefaultProvider: ProviderM365,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.httpServer.ReadTimeout != DefaultFileRequestTimeout || server.httpServer.WriteTimeout != DefaultFileRequestTimeout {
+		t.Fatalf("request timeouts = read %s/write %s, want %s", server.httpServer.ReadTimeout, server.httpServer.WriteTimeout, DefaultFileRequestTimeout)
+	}
+}
+
+func TestServerHandlesConcurrentOneAndTwoMinuteWebMUploads(t *testing.T) {
+	provider := &fakeProvider{id: ProviderM365, result: Result{Text: "concurrent file result"}}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{
+		Registry:        NewRegistry(provider),
+		Store:           store,
+		DefaultProvider: ProviderM365,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	durations := []int64{60_000, 120_000, 60_000, 120_000, 60_000, 120_000, 60_000, 120_000}
+	client := &http.Client{Timeout: 10 * time.Second}
+	responses := make(chan error, len(durations))
+	var wait sync.WaitGroup
+	for index, duration := range durations {
+		index, duration := index, duration
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			audio := syntheticWebMForStress(duration)
+			request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", fmt.Sprintf("m365-load-%d", index), "speech.webm", audio, map[string]string{
+				"model":       DefaultModel,
+				"provider":    string(ProviderM365),
+				"duration_ms": strconv.FormatInt(duration, 10),
+			})
+			response, requestErr := client.Do(request)
+			if requestErr != nil {
+				responses <- requestErr
+				return
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(response.Body)
+				responses <- fmt.Errorf("duration %d returned %d: %s", duration, response.StatusCode, body)
+				return
+			}
+			var result Result
+			if decodeErr := json.NewDecoder(response.Body).Decode(&result); decodeErr != nil {
+				responses <- decodeErr
+				return
+			}
+			if result.Text != "concurrent file result" {
+				responses <- fmt.Errorf("duration %d result = %+v", duration, result)
+			}
+		}()
+	}
+	wait.Wait()
+	close(responses)
+	for requestErr := range responses {
+		t.Error(requestErr)
+	}
+}
+
+func syntheticWebMForStress(durationMilliseconds int64) []byte {
+	// The API boundary persists the upload before the provider adapter decodes
+	// it. This deterministic EBML-shaped payload keeps the load test portable
+	// while sizing requests like browser WebM recordings for 1–2 minute files.
+	bytesPerSecond := 16 * 1024
+	payload := make([]byte, 4+int(durationMilliseconds/1000)*bytesPerSecond)
+	copy(payload, []byte{0x1a, 0x45, 0xdf, 0xa3})
+	for index := 4; index < len(payload); index++ {
+		payload[index] = byte(index * 31)
+	}
+	return payload
 }
 
 func TestServerEphemeralMediaIsRemovedAfterFileTransaction(t *testing.T) {

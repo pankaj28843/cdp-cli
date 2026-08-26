@@ -7,6 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -157,6 +160,104 @@ func TestRunSessionReturnsWhenFinalArrivesWithoutSpeechStopped(t *testing.T) {
 	}
 }
 
+func TestRunSessionDoesNotBackpressureOnProviderEventsDuringFileReplay(t *testing.T) {
+	floodSocket := newEventFloodSocket()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	transcript, _, failure := runSession(
+		ctx,
+		testAuthTemplate(t),
+		bytes.Repeat([]byte{0x01, 0x02}, pcmBytesPerTile*4/2),
+		TranscribeConfig{
+			Dial: func(context.Context, string, string) (socket, error) {
+				return floodSocket, nil
+			},
+			PaceTiles: true,
+			Sleep:     func(context.Context, time.Duration) error { return nil },
+		},
+	)
+
+	require.Nil(t, failure)
+	require.Equal(t, "long replay complete", transcript)
+}
+
+func TestTranscribeHandlesOneAndTwoMinuteWebMFilesUnderConcurrentLoad(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+	require.NoError(t, store.SaveTemplate(context.Background(), testAuthTemplate(t)))
+	audioPath := filepath.Join(root, "synthetic.webm")
+	require.NoError(t, os.WriteFile(audioPath, []byte{0x1a, 0x45, 0xdf, 0xa3, 0x00}, 0o600))
+
+	durations := []int64{60_000, 120_000, 60_000, 120_000, 60_000, 120_000, 60_000, 120_000}
+	pcmByDuration := make(map[int64][]byte, 2)
+	for _, duration := range []int64{60_000, 120_000} {
+		samples := int(duration / 1000 * pcmSampleRate)
+		pcmByDuration[duration] = bytes.Repeat([]byte{0x01, 0x02}, samples)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	errorsCh := make(chan error, len(durations))
+	var wait sync.WaitGroup
+	for _, duration := range durations {
+		duration := duration
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			pcm := pcmByDuration[duration]
+			result := Transcribe(ctx, TranscribeConfig{
+				Store:       store,
+				MaxAttempts: 1,
+				DecodePCM: func(context.Context, string) ([]byte, error) {
+					return pcm, nil
+				},
+				Dial: func(context.Context, string, string) (socket, error) {
+					return newFakeSocket(
+						textFrame(sessionInitResponsePayload()),
+						textFrame(annotationResultsPayload(
+							"AugLoop_Voice_SpeechSessionEvent",
+							map[string]any{"eventId": "SpeechRecognitionStarted"},
+						)),
+						textFrame(annotationResultsPayload(
+							"AugLoop_Voice_SpeechToTextFinalResult",
+							map[string]any{"text": "concurrent long-file result"},
+						)),
+						textFrame(annotationResultsPayload(
+							"AugLoop_Voice_SpeechToTextFinalResult",
+							map[string]any{"text": "second long-file segment"},
+						)),
+						textFrame(annotationResultsPayload(
+							"AugLoop_Voice_SpeechSessionEvent",
+							map[string]any{"eventId": "SpeechRecognitionStopped"},
+						)),
+					), nil
+				},
+				Sleep: func(context.Context, time.Duration) error { return nil },
+			}, audioPath, duration)
+			if !result.OK {
+				errorsCh <- fmt.Errorf("duration %d: %+v", duration, result.Error)
+				return
+			}
+			data, ok := result.Data.(TranscriptionData)
+			if !ok {
+				errorsCh <- fmt.Errorf("duration %d: result data has type %T", duration, result.Data)
+				return
+			}
+			wantPCMBytes := int64(len(pcm))
+			wantTiles := len(pcm) / pcmBytesPerTile
+			if data.DurationMS != duration || data.PCMBytes != wantPCMBytes || data.Tiles != wantTiles || data.Transcript != "concurrent long-file result second long-file segment" {
+				errorsCh <- fmt.Errorf("duration %d: data = %+v, want pcm=%d tiles=%d", duration, data, wantPCMBytes, wantTiles)
+			}
+		}()
+	}
+	wait.Wait()
+	close(errorsCh)
+	for err := range errorsCh {
+		t.Error(err)
+	}
+}
+
 func TestStreamTranscribeEmitsReadyPartialAndFinalEvents(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)
@@ -289,6 +390,86 @@ func (s *fakeSocket) writesSnapshot() []fakeWrite {
 	return append([]fakeWrite{}, s.writes...)
 }
 
+type eventFloodSocket struct {
+	mu           sync.Mutex
+	initial      []fakeFrame
+	frames       chan fakeFrame
+	binaryWrites int
+}
+
+func newEventFloodSocket() *eventFloodSocket {
+	return &eventFloodSocket{
+		initial: []fakeFrame{
+			textFrame(sessionInitResponsePayload()),
+			textFrame(annotationResultsPayloadWithoutAck(
+				"AugLoop_Voice_SpeechSessionEvent",
+				map[string]any{"eventId": "SpeechRecognitionStarted"},
+			)),
+		},
+		frames: make(chan fakeFrame, 1),
+	}
+}
+
+func (s *eventFloodSocket) Write(ctx context.Context, messageType augloop.MessageType, _ []byte) error {
+	if messageType != augloop.MessageBinary {
+		return nil
+	}
+	s.mu.Lock()
+	s.binaryWrites++
+	shouldFlood := s.binaryWrites == 2
+	s.mu.Unlock()
+	if !shouldFlood {
+		return nil
+	}
+	for index := 0; index < 200; index++ {
+		frame := annotationResultsPayloadWithoutAck(
+			"AugLoop_Voice_SpeechToTextPartialResult",
+			map[string]any{"text": fmt.Sprintf("partial %d", index)},
+		)
+		select {
+		case s.frames <- textFrame(frame):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	for _, frame := range []fakeFrame{
+		textFrame(annotationResultsPayloadWithoutAck(
+			"AugLoop_Voice_SpeechToTextFinalResult",
+			map[string]any{"text": "long replay complete"},
+		)),
+		textFrame(annotationResultsPayloadWithoutAck(
+			"AugLoop_Voice_SpeechSessionEvent",
+			map[string]any{"eventId": "SpeechRecognitionStopped"},
+		)),
+	} {
+		select {
+		case s.frames <- frame:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (s *eventFloodSocket) Read(ctx context.Context) (augloop.MessageType, []byte, error) {
+	s.mu.Lock()
+	if len(s.initial) > 0 {
+		frame := s.initial[0]
+		s.initial = s.initial[1:]
+		s.mu.Unlock()
+		return frame.messageType, frame.payload, nil
+	}
+	s.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return 0, nil, ctx.Err()
+	case frame := <-s.frames:
+		return frame.messageType, frame.payload, nil
+	}
+}
+
+func (s *eventFloodSocket) Close(augloop.StatusCode, string) error { return nil }
+
 func textFrame(payload []byte) fakeFrame {
 	return fakeFrame{messageType: augloop.MessageText, payload: payload}
 }
@@ -307,6 +488,18 @@ func sessionInitResponsePayload() []byte {
 func annotationResultsPayload(annotationType string, body map[string]any) []byte {
 	return mustJSON(map[string]any{
 		"messageId":      "result-1",
+		"annotationType": annotationType,
+		"ops": []any{map[string]any{
+			"items": []any{map[string]any{"body": body}},
+		}},
+		"H_": map[string]any{
+			"T_": "AugLoop_Session_Protocol_AnnotationResultsMessage",
+		},
+	})
+}
+
+func annotationResultsPayloadWithoutAck(annotationType string, body map[string]any) []byte {
+	return mustJSON(map[string]any{
 		"annotationType": annotationType,
 		"ops": []any{map[string]any{
 			"items": []any{map[string]any{"body": body}},

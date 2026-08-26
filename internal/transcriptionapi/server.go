@@ -73,8 +73,8 @@ func NewServer(config ServerConfig) (*Server, error) {
 		Addr:              config.Address,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       2 * time.Minute,
-		WriteTimeout:      2 * time.Minute,
+		ReadTimeout:       DefaultFileRequestTimeout,
+		WriteTimeout:      DefaultFileRequestTimeout,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
 	}
