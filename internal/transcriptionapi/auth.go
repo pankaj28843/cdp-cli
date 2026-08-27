@@ -7,7 +7,9 @@ import (
 )
 
 const (
-	DefaultAuthRefreshInterval = time.Hour
+	// Keep the shared schedule inside the shortest provider auth freshness
+	// window, including the provider's proactive refresh safety margin.
+	DefaultAuthRefreshInterval = 10 * time.Minute
 	DefaultAuthRefreshTimeout  = 2 * time.Minute
 	// Request-time auth repair must have a shorter bound than the listener's
 	// write timeout. A stale headed session should become a recoverable API

@@ -8,6 +8,7 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
 )
 
 func TestProviderAudioDurationUsesClientMeasurement(t *testing.T) {
@@ -62,5 +63,15 @@ func TestAuthRefreshScheduleDefaultsOnAndAllowsExplicitDisable(t *testing.T) {
 				t.Fatalf("scheduled = %v, want %v", got, test.wantScheduled)
 			}
 		})
+	}
+}
+
+func TestDefaultAuthRefreshCadencePrecedesM365ExpiryWindow(t *testing.T) {
+	refreshDeadline := m365.DefaultAuthTTL - 15*time.Minute
+	if refreshDeadline <= 0 {
+		t.Fatalf("M365 refresh deadline = %s, want positive", refreshDeadline)
+	}
+	if transcriptionapi.DefaultAuthRefreshInterval >= refreshDeadline {
+		t.Fatalf("default auth refresh interval = %s, must be shorter than M365 refresh deadline %s", transcriptionapi.DefaultAuthRefreshInterval, refreshDeadline)
 	}
 }

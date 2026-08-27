@@ -103,6 +103,8 @@ independently on the shared `--auth-refresh-interval` cadence. Use
 `--auth-refresh-interval 0s` only for a deliberately transient, browser-free
 service; normal installations should keep the schedule enabled so an expired
 ChatGPT or Microsoft 365 session is repaired before it breaks the next turn.
+The default cadence is ten minutes, which stays ahead of Microsoft 365's
+45-minute auth-evidence TTL and its 15-minute proactive refresh margin.
 The first synthetic probe waits for the first lifecycle pass to finish.
 `--probe-interval` can be changed for a deployment; setting it to zero uses the
 one-minute default rather than disabling the safety gate. Probe evidence is
