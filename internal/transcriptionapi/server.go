@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -40,11 +42,13 @@ type ServerConfig struct {
 	AuthCoordinator  *AuthRefreshCoordinator
 	ProbeHealth      *ProbeHealth
 	ProbeCoordinator *SyntheticProbeCoordinator
+	Logger           *slog.Logger
 }
 
 type Server struct {
-	config     ServerConfig
-	httpServer *http.Server
+	config       ServerConfig
+	httpServer   *http.Server
+	availability *availabilityTracker
 }
 
 func NewServer(config ServerConfig) (*Server, error) {
@@ -68,7 +72,13 @@ func NewServer(config ServerConfig) (*Server, error) {
 	if (strings.TrimSpace(config.TLSCertFile) == "") != (strings.TrimSpace(config.TLSKeyFile) == "") {
 		return nil, fmt.Errorf("transcription TLS certificate and key must be provided together")
 	}
-	server := &Server{config: config}
+	if config.Logger == nil {
+		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	server := &Server{
+		config:       config,
+		availability: newAvailabilityTracker(filepath.Join(config.Store.Root(), "availability.json"), time.Now, config.Logger),
+	}
 	server.httpServer = &http.Server{
 		Addr:              config.Address,
 		Handler:           server.Handler(),
@@ -159,6 +169,17 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		listeners = append(listeners, httpListener)
 	}
+	s.availability.start(ctx)
+	defer s.availability.stop()
+	s.config.Logger.Info(
+		"transcription server listening",
+		"event", "transcription.server.listening",
+		"listener_count", len(listeners),
+	)
+	defer s.config.Logger.Info(
+		"transcription server stopped",
+		"event", "transcription.server.stopped",
+	)
 	serveErr := make(chan error, len(listeners))
 	for _, currentListener := range listeners {
 		go func(listener net.Listener) {
@@ -222,6 +243,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"default_provider": s.config.DefaultProvider,
 		"listeners":        s.listenerHealth(),
 		"providers":        capabilities,
+		"uptime":           s.availability.snapshot(),
 		"observability": map[string]any{
 			"request_records": true,
 			"trace_file":      true,
@@ -606,7 +628,13 @@ func (s *Server) trace(event TraceEvent) {
 	if s == nil || s.config.Store == nil {
 		return
 	}
-	_ = s.config.Store.AppendTrace(context.Background(), event)
+	if err := s.config.Store.AppendTrace(context.Background(), event); err != nil {
+		s.config.Logger.Error(
+			"append transcription trace",
+			"event", "transcription.trace.append_failed",
+			"error", err,
+		)
+	}
 }
 
 func (c *realtimeConnection) trace(event string, phase RecordPhase, err error) {

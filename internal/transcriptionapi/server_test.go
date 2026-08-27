@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -35,6 +36,23 @@ type fakeProvider struct {
 	requestMu      sync.Mutex
 	transcribeCall int
 	ensureCalls    int
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(value)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func (p *fakeProvider) ID() ProviderID { return p.id }
@@ -1180,6 +1198,7 @@ func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *tes
 			RequestRecords bool `json:"request_records"`
 			TraceFile      bool `json:"trace_file"`
 		} `json:"observability"`
+		Uptime AvailabilitySummary `json:"uptime"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -1193,7 +1212,48 @@ func TestHealthReportsRequestTransportListenersAndSelectionWithoutSecrets(t *tes
 	if !body.Observability.RequestRecords || !body.Observability.TraceFile {
 		t.Fatalf("health observability = %+v", body.Observability)
 	}
+	if body.Uptime.WindowSeconds != int64((7*24*time.Hour)/time.Second) || body.Uptime.SampleIntervalSeconds != 60 || body.Uptime.ServiceStarts != 1 {
+		t.Fatalf("health uptime = %+v", body.Uptime)
+	}
+	if body.Uptime.ProcessStartedAt == "" || body.Uptime.LastHeartbeatAt == "" {
+		t.Fatalf("health uptime timestamps = %+v", body.Uptime)
+	}
 	if strings.Contains(response.Body.String(), "do-not-leak-this") {
 		t.Fatal("health response leaked bearer token")
+	}
+}
+
+func TestServerWritesStructuredLifecycleLogsWithoutRequestContent(t *testing.T) {
+	store, err := NewStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs synchronizedBuffer
+	server, err := NewServer(ServerConfig{
+		Registry: NewRegistry(&fakeProvider{id: ProviderLocal}),
+		Store:    store,
+		Address:  reserveTCPAddress(t),
+		Logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.ListenAndServe(ctx) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(logs.String(), "transcription.server.listening") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListenAndServe error = %v, want context cancellation", err)
+	}
+	logged := logs.String()
+	if !strings.Contains(logged, "transcription.server.listening") || !strings.Contains(logged, "transcription.server.stopped") {
+		t.Fatalf("lifecycle logs = %s", logged)
+	}
+	if strings.Contains(logged, "request_id") || strings.Contains(logged, "audio_bytes") {
+		t.Fatalf("lifecycle logs contain request content markers: %s", logged)
 	}
 }

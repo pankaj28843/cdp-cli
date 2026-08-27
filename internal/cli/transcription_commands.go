@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,6 +162,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				AuthCoordinator:  authCoordinator,
 				ProbeHealth:      probeHealth,
 				ProbeCoordinator: probeCoordinator,
+				Logger:           slog.New(slog.NewJSONHandler(a.err, nil)),
 			})
 			if err != nil {
 				_ = store.Close()

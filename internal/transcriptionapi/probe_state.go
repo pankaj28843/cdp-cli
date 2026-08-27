@@ -3,7 +3,6 @@ package transcriptionapi
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -66,36 +65,7 @@ func (c *SyntheticProbeCoordinator) persistState() error {
 		}
 		state.Providers[string(key.Provider)] = provider
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(c.statePath), 0o700); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(c.statePath), ".probe-state-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, c.statePath)
+	return writePrivateJSON(c.statePath, state)
 }
 
 func formatProbeTime(value time.Time) string {
