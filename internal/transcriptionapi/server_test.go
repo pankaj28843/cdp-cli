@@ -587,10 +587,87 @@ func TestServerRetainsAudioWhenProviderFails(t *testing.T) {
 	}
 }
 
-func TestServerMarksObservedFileFailureUntilSyntheticRecovery(t *testing.T) {
+func TestServerTracesCompletedFileLifecycleWithoutTranscript(t *testing.T) {
+	provider := &fakeProvider{id: ProviderChatGPT, result: Result{Text: "private transcript text"}}
+	server, store := newTestServer(t, provider)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "file-trace-1", "speech.webm", []byte("fake-webm"), map[string]string{
+		"duration_ms": "141099",
+		"model":       DefaultModel,
+	})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+
+	raw, err := os.ReadFile(store.TracePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private transcript text") {
+		t.Fatalf("file trace leaked transcript text: %s", raw)
+	}
+	for _, event := range []string{"file.persisted", "file.dispatched", "file.completed"} {
+		if !strings.Contains(string(raw), `"event":"`+event+`"`) {
+			t.Fatalf("file trace missing %s: %s", event, raw)
+		}
+	}
+	lines := bytes.Split(bytes.TrimSpace(raw), []byte{'\n'})
+	var completed TraceEvent
+	if err := json.Unmarshal(lines[len(lines)-1], &completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed.RequestID != "file-trace-1" || completed.Provider != ProviderChatGPT || completed.AudioBytes != 9 || completed.DurationMS != 141099 || completed.Attempts != 1 || completed.ElapsedMS < 0 {
+		t.Fatalf("completed trace = %+v", completed)
+	}
+}
+
+func TestServerTracesTypedFileFailure(t *testing.T) {
 	provider := &fakeProvider{
 		id:  ProviderChatGPT,
-		err: providerError(http.StatusBadGateway, "provider", "provider_response_changed", "provider returned no transcript", false),
+		err: providerError(http.StatusBadGateway, "provider", "provider_transcript_unavailable", "provider returned no transcript", false),
+	}
+	server, store := newTestServer(t, provider)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	request := newMultipartRequest(t, httpServer.URL+"/v1/audio/transcriptions", "file-trace-failed-1", "silence.webm", []byte("silent"), map[string]string{
+		"duration_ms": "2103",
+		"model":       DefaultModel,
+	})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", response.StatusCode)
+	}
+
+	raw, err := os.ReadFile(store.TracePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(raw), []byte{'\n'})
+	var failed TraceEvent
+	if err := json.Unmarshal(lines[len(lines)-1], &failed); err != nil {
+		t.Fatal(err)
+	}
+	if failed.Event != "file.failed" || failed.RequestID != "file-trace-failed-1" || failed.ErrorType != "provider" || failed.ErrorCode != "provider_transcript_unavailable" || failed.Attempts != 1 {
+		t.Fatalf("failed trace = %+v", failed)
+	}
+}
+
+func TestServerDoesNotMarkProviderUnhealthyForContentSpecificEmptyTranscript(t *testing.T) {
+	provider := &fakeProvider{
+		id:  ProviderChatGPT,
+		err: providerError(http.StatusBadGateway, "provider", "provider_transcript_unavailable", "provider returned no transcript", false),
 	}
 	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
 	if err != nil {
@@ -622,17 +699,8 @@ func TestServerMarksObservedFileFailureUntilSyntheticRecovery(t *testing.T) {
 		t.Fatalf("status = %d, want 502", response.StatusCode)
 	}
 	capability := health.Apply(provider.Capabilities(context.Background()), time.Now().UTC())
-	if capability.Ready || capability.ProbeReady || capability.FileProbe == nil || capability.FileProbe.Ready {
-		t.Fatalf("observed file failure left health ready: %+v", capability)
-	}
-	if capability.FileProbe.Reason != "provider_response_changed" {
-		t.Fatalf("observed failure reason = %q", capability.FileProbe.Reason)
-	}
-
-	health.RecordSuccess(ProviderChatGPT, time.Now().UTC(), "fixture-002")
-	recovered := health.Apply(provider.Capabilities(context.Background()), time.Now().UTC())
-	if !recovered.Ready || !recovered.ProbeReady || recovered.FileProbe == nil || !recovered.FileProbe.Ready {
-		t.Fatalf("synthetic recovery did not restore health: %+v", recovered)
+	if !capability.Ready || !capability.ProbeReady || capability.FileProbe == nil || !capability.FileProbe.Ready {
+		t.Fatalf("content-specific empty transcript degraded provider health: %+v", capability)
 	}
 }
 

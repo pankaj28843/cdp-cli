@@ -27,6 +27,7 @@ type TraceEvent struct {
 	AudioBytes   int64       `json:"audio_bytes,omitempty"`
 	AudioChunks  int64       `json:"audio_chunks,omitempty"`
 	DurationMS   int64       `json:"duration_ms,omitempty"`
+	ElapsedMS    int64       `json:"elapsed_ms,omitempty"`
 	ErrorType    string      `json:"error_type,omitempty"`
 	ErrorCode    string      `json:"error_code,omitempty"`
 	ErrorMessage string      `json:"error_message,omitempty"`

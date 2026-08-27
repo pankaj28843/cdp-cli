@@ -406,25 +406,31 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		writeAPIError(w, http.StatusInternalServerError, APIError{Type: "internal_error", Code: "record_persist_failed", Message: "transcription request could not be persisted"})
 		return
 	}
+	transport := requestTransport(r)
+	s.traceFile("file.persisted", transport, record, nil)
 	if providerErr != nil {
 		s.failRecord(r.Context(), &record, providerErr)
+		s.traceFile("file.failed", transport, record, providerErr)
 		writeProviderError(w, providerErr)
 		return
 	}
 	if err := ensureProviderAuth(r.Context(), provider, s.config.AuthTimeout); err != nil {
 		s.recordObservedFileFailure(provider, err)
 		s.failRecord(r.Context(), &record, err)
+		s.traceFile("file.failed", transport, record, err)
 		writeProviderError(w, err)
 		return
 	}
 	record.Phase = PhaseDispatched
 	_ = s.config.Store.SaveRecord(r.Context(), record)
+	s.traceFile("file.dispatched", transport, record, nil)
 
 	result, runErr, attempts := runFileProvider(r.Context(), provider, request)
 	record.Attempts = attempts
 	if runErr != nil {
 		s.recordObservedFileFailure(provider, runErr)
 		s.failRecord(r.Context(), &record, runErr)
+		s.traceFile("file.failed", transport, record, runErr)
 		if request.Stream {
 			s.writeSSEError(w, runErr)
 			return
@@ -441,6 +447,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		return
 	}
 	_ = s.config.Store.SaveResult(r.Context(), record, result)
+	s.traceFile("file.completed", transport, record, nil)
 	if request.Stream {
 		s.writeSSE(w, result)
 		return
@@ -465,6 +472,9 @@ func (s *Server) recordObservedFileFailure(provider Provider, err error) {
 func countsAgainstFilePathHealth(err error) bool {
 	var providerErr *ProviderError
 	if !errors.As(err, &providerErr) || providerErr == nil {
+		return false
+	}
+	if providerErr.APIError.Code == "provider_transcript_unavailable" {
 		return false
 	}
 	switch providerErr.APIError.Type {
@@ -506,6 +516,28 @@ func (s *Server) failRecord(ctx context.Context, record *RequestRecord, err erro
 	apiError := apiErrorFrom(err)
 	record.Error = &apiError
 	_ = s.config.Store.SaveRecord(ctx, *record)
+}
+
+func (s *Server) traceFile(event, transport string, record RequestRecord, err error) {
+	value := TraceEvent{
+		Event:      event,
+		Transport:  transport,
+		RequestID:  record.RequestID,
+		Provider:   record.Provider,
+		Model:      record.Model,
+		Phase:      record.Phase,
+		Attempts:   record.Attempts,
+		AudioBytes: record.Audio.Bytes,
+		DurationMS: record.Audio.DurationMS,
+		ElapsedMS:  max(time.Since(record.CreatedAt).Milliseconds(), 0),
+	}
+	if err != nil {
+		apiError := apiErrorFrom(err)
+		value.ErrorType = apiError.Type
+		value.ErrorCode = apiError.Code
+		value.ErrorMessage = apiError.Message
+	}
+	s.trace(value)
 }
 
 func runFileProvider(ctx context.Context, provider Provider, request FileRequest) (Result, error, int) {
