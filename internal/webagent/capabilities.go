@@ -94,7 +94,7 @@ var operationSpecs = []operationSpec{
 		sideEffect: "provider_request",
 		browser:    "none",
 		summary:    "Send one persisted WebM audio file through an observed provider transcription transport; headed auth repair is bounded and lazy.",
-		providers:  []Provider{ProviderChatGPT, ProviderM365},
+		providers:  []Provider{ProviderChatGPT, ProviderM365, ProviderBing},
 	},
 	{
 		operation:  OperationAsk,
@@ -327,6 +327,9 @@ func providerOperationImplemented(
 	provider Provider,
 	operation Operation,
 ) bool {
+	if operation == OperationTranscribe {
+		return provider == ProviderChatGPT || provider == ProviderM365 || provider == ProviderBing
+	}
 	if provider != ProviderAlex &&
 		provider != ProviderChatGPT &&
 		provider != ProviderM365 &&
@@ -347,8 +350,6 @@ func providerOperationImplemented(
 			provider == ProviderGrok ||
 			provider == ProviderPerplexity ||
 			provider == ProviderTripadvisor
-	case OperationTranscribe:
-		return provider == ProviderChatGPT || provider == ProviderM365
 	case OperationConversationsList,
 		OperationConversationsDetail,
 		OperationConversationsAwait:

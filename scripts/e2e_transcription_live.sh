@@ -211,4 +211,13 @@ sleep 0.5
 cdp click '#talkButton' --target "$page_id" --json >/dev/null
 assert_transcript bing-web file
 
+wait_for_state \
+  '({provider: document.querySelector("#provider")?.value || "", stored: localStorage.getItem("cdp-transcription-demo-last-provider-v1") || ""})' \
+  '.provider == "bing-web" and .stored == "bing-web"'
+cdp page reload --target "$page_id" --json >/dev/null
+wait_for_state \
+  '({provider: document.querySelector("#provider")?.value || "", stored: localStorage.getItem("cdp-transcription-demo-last-provider-v1") || ""})' \
+  '.provider == "bing-web" and .stored == "bing-web"'
+printf 'demo provider persistence=PASS provider=bing-web\n'
+
 printf 'live transcription e2e passed: ChatGPT file + Microsoft 365 realtime + Bing file; audio source=%s\n' "$default_source"

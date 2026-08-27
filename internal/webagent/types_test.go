@@ -70,6 +70,41 @@ func TestProviderCatalogIsStableAndHonest(t *testing.T) {
 	}
 }
 
+func TestTranscriptionOnlyProviderStaysOutOfGeneralCatalog(t *testing.T) {
+	for _, provider := range Providers() {
+		if provider == ProviderBing {
+			t.Fatal("Bing transcription-only provider leaked into the general catalog")
+		}
+	}
+	for _, capabilities := range Catalog().Providers {
+		if capabilities.Provider == ProviderBing {
+			t.Fatal("Bing transcription-only provider leaked into the general capability catalog")
+		}
+	}
+
+	capabilities, ok := CapabilitiesFor(ProviderBing)
+	if !ok {
+		t.Fatal("Bing capability metadata was not found")
+	}
+	for _, operation := range capabilities.Operations {
+		if operation.Operation == OperationTranscribe {
+			if !operation.Supported || operation.Status != CapabilityImplemented {
+				t.Fatalf("Bing transcription capability = %+v, want implemented", operation)
+			}
+			continue
+		}
+		if operation.Operation == OperationAsk && operation.Supported {
+			t.Fatalf("Bing exposes general ask capability: %+v", operation)
+		}
+	}
+	for _, operation := range capabilities.Operations {
+		if operation.Operation == OperationTranscribe {
+			return
+		}
+	}
+	t.Fatal("Bing capability metadata omitted transcription")
+}
+
 func TestChatGPTAdvertisesOnlyLiveProvenMutationSurface(t *testing.T) {
 	capabilities, ok := CapabilitiesFor(ProviderChatGPT)
 	if !ok {

@@ -77,3 +77,30 @@ func TestDescriptorsAreCanonicalAndDeterministicallySorted(t *testing.T) {
 		t.Fatalf("Bing descriptor = %+v, ok=%v", bing, ok)
 	}
 }
+
+func TestOnlyStandaloneTranscriptionProvidersHaveTranscriptionIDs(t *testing.T) {
+	want := map[ProviderID]string{
+		ProviderBing:    "bing-web",
+		ProviderChatGPT: "chatgpt-web",
+		ProviderM365:    "microsoft-365-web",
+	}
+	for _, descriptor := range Descriptors() {
+		if descriptor.TranscriptionID == "" {
+			continue
+		}
+		if want[descriptor.ID] != descriptor.TranscriptionID {
+			t.Fatalf("provider %q exposes stale transcription ID %q", descriptor.ID, descriptor.TranscriptionID)
+		}
+		delete(want, descriptor.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("standalone transcription providers missing from policy: %#v", want)
+	}
+	gemini, ok := DescriptorFor("gemini")
+	if !ok {
+		t.Fatal("general Gemini provider disappeared")
+	}
+	if gemini.TranscriptionID != "" || gemini.TranscriptionOnly {
+		t.Fatalf("general Gemini descriptor exposes transcription: %+v", gemini)
+	}
+}

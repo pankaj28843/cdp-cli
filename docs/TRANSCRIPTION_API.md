@@ -4,6 +4,11 @@
 The public contract is compatible with the OpenAI Whisper file API and adds
 completed-file SSE plus an OpenAI-shaped realtime transcription WebSocket.
 The root page is a self-contained human dogfood app at `/demo.html` (also `/`).
+It remembers the last valid provider used in browser `localStorage`, restores
+that provider when the service still advertises it, and otherwise leaves the
+request on the configured server default. Audio and transcripts use the
+existing demo storage rules; the provider preference is only a small browser
+selection value.
 
 The service reads the owner cdp config's `agents.disabled_providers` policy.
 Disabled authenticated providers are omitted from ordinary `/healthz` and
@@ -79,9 +84,8 @@ For a provider-neutral cdp-cli demo or live check, allow the available web
 adapters with `--providers chatgpt-web,microsoft-365-web,bing-web` and choose
 ChatGPT, Microsoft 365, or Bing Voice in the rendered provider selector. Bing
 Voice is a direct, unauthenticated Speech WebSocket file adapter; it does not
-submit a Bing search. Google voice input is intentionally not advertised here:
-the public Google control observed in development turns speech into a Google
-search, and no standalone transcription boundary was found.
+submit a search. Search-only browser voice controls are outside this
+transcription API because they are not standalone STT adapters.
 The service also persists the selected browser mode and display session so
 headed Linux services can use the same authenticated browser owned by cdp.
 
@@ -332,9 +336,9 @@ The registry currently supports:
   does not require a Bing account session. It does not expose translation or
   the cdp realtime session contract.
 
-Google is not a transcription provider. Its public voice affordance is a
-search input that navigates to search results after recognition; keeping that
-surface in search workflows does not make it a standalone STT adapter.
+Search-only browser voice controls are not transcription providers. Keeping
+those controls in their respective search workflows does not make them
+standalone STT adapters.
 
 Provider adapters are the effect boundary. The API core owns persistence,
 request validation, WebSocket framing, event reduction, and provider-neutral

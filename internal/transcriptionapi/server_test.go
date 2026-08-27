@@ -245,8 +245,12 @@ func TestDemoPageIsServedWithoutAuthentication(t *testing.T) {
 		if got := response.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
 			t.Fatalf("GET %s content type = %q, want text/html", path, got)
 		}
-		if !strings.Contains(string(body), "cdp transcription API") || !strings.Contains(string(body), "getUserMedia") || !strings.Contains(string(body), "duration_ms") || !strings.Contains(string(body), "secureLink") {
+		bodyText := string(body)
+		if !strings.Contains(bodyText, "cdp transcription API") || !strings.Contains(bodyText, "getUserMedia") || !strings.Contains(bodyText, "duration_ms") || !strings.Contains(bodyText, "secureLink") || !strings.Contains(bodyText, "cdp-transcription-demo-last-provider-v1") || !strings.Contains(bodyText, "localStorage.setItem(lastProviderKey") {
 			t.Fatalf("GET %s did not return the microphone demo", path)
+		}
+		if strings.Contains(bodyText, "gemini-web") || strings.Contains(bodyText, "Google voice") {
+			t.Fatalf("GET %s returned stale Google/Gemini transcription UI", path)
 		}
 	}
 }

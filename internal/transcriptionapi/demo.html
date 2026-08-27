@@ -336,8 +336,12 @@
     mode: "file",
     finalText: "",
     capabilities: {},
+    defaultProvider: "",
+    realtimeProvider: "",
   };
   const historyKey = "cdp-transcription-demo-history-v2";
+  const lastProviderKey = "cdp-transcription-demo-last-provider-v1";
+  const transcriptionProviderValues = new Set(["chatgpt-web", "microsoft-365-web", "bing-web", "local"]);
 
   $("baseUrl").value = window.location.origin;
 
@@ -370,6 +374,47 @@
     return ({ "chatgpt-web": "ChatGPT", "microsoft-365-web": "Microsoft 365", "bing-web": "Bing Voice", local: "Local model" })[value] || "server default";
   }
 
+  function normalizeProvider(value) {
+    const provider = String(value || "").trim();
+    return transcriptionProviderValues.has(provider) ? provider : "";
+  }
+
+  function readLastProvider() {
+    try { return normalizeProvider(localStorage.getItem(lastProviderKey)); }
+    catch (_) { return ""; }
+  }
+
+  function rememberLastProvider(value) {
+    const provider = normalizeProvider(value);
+    if (!provider) return;
+    try { localStorage.setItem(lastProviderKey, provider); }
+    catch (_) {}
+  }
+
+  function providerIsAvailable(value) {
+    const capability = state.capabilities[value];
+    return Boolean(capability && capability.file !== false);
+  }
+
+  function selectedProvider() {
+    return normalizeProvider($("provider").value) || state.defaultProvider;
+  }
+
+  function requestProvider() {
+    return normalizeProvider($("advancedProvider").value) || selectedProvider();
+  }
+
+  function restoreLastProvider() {
+    const remembered = readLastProvider();
+    const current = normalizeProvider($("provider").value);
+    if (remembered && providerIsAvailable(remembered)) {
+      if (!current || current === remembered) $("provider").value = remembered;
+      return remembered;
+    }
+    if (current === remembered) $("provider").value = "";
+    return "";
+  }
+
   function capabilityFor(value) {
     const capability = state.capabilities[value];
     if (capability) return capability;
@@ -379,7 +424,7 @@
   }
 
   function updateProviderPresentation() {
-    const provider = $("provider").value;
+    const provider = selectedProvider();
     const capability = capabilityFor(provider);
     state.mode = capability.realtime ? "realtime" : "file";
     $("modeNote").textContent = capability.realtime ? "live preview" : "final transcript at stop";
@@ -446,6 +491,7 @@
 
   function finishTranscript(text, mode, provider, model) {
     const value = String(text || "").trim();
+    const resolvedProvider = normalizeProvider(provider);
     state.finalText = value;
     $("transcriptPlaceholder").hidden = true;
     $("liveTranscript").hidden = true;
@@ -454,7 +500,8 @@
     $("copyTranscript").disabled = !value;
     $("transcriptActions").hidden = false;
     if (value) {
-      remember(value, mode, provider, model);
+      rememberLastProvider(resolvedProvider);
+      remember(value, mode, resolvedProvider, model);
       setTalkStatus(`Done · ${value.split(/\s+/).length} words`, "good");
     } else {
       setTalkStatus("No words came back. Try again.", "bad");
@@ -506,6 +553,8 @@
     try {
       const value = await fetchValue("/healthz");
       state.capabilities = Object.fromEntries((value.providers || []).map((item) => [item.provider, item]));
+      state.defaultProvider = normalizeProvider(value.default_provider);
+      restoreLastProvider();
       if (showResult) show($("connectionOutput"), value);
       $("connectionStatus").textContent = `Service ${value.status} · ${Object.keys(state.capabilities).length} provider(s)`;
       updateProviderPresentation();
@@ -517,7 +566,11 @@
     }
   }
 
-  $("provider").onchange = updateProviderPresentation;
+  $("provider").onchange = () => {
+    rememberLastProvider($("provider").value);
+    updateProviderPresentation();
+  };
+  $("advancedProvider").onchange = () => rememberLastProvider($("advancedProvider").value);
   $("clearHistory").onclick = () => { try { localStorage.removeItem(historyKey); } catch (_) {} renderHistory(); };
   $("clearTranscript").onclick = () => { resetTranscript(); setTalkStatus("Ready when you are."); };
   $("copyTranscript").onclick = async () => {
@@ -613,10 +666,11 @@
     $("talkButton").disabled = true;
     setTalkStatus("Sending the complete recording…");
     const form = new FormData();
+    const provider = requestProvider();
     form.append("file", blob, name);
     if (Number.isInteger(durationMS) && durationMS > 0) form.append("duration_ms", String(durationMS));
     form.append("model", $("fileModel").value.trim() || "whisper-1");
-    appendFormValue(form, "provider", $("advancedProvider").value || $("provider").value);
+    appendFormValue(form, "provider", provider);
     appendFormValue(form, "language", $("language").value);
     appendFormValue(form, "prompt", $("prompt").value);
     form.append("response_format", $("responseFormat").value);
@@ -635,7 +689,7 @@
         try { const value = JSON.parse(raw); text = value.text || ""; show($("fileOutput"), value); }
         catch (_) { text = raw; show($("fileOutput"), raw); }
       }
-      finishTranscript(text, "whole file", $("advancedProvider").value || $("provider").value, $("fileModel").value);
+      finishTranscript(text, "whole file", provider, $("fileModel").value);
     } catch (error) {
       show($("fileOutput"), String(error));
       showFailure(`Transcription failed. ${error.message || error}`);
@@ -706,7 +760,7 @@
       state.realtimeText = value.transcript || state.realtimeText;
       state.realtimeCommitted = true;
       state.realtimeFailed = false;
-      finishTranscript(state.realtimeText, "live", $("provider").value, $("fileModel").value);
+      finishTranscript(state.realtimeText, "live", state.realtimeProvider, $("fileModel").value);
       state.pending = false;
       state.active = false;
       $("talkButton").disabled = false;
@@ -727,7 +781,9 @@
   }
 
   async function startRealtime() {
+    const provider = selectedProvider();
     const stream = await microphone();
+    state.realtimeProvider = provider;
     state.realtimeText = "";
     state.realtimeCommitted = false;
     state.realtimeFailed = false;
@@ -742,7 +798,7 @@
       realtimeSend({ type: "session.update", session: {
         type: "transcription",
         model: $("fileModel").value.trim() || "whisper-1",
-        provider: $("provider").value,
+        provider,
         language: $("language").value.trim(),
         prompt: $("prompt").value,
         audio: { input: { format: { type: "audio/pcm", rate: 24000 } } },
