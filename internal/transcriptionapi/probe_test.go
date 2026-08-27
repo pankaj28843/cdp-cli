@@ -199,7 +199,7 @@ func (p *lifecycleRefreshingProbeProvider) EnsureCapabilitiesFresh(context.Conte
 	return nil
 }
 
-func TestSyntheticProbeCoordinatorDoesNotRefreshProviderLifecycleHooks(t *testing.T) {
+func TestSyntheticProbeCoordinatorPreparesProviderLifecycleBeforeLivePath(t *testing.T) {
 	provider := &lifecycleRefreshingProbeProvider{
 		fakeProvider: &fakeProvider{
 			id:     ProviderM365,
@@ -222,8 +222,8 @@ func TestSyntheticProbeCoordinatorDoesNotRefreshProviderLifecycleHooks(t *testin
 	provider.requestMu.Lock()
 	authRefreshCalls := provider.ensureCalls
 	provider.requestMu.Unlock()
-	if authRefreshCalls != 0 || provider.capabilityRefreshCalls != 0 {
-		t.Fatalf("lifecycle refresh calls = auth %d/capabilities %d, want zero", authRefreshCalls, provider.capabilityRefreshCalls)
+	if authRefreshCalls != 1 || provider.capabilityRefreshCalls != 1 {
+		t.Fatalf("lifecycle refresh calls = auth %d/capabilities %d, want one each", authRefreshCalls, provider.capabilityRefreshCalls)
 	}
 	if provider.transcribeCall != 1 {
 		t.Fatalf("transcribe calls = %d, want one cached-capability probe", provider.transcribeCall)

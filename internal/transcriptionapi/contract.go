@@ -79,8 +79,9 @@ type FileRequest struct {
 	Stream                 bool                   `json:"stream,omitempty"`
 	TimestampGranularities []TimestampGranularity `json:"timestamp_granularities,omitempty"`
 	Include                []string               `json:"include,omitempty"`
-	// SyntheticProbe is an internal adapter signal. Health probes must not
-	// trigger a headed auth repair from inside a provider's lazy retry path.
+	// SyntheticProbe is an internal adapter signal. Health probes may trigger
+	// one bounded provider-owned auth repair, but never expose the probe as a
+	// user request or persist its audio/transcript.
 	SyntheticProbe bool `json:"-"`
 }
 
@@ -272,8 +273,8 @@ type RealtimeSessionConfig struct {
 	Prompt        string              `json:"prompt,omitempty"`
 	InputFormat   RealtimeAudioFormat `json:"input_format,omitempty"`
 	TurnDetection any                 `json:"turn_detection,omitempty"`
-	// SyntheticProbe is an internal adapter signal. Health probes must not
-	// trigger a headed auth repair from inside a provider's lazy setup path.
+	// SyntheticProbe is an internal adapter signal. Health probes may trigger
+	// one bounded provider-owned auth repair, but never expose a user session.
 	SyntheticProbe bool `json:"-"`
 }
 

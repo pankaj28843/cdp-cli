@@ -90,7 +90,7 @@ func TestChatGPTTranscriptionUsesDirectTransportByDefault(t *testing.T) {
 	}
 }
 
-func TestChatGPTSyntheticProbeDisablesLazyBrowserRepair(t *testing.T) {
+func TestChatGPTSyntheticProbeRetainsLazyAuthRepairWithoutBrowserFallback(t *testing.T) {
 	store, err := chatgpt.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,10 @@ func TestChatGPTSyntheticProbeDisablesLazyBrowserRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if captured.RefreshAuth != nil || captured.BrowserFallback != nil {
-		t.Fatal("synthetic ChatGPT probe must not retain lazy browser repair callbacks")
+	if captured.RefreshAuth == nil {
+		t.Fatal("synthetic ChatGPT probe must retain bounded lazy auth repair")
+	}
+	if captured.BrowserFallback != nil {
+		t.Fatal("synthetic ChatGPT probe must not retain the browser transcription fallback")
 	}
 }

@@ -265,12 +265,12 @@ func applyPathStatus(state probeHealthState, found bool, now time.Time, maxAge t
 }
 
 // SyntheticProbeCoordinator exercises every advertised provider transcription
-// path with one weighted-LRU WebM on a bounded cadence. It is deliberately
-// browser-free: probes use the provider's cached capability snapshot and never
-// invoke AuthRefresher or CapabilityRefresher hooks. Headed auth/capability
-// repair belongs to the service lifecycle coordinator or request-time action,
-// not to a health-probe side effect. It persists only timestamps, fixture ids,
-// and redacted result codes; audio and transcript text never enter probe state.
+// path with one weighted-LRU WebM on a bounded cadence. Each cycle first runs
+// the provider's bounded auth/capability preflight, then exercises the live
+// wire; an auth rejection may therefore trigger one provider-owned repair
+// before the health result is recorded. It persists only timestamps, fixture
+// ids, and redacted result codes; audio and transcript text never enter probe
+// state.
 type SyntheticProbeCoordinator struct {
 	registry    *Registry
 	selector    *fixtureSelector
@@ -442,6 +442,15 @@ func (c *SyntheticProbeCoordinator) probeProvider(ctx context.Context, provider 
 	defer cancel()
 	capability := provider.Capabilities(probeContext)
 	paths := probePathsForCapability(capability)
+	if len(paths) == 0 {
+		return
+	}
+	if err := prepareProviderForProbe(probeContext, provider); err != nil {
+		c.recordProviderFailure(providerID, paths, fixture, probeReason(err))
+		return
+	}
+	capability = provider.Capabilities(probeContext)
+	paths = probePathsForCapability(capability)
 	for _, path := range paths {
 		c.recordPathAttempt(providerID, path, fixture)
 	}
@@ -486,6 +495,23 @@ func (c *SyntheticProbeCoordinator) probeProvider(ctx context.Context, provider 
 			c.recordPathSuccess(providerID, ProbePathRealtime, fixture)
 		}
 	}
+}
+
+func prepareProviderForProbe(ctx context.Context, provider Provider) error {
+	if provider == nil {
+		return ErrProviderUnavailable
+	}
+	if auth, ok := provider.(AuthRefresher); ok {
+		if err := auth.EnsureAuthFresh(ctx); err != nil {
+			return err
+		}
+	}
+	if capabilities, ok := provider.(CapabilityRefresher); ok {
+		if err := capabilities.EnsureCapabilitiesFresh(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *SyntheticProbeCoordinator) recordPathAttempt(provider ProviderID, path ProbePath, fixture ProbeFixture) {

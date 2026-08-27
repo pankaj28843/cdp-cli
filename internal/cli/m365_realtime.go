@@ -64,9 +64,6 @@ func newM365RealtimeSession(ctx context.Context, provider *m365TranscriptionProv
 		streamDone:    make(chan struct{}),
 	}
 	refreshAuth := provider.refreshAuth
-	if config.SyntheticProbe {
-		refreshAuth = nil
-	}
 	streamConfig := m365.TranscribeConfig{
 		Store:       provider.store,
 		BuildCommit: provider.app.build.Commit,

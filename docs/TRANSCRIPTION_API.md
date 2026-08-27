@@ -76,6 +76,37 @@ cdp transcription service restart
 cdp transcription service stop
 ```
 
+For a reusable, cross-platform recovery check, run
+`scripts/chaos_monkey_transcription.sh`. It detects Darwin/LaunchAgent and
+Linux system or user `systemd`, reads the manager-owned PID, verifies a real
+fixture transcription and `/healthz`, and performs no mutation by default:
+
+```bash
+scripts/chaos_monkey_transcription.sh --check
+scripts/chaos_monkey_transcription.sh --scenario process-term
+scripts/chaos_monkey_transcription.sh --scenario process-kill
+scripts/chaos_monkey_transcription.sh --scenario service-restart
+scripts/chaos_monkey_transcription.sh --scenario service-down
+scripts/chaos_monkey_transcription.sh --scenario state-expired \
+  --state-provider microsoft-365-web
+```
+
+Each chaos scenario first proves the baseline, then requires manager recovery,
+green `/healthz`, and a non-empty real transcription. `all` runs the bounded
+matrix sequentially. `state-expired` is for an actual provider host only: it
+requires an explicit provider allowlist, backs up the exact auth/capability
+JSON, backdates only `captured_at`, and proves the service refreshes both files;
+failed runs restore the backups. The script has bounded polling and an exit
+trap for recovery. It removes only its own temporary directory, never service
+state, credentials, audio history, or unrelated processes. Use `--health-url`,
+`--fixture`, and `--provider` for a tunnel or an external fixture. Run a
+user-systemd check as the service account with a live user bus. On Linux, the
+process that reads, expires, or refreshes provider state must be the account
+that owns that state. A system-scoped manager's stop/start operations require
+systemd privilege; keep that narrow manager boundary separate from the
+owner-only state operation. Capture key/value output rather than transcript
+text when retaining reliability evidence.
+
 Use `--providers` to persist an explicit provider allowlist in the user
 service. For a ChatGPT-only deployment, set `--default-provider chatgpt-web
 --providers chatgpt-web`; requests for every other provider are then rejected
@@ -105,7 +136,12 @@ service; normal installations should keep the schedule enabled so an expired
 ChatGPT or Microsoft 365 session is repaired before it breaks the next turn.
 The default cadence is ten minutes, which stays ahead of Microsoft 365's
 45-minute auth-evidence TTL and its 15-minute proactive refresh margin.
-The first synthetic probe waits for the first lifecycle pass to finish.
+The first live probe waits for the first lifecycle pass to finish. Every later
+probe performs the same cheap auth/capability preflight before exercising the
+provider's real file or realtime transcription path; an auth rejection can
+trigger one bounded provider-owned repair before the probe is marked failed.
+This keeps the service warm without putting browser or provider-specific logic
+in the HTTP health handler.
 `--probe-interval` can be changed for a deployment; setting it to zero uses the
 one-minute default rather than disabling the safety gate. Probe evidence is
 considered stale after three missed minutes, so the health supervisor can

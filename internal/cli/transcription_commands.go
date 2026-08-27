@@ -79,8 +79,8 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 		Long: "Start the deployable provider-neutral transcription API. The server defaults to the " +
 			"LAN-capable primary and cleartext companion listeners without bearer-token authentication, and retains result records under " +
 			"<state-dir>/transcription; uploaded media is ephemeral unless --persist-audio is set. " +
-			"When --fixture-dir is configured, the service runs a bounded synthetic probe for every configured provider on a recurring cadence; " +
-			"the probe is browser-free and health is green only after a recent probe succeeds. The shared headed auth/capability schedule " +
+			"When --fixture-dir is configured, the service runs a bounded live transcription probe for every configured provider on a recurring cadence; " +
+			"each probe performs a cheap auth/capability preflight and health is green only after a recent probe succeeds. The shared headed auth/capability schedule " +
 			"runs by default and can be disabled with --auth-refresh-interval 0s. Configure a local OpenAI-compatible backend with " +
 			"--local-base-url or select an authenticated cdp-cli provider as the default.",
 		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
@@ -459,9 +459,7 @@ func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request t
 	}
 	refreshAuth := p.refreshAuth
 	var browserFallback func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
-	if request.SyntheticProbe {
-		refreshAuth = nil
-	} else {
+	if !request.SyntheticProbe {
 		browserFallback = func(
 			fallbackContext context.Context,
 			fallbackConfig chatgpt.TranscribeConfig,
@@ -635,9 +633,6 @@ func (p *m365TranscriptionProvider) Transcribe(ctx context.Context, request tran
 		return transcriptionapi.Result{}, err
 	}
 	refreshAuth := p.refreshAuth
-	if request.SyntheticProbe {
-		refreshAuth = nil
-	}
 	result := m365.Transcribe(ctx, m365.TranscribeConfig{
 		Store:       p.store,
 		BuildCommit: p.app.build.Commit,
