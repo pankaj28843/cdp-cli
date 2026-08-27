@@ -261,7 +261,10 @@ func voiceTileMessage(
 	if err != nil {
 		return nil, err
 	}
-	if len(header) > math.MaxUint32 || len(pcm) > math.MaxUint32 {
+	// Convert the lengths before comparing so this remains buildable on
+	// 32-bit ARM, where an untyped math.MaxUint32 constant cannot be
+	// represented by int.
+	if uint64(len(header)) > uint64(math.MaxUint32) || uint64(len(pcm)) > uint64(math.MaxUint32) {
 		return nil, fmt.Errorf("Microsoft 365 VoiceTile frame exceeds protocol bounds")
 	}
 	frame := make([]byte, 0, 1+4+len(header)+4+len(pcm))
