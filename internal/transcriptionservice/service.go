@@ -278,11 +278,8 @@ func renderSystemdUnit(c Config, paths Paths) ([]byte, error) {
 	// path and ignore the environment file.
 	b.WriteString("EnvironmentFile=-")
 	b.WriteString(paths.Environment)
-	if paths.Scope == ScopeSystem {
-		b.WriteString("\nRestart=always\n")
-	} else {
-		b.WriteString("\nRestart=on-failure\n")
-	}
+	// The transcription endpoint is an always-on dependency in both scopes.
+	b.WriteString("\nRestart=always\n")
 	b.WriteString("RestartSec=2\n")
 	b.WriteString("KillSignal=SIGINT\nTimeoutStopSec=10\nUMask=0077\n")
 	b.WriteString("NoNewPrivileges=true\nPrivateTmp=true\n\n")

@@ -94,7 +94,7 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	for _, want := range []string{
 		"ExecStart=\"/Users/test/.local/bin/cdp\" transcription serve",
 		"EnvironmentFile=-" + paths.Environment,
-		"Restart=on-failure",
+		"Restart=always",
 		"WantedBy=default.target",
 	} {
 		if !strings.Contains(unit, want) {
