@@ -224,7 +224,9 @@ func RefreshCapabilities(
 				Source:               "headed-cdp-sanitized-composer-probe",
 				Message:              message,
 			}
-			if err := config.Store.SaveRuntime(ctx, runtime); err != nil {
+			persistenceContext, cancelPersistence := webagent.DurablePersistenceContext(ctx)
+			defer cancelPersistence()
+			if err := config.Store.SaveRuntime(persistenceContext, runtime); err != nil {
 				_ = lease.MarkIncomplete(context.Background())
 				return capabilityFailure(
 					runID, config, webagent.StageObserveTerminal, target, pending,
@@ -233,7 +235,7 @@ func RefreshCapabilities(
 					data,
 				)
 			}
-			if err := lease.MarkTerminal(ctx); err != nil {
+			if err := lease.MarkTerminal(persistenceContext); err != nil {
 				return capabilityFailure(
 					runID, config, webagent.StageObserveTerminal, target, pending,
 					"chatgpt_capabilities_terminal_state_failed", "internal",

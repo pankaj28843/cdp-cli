@@ -1,6 +1,21 @@
 package webagent
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+const durablePersistenceTimeout = 5 * time.Second
+
+// DurablePersistenceContext gives terminal state a short atomic-write budget
+// after a completed external observation, even when its operation deadline
+// expires at that boundary.
+func DurablePersistenceContext(operation context.Context) (context.Context, context.CancelFunc) {
+	if operation == nil {
+		operation = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(operation), durablePersistenceTimeout)
+}
 
 // FractionalDeadline reserves the tail of an existing deadline for a distinct
 // reconciliation phase. Fractions outside (0, 1) clamp to the nearest bound.

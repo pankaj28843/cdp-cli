@@ -292,7 +292,9 @@ func refresh(
 				}
 				return result
 			}
-			if err := config.Store.SaveTemplate(ctx, probe.Template); err != nil {
+			persistenceContext, cancelPersistence := webagent.DurablePersistenceContext(ctx)
+			defer cancelPersistence()
+			if err := config.Store.SaveTemplate(persistenceContext, probe.Template); err != nil {
 				return operationFailure(
 					runID, config.BuildCommit, operation, webagent.StageObserveTerminal,
 					"browser_observed_auth", target, pending,
@@ -301,7 +303,7 @@ func refresh(
 					[]string{"cdp doctor --json"},
 				)
 			}
-			if err := config.Store.SaveRuntime(ctx, probe.Runtime); err != nil {
+			if err := config.Store.SaveRuntime(persistenceContext, probe.Runtime); err != nil {
 				return operationFailure(
 					runID, config.BuildCommit, operation, webagent.StageObserveTerminal,
 					"browser_observed_auth", target, pending,

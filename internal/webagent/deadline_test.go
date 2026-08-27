@@ -1,9 +1,30 @@
 package webagent
 
 import (
+	"context"
 	"testing"
 	"time"
 )
+
+func TestDurablePersistenceContextOutlivesOperationCancellation(t *testing.T) {
+	type contextKey string
+	operation := context.WithValue(context.Background(), contextKey("request"), "refresh-1")
+	operation, cancelOperation := context.WithCancel(operation)
+	cancelOperation()
+
+	persistence, cancelPersistence := DurablePersistenceContext(operation)
+	defer cancelPersistence()
+	if err := persistence.Err(); err != nil {
+		t.Fatalf("persistence context inherited cancellation: %v", err)
+	}
+	if got := persistence.Value(contextKey("request")); got != "refresh-1" {
+		t.Fatalf("persistence context value = %v, want refresh-1", got)
+	}
+	deadline, ok := persistence.Deadline()
+	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Second {
+		t.Fatalf("persistence deadline = %s, want a live bound within five seconds", deadline)
+	}
+}
 
 func TestFractionalDeadlineReservesTail(t *testing.T) {
 	now := time.Date(2026, 7, 26, 8, 0, 0, 0, time.UTC)
