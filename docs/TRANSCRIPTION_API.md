@@ -58,8 +58,9 @@ cdp transcription service install \
   --http-address '[::]:28766' \
   --default-provider chatgpt-web \
   --providers chatgpt-web,microsoft-365-web,bing-web \
-  --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
-  --probe-interval 1m \
+  --fixture-dir '' \
+  --auth-refresh-interval 15m \
+  --auth-refresh-offset 4m \
   --tls-self-signed \
   --tls-host <this-machine-LAN-IP> \
   --tls-host localhost
@@ -120,12 +121,17 @@ transcription API because they are not standalone STT adapters.
 The service also persists the selected browser mode and display session so
 headed Linux services can use the same authenticated browser owned by cdp.
 
-Native service installation requires the checked-in WebM corpus through
-`--fixture-dir`. The corpus must contain exactly 100 validated WebM files. The
-installed service selects one fixture from the least-recently-used weighted
-pool immediately at startup and then every minute by default. Each
-configured provider path is exercised independently: file upload for
-`file: true`, and the native paced PCM WebSocket path for `realtime: true`.
+Set `--fixture-dir ''` to disable scheduled synthetic audio. This leaves
+ordinary requests and the auth/capability coordinator active without sending
+recurring transcriptions to provider accounts. Use an explicit smoke or chaos
+command when a real-audio deployment or debugging check is required.
+
+When `--fixture-dir` names the checked-in WebM corpus, it must contain exactly
+100 validated files. The installed service selects one fixture from the
+least-recently-used weighted pool immediately at startup and then every minute
+by default. Each configured provider path is exercised independently: file
+upload for `file: true`, and the native paced PCM WebSocket path for
+`realtime: true`.
 A synthetic probe uses cached provider capability/auth evidence only; it never
 invokes a provider's auth or capability refresh hook and therefore never opens
 a headed browser target as a health-check side effect. The installed service's
@@ -136,6 +142,10 @@ service; normal installations should keep the schedule enabled so an expired
 ChatGPT or Microsoft 365 session is repaired before it breaks the next turn.
 The default cadence is ten minutes, which stays ahead of Microsoft 365's
 45-minute auth-evidence TTL and its 15-minute proactive refresh margin.
+`--auth-refresh-offset` phases recurring refreshes against the wall clock and
+must be shorter than the interval. Startup refresh remains immediate. Fleet
+operators should give each node a distinct offset so restarts cannot collapse
+all nodes onto one provider-facing boundary.
 The first live probe waits for the first lifecycle pass to finish. Every later
 probe performs the same cheap auth/capability preflight before exercising the
 provider's real file or realtime transcription path; an auth rejection can
@@ -182,7 +192,7 @@ cdp transcription service install \
   --http-address '[::]:28766' \
   --default-provider chatgpt-web \
   --providers chatgpt-web,microsoft-365-web,bing-web \
-  --fixture-dir /path/to/cdp-cli/testdata/transcription-fixtures \
+  --fixture-dir '' \
   --tls-self-signed \
   --tls-host 192.168.5.249 \
   --tls-host localhost
@@ -380,11 +390,12 @@ standalone STT adapters.
 
 Provider adapters are the effect boundary. The API core owns persistence,
 request validation, WebSocket framing, event reduction, and provider-neutral
-errors. With a fixture corpus enabled, the synthetic probe is the normal hot
-path, but it is deliberately browser-free: each bounded probe tests the cached
-provider capability snapshot and records a redacted readiness failure when
-that evidence is stale. It never opens a target or calls a provider refresh
-hook. A separate service-owned coordinator is enabled by default whenever
+errors. With a fixture corpus enabled, the synthetic probe is deliberately
+browser-free: each bounded probe tests the cached provider capability snapshot
+and records a redacted readiness failure when that evidence is stale. It never
+opens a target or calls a provider refresh hook. With an explicitly empty
+fixture directory, no synthetic transcription is scheduled. A separate
+service-owned coordinator is enabled by default whenever
 `--auth-refresh-interval` is positive; `--auth-refresh-interval 0s` is the
 explicit transient-service opt-out. Native service installation persists the
 same derived setting, so a stale legacy environment flag cannot silently

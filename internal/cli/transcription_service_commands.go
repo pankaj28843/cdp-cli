@@ -49,6 +49,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	var localAPIKey string
 	var maxAudioBytes int64
 	var authRefreshInterval time.Duration
+	var authRefreshOffset time.Duration
 	var fixtureDir string
 	var probeInterval time.Duration
 	var persistAudio bool
@@ -73,17 +74,22 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(fixtureDir) == "" {
-				return fmt.Errorf("transcription service installation requires --fixture-dir pointing to the checked-in WebM corpus")
+			fixtureDir = strings.TrimSpace(fixtureDir)
+			fixtureCount := 0
+			if fixtureDir != "" {
+				if _, err := transcriptionapi.LoadFixtureCatalog(fixtureDir); err != nil {
+					return fmt.Errorf("validate transcription service fixture corpus: %w", err)
+				}
+				fixtureCount = transcriptionapi.DefaultFixtureCount
 			}
-			if _, err := transcriptionapi.LoadFixtureCatalog(fixtureDir); err != nil {
-				return fmt.Errorf("validate transcription service fixture corpus: %w", err)
+			if authRefreshOffset < 0 || (authRefreshInterval == 0 && authRefreshOffset != 0) || (authRefreshInterval > 0 && authRefreshOffset >= authRefreshInterval) {
+				return fmt.Errorf("--auth-refresh-offset must be non-negative and shorter than its interval")
 			}
 			if probeInterval == 0 {
 				probeInterval = transcriptionapi.DefaultProbeInterval
 			}
 			authRefreshEnabled := authRefreshInterval > 0
-			platform, paths, config, err := a.transcriptionServiceConfig(systemScope, binaryPath, address, httpAddress, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, authRefreshEnabled, fixtureDir, probeInterval, persistAudio, tlsCertFile, tlsKeyFile)
+			platform, paths, config, err := a.transcriptionServiceConfig(systemScope, binaryPath, address, httpAddress, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, authRefreshOffset, authRefreshEnabled, fixtureDir, probeInterval, persistAudio, tlsCertFile, tlsKeyFile)
 			if err != nil {
 				return err
 			}
@@ -126,8 +132,9 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 				"http_address":         config.HTTPAddress,
 				"provider":             config.Provider,
 				"auth_refresh_enabled": authRefreshEnabled,
+				"auth_refresh_offset":  authRefreshOffset.String(),
 				"probe_interval":       config.ProbeInterval.String(),
-				"fixture_count":        transcriptionapi.DefaultFixtureCount,
+				"fixture_count":        fixtureCount,
 				"audio_persisted":      config.PersistAudio,
 				"tls_enabled":          strings.TrimSpace(config.TLSCertFile) != "",
 				"tls_cert_file":        tlsFiles.CertFile,
@@ -148,7 +155,8 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes")
 	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers; use 0s to disable")
-	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", envDefault("CDP_TRANSCRIPTION_FIXTURE_DIR", defaultTranscriptionFixtureDir()), "checked-in WebM corpus used by the bounded provider health probe")
+	cmd.Flags().DurationVar(&authRefreshOffset, "auth-refresh-offset", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET", 0), "wall-clock phase offset for recurring auth refreshes; must be shorter than the interval")
+	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", envDefault("CDP_TRANSCRIPTION_FIXTURE_DIR", defaultTranscriptionFixtureDir()), "checked-in WebM corpus used by the bounded provider health probe; explicitly empty disables scheduled probes")
 	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
 	cmd.Flags().StringVar(&tlsCertFile, "tls-cert", os.Getenv("CDP_TRANSCRIPTION_TLS_CERT"), "TLS certificate file; provide with --tls-key for HTTPS microphone access over LAN")
@@ -297,7 +305,7 @@ func (a *app) transcriptionServicePaths(systemScope bool) (transcriptionservice.
 	return platform, paths, nil
 }
 
-func (a *app) transcriptionServiceConfig(systemScope bool, binaryPath, address, httpAddress, provider string, allowedProviders []string, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval time.Duration, authRefreshEnabled bool, fixtureDir string, probeInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
+func (a *app) transcriptionServiceConfig(systemScope bool, binaryPath, address, httpAddress, provider string, allowedProviders []string, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval, authRefreshOffset time.Duration, authRefreshEnabled bool, fixtureDir string, probeInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
 	platform, paths, err := a.transcriptionServicePaths(systemScope)
 	if err != nil {
 		return "", transcriptionservice.Paths{}, transcriptionservice.Config{}, err
@@ -343,6 +351,7 @@ func (a *app) transcriptionServiceConfig(systemScope bool, binaryPath, address, 
 		LocalAPIKey:          strings.TrimSpace(localAPIKey),
 		MaxAudioBytes:        maxAudioBytes,
 		AuthRefreshInterval:  authRefreshInterval,
+		AuthRefreshOffset:    authRefreshOffset,
 		AuthRefreshEnabled:   authRefreshEnabled,
 		FixtureDir:           fixtureDir,
 		ProbeInterval:        probeInterval,

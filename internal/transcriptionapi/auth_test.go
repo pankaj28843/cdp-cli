@@ -175,3 +175,38 @@ func TestAuthRefreshCoordinatorRunsOneSharedRecurringSchedule(t *testing.T) {
 		t.Fatalf("coordinator started duplicate capability schedules: calls grew from %d to %d", capabilityCalls, provider.capabilityCalls.Load())
 	}
 }
+
+func TestNextAlignedScheduleDelayUsesWallClockOffset(t *testing.T) {
+	interval := 15 * time.Minute
+	for _, test := range []struct {
+		name   string
+		now    time.Time
+		offset time.Duration
+		want   time.Duration
+	}{
+		{
+			name:   "before slot",
+			now:    time.Date(2026, 8, 28, 6, 7, 0, 0, time.UTC),
+			offset: 10 * time.Minute,
+			want:   3 * time.Minute,
+		},
+		{
+			name:   "at slot schedules next interval",
+			now:    time.Date(2026, 8, 28, 6, 10, 0, 0, time.UTC),
+			offset: 10 * time.Minute,
+			want:   15 * time.Minute,
+		},
+		{
+			name:   "after slot wraps",
+			now:    time.Date(2026, 8, 28, 6, 12, 0, 0, time.UTC),
+			offset: 10 * time.Minute,
+			want:   13 * time.Minute,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nextAlignedScheduleDelay(test.now, interval, test.offset); got != test.want {
+				t.Fatalf("delay = %s, want %s", got, test.want)
+			}
+		})
+	}
+}

@@ -24,6 +24,7 @@ func testConfig() Config {
 		LocalAPIKey:          "local-key",
 		MaxAudioBytes:        512 << 20,
 		AuthRefreshInterval:  10 * time.Minute,
+		AuthRefreshOffset:    4 * time.Minute,
 		FixtureDir:           "/synthetic-user/cdp-fixtures",
 		ProbeInterval:        5 * time.Minute,
 		Path:                 "/opt/homebrew/bin:/usr/bin:/bin",
@@ -107,6 +108,7 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	for _, want := range []string{
 		`CDP_TRANSCRIPTION_PROVIDERS="chatgpt-web"`,
 		`CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED="true"`,
+		`CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET="4m0s"`,
 		`CDP_TRANSCRIPTION_PROBE_INTERVAL="5m0s"`,
 		`CDP_TRANSCRIPTION_FIXTURE_DIR="/synthetic-user/cdp-fixtures"`,
 		`CDP_BROWSER_MODE="headed"`,
@@ -131,6 +133,7 @@ func TestRenderDisablesAuthRefreshOnlyWithZeroInterval(t *testing.T) {
 	}
 	config := testConfig()
 	config.AuthRefreshInterval = 0
+	config.AuthRefreshOffset = 0
 	config.AuthRefreshEnabled = true
 	artifacts, err := Render(PlatformLinux, config, paths)
 	if err != nil {
@@ -138,6 +141,15 @@ func TestRenderDisablesAuthRefreshOnlyWithZeroInterval(t *testing.T) {
 	}
 	if !strings.Contains(string(artifacts[1].Data), `CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED="false"`) {
 		t.Fatalf("environment file did not honor zero auth refresh interval: %s", artifacts[1].Data)
+	}
+}
+
+func TestValidateRejectsAuthRefreshOffsetWithoutSchedule(t *testing.T) {
+	config := testConfig()
+	config.AuthRefreshInterval = 0
+	config.AuthRefreshOffset = time.Minute
+	if err := config.Validate(); err == nil {
+		t.Fatal("nonzero auth refresh offset without a recurring schedule was accepted")
 	}
 }
 

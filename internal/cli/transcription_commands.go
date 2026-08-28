@@ -65,6 +65,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var localAPIKey string
 	var maxAudioBytes int64
 	var authRefreshInterval time.Duration
+	var authRefreshOffset time.Duration
 	var fixtureDir string
 	var probeInterval time.Duration
 	var persistAudio bool
@@ -94,6 +95,9 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			}
 			if authRefreshInterval < 0 {
 				return commandError("transcription_auth_refresh_interval_invalid", "usage", "--auth-refresh-interval must be zero or positive", ExitUsage, nil)
+			}
+			if authRefreshOffset < 0 || (authRefreshInterval == 0 && authRefreshOffset != 0) || (authRefreshInterval > 0 && authRefreshOffset >= authRefreshInterval) {
+				return commandError("transcription_auth_refresh_offset_invalid", "usage", "--auth-refresh-offset must be non-negative and shorter than its interval", ExitUsage, nil)
 			}
 			if probeInterval < 0 {
 				return commandError("transcription_probe_interval_invalid", "usage", "--probe-interval must be zero or positive", ExitUsage, nil)
@@ -128,6 +132,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			var authCoordinator *transcriptionapi.AuthRefreshCoordinator
 			if authRefreshScheduleEnabled(authRefreshInterval) {
 				authCoordinator = transcriptionapi.NewAuthRefreshCoordinator(registry, authRefreshInterval)
+				authCoordinator.SetScheduleOffset(authRefreshOffset)
 			}
 			var probeCoordinator *transcriptionapi.SyntheticProbeCoordinator
 			var probeHealth *transcriptionapi.ProbeHealth
@@ -177,6 +182,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 					"contract_version":      transcriptionapi.ContractVersion,
 					"state_dir":             store.Root(),
 					"auth_refresh_interval": authRefreshInterval.String(),
+					"auth_refresh_offset":   authRefreshOffset.String(),
 					"auth_refresh_enabled":  authCoordinator != nil,
 					"probe_interval":        probeInterval.String(),
 					"probe_enabled":         probeCoordinator != nil,
@@ -209,6 +215,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes; transcript records are retained independently")
 	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers; use 0s to disable")
+	cmd.Flags().DurationVar(&authRefreshOffset, "auth-refresh-offset", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET", 0), "wall-clock phase offset for recurring auth refreshes; must be shorter than the interval")
 	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", os.Getenv("CDP_TRANSCRIPTION_FIXTURE_DIR"), "checked-in WebM corpus used by the bounded provider health probe; empty disables probe scheduling for transient runs")
 	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")

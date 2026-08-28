@@ -56,6 +56,7 @@ type Config struct {
 	LocalAPIKey          string
 	MaxAudioBytes        int64
 	AuthRefreshInterval  time.Duration
+	AuthRefreshOffset    time.Duration
 	// AuthRefreshEnabled is retained for renderer compatibility; the positive
 	// interval is the authoritative enablement switch.
 	AuthRefreshEnabled bool
@@ -144,6 +145,9 @@ func (c Config) Validate() error {
 	if c.AuthRefreshInterval < 0 {
 		return fmt.Errorf("transcription service auth refresh interval must be zero or positive")
 	}
+	if c.AuthRefreshOffset < 0 || (c.AuthRefreshInterval == 0 && c.AuthRefreshOffset != 0) || (c.AuthRefreshInterval > 0 && c.AuthRefreshOffset >= c.AuthRefreshInterval) {
+		return fmt.Errorf("transcription service auth refresh offset must be non-negative and shorter than its interval")
+	}
 	if c.ProbeInterval < 0 {
 		return fmt.Errorf("transcription service probe interval must be zero or positive")
 	}
@@ -168,6 +172,7 @@ func (c Config) Environment() map[string]string {
 		"CDP_TRANSCRIPTION_LOCAL_API_KEY":           c.LocalAPIKey,
 		"CDP_TRANSCRIPTION_MAX_AUDIO_BYTES":         strconv.FormatInt(c.MaxAudioBytes, 10),
 		"CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL":   c.AuthRefreshInterval.String(),
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET":     c.AuthRefreshOffset.String(),
 		// The interval is the source of truth. Deriving this compatibility
 		// marker prevents a stale generated plist from disabling lifecycle
 		// repair while retaining the field for callers of the renderer.

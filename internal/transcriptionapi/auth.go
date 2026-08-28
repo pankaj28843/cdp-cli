@@ -32,11 +32,24 @@ type AuthRefresher interface {
 type AuthRefreshCoordinator struct {
 	targets       []providerRefreshTarget
 	interval      time.Duration
+	offset        time.Duration
 	timeout       time.Duration
 	startOnce     sync.Once
 	initialDone   chan struct{}
 	initialDoneMu sync.Once
 	runMu         sync.Mutex
+}
+
+// SetScheduleOffset aligns recurring refreshes to a stable wall-clock phase.
+// The startup refresh remains immediate; callers set the offset before Start.
+func (c *AuthRefreshCoordinator) SetScheduleOffset(offset time.Duration) {
+	if c == nil || c.interval <= 0 {
+		return
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	c.offset = offset % c.interval
 }
 
 func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *AuthRefreshCoordinator {
@@ -74,18 +87,34 @@ func (c *AuthRefreshCoordinator) Start(ctx context.Context) {
 		go func() {
 			c.RefreshAll(ctx)
 			c.markInitialDone()
-			ticker := time.NewTicker(c.interval)
-			defer ticker.Stop()
 			for {
+				timer := time.NewTimer(nextAlignedScheduleDelay(time.Now().UTC(), c.interval, c.offset))
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return
-				case <-ticker.C:
+				case <-timer.C:
 					c.RefreshAll(ctx)
 				}
 			}
 		}()
 	})
+}
+
+func nextAlignedScheduleDelay(now time.Time, interval, offset time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	offset %= interval
+	if offset < 0 {
+		offset += interval
+	}
+	phase := time.Duration(now.UnixNano() % int64(interval))
+	delay := offset - phase
+	if delay <= 0 {
+		delay += interval
+	}
+	return delay
 }
 
 // WaitInitial waits until the first proactive pass has finished. The
