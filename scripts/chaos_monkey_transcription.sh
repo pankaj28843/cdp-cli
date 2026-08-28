@@ -57,8 +57,9 @@ CDP_CHAOS_STATE_PROVIDER, CDP_CHAOS_SCENARIO, CDP_CHAOS_SIGNAL,
 CDP_CHAOS_SERVICE_LABEL, CDP_CHAOS_SYSTEMD_UNIT, CDP_CHAOS_SYSTEM_SCOPE,
 CDP_CHAOS_HEALTH_TIMEOUT, CDP_CHAOS_REQUEST_TIMEOUT, CDP_CHAOS_DURATION_MS.
 
-State-expired backs up exact selected JSON files, changes only captured_at,
-and restores them if repair cannot be proven. No credentials, audio, or
+State-expired backs up the exact provider state required by transcription,
+changes only captured_at, and restores it if repair cannot be proven. Unrelated
+provider UI capability state is out of scope. No credentials, audio, or
 unrelated process is deleted.
 EOF
 }
@@ -157,11 +158,36 @@ manager_state() {
   elif [[ "$manager_scope" == system ]]; then systemctl show "$manager_ref" -p ActiveState --value 2>/dev/null
   else systemd_user show "$manager_ref" -p ActiveState --value 2>/dev/null; fi
 }
+launchd_bootstrap() {
+  local domain="gui/$(id -u)" registered=false pid=""
+  for _ in $(seq 1 10); do
+    registered=false
+    launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 && registered=true
+    if [[ "$registered" == false ]]; then
+      launchctl load "$plist" >/dev/null 2>&1 && registered=true
+    fi
+    if [[ "$registered" == true ]]; then
+      for _ in $(seq 1 5); do
+        pid="$(manager_pid || true)"
+        if manager_active && positive "$pid" && kill -0 "$pid" 2>/dev/null; then return 0; fi
+        sleep 1
+      done
+    fi
+    sleep 1
+  done
+  return 1
+}
 manager_ctl() {
   case "$manager:$1" in
-    launchd:restart) launchctl kickstart -k "$manager_ref" ;;
+    launchd:restart)
+      local old_pid=""
+      old_pid="$(manager_pid || true)"
+      launchctl bootout "$manager_ref"
+      if positive "$old_pid"; then wait_stopped "$old_pid"; fi
+      launchd_bootstrap
+      ;;
     launchd:stop) launchctl bootout "$manager_ref" ;;
-    launchd:start) launchctl bootstrap "gui/$(id -u)" "$plist"; launchctl kickstart -k "$manager_ref" ;;
+    launchd:start) launchd_bootstrap ;;
     systemd:*)
       if [[ "$manager_scope" == system ]]; then systemctl "$1" "$manager_ref"; else systemd_user "$1" "$manager_ref"; fi
       ;;
@@ -321,8 +347,8 @@ prepare_state() {
   state_files=()
   case "$state_provider" in
     microsoft-365-web) state_files=("$state_dir/webagent/m365/auth-template.json" "$state_dir/webagent/m365/capabilities.json") ;;
-    chatgpt-web) state_files=("$state_dir/webagent/chatgpt/request-template.json" "$state_dir/webagent/chatgpt/capabilities.json") ;;
-    both) state_files=("$state_dir/webagent/m365/auth-template.json" "$state_dir/webagent/m365/capabilities.json" "$state_dir/webagent/chatgpt/request-template.json" "$state_dir/webagent/chatgpt/capabilities.json") ;;
+    chatgpt-web) state_files=("$state_dir/webagent/chatgpt/request-template.json") ;;
+    both) state_files=("$state_dir/webagent/m365/auth-template.json" "$state_dir/webagent/m365/capabilities.json" "$state_dir/webagent/chatgpt/request-template.json") ;;
   esac
   for provider_name in microsoft-365-web chatgpt-web; do
     if [[ "$state_provider" == "$provider_name" || "$state_provider" == both ]]; then

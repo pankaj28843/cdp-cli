@@ -438,17 +438,22 @@ func (c *SyntheticProbeCoordinator) providerIDs() []ProviderID {
 
 func (c *SyntheticProbeCoordinator) probeProvider(ctx context.Context, provider Provider, fixture ProbeFixture) {
 	providerID := provider.ID()
-	probeContext, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-	capability := provider.Capabilities(probeContext)
+	lifecycleContext, cancelLifecycle := context.WithTimeout(ctx, c.timeout)
+	capability := provider.Capabilities(lifecycleContext)
 	paths := probePathsForCapability(capability)
 	if len(paths) == 0 {
+		cancelLifecycle()
 		return
 	}
-	if err := prepareProviderForProbe(probeContext, provider); err != nil {
+	if err := prepareProviderForProbe(lifecycleContext, provider); err != nil {
+		cancelLifecycle()
 		c.recordProviderFailure(providerID, paths, fixture, probeReason(err))
 		return
 	}
+	cancelLifecycle()
+
+	probeContext, cancelProbe := context.WithTimeout(ctx, c.timeout)
+	defer cancelProbe()
 	capability = provider.Capabilities(probeContext)
 	paths = probePathsForCapability(capability)
 	for _, path := range paths {
@@ -458,7 +463,11 @@ func (c *SyntheticProbeCoordinator) probeProvider(ctx context.Context, provider 
 		return
 	}
 	if !capability.Ready {
-		c.recordProviderFailure(providerID, paths, fixture, "provider_not_ready")
+		reason := strings.TrimSpace(capability.Reason)
+		if reason == "" {
+			reason = "provider_not_ready"
+		}
+		c.recordProviderFailure(providerID, paths, fixture, reason)
 		return
 	}
 	if capability.File {
@@ -507,9 +516,10 @@ func prepareProviderForProbe(ctx context.Context, provider Provider) error {
 		}
 	}
 	if capabilities, ok := provider.(CapabilityRefresher); ok {
-		if err := capabilities.EnsureCapabilitiesFresh(ctx); err != nil {
-			return err
-		}
+		// Cached capability repair is advisory here. The provider's current
+		// capability gate and the synthetic request below are the authoritative
+		// health evidence; a transient browser-cleanup error must not skip them.
+		_ = capabilities.EnsureCapabilitiesFresh(ctx)
 	}
 	return nil
 }

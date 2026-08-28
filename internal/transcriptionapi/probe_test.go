@@ -3,6 +3,7 @@ package transcriptionapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -192,11 +193,22 @@ func TestSyntheticProbeCoordinatorIsolatesProvidersAndPersistsRedactedState(t *t
 type lifecycleRefreshingProbeProvider struct {
 	*fakeProvider
 	capabilityRefreshCalls int
+	capabilityRefreshErr   error
+	capabilityRefreshWait  time.Duration
 }
 
-func (p *lifecycleRefreshingProbeProvider) EnsureCapabilitiesFresh(context.Context) error {
+func (p *lifecycleRefreshingProbeProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
 	p.capabilityRefreshCalls++
-	return nil
+	if p.capabilityRefreshWait > 0 {
+		timer := time.NewTimer(p.capabilityRefreshWait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return p.capabilityRefreshErr
 }
 
 func TestSyntheticProbeCoordinatorPreparesProviderLifecycleBeforeLivePath(t *testing.T) {
@@ -227,6 +239,100 @@ func TestSyntheticProbeCoordinatorPreparesProviderLifecycleBeforeLivePath(t *tes
 	}
 	if provider.transcribeCall != 1 {
 		t.Fatalf("transcribe calls = %d, want one cached-capability probe", provider.transcribeCall)
+	}
+}
+
+func TestSyntheticProbeCoordinatorUsesLivePathAfterCapabilityRefreshFailure(t *testing.T) {
+	provider := &lifecycleRefreshingProbeProvider{
+		fakeProvider: &fakeProvider{
+			id:     ProviderChatGPT,
+			result: Result{Text: "live path remains authoritative"},
+		},
+		capabilityRefreshErr: errors.New("browser cleanup proof was transient"),
+	}
+	coordinator, err := NewSyntheticProbeCoordinator(
+		NewRegistry(provider),
+		[]ProbeFixture{{ID: "fixture-001", Path: "/tmp/fixture-001.webm", FileName: "fixture-001.webm", MIMEType: "audio/webm", Bytes: 32}},
+		t.TempDir(),
+		5*time.Minute,
+		time.Second,
+		15*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.RunOnce(context.Background())
+
+	if provider.capabilityRefreshCalls != 1 || provider.transcribeCall != 1 {
+		t.Fatalf("calls = capabilities %d/transcribe %d, want one each", provider.capabilityRefreshCalls, provider.transcribeCall)
+	}
+	capability := coordinator.Health().Apply(provider.Capabilities(context.Background()), time.Now().UTC())
+	if !capability.Ready || !capability.ProbeReady {
+		t.Fatalf("successful live path remained degraded after advisory capability refresh failure: %+v", capability)
+	}
+}
+
+func TestSyntheticProbeCoordinatorGivesLivePathAFreshTimeoutAfterLifecycleRepair(t *testing.T) {
+	provider := &lifecycleRefreshingProbeProvider{
+		fakeProvider:          &fakeProvider{id: ProviderChatGPT, result: Result{Text: "fresh probe context"}},
+		capabilityRefreshWait: 50 * time.Millisecond,
+	}
+	coordinator, err := NewSyntheticProbeCoordinator(
+		NewRegistry(provider),
+		[]ProbeFixture{{ID: "fixture-001", Path: "/tmp/fixture-001.webm", FileName: "fixture-001.webm", MIMEType: "audio/webm", Bytes: 32}},
+		t.TempDir(),
+		5*time.Minute,
+		10*time.Millisecond,
+		15*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.RunOnce(context.Background())
+
+	if provider.transcribeCall != 1 {
+		t.Fatalf("transcribe calls = %d, want one with a fresh probe timeout", provider.transcribeCall)
+	}
+	capability := coordinator.Health().Apply(provider.Capabilities(context.Background()), time.Now().UTC())
+	if !capability.Ready || !capability.ProbeReady {
+		t.Fatalf("live path remained degraded after lifecycle timeout: %+v", capability)
+	}
+}
+
+type unavailableProbeProvider struct {
+	*fakeProvider
+	reason string
+}
+
+func (p *unavailableProbeProvider) Capabilities(context.Context) ProviderCapability {
+	capability := p.fakeProvider.Capabilities(context.Background())
+	capability.Ready = false
+	capability.Reason = p.reason
+	return capability
+}
+
+func TestSyntheticProbeCoordinatorPreservesProviderReadinessReason(t *testing.T) {
+	provider := &unavailableProbeProvider{
+		fakeProvider: &fakeProvider{id: ProviderChatGPT},
+		reason:       "auth request template failed owner-only validation",
+	}
+	coordinator, err := NewSyntheticProbeCoordinator(
+		NewRegistry(provider),
+		[]ProbeFixture{{ID: "fixture-001", Path: "/tmp/fixture-001.webm", FileName: "fixture-001.webm", MIMEType: "audio/webm", Bytes: 32}},
+		t.TempDir(),
+		5*time.Minute,
+		time.Second,
+		15*time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.RunOnce(context.Background())
+
+	state := coordinator.Health().Snapshot()[ProviderChatGPT]
+	wantReason := safeProbeReason(provider.reason)
+	if state.Reason != wantReason {
+		t.Fatalf("probe reason = %q, want %q", state.Reason, wantReason)
 	}
 }
 
