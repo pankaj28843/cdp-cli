@@ -20,8 +20,10 @@ const (
 	Origin                           = "https://gemini.google.com"
 	HomeURL                          = Origin + "/app"
 	AuthStateSchemaVersion           = "gemini-auth-state/v1"
+	RequestTemplateSchemaVersion     = "gemini-dictation-template/v1"
 	RuntimeCapabilitiesSchemaVersion = "gemini-runtime-capabilities/v1"
 	RelativeAuthStatePath            = "webagent/gemini/auth-state.json"
+	RelativeTemplatePath             = "webagent/gemini/dictation-template.json"
 	RelativeCapabilitiesPath         = "webagent/gemini/capabilities.json"
 	DefaultAuthTTL                   = time.Hour
 	DefaultCapabilitiesTTL           = 24 * time.Hour
@@ -33,6 +35,18 @@ type AuthState struct {
 	SignedIn              bool   `json:"signed_in"`
 	SessionCookieObserved bool   `json:"session_cookie_observed"`
 	Source                string `json:"source"`
+}
+
+// RequestTemplate is the minimum owner-only state needed to replay Gemini's
+// observed dictation WebChannel without involving a browser on the audio path.
+type RequestTemplate struct {
+	SchemaVersion    string            `json:"schema_version"`
+	APIKey           string            `json:"api_key"`
+	AuthUser         string            `json:"auth_user"`
+	Cookies          map[string]string `json:"cookies"`
+	BrowserUserAgent string            `json:"browser_user_agent"`
+	CapturedAt       string            `json:"captured_at"`
+	Source           string            `json:"source"`
 }
 
 type AuthStatus struct {
@@ -77,6 +91,7 @@ type RuntimeStatus struct {
 
 type Store struct {
 	authPath         string
+	templatePath     string
 	capabilitiesPath string
 }
 
@@ -87,8 +102,62 @@ func NewStore(stateDir string) (*Store, error) {
 	}
 	return &Store{
 		authPath:         filepath.Join(stateDir, filepath.FromSlash(RelativeAuthStatePath)),
+		templatePath:     filepath.Join(stateDir, filepath.FromSlash(RelativeTemplatePath)),
 		capabilitiesPath: filepath.Join(stateDir, filepath.FromSlash(RelativeCapabilitiesPath)),
 	}, nil
+}
+
+func (s *Store) SaveTemplate(ctx context.Context, template RequestTemplate) error {
+	if s == nil || s.templatePath == "" {
+		return fmt.Errorf("Gemini dictation template store is not configured")
+	}
+	if err := template.Validate(); err != nil {
+		return fmt.Errorf("validate Gemini dictation template: %w", err)
+	}
+	return saveOwnerJSON(ctx, s.templatePath, template)
+}
+
+func (s *Store) LoadTemplate(ctx context.Context) (RequestTemplate, error) {
+	if s == nil || s.templatePath == "" {
+		return RequestTemplate{}, fmt.Errorf("Gemini dictation template store is not configured")
+	}
+	var template RequestTemplate
+	if err := loadOwnerJSON(ctx, s.templatePath, &template); err != nil {
+		return RequestTemplate{}, err
+	}
+	if err := template.Validate(); err != nil {
+		return RequestTemplate{}, fmt.Errorf("validate Gemini dictation template: %w", err)
+	}
+	return template, nil
+}
+
+func (s *Store) TemplateStatus(ctx context.Context, now time.Time, ttl time.Duration) AuthStatus {
+	_, status, _ := s.LoadTemplateStatus(ctx, now, ttl)
+	return status
+}
+
+func (s *Store) LoadTemplateStatus(ctx context.Context, now time.Time, ttl time.Duration) (RequestTemplate, AuthStatus, error) {
+	status := AuthStatus{
+		SchemaVersion: RequestTemplateSchemaVersion,
+		State:         "missing",
+		StatePath:     RelativeTemplatePath,
+		Reason:        "dictation request template is not present",
+	}
+	if ttl <= 0 {
+		ttl = DefaultAuthTTL
+	}
+	template, err := s.LoadTemplate(ctx)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
+			return RequestTemplate{}, status, err
+		}
+		status.State = "invalid"
+		status.Reason = "dictation request template failed owner-only validation"
+		return RequestTemplate{}, status, err
+	}
+	capturedAt, _ := time.Parse(time.RFC3339Nano, template.CapturedAt)
+	status = authStatusFromState(status, AuthState{}, capturedAt, now, ttl)
+	return template, status, nil
 }
 
 func (s *Store) SaveAuth(ctx context.Context, state AuthState) error {
@@ -222,6 +291,42 @@ func (s AuthState) Validate() error {
 	}
 	if s.Source != "headed-cdp-safe-auth-evidence" {
 		return fmt.Errorf("source is not an accepted auth observation")
+	}
+	return nil
+}
+
+func (t RequestTemplate) Validate() error {
+	if t.SchemaVersion != RequestTemplateSchemaVersion {
+		return fmt.Errorf("schema_version must be %q", RequestTemplateSchemaVersion)
+	}
+	if strings.TrimSpace(t.APIKey) == "" || len(t.APIKey) > 512 {
+		return fmt.Errorf("api_key is required and bounded")
+	}
+	if strings.TrimSpace(t.AuthUser) == "" || len(t.AuthUser) > 32 {
+		return fmt.Errorf("auth_user is required and bounded")
+	}
+	if len(t.Cookies) == 0 || len(t.Cookies) > 512 {
+		return fmt.Errorf("cookies are required and bounded")
+	}
+	for name, value := range t.Cookies {
+		if strings.TrimSpace(name) == "" || len(name) > 4096 || len(value) > 64<<10 {
+			return fmt.Errorf("cookie names and values must be bounded")
+		}
+	}
+	for _, name := range []string{"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"} {
+		if strings.TrimSpace(t.Cookies[name]) == "" || len(t.Cookies[name]) > 64<<10 {
+			return fmt.Errorf("required Gemini auth cookie %q is missing or invalid", name)
+		}
+	}
+	if strings.TrimSpace(t.BrowserUserAgent) == "" || len(t.BrowserUserAgent) > 4096 {
+		return fmt.Errorf("browser_user_agent is required and bounded")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, t.CapturedAt); err != nil {
+		return fmt.Errorf("captured_at must be RFC3339")
+	}
+	if t.Source != "headed-cdp-observed-dictation-template" &&
+		t.Source != "headed-cdp-retained-dictation-template" {
+		return fmt.Errorf("source is not an accepted dictation-template observation")
 	}
 	return nil
 }

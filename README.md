@@ -25,12 +25,16 @@ The provider-neutral VoxInput transcription service is available through
 `cdp transcription serve`. It exposes OpenAI/Whisper-compatible file and
 translation endpoints, completed-file SSE, an OpenAI-shaped realtime
 WebSocket, a self-contained `/demo.html` dogfood app, ephemeral transaction
-media with durable result records, bounded browser-free provider health probes,
-explicit online-auth refresh, and
-local/ChatGPT/Microsoft 365 provider routing. User-level service installation
+media with durable result records, bounded provider health probes,
+explicit online-auth refresh, and local/ChatGPT/Claude/Gemini/Microsoft 365/Bing
+provider routing. User-level service installation
 is available through `cdp transcription service install` on macOS and Linux.
 See
-[docs/TRANSCRIPTION_API.md](docs/TRANSCRIPTION_API.md).
+[docs/TRANSCRIPTION_API.md](docs/TRANSCRIPTION_API.md). Authenticated
+transcription providers use browser/CDP only to learn and refresh the
+owner-only request template for each provider's dictation transport; every
+uploaded file is sent through that direct HTTP or WebSocket transaction. See
+[docs/SANITIZATION.md](docs/SANITIZATION.md).
 
 For phone or tablet microphone testing over a private LAN, install the service
 with `--tls-self-signed --tls-host <LAN-IP>` and open the reported `https://`
@@ -80,7 +84,7 @@ cdp workflow agent gemini capabilities --json
 cdp workflow agent gemini capabilities refresh --json
 cdp workflow agent grok capabilities --json
 cdp workflow agent grok capabilities refresh --json
-cdp transcription serve --default-provider chatgpt-web --providers chatgpt-web,microsoft-365-web,bing-web
+cdp transcription serve --default-provider chatgpt-web --providers chatgpt-web,claude-web,gemini-web,microsoft-365-web,bing-web
 cdp transcription spec > openapi.json
 cdp schema webagent-operation --json
 cdp protocol search screenshot --json
@@ -228,7 +232,8 @@ Unusable authenticated providers can be disabled in the same owner-only
 config. On macOS the default file is
 `~/Library/Application Support/cdp-cli/config.json`; use `--config <path>` for
 another file. Values are canonicalized and aliases such as `chatgpt-web` and
-`microsoft-365-web`, and `bing-web` are accepted; local transcription is
+`claude-web`, `gemini-web`, `microsoft-365-web`, and `bing-web` are accepted;
+local transcription is
 independent and cannot be disabled through this list. Bing Voice is
 transcription-only: its direct public Speech WebSocket is available to the
 transcription service, but it is not exposed as a general web-agent/search

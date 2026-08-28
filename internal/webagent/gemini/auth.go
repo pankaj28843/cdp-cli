@@ -89,6 +89,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 			pending webagent.CleanupEvidence,
 		) webagent.Result {
 			session := lease.Session()
+			var observedCookies map[string]string
 			if err := preparePage(ctx, config.Client, session, HomeURL); err != nil {
 				return operationFailure(
 					runID, config.BuildCommit, webagent.OperationAuthRefresh,
@@ -126,12 +127,13 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					}
 					data.ComposerReady = observation.ComposerReady &&
 						observation.PromptReady
-					cookieCount, sessionCookie, cookieErr :=
+					cookies, cookieCount, sessionCookie, cookieErr :=
 						observeSessionCookies(observationCtx, session)
 					if cookieErr != nil {
 						return false, cookieErr
 					}
 					data.CookieCount = cookieCount
+					observedCookies = cookies
 					data.SessionCookieObserved = sessionCookie
 					data.SignedIn = data.ComposerReady &&
 						data.SessionCookieObserved
@@ -193,6 +195,41 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					target, pending, nil, nil,
 					"gemini_auth_state_write_failed", "internal",
 					"Gemini auth evidence could not be persisted to owner-only state", "",
+					data, cleanupCommands(runID, pending),
+				)
+			}
+			var existing *RequestTemplate
+			if loaded, err := config.Store.LoadTemplate(ctx); err == nil {
+				existing = &loaded
+			}
+			var browser struct {
+				UserAgent string `json:"user_agent"`
+				APIKey    string `json:"api_key"`
+			}
+			if err := evaluateInto(ctx, session, `(() => {
+			  const html = document.documentElement?.innerHTML || "";
+			  const match = html.match(/\\?"VVlN6d\\?"\s*:\s*\\?"(AIza[A-Za-z0-9_-]{35})\\?"/);
+			  return {user_agent: navigator.userAgent || "", api_key: match?.[1] || ""};
+			})()`, &browser); err != nil {
+				_ = lease.MarkIncomplete(context.Background())
+				return operationFailure(
+					runID, config.BuildCommit, webagent.OperationAuthRefresh,
+					webagent.StageObserveTerminal, "browser_observed_auth",
+					target, pending, nil, nil,
+					"gemini_auth_template_observation_failed", "connection",
+					"Gemini browser auth template could not be refreshed", "",
+					data, cleanupCommands(runID, pending),
+				)
+			}
+			refreshed, ok := retainedDictationTemplate(existing, observedCookies, browser.UserAgent, browser.APIKey, now())
+			if !ok || config.Store.SaveTemplate(ctx, refreshed) != nil {
+				_ = lease.MarkIncomplete(context.Background())
+				return operationFailure(
+					runID, config.BuildCommit, webagent.OperationAuthRefresh,
+					webagent.StageObserveTerminal, "browser_observed_auth",
+					target, pending, nil, nil,
+					"gemini_dictation_template_refresh_failed", "auth",
+					"Gemini dictation template credentials could not be refreshed from the signed-in browser", "",
 					data, cleanupCommands(runID, pending),
 				)
 			}
@@ -297,31 +334,69 @@ func observeSessionCookies(
 	session interface {
 		Exec(context.Context, string, json.RawMessage) (json.RawMessage, error)
 	},
-) (int, bool, error) {
+) (map[string]string, int, bool, error) {
 	raw, err := session.Exec(
 		ctx,
 		"Network.getCookies",
 		json.RawMessage(`{"urls":["https://gemini.google.com"]}`),
 	)
 	if err != nil {
-		return 0, false, err
+		return nil, 0, false, err
 	}
 	var payload struct {
 		Cookies []struct {
-			Name string `json:"name"`
+			Name  string `json:"name"`
+			Value string `json:"value"`
 		} `json:"cookies"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return 0, false, fmt.Errorf("decode Gemini cookie names")
+		return nil, 0, false, fmt.Errorf("decode Gemini cookies")
 	}
+	values := make(map[string]string, len(payload.Cookies))
+	signedIn := false
 	for _, cookie := range payload.Cookies {
 		name := strings.TrimSpace(cookie.Name)
+		values[name] = cookie.Value
 		if strings.HasPrefix(name, "__Secure-1PSID") ||
 			strings.HasPrefix(name, "__Secure-3PSID") ||
 			name == "SID" ||
 			strings.HasPrefix(name, "SID") {
-			return len(payload.Cookies), true, nil
+			signedIn = true
 		}
 	}
-	return len(payload.Cookies), false, nil
+	return values, len(payload.Cookies), signedIn, nil
+}
+
+func retainedDictationTemplate(existing *RequestTemplate, cookies map[string]string, userAgent, apiKey string, capturedAt time.Time) (RequestTemplate, bool) {
+	refreshed := RequestTemplate{
+		SchemaVersion: RequestTemplateSchemaVersion,
+		AuthUser:      "0",
+		Source:        "headed-cdp-observed-dictation-template",
+	}
+	if existing != nil {
+		refreshed = *existing
+		refreshed.Source = "headed-cdp-retained-dictation-template"
+	}
+	refreshed.APIKey = strings.TrimSpace(apiKey)
+	refreshed.Cookies = make(map[string]string, len(cookies))
+	for name, value := range cookies {
+		if strings.TrimSpace(name) != "" {
+			refreshed.Cookies[name] = value
+		}
+	}
+	for _, name := range []string{"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"} {
+		value := strings.TrimSpace(refreshed.Cookies[name])
+		if value == "" {
+			return RequestTemplate{}, false
+		}
+	}
+	refreshed.BrowserUserAgent = strings.TrimSpace(userAgent)
+	if refreshed.BrowserUserAgent == "" {
+		return RequestTemplate{}, false
+	}
+	refreshed.CapturedAt = capturedAt.UTC().Format(time.RFC3339Nano)
+	if err := refreshed.Validate(); err != nil {
+		return RequestTemplate{}, false
+	}
+	return refreshed, true
 }

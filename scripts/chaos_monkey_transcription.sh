@@ -20,6 +20,7 @@ health_override="${CDP_CHAOS_HEALTH_URL:-}"
 fixture_override="${CDP_CHAOS_FIXTURE:-}"
 provider_override="${CDP_CHAOS_PROVIDER:-}"
 state_provider="${CDP_CHAOS_STATE_PROVIDER:-microsoft-365-web}"
+baseline_transcription=true
 signal="${CDP_CHAOS_SIGNAL:-KILL}"
 health_wait="${CDP_CHAOS_HEALTH_TIMEOUT:-$health_wait_default}"
 request_wait="${CDP_CHAOS_REQUEST_TIMEOUT:-$request_wait_default}"
@@ -44,7 +45,10 @@ Usage: $name [--check|--chaos] [options]
   --health-url URL           /healthz URL; required for a tunnel.
   --fixture PATH             WebM fixture for the real smoke request.
   --provider ID              Provider for the real smoke request.
-  --state-provider ID        microsoft-365-web, chatgpt-web, or both.
+  --state-provider ID        chatgpt-web, claude-web, gemini-web,
+                             microsoft-365-web, or both (ChatGPT + M365).
+  --skip-baseline-transcription
+                             Rely on an outer real-provider gate before chaos.
   --system-scope             Use system systemd.
   --user-scope               Use user systemd as its service user.
   --health-timeout SECONDS   Recovery health budget (default: $health_wait_default).
@@ -88,6 +92,7 @@ parse() {
         shift ;;
       --system-scope) scope=system ;;
       --user-scope) scope=user ;;
+      --skip-baseline-transcription) baseline_transcription=false ;;
       --help|-h) usage; exit 0 ;;
       *) die "unknown argument: $1 (use --help)" ;;
     esac
@@ -99,7 +104,13 @@ parse() {
   case "$scope" in ""|system|user) ;; *) die "system scope must be system or user" ;; esac
   case "$signal" in KILL|TERM) ;; *) die "CDP_CHAOS_SIGNAL must be KILL or TERM" ;; esac
   case "$scenario" in process-kill|process-term|service-restart|service-down|state-expired|all) ;; *) die "unknown chaos scenario: $scenario" ;; esac
-  case "$state_provider" in microsoft-365-web|chatgpt-web|both) ;; *) die "state provider must be microsoft-365-web, chatgpt-web, or both" ;; esac
+  case "$state_provider" in
+    microsoft-365-web|chatgpt-web|claude-web|gemini-web|both) ;;
+    *) die "state provider must be chatgpt-web, claude-web, gemini-web, microsoft-365-web, or both" ;;
+  esac
+  if [[ -n "$provider_override" && ( "$scenario" == state-expired || "$scenario" == all ) && "$provider_override" != "$state_provider" ]]; then
+    die "provider and state-provider must match for state expiry"
+  fi
 }
 
 user_bus() {
@@ -302,7 +313,8 @@ PY
 baseline() {
   baseline_pid="$(manager_pid || true)"; assert_pid "$baseline_pid"
   printf 'manager=%s scope=%s state=%s pid=%s\n' "$manager" "$manager_scope" "$(manager_state)" "$baseline_pid"
-  choose_health; choose_fixture; choose_provider; real_transcription
+  choose_health; choose_fixture; choose_provider
+  if [[ "$baseline_transcription" == true ]]; then real_transcription; fi
 }
 
 wait_pid() {
@@ -338,7 +350,7 @@ wait_health() {
 state_owner() { case "$platform" in Darwin) stat -f '%u:%g' "$1" ;; Linux) stat -c '%u:%g' "$1" ;; esac; }
 state_mode() { case "$platform" in Darwin) stat -f '%Lp' "$1" ;; Linux) stat -c '%a' "$1" ;; esac; }
 prepare_state() {
-  local path provider_name backup index=0 configured=""
+  local path provider_name backup index=0 configured=""; local -a required_providers
   need jq; need stat; need cp; need chmod; need chown; need mv
   configured="$(service_env CDP_TRANSCRIPTION_PROVIDERS)"
   [[ -n "$configured" ]] || die 'state-expired requires an explicit provider allowlist on the actual provider host'
@@ -346,14 +358,14 @@ prepare_state() {
   [[ -d "$state_dir" ]] || die "state directory is missing: $state_dir"
   state_files=()
   case "$state_provider" in
-    microsoft-365-web) state_files=("$state_dir/webagent/m365/auth-template.json" "$state_dir/webagent/m365/capabilities.json") ;;
-    chatgpt-web) state_files=("$state_dir/webagent/chatgpt/request-template.json") ;;
-    both) state_files=("$state_dir/webagent/m365/auth-template.json" "$state_dir/webagent/m365/capabilities.json" "$state_dir/webagent/chatgpt/request-template.json") ;;
+    microsoft-365-web) state_files=("$state_dir/webagent/m365/auth-template.json" "$state_dir/webagent/m365/capabilities.json"); required_providers=(microsoft-365-web) ;;
+    chatgpt-web) state_files=("$state_dir/webagent/chatgpt/request-template.json"); required_providers=(chatgpt-web) ;;
+    claude-web) state_files=("$state_dir/webagent/claude/request-template.json"); required_providers=(claude-web) ;;
+    gemini-web) state_files=("$state_dir/webagent/gemini/dictation-template.json"); required_providers=(gemini-web) ;;
+    both) state_files=("$state_dir/webagent/m365/auth-template.json" "$state_dir/webagent/m365/capabilities.json" "$state_dir/webagent/chatgpt/request-template.json"); required_providers=(microsoft-365-web chatgpt-web) ;;
   esac
-  for provider_name in microsoft-365-web chatgpt-web; do
-    if [[ "$state_provider" == "$provider_name" || "$state_provider" == both ]]; then
-      printf '%s' "$configured" | grep -Eq "(^|,)[[:space:]]*$provider_name([,]|$)" || die "state provider is not configured: $provider_name"
-    fi
+  for provider_name in "${required_providers[@]}"; do
+    printf '%s' "$configured" | grep -Eq "(^|,)[[:space:]]*$provider_name([,]|$)" || die "state provider is not configured: $provider_name"
   done
   mkdir -p "$temp/state-backup"; state_backups=()
   for path in "${state_files[@]}"; do

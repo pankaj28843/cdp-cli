@@ -57,7 +57,7 @@ cdp transcription service install \
   --address '[::]:28765' \
   --http-address '[::]:28766' \
   --default-provider chatgpt-web \
-  --providers chatgpt-web,microsoft-365-web,bing-web \
+  --providers chatgpt-web,claude-web,gemini-web,microsoft-365-web,bing-web \
   --fixture-dir '' \
   --auth-refresh-interval 15m \
   --auth-refresh-offset 4m \
@@ -96,7 +96,8 @@ Each chaos scenario first proves the baseline, then requires manager recovery,
 green `/healthz`, and a non-empty real transcription. `all` runs the bounded
 matrix sequentially. `state-expired` is for an actual provider host only: it
 requires an explicit provider allowlist, backs up the exact auth/capability
-JSON, backdates only `captured_at`, and proves the service refreshes both files;
+JSON for ChatGPT, Claude, Gemini, or Microsoft 365, backdates only
+`captured_at`, and proves the service refreshes the selected files;
 failed runs restore the backups. The script has bounded polling and an exit
 trap for recovery. It removes only its own temporary directory, never service
 state, credentials, audio history, or unrelated processes. Use `--health-url`,
@@ -112,14 +113,44 @@ Use `--providers` to persist an explicit provider allowlist in the user
 service. For a ChatGPT-only deployment, set `--default-provider chatgpt-web
 --providers chatgpt-web`; requests for every other provider are then rejected
 by the service boundary even if those adapters are available in the binary.
-For a provider-neutral cdp-cli demo or live check, allow the available web
-adapters with `--providers chatgpt-web,microsoft-365-web,bing-web` and choose
-ChatGPT, Microsoft 365, or Bing Voice in the rendered provider selector. Bing
+For a provider-neutral cdp-cli service, allow the available web adapters with
+`--providers chatgpt-web,claude-web,gemini-web,microsoft-365-web,bing-web`.
+The human demo can choose any advertised provider, but deployment evidence must
+select each provider explicitly through the file-upload API. Bing
 Voice is a direct, unauthenticated Speech WebSocket file adapter; it does not
 submit a search. Search-only browser voice controls are outside this
 transcription API because they are not standalone STT adapters.
 The service also persists the selected browser mode and display session so
-headed Linux services can use the same authenticated browser owned by cdp.
+headed Linux services can refresh auth/request templates from the same
+authenticated browser owned by cdp. The browser is not the transcription
+transport.
+
+### Provider file-upload validation
+
+Provider qualification uses the public multipart endpoint, not `/demo.html`.
+Run the installed gate with valid cached provider auth/request templates:
+
+```bash
+make e2e-transcription-live-installed
+```
+
+The gate starts a transient service and sends the checked-in synthetic WebM to
+`/v1/audio/transcriptions` five times in sequence, with an explicit `provider`
+field for `chatgpt-web`, `claude-web`, `gemini-web`, `microsoft-365-web`, and
+`bing-web`. It requires non-empty text plus fixture-specific semantic markers.
+Evidence contains only the provider ID, marker result, and text length; it does
+not retain or print transcript text. Remote deployment smoke must use the same
+multipart request against the deployed API and must select every enabled
+provider explicitly and sequentially. Recording through the demo app proves
+the demo, not the provider adapter, and is not a substitute.
+
+Authenticated providers derive the minimum owner-only request template from the
+existing signed-in browser session during bounded discovery and auth refresh.
+Discovery captures the provider's dictation transaction unredacted and keeps it
+ephemeral; logs, evidence, and committed documentation remain credential-free.
+Each completed upload then goes directly to that HTTP or WebSocket transport. A
+serving request opens no tab, drives no dictation UI, and uses no browser or host
+microphone. See `SANITIZATION.md`.
 
 Set `--fixture-dir ''` to disable scheduled synthetic audio. This leaves
 ordinary requests and the auth/capability coordinator active without sending
@@ -132,14 +163,16 @@ least-recently-used weighted pool immediately at startup and then every minute
 by default. Each configured provider path is exercised independently: file
 upload for `file: true`, and the native paced PCM WebSocket path for
 `realtime: true`.
-A synthetic probe uses cached provider capability/auth evidence only; it never
-invokes a provider's auth or capability refresh hook and therefore never opens
-a headed browser target as a health-check side effect. The installed service's
-headed auth/capability schedule is enabled by default and runs the providers
-independently on the shared `--auth-refresh-interval` cadence. Use
-`--auth-refresh-interval 0s` only for a deliberately transient, browser-free
-service; normal installations should keep the schedule enabled so an expired
-ChatGPT or Microsoft 365 session is repaired before it breaks the next turn.
+A synthetic probe uses cached provider capability/auth evidence and never
+invokes a provider's auth or capability refresh hook. It exercises the same
+direct provider adapter as an ordinary upload and opens no browser target. The
+installed service's headed auth/capability schedule is enabled by default and
+runs the providers independently on the shared `--auth-refresh-interval`
+cadence. Use
+`--auth-refresh-interval 0s` only for a deliberately transient service with
+lifecycle refresh disabled; normal installations should keep the schedule
+enabled so an expired ChatGPT, Claude, Gemini, or Microsoft 365 session is
+repaired before it breaks the next turn.
 The default cadence is ten minutes, which stays ahead of Microsoft 365's
 45-minute auth-evidence TTL and its 15-minute proactive refresh margin.
 `--auth-refresh-offset` phases recurring refreshes against the wall clock and
@@ -191,7 +224,7 @@ cdp transcription service install \
   --address '[::]:28765' \
   --http-address '[::]:28766' \
   --default-provider chatgpt-web \
-  --providers chatgpt-web,microsoft-365-web,bing-web \
+  --providers chatgpt-web,claude-web,gemini-web,microsoft-365-web,bing-web \
   --fixture-dir '' \
   --tls-self-signed \
   --tls-host 192.168.5.249 \
@@ -237,7 +270,7 @@ audio for a later retry; VoxInput may still keep its own local retry copy.
 Every service instance writes a bounded, owner-only metadata trace next to its
 request records at `~/.cdp-cli/transcription/trace.jsonl` (or
 `<state-dir>/transcription/trace.jsonl`). It records request ID, provider,
-phase, audio byte/chunk counts, attempts, duration, and sanitized error
+phase, audio byte/chunk counts, attempts, duration, and typed error
 metadata. It never records audio, transcript text, cookies, or bearer tokens.
 The active file rotates once it reaches 8 MiB; the previous file is kept as
 `trace.jsonl.previous`.
@@ -280,7 +313,7 @@ and any failed or stale path are reported as `status: "degraded"`; this is not
 a cached “service process is alive” signal. A probe that is currently running
 does not invalidate a still-fresh last success, so normal one-minute probing
 does not create a false outage. Each provider entry exposes the
-aggregate `probe_ready`, `last_probe_at`, `probe_age_seconds`, and redacted
+aggregate `probe_ready`, `last_probe_at`, `probe_age_seconds`, and typed
 `probe_reason`, plus `file_probe` and `realtime_probe` objects when those paths
 are advertised. Path status age is measured from the last successful probe, so
 a failed retry cannot make an old success appear fresh. A realtime failure can
@@ -289,7 +322,7 @@ healthy; provider `ready` is conservative and becomes false until every
 advertised path recovers.
 
 Probe state is owner-only metadata at `<state-dir>/probe-state.json`. It stores
-fixture IDs, timestamps, and redacted result codes only—never fixture audio,
+fixture IDs, timestamps, and typed result codes only—never fixture audio,
 transcript text, request headers, cookies, or tokens.
 
 To use an OpenAI-compatible local ASR server instead:
@@ -377,8 +410,15 @@ leaves a retryable PCM file and request record.
 The registry currently supports:
 
 - `local`: any configured OpenAI-compatible HTTP/WebSocket service.
-- `chatgpt-web`: the existing cdp-cli ChatGPT workflow and auth evidence.
-- `microsoft-365-web`: the existing cdp-cli Microsoft 365/AugLoop workflow.
+- `chatgpt-web`: direct multipart replay using browser-refreshed request/auth
+  evidence.
+- `claude-web`: authenticated Claude dictation WebSocket replay using paced
+  16 kHz mono linear PCM, `CloseStream`, `TranscriptText`, and
+  `TranscriptEndpoint`; it creates no chat or conversation.
+- `gemini-web`: direct completed-file replay using Gemini's minimum owner-only
+  browser-derived request/auth template.
+- `microsoft-365-web`: direct Microsoft 365/AugLoop WebSocket transport using
+  browser-refreshed auth evidence.
 - `bing-web`: direct public Bing Speech SDK WebSocket transcription. It
   accepts completed audio files, decodes them to paced 16 kHz mono PCM, and
   does not require a Bing account session. It does not expose translation or
@@ -390,11 +430,11 @@ standalone STT adapters.
 
 Provider adapters are the effect boundary. The API core owns persistence,
 request validation, WebSocket framing, event reduction, and provider-neutral
-errors. With a fixture corpus enabled, the synthetic probe is deliberately
-browser-free: each bounded probe tests the cached provider capability snapshot
-and records a redacted readiness failure when that evidence is stale. It never
-opens a target or calls a provider refresh hook. With an explicitly empty
-fixture directory, no synthetic transcription is scheduled. A separate
+errors. With a fixture corpus enabled for explicit development or debugging,
+each bounded probe checks cached capability evidence and exercises the direct
+provider file or realtime adapter. It does not call a provider refresh hook or
+open a browser target. With an explicitly empty fixture directory, no synthetic
+transcription is scheduled. A separate
 service-owned coordinator is enabled by default whenever
 `--auth-refresh-interval` is positive; `--auth-refresh-interval 0s` is the
 explicit transient-service opt-out. Native service installation persists the
@@ -402,14 +442,13 @@ same derived setting, so a stale legacy environment flag cannot silently
 disable lifecycle repair. The first probe is ordered after the coordinator's
 initial auth/capability pass, and capabilities are refreshed only after that
 provider's auth refresh succeeds. A request also calls the same provider's
-freshness hook before dispatch or the first realtime chunk. ChatGPT and
-Microsoft 365 keep their existing provider-specific refresh owner, so an
-expired session has both a scheduled and an on-demand self-healing path without
-a provider-specific cron job. Provider lifecycle work is serialized per
-provider with request cancellation, while ChatGPT and Microsoft 365 remain
-isolated from one another. If the browser-free ChatGPT replay is rejected with
-a typed authentication/authorization response, the adapter makes one lazy
-headed-browser repair/retry; ordinary successful requests never open a browser.
+freshness hook before dispatch or the first realtime chunk. Authenticated
+providers keep provider-specific refresh owners, so an expired session has both
+a scheduled and an on-demand self-healing path without a provider-specific cron
+job. Provider lifecycle work is serialized per provider with request
+cancellation. If a direct replay receives a typed auth rejection, the adapter
+runs one single-flight browser template refresh and then retries the direct
+transport once. It never transcribes through provider UI.
 The shared retry policy is bounded at three total attempts with 1-second and
 2-second waits. Its 4-second slot is retained for policies with a larger
 future attempt budget. A stale-auth observation is therefore repaired and
@@ -428,11 +467,12 @@ the binary for the target Linux architecture, create the dedicated `cdp`
 system account, and install the machine-wide unit with
 `cdp transcription service install --system`; the renderer places state under
 `/var/lib/cdp-cli` and runs the API and headed daemon as `cdp:cdp`, never as
-root. Browser-backed ChatGPT and Microsoft 365 providers also need the
-configured headed cdp-cli browser runtime and the provider's existing auth
-evidence. The local OpenAI-compatible provider does not require a browser;
-browser-backed file adapters may need `ffprobe`/`ffmpeg` when `duration_ms` or
-audio decoding cannot be supplied by the caller.
+root. Authenticated ChatGPT, Claude, Gemini, and Microsoft 365 providers need
+the configured headed cdp-cli browser runtime only for auth/request-template
+refresh. Their transcription hot paths remain direct. The local
+OpenAI-compatible provider does not require a browser; file adapters may need
+`ffprobe`/`ffmpeg` when
+`duration_ms` or audio decoding cannot be supplied by the caller.
 
 ## Compatibility gate
 

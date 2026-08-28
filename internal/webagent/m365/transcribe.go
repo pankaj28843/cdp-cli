@@ -505,7 +505,7 @@ func (s *liveSession) appendPCM(ctx context.Context, pcm []byte) *transcribeFail
 			return failure
 		}
 		s.pendingPCM = s.pendingPCM[pcmBytesPerTile:]
-		if failure := s.pace(ctx); failure != nil {
+		if failure := s.pace(ctx, pcmBytesPerTile); failure != nil {
 			return failure
 		}
 	}
@@ -515,7 +515,7 @@ func (s *liveSession) appendPCM(ctx context.Context, pcm []byte) *transcribeFail
 	return nil
 }
 
-func (s *liveSession) pace(ctx context.Context) *transcribeFailure {
+func (s *liveSession) pace(ctx context.Context, pcmBytes int) *transcribeFailure {
 	if !s.paceTiles {
 		return nil
 	}
@@ -532,7 +532,7 @@ func (s *liveSession) pace(ctx context.Context) *transcribeFailure {
 			}
 		}
 	}
-	if err := sleep(ctx, time.Duration(float64(pcmBytesPerTile/2)/pcmSampleRate*float64(time.Second))); err != nil {
+	if err := sleep(ctx, time.Duration(float64(pcmBytes/2)/pcmSampleRate*float64(time.Second))); err != nil {
 		return &transcribeFailure{
 			code:     "m365_audio_send_cancelled",
 			errClass: "cancelled",
@@ -564,10 +564,14 @@ func (s *liveSession) finish(ctx context.Context) (string, *transcribeFailure) {
 		return "", failure
 	}
 	if len(s.pendingPCM) > 0 {
+		finalPCMBytes := len(s.pendingPCM)
 		if failure := s.sendTile(ctx, s.pendingPCM, false); failure != nil {
 			return "", failure
 		}
 		s.pendingPCM = nil
+		if failure := s.pace(ctx, finalPCMBytes); failure != nil {
+			return "", failure
+		}
 	}
 	if failure := s.sendTile(ctx, nil, true); failure != nil {
 		failure.code = "m365_audio_end_failed"

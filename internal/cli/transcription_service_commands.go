@@ -148,7 +148,7 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "primary listen address; defaults to [::]:28765 (dual-stack wildcard where IPv6 is enabled)")
 	cmd.Flags().StringVar(&httpAddress, "http-address", envDefault("CDP_TRANSCRIPTION_HTTP_ADDRESS", transcriptionapi.DefaultHTTPListenAddress), "cleartext companion listen address; defaults to [::]:28766 (dual-stack wildcard where IPv6 is enabled)")
-	cmd.Flags().StringVar(&provider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, microsoft-365-web, or bing-web")
+	cmd.Flags().StringVar(&provider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, bing-web, chatgpt-web, claude-web, gemini-web, or microsoft-365-web")
 	cmd.Flags().StringSliceVar(&allowedProviders, "providers", envStringSlice("CDP_TRANSCRIPTION_PROVIDERS"), "provider allowlist persisted into the user service; repeat or comma-separate")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional local realtime provider base URL, usually ending in /v1")

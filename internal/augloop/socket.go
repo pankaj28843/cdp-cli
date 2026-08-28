@@ -34,17 +34,29 @@ func Dial(ctx context.Context, rawURL, userAgent string) (Socket, error) {
 }
 
 func DialWithOrigin(ctx context.Context, rawURL, userAgent, origin string) (Socket, error) {
-	conn, _, err := websocket.Dial(ctx, rawURL, &websocket.DialOptions{
-		HTTPHeader: http.Header{
-			"Origin":     []string{origin},
-			"User-Agent": []string{userAgent},
-		},
+	conn, _, err := DialWithHeaders(ctx, rawURL, http.Header{
+		"Origin":     []string{origin},
+		"User-Agent": []string{userAgent},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("connect Microsoft 365 AugLoop: %w", err)
 	}
+	return conn, nil
+}
+
+// DialWithHeaders opens a non-browser WebSocket and reports the handshake
+// status so callers can distinguish expired auth from transport failures.
+func DialWithHeaders(ctx context.Context, rawURL string, header http.Header) (Socket, int, error) {
+	conn, response, err := websocket.Dial(ctx, rawURL, &websocket.DialOptions{HTTPHeader: header})
+	status := 0
+	if response != nil {
+		status = response.StatusCode
+	}
+	if err != nil {
+		return nil, status, err
+	}
 	conn.SetReadLimit(100 << 20)
-	return &socket{conn: conn}, nil
+	return &socket{conn: conn}, status, nil
 }
 
 type socket struct {

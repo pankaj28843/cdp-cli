@@ -510,7 +510,7 @@ func (a *app) geminiBrowserOperationConfig(
 		Client:          client,
 		Journal:         journal,
 		Budget:          a.browserResourceBudgetOptions(),
-		AllowOverBudget: a.opts.allowOverBudget,
+		AllowOverBudget: a.headedProviderRepairMayUseOwnedTarget(operation),
 		InputLockPath:   browserflow.HeadedInputLockPath(store.Dir),
 	})
 	if err != nil {

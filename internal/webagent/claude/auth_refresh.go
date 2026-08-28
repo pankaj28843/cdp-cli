@@ -329,6 +329,9 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 		)
 	}
 	if !found {
+		observation, found = activeOrganizationObservation(cookies)
+	}
+	if !found {
 		_ = lease.MarkIncomplete(context.Background())
 		baseData.AuthState = "request_not_observed"
 		return authRefreshFailure(
@@ -424,6 +427,21 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 			"cdp workflow agent claude capabilities --json",
 		},
 	}
+}
+
+func activeOrganizationObservation(cookies map[string]string) (authObservation, bool) {
+	organizationID := strings.TrimSpace(cookies["lastActiveOrg"])
+	if !organizationPattern.MatchString(organizationID) {
+		return authObservation{}, false
+	}
+	return authObservation{
+		OrganizationID: organizationID,
+		ListURL: Origin + "/api/organizations/" + organizationID +
+			"/chat_conversations_v2?limit=30&starred=false&consistency=eventual",
+		Headers:      map[string]string{"accept": "application/json"},
+		Source:       "headed-cdp-observed-active-organization-cookie",
+		RequestShape: "observed_active_organization",
+	}, true
 }
 
 func prepareAuthObservation(ctx context.Context, client EventClient, session *cdp.PageSession) (string, error) {

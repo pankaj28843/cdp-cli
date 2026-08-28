@@ -280,6 +280,7 @@ func (s *Store) SaveRecord(ctx context.Context, record RequestRecord) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
+	record.Text = ""
 	if err := record.Validate(); err != nil {
 		return fmt.Errorf("validate transcription record: %w", err)
 	}
@@ -293,6 +294,9 @@ func (s *Store) SaveResult(ctx context.Context, record RequestRecord, result Res
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
+	record.Text = ""
+	result.Text = ""
+	result.rawText = ""
 	if err := record.Validate(); err != nil {
 		return fmt.Errorf("validate transcription record: %w", err)
 	}

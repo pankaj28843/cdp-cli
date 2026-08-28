@@ -29,21 +29,15 @@ const (
 )
 
 type TranscribeConfig struct {
-	Store   *Store
-	Browser *BrowserConfig
-	// BrowserFallback is used only after direct HTTP transcription has
-	// exhausted its bounded retry and auth-repair path. Keeping this callback
-	// lazy preserves the no-browser hot path while allowing a provider adapter
-	// to recover when the web origin rejects a non-browser replay.
-	BrowserFallback func(context.Context, TranscribeConfig, string, int64) webagent.Result
-	BuildCommit     string
-	HTTPClient      *http.Client
-	RefreshAuth     func(context.Context) error
-	AudioFileName   string
-	AudioMIMEType   string
-	MaxAttempts     int
-	Backoff         []time.Duration
-	Now             func() time.Time
+	Store         *Store
+	BuildCommit   string
+	HTTPClient    *http.Client
+	RefreshAuth   func(context.Context) error
+	AudioFileName string
+	AudioMIMEType string
+	MaxAttempts   int
+	Backoff       []time.Duration
+	Now           func() time.Time
 }
 
 type TranscriptionData struct {
@@ -93,10 +87,6 @@ func Transcribe(
 		FileName:             fileName,
 		DurationMilliseconds: durationMilliseconds,
 	}
-	if config.Browser != nil {
-		data.Transport = "headed_browser_fetch"
-	}
-
 	if config.Store == nil {
 		return transcriptionFailureResult(
 			runID, config, data,
@@ -124,33 +114,14 @@ func Transcribe(
 	}
 	data.AudioBytes = int64(len(audio))
 
-	var lastBrowserResult webagent.Result
 	attempt, report, runErr := resilience.Run(
 		ctx,
 		resilience.Policy{MaxAttempts: config.MaxAttempts, Backoff: config.Backoff},
 		resilience.Hooks[transcriptionAttempt]{
-			Attempt: func(attemptContext context.Context, attemptNumber int) (transcriptionAttempt, error) {
-				if config.Browser != nil {
-					lastBrowserResult = webagent.Result{}
-				}
+			Attempt: func(attemptContext context.Context, _ int) (transcriptionAttempt, error) {
 				template, templateFailure := loadTranscriptionTemplate(attemptContext, config)
 				if templateFailure != nil {
 					return transcriptionAttempt{}, templateFailure
-				}
-				if config.Browser != nil {
-					browserAttempt, browserResult, browserFailure :=
-						transcribeBrowserAttempt(
-							attemptContext,
-							config,
-							runID,
-							attemptNumber,
-							data,
-							template,
-							audio,
-							durationMilliseconds,
-						)
-					lastBrowserResult = browserResult
-					return browserAttempt, browserFailure
 				}
 				request, requestErr := newTranscriptionRequest(
 					attemptContext,
@@ -201,13 +172,6 @@ func Transcribe(
 	data.Attempts = report.Attempts
 	if runErr == nil {
 		data.Transcript = attempt.transcript
-		if config.Browser != nil && lastBrowserResult.SchemaVersion != "" {
-			if browserData, ok := lastBrowserResult.Data.(TranscriptionData); ok {
-				data.StatusCode = browserData.StatusCode
-			}
-			lastBrowserResult.Data = data
-			return lastBrowserResult
-		}
 		return operationSuccess(
 			runID,
 			config.BuildCommit,
@@ -224,37 +188,7 @@ func Transcribe(
 		)
 	}
 	failure := transcriptionFailureFromError(runErr)
-	if config.Browser == nil && config.BrowserFallback != nil && shouldUseBrowserFallback(failure) {
-		fallbackConfig := config
-		fallbackConfig.Browser = nil
-		fallbackConfig.BrowserFallback = nil
-		fallbackResult := config.BrowserFallback(ctx, fallbackConfig, filePath, durationMilliseconds)
-		if fallbackResult.SchemaVersion != "" {
-			return fallbackResult
-		}
-	}
-	if config.Browser != nil && lastBrowserResult.SchemaVersion != "" {
-		if browserData, ok := lastBrowserResult.Data.(TranscriptionData); ok {
-			data.StatusCode = browserData.StatusCode
-		}
-		lastBrowserResult.Data = data
-		lastBrowserResult.Error = &webagent.OperationError{
-			Code:      failure.code,
-			ErrClass:  failure.errClass,
-			Message:   failure.message,
-			RetrySafe: true,
-		}
-		lastBrowserResult.OK = false
-		lastBrowserResult.State = webagent.StateFailed
-		return lastBrowserResult
-	}
 	return transcriptionFailureResult(runID, config, data, failure)
-}
-
-func shouldUseBrowserFallback(failure transcribeFailure) bool {
-	return failure.auth || failure.status == http.StatusUnauthorized ||
-		failure.status == http.StatusForbidden || failure.errClass == "auth" ||
-		failure.code == "chatgpt_transcription_response_changed"
 }
 
 type transcriptionHTTPResponse struct {

@@ -31,6 +31,33 @@ For browser-facing changes, also run the synthetic live-site loop:
 make e2e-demo-installed
 ```
 
+Transcription-provider changes require the installed provider gate:
+
+```bash
+make e2e-transcription-live-installed
+```
+
+That gate must send a checked-in synthetic audio file through the public
+`/v1/audio/transcriptions` multipart API, select each provider explicitly, and
+run providers sequentially. A demo-page recording is not provider evidence.
+Retain only provider ID, semantic-marker status, and transcript length; never
+persist or print transcript text.
+
+All transcription providers follow the direct-replay contract in
+`docs/SANITIZATION.md`. Browser/CDP may capture the provider's own dictation/
+microphone transaction during bounded development/debugging and may refresh the
+minimum owner-only auth/request template from an existing signed-in session.
+Development/debugging capture is always byte-faithful and unredacted: never
+mask, omit, hash, truncate, or transform observed URLs, query values, headers,
+cookies, bodies, or frames anywhere in the capture pipeline. Keep the complete
+capture owner-only and ephemeral, destroy it after extracting the replay
+contract, and construct retained metadata-only evidence separately. A normal
+transcription request directly replays that HTTP or WebSocket transaction with
+the newly uploaded audio and creates no browser target. Typed auth rejection
+permits one single-flight template refresh and one direct retry, never UI
+transcription fallback. This invariant applies to ChatGPT, Claude, Gemini,
+Microsoft 365, and Bing.
+
 For work on `main`, keep the checkout synchronized with `origin/main` and
 install the exact checkout around every synchronization boundary. Run
 `make install` immediately before and immediately after each fetch, pull,

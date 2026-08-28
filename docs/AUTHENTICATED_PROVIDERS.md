@@ -1,5 +1,12 @@
 # Authenticated Provider Workflows
 
+This document describes interactive web-agent operations such as `ask`,
+`list`, and `delete`. Its fresh-tab lifecycle does not apply to
+transcription. Transcription uses browser/CDP only for bounded discovery and
+auth/request-template refresh, then sends audio through direct provider-native
+HTTP or WebSocket transports as defined in
+[`SANITIZATION.md`](SANITIZATION.md).
+
 `cdp workflow agent` exposes authenticated provider operations through the
 signed-in headed Chrome session selected by `--browser-mode headed`.
 Provider `ask` operations reject an explicit headless mode before browser

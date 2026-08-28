@@ -978,6 +978,13 @@ func ensureProviderAuth(ctx context.Context, provider Provider, timeout time.Dur
 	if !ok {
 		return nil
 	}
+	// A ready owner-only template is sufficient for the request hot path.
+	// Proactive refresh belongs to the shared lifecycle coordinator; the
+	// provider's direct transport owns one typed rejection repair if the remote
+	// session has expired early.
+	if capability := provider.Capabilities(ctx); capability.Ready {
+		return nil
+	}
 	if timeout <= 0 {
 		timeout = DefaultRequestAuthTimeout
 	}

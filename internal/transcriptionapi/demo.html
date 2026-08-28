@@ -220,6 +220,8 @@
         <select id="provider">
           <option value="">Server default</option>
           <option value="chatgpt-web">ChatGPT</option>
+          <option value="claude-web">Claude</option>
+          <option value="gemini-web">Gemini</option>
           <option value="microsoft-365-web">Microsoft 365</option>
           <option value="bing-web">Bing Voice</option>
           <option value="local">Local model</option>
@@ -286,7 +288,7 @@
       <p class="section-kicker">Whole-file API</p>
       <p class="advanced-status">Use an existing WebM or audio file, or retry the last recording through the same endpoint.</p>
       <div class="advanced-grid">
-        <label class="field" for="advancedProvider"><span class="field-label">Provider override</span><select id="advancedProvider"><option value="">Use selection above</option><option value="chatgpt-web">ChatGPT</option><option value="microsoft-365-web">Microsoft 365</option><option value="bing-web">Bing Voice</option><option value="local">Local model</option></select></label>
+        <label class="field" for="advancedProvider"><span class="field-label">Provider override</span><select id="advancedProvider"><option value="">Use selection above</option><option value="chatgpt-web">ChatGPT</option><option value="claude-web">Claude</option><option value="gemini-web">Gemini</option><option value="microsoft-365-web">Microsoft 365</option><option value="bing-web">Bing Voice</option><option value="local">Local model</option></select></label>
         <label class="field" for="fileModel"><span class="field-label">Model</span><input id="fileModel" value="whisper-1"></label>
         <label class="field" for="audioFile"><span class="field-label">Audio file</span><input id="audioFile" type="file" accept="audio/*,.webm,.wav,.mp3,.m4a"></label>
         <label class="field" for="task"><span class="field-label">Task</span><select id="task"><option value="transcribe">transcribe</option><option value="translate">translate</option></select></label>
@@ -341,7 +343,7 @@
   };
   const historyKey = "cdp-transcription-demo-history-v2";
   const lastProviderKey = "cdp-transcription-demo-last-provider-v1";
-  const transcriptionProviderValues = new Set(["chatgpt-web", "microsoft-365-web", "bing-web", "local"]);
+  const transcriptionProviderValues = new Set(["chatgpt-web", "claude-web", "gemini-web", "microsoft-365-web", "bing-web", "local"]);
 
   $("baseUrl").value = window.location.origin;
 
@@ -371,7 +373,7 @@
   }
 
   function providerName(value) {
-    return ({ "chatgpt-web": "ChatGPT", "microsoft-365-web": "Microsoft 365", "bing-web": "Bing Voice", local: "Local model" })[value] || "server default";
+    return ({ "chatgpt-web": "ChatGPT", "claude-web": "Claude", "gemini-web": "Gemini", "microsoft-365-web": "Microsoft 365", "bing-web": "Bing Voice", local: "Local model" })[value] || "server default";
   }
 
   function normalizeProvider(value) {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -489,10 +490,21 @@ func newClaudeRequest(ctx context.Context, template AuthTemplate, rawURL string)
 	}
 	request.Header.Del("Accept-Encoding")
 	request.Header.Set("User-Agent", template.BrowserUserAgent)
-	for name, value := range template.Cookies {
-		request.AddCookie(&http.Cookie{Name: name, Value: value})
-	}
+	setClaudeCookieHeader(request, template.Cookies)
 	return request, nil
+}
+
+func setClaudeCookieHeader(request *http.Request, cookies map[string]string) {
+	names := make([]string, 0, len(cookies))
+	for name := range cookies {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+cookies[name])
+	}
+	request.Header.Set("Cookie", strings.Join(parts, "; "))
 }
 
 func doClaudeRequest(config ReadConfig, request *http.Request) (*http.Response, *readFailure) {

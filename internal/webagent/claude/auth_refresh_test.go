@@ -187,6 +187,34 @@ func TestRefreshAuthMissingEvidenceAndBudgetFailureRemainTypedAndClean(t *testin
 	})
 }
 
+func TestRefreshAuthUsesObservedActiveOrganizationCookieWithoutListRequest(t *testing.T) {
+	stateDir := t.TempDir()
+	client := newAuthFakeClient("user-page")
+	client.emitList = false
+	client.activeOrganization = "org-from-cookie"
+	config := newAuthRefreshTestConfig(t, stateDir, client, cdp.BrowserResourceBudgetOptions{
+		MaxTabs: 15, MaxTabsSource: "test", MaxWindows: 5, BrowserMode: "headed",
+	})
+	config.ObservationTimeout = 100 * time.Millisecond
+
+	result := RefreshAuth(context.Background(), config)
+	if !result.OK {
+		t.Fatalf("RefreshAuth result = %+v error=%+v", result, result.Error)
+	}
+	data := result.Data.(AuthRefreshData)
+	if data.RequestShape != "observed_active_organization" || !data.OrganizationDerived {
+		t.Fatalf("RefreshAuth data = %+v", data)
+	}
+	template, err := config.Store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if template.OrganizationID != "org-from-cookie" ||
+		template.Source != "headed-cdp-observed-active-organization-cookie" {
+		t.Fatalf("template = %+v", template)
+	}
+}
+
 func TestRefreshAuthCleanupFailureReturnsExactTargetEvidence(t *testing.T) {
 	stateDir := t.TempDir()
 	client := newAuthFakeClient("user-page")
@@ -326,6 +354,7 @@ type authFakeClient struct {
 	nextID                   int
 	emitList                 bool
 	cookieValue              string
+	activeOrganization       string
 	readDeadlineImmediately  bool
 	composerReady            bool
 	composerReadyAfterReload int
@@ -446,6 +475,9 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 		cookies := []map[string]string{{"name": "other", "value": "value"}}
 		if c.cookieValue != "" {
 			cookies = append(cookies, map[string]string{"name": "sessionKey", "value": c.cookieValue})
+		}
+		if c.activeOrganization != "" {
+			cookies = append(cookies, map[string]string{"name": "lastActiveOrg", "value": c.activeOrganization})
 		}
 		return assignAuthJSON(result, map[string]any{"cookies": cookies})
 	case "Runtime.evaluate":

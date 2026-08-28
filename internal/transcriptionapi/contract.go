@@ -30,6 +30,8 @@ const (
 	ProviderLocal   ProviderID = "local"
 	ProviderBing    ProviderID = "bing-web"
 	ProviderChatGPT ProviderID = "chatgpt-web"
+	ProviderClaude  ProviderID = "claude-web"
+	ProviderGemini  ProviderID = "gemini-web"
 	ProviderM365    ProviderID = "microsoft-365-web"
 )
 

@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ type fakeProvider struct {
 	ensureErr      error
 	ensureSequence []error
 	ensureWait     time.Duration
+	notReady       bool
 	realtime       *fakeRealtime
 	lastRequest    FileRequest
 	requestMu      sync.Mutex
@@ -65,7 +67,7 @@ func (p *fakeProvider) Capabilities(context.Context) ProviderCapability {
 		Translation: true,
 		Streaming:   true,
 		Realtime:    p.realtime != nil,
-		Ready:       true,
+		Ready:       !p.notReady,
 	}
 }
 
@@ -106,6 +108,7 @@ func (p *fakeProvider) EnsureAuthFresh(ctx context.Context) error {
 func TestEnsureProviderAuthRetriesWithinShortRequestBudget(t *testing.T) {
 	provider := &fakeProvider{
 		id:             ProviderChatGPT,
+		notReady:       true,
 		ensureSequence: []error{errors.New("headed browser is still repairing"), errors.New("auth evidence is not ready")},
 	}
 	if err := ensureProviderAuth(context.Background(), provider, 2*time.Second); err != nil {
@@ -122,6 +125,7 @@ func TestEnsureProviderAuthRetriesWithinShortRequestBudget(t *testing.T) {
 func TestEnsureProviderAuthDoesNotRetryNonRetryableProviderError(t *testing.T) {
 	provider := &fakeProvider{
 		id:        ProviderM365,
+		notReady:  true,
 		ensureErr: providerError(401, "authentication_error", "voice_input_unavailable", "account cannot use dictation", false),
 	}
 	err := ensureProviderAuth(context.Background(), provider, 2*time.Second)
@@ -141,7 +145,7 @@ func TestEnsureProviderAuthDoesNotRetryNonRetryableProviderError(t *testing.T) {
 }
 
 func TestServerBoundsRequestTimeAuthRepair(t *testing.T) {
-	provider := &fakeProvider{id: ProviderChatGPT, ensureWait: time.Second}
+	provider := &fakeProvider{id: ProviderChatGPT, ensureWait: time.Second, notReady: true}
 	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
 	if err != nil {
 		t.Fatal(err)
@@ -267,8 +271,11 @@ func TestDemoPageIsServedWithoutAuthentication(t *testing.T) {
 		if !strings.Contains(bodyText, "cdp transcription API") || !strings.Contains(bodyText, "getUserMedia") || !strings.Contains(bodyText, "duration_ms") || !strings.Contains(bodyText, "secureLink") || !strings.Contains(bodyText, "cdp-transcription-demo-last-provider-v1") || !strings.Contains(bodyText, "localStorage.setItem(lastProviderKey") {
 			t.Fatalf("GET %s did not return the microphone demo", path)
 		}
-		if strings.Contains(bodyText, "gemini-web") || strings.Contains(bodyText, "Google voice") {
-			t.Fatalf("GET %s returned stale Google/Gemini transcription UI", path)
+		for _, provider := range []string{"claude-web", "gemini-web"} {
+			if strings.Count(bodyText, `value="`+provider+`"`) != 2 ||
+				!strings.Contains(bodyText, `"`+provider+`"`) {
+				t.Fatalf("GET %s omitted first-class %s transcription UI", path, provider)
+			}
 		}
 	}
 }
@@ -400,8 +407,8 @@ func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testin
 	provider.requestMu.Lock()
 	ensureCalls := provider.ensureCalls
 	provider.requestMu.Unlock()
-	if ensureCalls != 1 {
-		t.Fatalf("ensure auth calls = %d, want 1 before dispatch", ensureCalls)
+	if ensureCalls != 0 {
+		t.Fatalf("ensure auth calls = %d, want zero while cached auth is ready", ensureCalls)
 	}
 	if _, err := os.Stat(lastRequest.Audio.PersistedPath); err != nil {
 		t.Fatalf("persisted audio is missing: %v", err)
@@ -410,7 +417,7 @@ func TestServerTranscriptionsPersistBeforeProviderAndReturnOpenAIShape(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Phase != PhaseCompleted || record.Text != result.Text || record.Attempts != 1 {
+	if record.Phase != PhaseCompleted || record.Text != "" || record.Attempts != 1 {
 		t.Fatalf("record = %+v", record)
 	}
 }
@@ -631,6 +638,23 @@ func TestServerTracesCompletedFileLifecycleWithoutTranscript(t *testing.T) {
 	if strings.Contains(string(raw), "private transcript text") {
 		t.Fatalf("file trace leaked transcript text: %s", raw)
 	}
+	requestDir := filepath.Join(store.Root(), "requests", "file-trace-1")
+	entries, err := os.ReadDir(requestDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		persisted, readErr := os.ReadFile(filepath.Join(requestDir, entry.Name()))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if strings.Contains(string(persisted), "private transcript text") {
+			t.Fatalf("%s retained transcript text", entry.Name())
+		}
+	}
 	for _, event := range []string{"file.persisted", "file.dispatched", "file.completed"} {
 		if !strings.Contains(string(raw), `"event":"`+event+`"`) {
 			t.Fatalf("file trace missing %s: %s", event, raw)
@@ -725,6 +749,7 @@ func TestServerDoesNotMarkProviderUnhealthyForContentSpecificEmptyTranscript(t *
 func TestServerRetainsAudioWhenProactiveAuthRefreshFails(t *testing.T) {
 	provider := &fakeProvider{
 		id:        ProviderLocal,
+		notReady:  true,
 		ensureErr: providerError(401, "authentication_error", "auth_refresh_failed", "auth fixture failed", false),
 	}
 	server, store := newTestServer(t, provider)

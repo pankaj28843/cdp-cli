@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/augloop"
@@ -17,6 +18,8 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/bing"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/claude"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/gemini"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
 	"github.com/spf13/cobra"
 )
@@ -208,7 +211,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&address, "address", envDefault("CDP_TRANSCRIPTION_ADDRESS", transcriptionapi.DefaultListenAddress), "primary listen address; defaults to [::]:28765 (dual-stack wildcard where IPv6 is enabled)")
 	cmd.Flags().StringVar(&httpAddress, "http-address", envDefault("CDP_TRANSCRIPTION_HTTP_ADDRESS", transcriptionapi.DefaultHTTPListenAddress), "cleartext companion listen address; defaults to [::]:28766 (dual-stack wildcard where IPv6 is enabled)")
-	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, chatgpt-web, microsoft-365-web, or bing-web")
+	cmd.Flags().StringVar(&defaultProvider, "default-provider", envDefault("CDP_TRANSCRIPTION_PROVIDER", string(transcriptionapi.ProviderLocal)), "default provider: local, bing-web, chatgpt-web, claude-web, gemini-web, or microsoft-365-web")
 	cmd.Flags().StringSliceVar(&allowedProviders, "providers", envStringSlice("CDP_TRANSCRIPTION_PROVIDERS"), "provider allowlist; repeat or comma-separate (default: all configured providers)")
 	cmd.Flags().StringVar(&localBaseURL, "local-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_BASE_URL"), "local OpenAI-compatible provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
@@ -230,7 +233,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 
 // authRefreshScheduleEnabled makes lifecycle repair default-on for online
 // providers. The explicit zero interval is the only opt-out; synthetic probes
-// remain browser-free and are ordered behind the first lifecycle pass.
+// remain distinct from refresh and are ordered behind the first lifecycle pass.
 func authRefreshScheduleEnabled(interval time.Duration) bool {
 	return interval > 0
 }
@@ -240,7 +243,7 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 	if err != nil {
 		return nil, err
 	}
-	providers := make([]transcriptionapi.Provider, 0, 4)
+	providers := make([]transcriptionapi.Provider, 0, 6)
 	if strings.TrimSpace(localBaseURL) != "" {
 		localProvider, err := transcriptionapi.NewOpenAIHTTPProvider(
 			transcriptionapi.ProviderLocal,
@@ -265,6 +268,14 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 	chatStore, chatErr := chatgpt.NewStore(stateStore.Dir)
 	if chatErr == nil {
 		providers = append(providers, &chatGPTTranscriptionProvider{app: a, store: chatStore})
+	}
+	claudeStore, claudeErr := claude.NewStore(stateStore.Dir)
+	if claudeErr == nil {
+		providers = append(providers, &claudeTranscriptionProvider{app: a, store: claudeStore})
+	}
+	geminiStore, geminiErr := gemini.NewStore(stateStore.Dir)
+	if geminiErr == nil {
+		providers = append(providers, &geminiTranscriptionProvider{app: a, store: geminiStore})
 	}
 	m365Store, m365Err := m365.NewStore(stateStore.Dir)
 	if m365Err == nil {
@@ -386,10 +397,49 @@ func (p *bingTranscriptionProvider) NewRealtime(context.Context, transcriptionap
 	return nil, transcriptionProviderError(501, "unsupported", "realtime_unsupported", "Bing voice transcription currently accepts completed audio files", false)
 }
 
+type authRepairFlight struct {
+	generation string
+	done       chan struct{}
+	err        error
+}
+
+type authRepairGroup struct {
+	mu     sync.Mutex
+	flight *authRepairFlight
+}
+
+func (g *authRepairGroup) Do(ctx context.Context, generation string, refresh func(context.Context) error) error {
+	g.mu.Lock()
+	if flight := g.flight; flight != nil && flight.generation == generation {
+		g.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-flight.done:
+			return flight.err
+		}
+	}
+	flight := &authRepairFlight{generation: generation, done: make(chan struct{})}
+	g.flight = flight
+	g.mu.Unlock()
+
+	err := refresh(ctx)
+	g.mu.Lock()
+	flight.err = err
+	if g.flight == flight {
+		g.flight = nil
+	}
+	close(flight.done)
+	g.mu.Unlock()
+	return err
+}
+
 type chatGPTTranscriptionProvider struct {
 	app        *app
 	store      *chatgpt.Store
 	authMu     contextMutex
+	authRepair authRepairGroup
+	refresh    func(context.Context) error
 	transcribe func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
 }
 
@@ -472,47 +522,19 @@ func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request t
 	if transcribe == nil {
 		transcribe = chatgpt.Transcribe
 	}
-	refreshAuth := p.refreshAuth
-	var browserFallback func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
-	if !request.SyntheticProbe {
-		browserFallback = func(
-			fallbackContext context.Context,
-			fallbackConfig chatgpt.TranscribeConfig,
-			filePath string,
-			durationMilliseconds int64,
-		) webagent.Result {
-			if !p.app.selectHeadedProviderRuntime() {
-				return chatgpt.UnavailableOperation(
-					p.app.build.Commit,
-					webagent.OperationTranscribe,
-					"chatgpt_headed_browser_required",
-					"connection",
-					"ChatGPT headed browser fallback is unavailable",
-				)
-			}
-			browserConfig, refreshedStore, unavailable := p.app.chatgptBrowserOperationConfig(
-				fallbackContext,
-				webagent.OperationTranscribe,
-			)
-			if unavailable != nil {
-				return *unavailable
-			}
-			fallbackConfig.Browser = &browserConfig
-			fallbackConfig.Store = refreshedStore
-			fallbackConfig.BrowserFallback = nil
-			return transcribe(fallbackContext, fallbackConfig, filePath, durationMilliseconds)
-		}
-	}
+	authGeneration := p.store.AuthStatus(ctx, time.Now(), chatgpt.DefaultAuthTTL).CapturedAt
 	result := transcribe(ctx, chatgpt.TranscribeConfig{
-		Store:           p.store,
-		BuildCommit:     p.app.build.Commit,
-		RefreshAuth:     refreshAuth,
-		AudioFileName:   request.Audio.FileName,
-		AudioMIMEType:   request.Audio.MIMEType,
-		BrowserFallback: browserFallback,
+		Store:       p.store,
+		BuildCommit: p.app.build.Commit,
+		MaxAttempts: 2,
+		RefreshAuth: func(refreshContext context.Context) error {
+			return p.repairAuth(refreshContext, authGeneration)
+		},
+		AudioFileName: request.Audio.FileName,
+		AudioMIMEType: request.Audio.MIMEType,
 	}, request.Audio.PersistedPath, duration)
 	if !result.OK {
-		return transcriptionapi.Result{}, webAgentProviderError(result)
+		return transcriptionapi.Result{}, withoutOuterProviderRetry(webAgentProviderError(result))
 	}
 	data, ok := result.Data.(chatgpt.TranscriptionData)
 	if !ok {
@@ -525,15 +547,24 @@ func (p *chatGPTTranscriptionProvider) NewRealtime(context.Context, transcriptio
 	return nil, transcriptionProviderError(501, "unsupported", "realtime_unsupported", "ChatGPT web transcription currently accepts completed WebM files", false)
 }
 
-func (p *chatGPTTranscriptionProvider) refreshAuth(ctx context.Context) error {
-	if err := p.authMu.Lock(ctx); err != nil {
-		return err
-	}
-	defer p.authMu.Unlock()
-	return p.refreshAuthLocked(ctx)
+func (p *chatGPTTranscriptionProvider) repairAuth(ctx context.Context, observedGeneration string) error {
+	return p.authRepair.Do(ctx, observedGeneration, func(refreshContext context.Context) error {
+		if err := p.authMu.Lock(refreshContext); err != nil {
+			return err
+		}
+		defer p.authMu.Unlock()
+		currentGeneration := p.store.AuthStatus(refreshContext, time.Now(), chatgpt.DefaultAuthTTL).CapturedAt
+		if currentGeneration != observedGeneration {
+			return nil
+		}
+		return p.refreshAuthLocked(refreshContext)
+	})
 }
 
 func (p *chatGPTTranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if p.refresh != nil {
+		return p.refresh(ctx)
+	}
 	if !p.app.selectHeadedProviderRuntime() {
 		return fmt.Errorf("ChatGPT headed browser runtime is unavailable for auth repair")
 	}
@@ -563,6 +594,239 @@ func (p *chatGPTTranscriptionProvider) refreshCapabilitiesLocked(ctx context.Con
 		return fmt.Errorf("ChatGPT headed browser capability repair is unavailable")
 	}
 	result := chatgpt.RefreshCapabilities(ctx, chatgpt.CapabilityRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
+	if !result.OK {
+		return webAgentProviderError(result)
+	}
+	return nil
+}
+
+type claudeTranscriptionProvider struct {
+	app        *app
+	store      *claude.Store
+	authMu     contextMutex
+	authRepair authRepairGroup
+	refresh    func(context.Context) error
+	transcribe func(context.Context, claude.TranscribeConfig, string, int64) webagent.Result
+}
+
+func (p *claudeTranscriptionProvider) ID() transcriptionapi.ProviderID {
+	return transcriptionapi.ProviderClaude
+}
+
+func (p *claudeTranscriptionProvider) Capabilities(ctx context.Context) transcriptionapi.ProviderCapability {
+	auth := p.store.Status(ctx, time.Now(), claude.DefaultAuthTTL)
+	return transcriptionapi.ProviderCapability{
+		Provider:    p.ID(),
+		Models:      []string{transcriptionapi.DefaultModel},
+		File:        true,
+		Translation: false,
+		Streaming:   false,
+		Realtime:    false,
+		Ready:       auth.Ready,
+		Reason:      auth.Reason,
+	}
+}
+
+func (p *claudeTranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
+	now := time.Now()
+	status := p.store.Status(ctx, now, claude.DefaultAuthTTL)
+	locked, err := lockProviderAuthRefresh(ctx, &p.authMu, status.Ready, status.ExpiresAt, now)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return nil
+	}
+	defer p.authMu.Unlock()
+	return p.ensureAuthFreshLocked(ctx)
+}
+
+func (p *claudeTranscriptionProvider) ensureAuthFreshLocked(ctx context.Context) error {
+	status := p.store.Status(ctx, time.Now(), claude.DefaultAuthTTL)
+	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, time.Now()) {
+		return nil
+	}
+	err := p.refreshAuthLocked(ctx)
+	return err
+}
+
+func (p *claudeTranscriptionProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
+	return p.EnsureAuthFresh(ctx)
+}
+
+func (p *claudeTranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
+	if request.Task == transcriptionapi.TaskTranslate {
+		return transcriptionapi.Result{}, transcriptionProviderError(501, "unsupported", "translation_unsupported", "Claude web transcription adapter does not expose Whisper translation", false)
+	}
+	duration, err := providerAudioDuration(ctx, request)
+	if err != nil {
+		return transcriptionapi.Result{}, err
+	}
+	transcribe := p.transcribe
+	if transcribe == nil {
+		transcribe = claude.Transcribe
+	}
+	result := transcribe(ctx, claude.TranscribeConfig{
+		Store:       p.store,
+		BuildCommit: p.app.build.Commit,
+		Language:    request.Language,
+		RefreshAuth: func(refreshContext context.Context, rejectedGeneration string) error {
+			return p.repairAuth(refreshContext, rejectedGeneration)
+		},
+	}, request.Audio.PersistedPath, duration)
+	if !result.OK {
+		return transcriptionapi.Result{}, withoutOuterProviderRetry(webAgentProviderError(result))
+	}
+	data, ok := result.Data.(claude.TranscriptionData)
+	if !ok {
+		return transcriptionapi.Result{}, transcriptionProviderError(502, "provider", "response_changed", "Claude transcription result shape changed", true)
+	}
+	return transcriptionapi.Result{Task: request.Task, Text: data.Transcript}, nil
+}
+
+func (p *claudeTranscriptionProvider) NewRealtime(context.Context, transcriptionapi.RealtimeSessionConfig) (transcriptionapi.RealtimeSession, error) {
+	return nil, transcriptionProviderError(501, "unsupported", "realtime_unsupported", "Claude web transcription currently accepts completed audio files", false)
+}
+
+func (p *claudeTranscriptionProvider) repairAuth(ctx context.Context, observedGeneration string) error {
+	return p.authRepair.Do(ctx, observedGeneration, func(refreshContext context.Context) error {
+		if err := p.authMu.Lock(refreshContext); err != nil {
+			return err
+		}
+		defer p.authMu.Unlock()
+		currentStatus := p.store.Status(refreshContext, time.Now(), claude.DefaultAuthTTL)
+		currentGeneration := currentStatus.CapturedAt
+		if currentStatus.Ready && currentGeneration != "" && currentGeneration != observedGeneration {
+			return nil
+		}
+		return p.refreshAuthLocked(refreshContext)
+	})
+}
+
+func (p *claudeTranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if p.refresh != nil {
+		return p.refresh(ctx)
+	}
+	result := p.app.refreshClaudeAuth(ctx)
+	if !result.OK {
+		return webAgentProviderError(result)
+	}
+	return nil
+}
+
+type geminiTranscriptionProvider struct {
+	app        *app
+	store      *gemini.Store
+	authMu     contextMutex
+	authRepair authRepairGroup
+	refresh    func(context.Context) error
+	transcribe func(context.Context, gemini.TranscribeConfig, string, int64) webagent.Result
+}
+
+func (p *geminiTranscriptionProvider) ID() transcriptionapi.ProviderID {
+	return transcriptionapi.ProviderGemini
+}
+
+func (p *geminiTranscriptionProvider) Capabilities(ctx context.Context) transcriptionapi.ProviderCapability {
+	status := p.store.TemplateStatus(ctx, time.Now(), gemini.DefaultAuthTTL)
+	return transcriptionapi.ProviderCapability{
+		Provider: p.ID(), Models: []string{transcriptionapi.DefaultModel},
+		File: true, Translation: false, Streaming: false, Realtime: false,
+		Ready: status.Ready, Reason: status.Reason,
+	}
+}
+
+func (p *geminiTranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
+	now := time.Now()
+	status := p.store.TemplateStatus(ctx, now, gemini.DefaultAuthTTL)
+	locked, err := lockProviderAuthRefresh(ctx, &p.authMu, status.Ready, status.ExpiresAt, now)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return nil
+	}
+	defer p.authMu.Unlock()
+	status = p.store.TemplateStatus(ctx, time.Now(), gemini.DefaultAuthTTL)
+	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, time.Now()) {
+		return nil
+	}
+	if err := p.refreshAuthLocked(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *geminiTranscriptionProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
+	return p.EnsureAuthFresh(ctx)
+}
+
+func (p *geminiTranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
+	if request.Task == transcriptionapi.TaskTranslate {
+		return transcriptionapi.Result{}, transcriptionProviderError(501, "unsupported", "translation_unsupported", "Gemini dictation does not expose translation", false)
+	}
+	duration, err := providerAudioDuration(ctx, request)
+	if err != nil {
+		return transcriptionapi.Result{}, err
+	}
+	transcribe := p.transcribe
+	if transcribe == nil {
+		transcribe = gemini.Transcribe
+	}
+	authGeneration := p.store.TemplateStatus(ctx, time.Now(), gemini.DefaultAuthTTL).CapturedAt
+	result := transcribe(ctx, gemini.TranscribeConfig{
+		Store: p.store, BuildCommit: p.app.build.Commit,
+		Language: request.Language,
+		RefreshAuth: func(refreshContext context.Context, rejectedGeneration string) error {
+			if rejectedGeneration == "" {
+				rejectedGeneration = authGeneration
+			}
+			return p.repairAuth(refreshContext, rejectedGeneration)
+		},
+	}, request.Audio.PersistedPath, duration)
+	if !result.OK {
+		return transcriptionapi.Result{}, withoutOuterProviderRetry(webAgentProviderError(result))
+	}
+	data, ok := result.Data.(gemini.TranscriptionData)
+	if !ok {
+		return transcriptionapi.Result{}, transcriptionProviderError(502, "provider", "response_changed", "Gemini transcription result shape changed", true)
+	}
+	return transcriptionapi.Result{Task: request.Task, Text: data.Transcript}, nil
+}
+
+func (p *geminiTranscriptionProvider) NewRealtime(context.Context, transcriptionapi.RealtimeSessionConfig) (transcriptionapi.RealtimeSession, error) {
+	return nil, transcriptionProviderError(501, "unsupported", "realtime_unsupported", "Gemini dictation currently accepts completed WebM files", false)
+}
+
+func (p *geminiTranscriptionProvider) repairAuth(ctx context.Context, observedGeneration string) error {
+	return p.authRepair.Do(ctx, observedGeneration, func(refreshContext context.Context) error {
+		if err := p.authMu.Lock(refreshContext); err != nil {
+			return err
+		}
+		defer p.authMu.Unlock()
+		currentGeneration := p.store.TemplateStatus(refreshContext, time.Now(), gemini.DefaultAuthTTL).CapturedAt
+		if currentGeneration != "" && currentGeneration != observedGeneration {
+			return nil
+		}
+		return p.refreshAuthLocked(refreshContext)
+	})
+}
+
+func (p *geminiTranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if p.refresh != nil {
+		return p.refresh(ctx)
+	}
+	if !p.app.selectHeadedProviderRuntime() {
+		return fmt.Errorf("Gemini headed browser runtime is unavailable for auth repair")
+	}
+	browserConfig, refreshedStore, unavailable := p.app.geminiBrowserOperationConfig(ctx, webagent.OperationAuthRefresh)
+	if unavailable != nil {
+		if unavailable.Error != nil {
+			return fmt.Errorf("%s", unavailable.Error.Message)
+		}
+		return fmt.Errorf("Gemini headed browser auth repair is unavailable")
+	}
+	result := gemini.RefreshAuth(ctx, gemini.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
 	if !result.OK {
 		return webAgentProviderError(result)
 	}
@@ -821,6 +1085,16 @@ func webAgentProviderError(result webagent.Result) error {
 		message = "The transcription provider did not return a usable result; retry the saved audio"
 	}
 	return transcriptionProviderError(status, "provider", code, message, result.Error.RetrySafe)
+}
+
+func withoutOuterProviderRetry(err error) error {
+	var providerErr *transcriptionapi.ProviderError
+	if !errors.As(err, &providerErr) || providerErr == nil || !providerErr.Retryable {
+		return err
+	}
+	bounded := *providerErr
+	bounded.Retryable = false
+	return &bounded
 }
 
 func isUnusableTranscriptionResult(code string) bool {

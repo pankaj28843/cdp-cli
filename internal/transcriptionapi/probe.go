@@ -351,7 +351,7 @@ func (c *SyntheticProbeCoordinator) RecordObservedFileFailure(provider ProviderI
 
 // SetInitialGate installs the one-shot service-start gate. It must be called
 // before Start. The gate may wait for provider lifecycle repair, but it must
-// not perform a probe itself; the synthetic probe remains browser-free.
+// not perform a probe itself; the bounded synthetic probe runs afterward.
 func (c *SyntheticProbeCoordinator) SetInitialGate(gate func(context.Context) error) {
 	if c == nil {
 		return

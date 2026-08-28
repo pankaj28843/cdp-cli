@@ -27,6 +27,13 @@ architecture is intentionally small: keep browser protocol mechanics in
   resource budget before one target creation, durably record ownership and
   action intent before submission, classify dispatch as `performed`,
   `not_performed`, or `unknown`, and close only the recorded target.
+- Transcription serving is direct provider transport. Browser/CDP may observe
+  an authenticated audio request during bounded discovery and refresh the
+  minimum owner-only replay template, but a file request opens no target and
+  drives no website controls. The provider adapter replaces audio and dynamic
+  request fields, sends provider-native HTTP or WebSocket traffic, and parses a
+  terminal response. Auth rejection permits one refresh and one direct retry,
+  never browser transcription. See `docs/SANITIZATION.md`.
 - Auth readiness is provider-neutral: observe the initial navigation, then an
   ordinary reload, then a cache-bypassing hard reload with a final grace wait.
   One overall deadline is divided across at least three stages. Missing
@@ -90,7 +97,13 @@ stable envelope; it does not own provider selectors or lifecycle policy.
 Provider credential templates live below
 `<state-dir>/webagent/<provider>/` with `0700` directories and `0600` regular
 files. Atomic state replacement and cross-process file locking come from
-`internal/artifacts`; browserflow journals store lifecycle facts only. Claude
+`internal/artifacts`; browserflow journals store lifecycle facts only.
+Transcription replay templates follow `docs/SANITIZATION.md`: they contain
+only the minimum direct-request material, regenerate per-request fields, and
+never persist audio or transcript content. Conversation workflows remain
+separate from that hot path. Claude transcription replays its authenticated
+dictation WebSocket with 16 kHz mono PCM and never creates a conversation.
+Claude conversation reads separately
 derives its organization/list shape from a successful exact-session
 headed request, then tries that stable HTTP shape once before a narrowly typed
 rendered fallback. Gemini intentionally remains rendered-only: its owner state
@@ -182,6 +195,7 @@ Browser-facing changes also need the synthetic live-site check:
 
 ```bash
 make e2e-demo-installed
+make e2e-transcription-live-installed
 ```
 
 Then exercise the installed binary like an agent:

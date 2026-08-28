@@ -2,8 +2,29 @@ package transcriptionapi
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
+
+func TestCanonicalOnlineProviderIDsRemainStable(t *testing.T) {
+	got := []ProviderID{
+		ProviderBing,
+		ProviderChatGPT,
+		ProviderClaude,
+		ProviderGemini,
+		ProviderM365,
+	}
+	want := []ProviderID{
+		"bing-web",
+		"chatgpt-web",
+		"claude-web",
+		"gemini-web",
+		"microsoft-365-web",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider IDs = %#v, want %#v", got, want)
+	}
+}
 
 func TestFileRequestNormalizesWhisperDefaults(t *testing.T) {
 	request := FileRequest{

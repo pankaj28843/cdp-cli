@@ -229,7 +229,8 @@ func (t AuthTemplate) Validate() error {
 		return fmt.Errorf("captured_at must be RFC3339")
 	}
 	if t.Source != "headed-cdp-observed-list-request" &&
-		t.Source != "headed-cdp-retained-list-shape" {
+		t.Source != "headed-cdp-retained-list-shape" &&
+		t.Source != "headed-cdp-observed-active-organization-cookie" {
 		return fmt.Errorf("source is not an accepted observation source")
 	}
 	return nil

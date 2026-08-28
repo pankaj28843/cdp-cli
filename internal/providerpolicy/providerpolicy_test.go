@@ -82,6 +82,8 @@ func TestOnlyStandaloneTranscriptionProvidersHaveTranscriptionIDs(t *testing.T) 
 	want := map[ProviderID]string{
 		ProviderBing:    "bing-web",
 		ProviderChatGPT: "chatgpt-web",
+		ProviderClaude:  "claude-web",
+		ProviderGemini:  "gemini-web",
 		ProviderM365:    "microsoft-365-web",
 	}
 	for _, descriptor := range Descriptors() {
@@ -96,11 +98,13 @@ func TestOnlyStandaloneTranscriptionProvidersHaveTranscriptionIDs(t *testing.T) 
 	if len(want) != 0 {
 		t.Fatalf("standalone transcription providers missing from policy: %#v", want)
 	}
-	gemini, ok := DescriptorFor("gemini")
-	if !ok {
-		t.Fatal("general Gemini provider disappeared")
-	}
-	if gemini.TranscriptionID != "" || gemini.TranscriptionOnly {
-		t.Fatalf("general Gemini descriptor exposes transcription: %+v", gemini)
+	for _, raw := range []string{"claude", "gemini"} {
+		descriptor, ok := DescriptorFor(raw)
+		if !ok {
+			t.Fatalf("general %s provider disappeared", raw)
+		}
+		if descriptor.TranscriptionID != raw+"-web" || descriptor.TranscriptionOnly {
+			t.Fatalf("general %s descriptor transcription mapping = %+v", raw, descriptor)
+		}
 	}
 }

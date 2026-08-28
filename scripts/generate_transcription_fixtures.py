@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Generate the checked-in synthetic transcription fixture corpus.
 
-The corpus is deliberately generated once and committed as test input. The
-installed service uses one fixture on a bounded cadence for provider health
-verification; this is not evasion traffic. No user audio or expected
-transcript state is written by the service.
+The corpus is deliberately generated once and committed as test input. Managed
+services do not schedule fixture audio; operators use it only for explicit
+development, deployment, debugging, or acknowledged chaos checks. No user
+audio or expected transcript state is written by the service.
 """
 
 from __future__ import annotations

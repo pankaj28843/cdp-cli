@@ -584,94 +584,92 @@ func (a *app) newWorkflowAgentClaudeAuthRefreshCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 60*time.Second)
 			defer cancel()
-			if !a.selectHeadedProviderRuntime() {
-				result := claude.UnavailableAuthRefresh(
-					a.build.Commit,
-					"claude_headed_browser_required",
-					"usage",
-					"Claude auth refresh requires the headed browser runtime",
-					[]string{
-						"cdp --browser-mode headed daemon status --json",
-						"cdp workflow agent claude doctor --json",
-					},
-				)
-				return a.renderWebAgentResult(ctx, "claude auth: headed browser required", result)
-			}
-			store, err := a.stateStore()
-			if err != nil {
-				result := claude.UnavailableAuthRefresh(
-					a.build.Commit,
-					"claude_state_unavailable",
-					"internal",
-					"Claude owner-only state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude auth: state unavailable", result)
-			}
-			authStore, err := claude.NewStore(store.Dir)
-			if err != nil {
-				result := claude.UnavailableAuthRefresh(
-					a.build.Commit,
-					"claude_state_unavailable",
-					"internal",
-					"Claude owner-only state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude auth: state unavailable", result)
-			}
-			journal, err := browserflow.NewFileJournal(store.Dir)
-			if err != nil {
-				result := claude.UnavailableAuthRefresh(
-					a.build.Commit,
-					"claude_lifecycle_state_unavailable",
-					"internal",
-					"Claude exact-target lifecycle state is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude auth: lifecycle state unavailable", result)
-			}
-			client, closeClient, err := a.browserEventCDPClient(ctx)
-			if err != nil {
-				result := claude.UnavailableAuthRefresh(
-					a.build.Commit,
-					"claude_browser_unavailable",
-					"connection",
-					"Claude headed browser runtime is unavailable",
-					[]string{
-						"cdp --browser-mode headed daemon status --json",
-						"cdp workflow agent claude doctor --json",
-					},
-				)
-				return a.renderWebAgentResult(ctx, "claude auth: browser unavailable", result)
-			}
-			defer closeClient(context.Background())
-			engine, err := browserflow.New(browserflow.Config{
-				Client:          client,
-				Journal:         journal,
-				Budget:          a.browserResourceBudgetOptions(),
-				AllowOverBudget: a.opts.allowOverBudget,
-				InputLockPath:   browserflow.HeadedInputLockPath(store.Dir),
-			})
-			if err != nil {
-				result := claude.UnavailableAuthRefresh(
-					a.build.Commit,
-					"claude_browserflow_unavailable",
-					"internal",
-					"Claude exact-target browser transaction is unavailable",
-					[]string{"cdp doctor --json"},
-				)
-				return a.renderWebAgentResult(ctx, "claude auth: transaction unavailable", result)
-			}
-			result := claude.RefreshAuth(ctx, claude.AuthRefreshConfig{
-				Client:      client,
-				Engine:      engine,
-				Journal:     journal,
-				Store:       authStore,
-				BuildCommit: a.build.Commit,
-			})
+			result := a.refreshClaudeAuth(ctx)
 			return a.renderWebAgentResult(ctx, fmt.Sprintf("claude auth: %v", result.State), result)
 		},
 	}
+}
+
+func (a *app) refreshClaudeAuth(ctx context.Context) webagent.Result {
+	if !a.selectHeadedProviderRuntime() {
+		return claude.UnavailableAuthRefresh(
+			a.build.Commit,
+			"claude_headed_browser_required",
+			"usage",
+			"Claude auth refresh requires the headed browser runtime",
+			[]string{
+				"cdp --browser-mode headed daemon status --json",
+				"cdp workflow agent claude doctor --json",
+			},
+		)
+	}
+	store, err := a.stateStore()
+	if err != nil {
+		return claude.UnavailableAuthRefresh(
+			a.build.Commit,
+			"claude_state_unavailable",
+			"internal",
+			"Claude owner-only state is unavailable",
+			[]string{"cdp doctor --json"},
+		)
+	}
+	authStore, err := claude.NewStore(store.Dir)
+	if err != nil {
+		return claude.UnavailableAuthRefresh(
+			a.build.Commit,
+			"claude_state_unavailable",
+			"internal",
+			"Claude owner-only state is unavailable",
+			[]string{"cdp doctor --json"},
+		)
+	}
+	journal, err := browserflow.NewFileJournal(store.Dir)
+	if err != nil {
+		return claude.UnavailableAuthRefresh(
+			a.build.Commit,
+			"claude_lifecycle_state_unavailable",
+			"internal",
+			"Claude exact-target lifecycle state is unavailable",
+			[]string{"cdp doctor --json"},
+		)
+	}
+	client, closeClient, err := a.browserEventCDPClient(ctx)
+	if err != nil {
+		return claude.UnavailableAuthRefresh(
+			a.build.Commit,
+			"claude_browser_unavailable",
+			"connection",
+			"Claude headed browser runtime is unavailable",
+			[]string{
+				"cdp --browser-mode headed daemon status --json",
+				"cdp workflow agent claude doctor --json",
+			},
+		)
+	}
+	defer closeClient(context.Background())
+	engine, err := browserflow.New(browserflow.Config{
+		Client:          client,
+		Journal:         journal,
+		Budget:          a.browserResourceBudgetOptions(),
+		AllowOverBudget: a.headedProviderRepairMayUseOwnedTarget(webagent.OperationAuthRefresh),
+		InputLockPath:   browserflow.HeadedInputLockPath(store.Dir),
+	})
+	if err != nil {
+		return claude.UnavailableAuthRefresh(
+			a.build.Commit,
+			"claude_browserflow_unavailable",
+			"internal",
+			"Claude exact-target browser transaction is unavailable",
+			[]string{"cdp doctor --json"},
+		)
+	}
+	return claude.RefreshAuth(ctx, claude.AuthRefreshConfig{
+		Client:      client,
+		Engine:      engine,
+		Journal:     journal,
+		Store:       authStore,
+		BuildCommit: a.build.Commit,
+	})
 }
 
 func (a *app) selectHeadedProviderRuntime() bool {

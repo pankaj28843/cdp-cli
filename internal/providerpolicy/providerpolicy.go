@@ -42,8 +42,8 @@ var descriptors = []Descriptor{
 	{ID: ProviderAlex, DisplayName: "Ask Alex", Aliases: []string{"alex", "ask-alex"}},
 	{ID: ProviderBing, DisplayName: "Bing Voice", Aliases: []string{"bing", "bing-web", "bing-voice"}, TranscriptionID: "bing-web", TranscriptionOnly: true},
 	{ID: ProviderChatGPT, DisplayName: "ChatGPT", Aliases: []string{"chatgpt", "chatgpt-web"}, TranscriptionID: "chatgpt-web"},
-	{ID: ProviderClaude, DisplayName: "Claude", Aliases: []string{"claude", "claude-web"}},
-	{ID: ProviderGemini, DisplayName: "Gemini", Aliases: []string{"gemini", "gemini-web"}},
+	{ID: ProviderClaude, DisplayName: "Claude", Aliases: []string{"claude", "claude-web"}, TranscriptionID: "claude-web"},
+	{ID: ProviderGemini, DisplayName: "Gemini", Aliases: []string{"gemini", "gemini-web"}, TranscriptionID: "gemini-web"},
 	{ID: ProviderGrok, DisplayName: "Grok", Aliases: []string{"grok", "grok-web"}},
 	{ID: ProviderM365, DisplayName: "Microsoft 365 Copilot", Aliases: []string{
 		"m365", "microsoft365", "microsoft-365", "microsoft365-web", "microsoft-365-web", "copilot",

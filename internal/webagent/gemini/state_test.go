@@ -9,6 +9,64 @@ import (
 	"time"
 )
 
+func TestOwnerOnlyDictationTemplateRoundTrip(t *testing.T) {
+	stateDir := t.TempDir()
+	store, err := NewStore(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := testGeminiTemplate(time.Now().UTC())
+	if err := store.SaveTemplate(context.Background(), template); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadTemplate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.APIKey != template.APIKey || loaded.BrowserUserAgent != template.BrowserUserAgent {
+		t.Fatalf("loaded template did not preserve observed replay fields")
+	}
+	info, err := os.Stat(filepath.Join(stateDir, filepath.FromSlash(RelativeTemplatePath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("template permissions = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestRetainedDictationTemplateRotatesBrowserCredentialsOnly(t *testing.T) {
+	old := testGeminiTemplate(time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC))
+	capturedAt := time.Date(2026, 8, 28, 12, 15, 0, 0, time.UTC)
+	cookies := map[string]string{
+		"SAPISID": "new-sapisid", "__Secure-1PAPISID": "new-1p", "__Secure-3PAPISID": "new-3p",
+		"SID": "full-browser-cookie",
+	}
+	got, ok := retainedDictationTemplate(&old, cookies, "Browser/New", "new-api-key", capturedAt)
+	if !ok {
+		t.Fatal("valid browser credentials did not refresh the retained template")
+	}
+	if got.APIKey != "new-api-key" {
+		t.Fatal("auth refresh did not rotate the labeled dictation API key")
+	}
+	if got.Cookies["SAPISID"] != "new-sapisid" || got.Cookies["SID"] != "full-browser-cookie" || got.BrowserUserAgent != "Browser/New" || got.Source != "headed-cdp-retained-dictation-template" {
+		t.Fatalf("refreshed template = %+v", got)
+	}
+	if got.CapturedAt != capturedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("captured_at = %q", got.CapturedAt)
+	}
+
+	delete(cookies, "SAPISID")
+	if _, ok := retainedDictationTemplate(&old, cookies, "Browser/New", "new-api-key", capturedAt); ok {
+		t.Fatal("refresh accepted incomplete SAPISID credential set")
+	}
+	if created, ok := retainedDictationTemplate(nil, map[string]string{
+		"SAPISID": "new-sapisid", "__Secure-1PAPISID": "new-1p", "__Secure-3PAPISID": "new-3p",
+	}, "Browser/New", "first-api-key", capturedAt); !ok || created.Source != "headed-cdp-observed-dictation-template" {
+		t.Fatalf("first refresh did not self-seed: %+v, %v", created, ok)
+	}
+}
+
 func TestOwnerOnlyStateRoundTripAfterLiveContract(t *testing.T) {
 	stateDir := t.TempDir()
 	store, err := NewStore(stateDir)

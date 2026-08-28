@@ -181,6 +181,40 @@ func TestRunSessionDoesNotBackpressureOnProviderEventsDuringFileReplay(t *testin
 	require.Equal(t, "long replay complete", transcript)
 }
 
+func TestRunSessionPacesTheFinalPartialTileBeforeEndingTheStream(t *testing.T) {
+	fake := newFakeSocket(
+		textFrame(sessionInitResponsePayload()),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechSessionEvent",
+			map[string]any{"eventId": "SpeechRecognitionStarted"},
+		)),
+		textFrame(annotationResultsPayload(
+			"AugLoop_Voice_SpeechToTextFinalResult",
+			map[string]any{"text": "complete final words"},
+		)),
+	)
+	sleeps := 0
+	transcript, _, failure := runSession(
+		context.Background(),
+		testAuthTemplate(t),
+		bytes.Repeat([]byte{0x01, 0x02}, pcmBytesPerTile/2+100),
+		TranscribeConfig{
+			Dial: func(context.Context, string, string) (socket, error) {
+				return fake, nil
+			},
+			PaceTiles: true,
+			Sleep: func(context.Context, time.Duration) error {
+				sleeps++
+				return nil
+			},
+		},
+	)
+
+	require.Nil(t, failure)
+	require.Equal(t, "complete final words", transcript)
+	require.Equal(t, 2, sleeps)
+}
+
 func TestTranscribeHandlesOneAndTwoMinuteWebMFilesUnderConcurrentLoad(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)
