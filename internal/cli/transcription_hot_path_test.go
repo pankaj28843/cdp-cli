@@ -14,6 +14,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/claude"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/gemini"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
 )
 
 func TestChatGPTAuthUsesValidTemplateWhileBackgroundRefreshIsBusy(t *testing.T) {
@@ -549,6 +550,33 @@ func TestGeminiProviderDoesNotExposeASecondOuterRetryLoop(t *testing.T) {
 	var providerErr *transcriptionapi.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Retryable {
 		t.Fatalf("error = %#v, want non-retryable ProviderError", err)
+	}
+}
+
+func TestM365TranscriptionUsesOneDirectRetryWithoutOuterRetry(t *testing.T) {
+	var captured m365.TranscribeConfig
+	provider := &m365TranscriptionProvider{
+		app: &app{build: BuildInfo{Commit: "test"}},
+		transcribe: func(_ context.Context, config m365.TranscribeConfig, _ string, _ int64) webagent.Result {
+			captured = config
+			return webagent.Result{OK: false, Error: &webagent.OperationError{
+				Code: "m365_auth_rejected", ErrClass: "auth", Message: "bounded direct retry exhausted", RetrySafe: true,
+			}}
+		},
+	}
+	_, err := provider.Transcribe(context.Background(), transcriptionapi.FileRequest{
+		Task:  transcriptionapi.TaskTranscribe,
+		Audio: transcriptionapi.AudioAsset{FileName: "recording.webm", PersistedPath: "synthetic-fixture.webm", DurationMS: 100},
+	})
+	var providerErr *transcriptionapi.ProviderError
+	if captured.MaxAttempts != 2 {
+		t.Fatalf("M365 direct attempts = %d, want one initial request plus one retry", captured.MaxAttempts)
+	}
+	if captured.RefreshAuth == nil {
+		t.Fatal("M365 transcription must retain bounded lazy auth repair")
+	}
+	if !errors.As(err, &providerErr) || providerErr.Retryable {
+		t.Fatalf("error = %#v, want non-retryable ProviderError after internal retry exhaustion", err)
 	}
 }
 

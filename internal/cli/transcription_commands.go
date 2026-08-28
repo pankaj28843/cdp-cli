@@ -834,9 +834,10 @@ func (p *geminiTranscriptionProvider) refreshAuthLocked(ctx context.Context) err
 }
 
 type m365TranscriptionProvider struct {
-	app    *app
-	store  *m365.Store
-	authMu contextMutex
+	app        *app
+	store      *m365.Store
+	authMu     contextMutex
+	transcribe func(context.Context, m365.TranscribeConfig, string, int64) webagent.Result
 }
 
 func (p *m365TranscriptionProvider) ID() transcriptionapi.ProviderID {
@@ -918,14 +919,19 @@ func (p *m365TranscriptionProvider) Transcribe(ctx context.Context, request tran
 		return transcriptionapi.Result{}, err
 	}
 	refreshAuth := p.refreshAuth
-	result := m365.Transcribe(ctx, m365.TranscribeConfig{
+	transcribe := p.transcribe
+	if transcribe == nil {
+		transcribe = m365.Transcribe
+	}
+	result := transcribe(ctx, m365.TranscribeConfig{
 		Store:       p.store,
 		BuildCommit: p.app.build.Commit,
+		MaxAttempts: 2,
 		RefreshAuth: refreshAuth,
 		Dial:        augloop.Dial,
 	}, request.Audio.PersistedPath, duration)
 	if !result.OK {
-		return transcriptionapi.Result{}, webAgentProviderError(result)
+		return transcriptionapi.Result{}, withoutOuterProviderRetry(webAgentProviderError(result))
 	}
 	data, ok := result.Data.(m365.TranscriptionData)
 	if !ok {

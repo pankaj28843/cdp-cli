@@ -75,6 +75,74 @@ func TestRunSessionSendsObservedVoiceTileProtocolAndReturnsFinal(t *testing.T) {
 	require.True(t, voiceTileIsEnd(t, binaryFrames[3]))
 }
 
+func TestRunSessionReplaysOnlyEachAudioWithFreshSessionData(t *testing.T) {
+	firstPCM := bytes.Repeat([]byte{0x11, 0x12}, 64)
+	secondPCM := bytes.Repeat([]byte{0x21, 0x22}, 64)
+	run := func(pcm []byte, transcript string) ([]fakeWrite, map[string]any) {
+		fake := newFakeSocket(
+			textFrame(sessionInitResponsePayload()),
+			textFrame(annotationResultsPayload(
+				"AugLoop_Voice_SpeechSessionEvent",
+				map[string]any{"eventId": "SpeechRecognitionStarted"},
+			)),
+			textFrame(annotationResultsPayload(
+				"AugLoop_Voice_SpeechToTextFinalResult",
+				map[string]any{"text": transcript},
+			)),
+			textFrame(annotationResultsPayload(
+				"AugLoop_Voice_SpeechSessionEvent",
+				map[string]any{"eventId": "SpeechRecognitionStopped"},
+			)),
+		)
+		got, _, failure := runSession(
+			context.Background(),
+			testAuthTemplate(t),
+			pcm,
+			TranscribeConfig{Dial: func(context.Context, string, string) (socket, error) {
+				return fake, nil
+			}},
+		)
+		require.Nil(t, failure)
+		require.Equal(t, transcript, got)
+		writes := fake.writesSnapshot()
+		var init map[string]any
+		require.NoError(t, json.Unmarshal(writes[1].payload, &init))
+		return writes, init
+	}
+
+	firstWrites, firstInit := run(firstPCM, "first")
+	secondWrites, secondInit := run(secondPCM, "second")
+	firstCV := firstInit["cv"].(string)
+	secondCV := secondInit["cv"].(string)
+	firstMetadata := firstInit["clientMetadata"].(map[string]any)
+	secondMetadata := secondInit["clientMetadata"].(map[string]any)
+	if firstCV == secondCV || firstInit["messageId"] == secondInit["messageId"] ||
+		firstMetadata["sessionId"] == secondMetadata["sessionId"] ||
+		firstMetadata["docSessionId"] == secondMetadata["docSessionId"] {
+		t.Fatal("sequential Microsoft 365 requests reused dynamic session data")
+	}
+
+	for _, proof := range []struct {
+		writes []fakeWrite
+		pcm    []byte
+		cv     string
+	}{
+		{writes: firstWrites, pcm: firstPCM, cv: firstCV},
+		{writes: secondWrites, pcm: secondPCM, cv: secondCV},
+	} {
+		var binaryFrames [][]byte
+		for _, write := range proof.writes {
+			if write.messageType == augloop.MessageBinary {
+				binaryFrames = append(binaryFrames, write.payload)
+			}
+		}
+		require.Len(t, binaryFrames, 3)
+		header, body := decodeVoiceTile(t, binaryFrames[1])
+		require.Equal(t, proof.pcm, body)
+		require.Equal(t, proof.cv, header["cv"])
+	}
+}
+
 func TestStitchTranscriptSegmentsPreservesAllFinalSegments(t *testing.T) {
 	got := stitchTranscriptSegments([]string{
 		"So even though I switched to Microsoft 365 as the online transcription provider.",

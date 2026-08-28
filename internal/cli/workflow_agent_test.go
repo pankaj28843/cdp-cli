@@ -19,8 +19,12 @@ import (
 func TestWorkflowAgentProvidersJSONNeedsNoBrowser(t *testing.T) {
 	var out, errOut bytes.Buffer
 	build := cli.BuildInfo{Commit: "test-commit"}
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
-	code := cli.Execute(context.Background(), []string{"workflow", "agent", "providers", "--json"}, &out, &errOut, build)
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "workflow", "agent", "providers", "--json"}, &out, &errOut, build)
 	if code != cli.ExitOK {
 		t.Fatalf("workflow agent providers exit = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}

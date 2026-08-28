@@ -10,7 +10,9 @@ fi
 
 state_dir="$(mktemp -d)"
 config_dir="$state_dir/config"
+config_path="$state_dir/config.json"
 export XDG_CONFIG_HOME="$config_dir"
+printf '{}\n' >"$config_path"
 health_state_dir=""
 forced_restart_state_dir=""
 
@@ -102,7 +104,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" describe --command "workflow agent" --json | jq -e '.ok == true and .commands.name == "agent" and (.commands.examples | any(contains("workflow agent auth refresh"))) and (.commands.examples | any(contains("workflow agent capabilities refresh"))) and (.commands.examples | any(contains("workflow agent claude capabilities"))) and (.commands.examples | any(contains("workflow agent gemini capabilities refresh"))) and (.commands.examples | any(contains("agents.google.exclusive_ai_mode"))) and (.commands.examples | any(contains("--google-ai auto")))' >/dev/null
 "$binary" describe --command "workflow agent chatgpt conversations download-attachments" --json | jq -e '.ok == true and .commands.name == "download-attachments" and (.commands.use | contains("download-attachments CONVERSATION_ID")) and (.commands.flags[] | select(.name == "output-dir" and .type == "string"))' >/dev/null
 "$binary" describe --command "workflow youtube cookies" --json | jq -e '.ok == true and .commands.name == "cookies" and (.commands.examples | any(contains("--browser-mode headed") and contains("workflow youtube cookies"))) and (.commands.flags[] | select(.name == "url")) and (.commands.flags[] | select(.name == "out")) and (.commands.flags[] | select(.name == "settle"))' >/dev/null
-"$binary" --state-dir "$state_dir" workflow agent providers --json | jq -e '.ok == true and .schema_version == "webagent-operation/v1" and .data.schema_version == "webagent-capabilities/v1" and (.data.providers | length == 8) and ([.data.providers[] | select(.provider == "claude" or .provider == "gemini") | .operations[] | select(.supported)] | length == 16)' >/dev/null
+"$binary" --config "$config_path" --state-dir "$state_dir" workflow agent providers --json | jq -e '.ok == true and .schema_version == "webagent-operation/v1" and .data.schema_version == "webagent-capabilities/v1" and (.data.providers | length == 8) and ([.data.providers[] | select(.provider == "claude" or .provider == "gemini") | .operations[] | select(.supported)] | length == 16)' >/dev/null
 "$binary" --state-dir "$state_dir" workflow agent chatgpt capabilities --json | jq -e '.ok == true and .provider == "chatgpt" and (.data.operations[] | select(.operation == "conversations.download_attachments" and .supported == true and .status == "implemented" and .side_effect == "local_file_write" and .browser == "provider_defined" and (.command | endswith("conversations download-attachments"))))' >/dev/null
 "$binary" --state-dir "$state_dir" workflow agent gemini capabilities --json | jq -e '.ok == true and .provider == "gemini" and .operation == "capabilities" and .data.runtime.state == "missing" and ([.data.operations[] | select(.supported)] | length == 8)' >/dev/null
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null

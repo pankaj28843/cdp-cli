@@ -72,6 +72,75 @@ func TestTranscribeUsesDirectObservedHTTPMultipart(t *testing.T) {
 	}
 }
 
+func TestTranscribeSubstitutesEachNewMultipartAudioPayload(t *testing.T) {
+	store := testTranscriptionStore(t)
+	payloads := [][]byte{
+		[]byte("first-distinct-webm"),
+		[]byte("second-distinct-webm"),
+	}
+	type capturedRequest struct {
+		audio       []byte
+		duration    string
+		contentType string
+	}
+	captured := make([]capturedRequest, 0, len(payloads))
+	client := &http.Client{Transport: transcriptionRoundTripper(func(request *http.Request) (*http.Response, error) {
+		reader, err := request.MultipartReader()
+		if err != nil {
+			t.Fatalf("multipart reader: %v", err)
+		}
+		got := capturedRequest{contentType: request.Header.Get("Content-Type")}
+		parts := 0
+		for {
+			part, partErr := reader.NextPart()
+			if partErr == io.EOF {
+				break
+			}
+			if partErr != nil {
+				t.Fatalf("next multipart part: %v", partErr)
+			}
+			parts++
+			value, readErr := io.ReadAll(part)
+			if readErr != nil {
+				t.Fatalf("read multipart part %q: %v", part.FormName(), readErr)
+			}
+			switch part.FormName() {
+			case "file":
+				got.audio = value
+			case "duration_ms":
+				got.duration = string(value)
+			default:
+				t.Fatalf("unexpected multipart part %q", part.FormName())
+			}
+		}
+		if parts != 2 {
+			t.Fatalf("multipart parts = %d, want file and duration only", parts)
+		}
+		captured = append(captured, got)
+		return makeTranscriptionHTTPResponse(http.StatusOK, `{"text":"direct works"}`), nil
+	})}
+
+	for index, audio := range payloads {
+		result := Transcribe(context.Background(), TranscribeConfig{
+			Store: store, HTTPClient: client, MaxAttempts: 1,
+		}, testTranscriptionFile(t, audio), int64(index+1)*100)
+		if !result.OK {
+			t.Fatalf("Transcribe(%d) = %+v", index, result)
+		}
+	}
+	for index, request := range captured {
+		if !bytes.Equal(request.audio, payloads[index]) {
+			t.Fatalf("request %d audio = %q, want only %q", index, request.audio, payloads[index])
+		}
+		if wantDuration := []string{"100", "200"}[index]; request.duration != wantDuration {
+			t.Fatalf("request %d duration = %q, want %q", index, request.duration, wantDuration)
+		}
+	}
+	if captured[0].contentType == "" || captured[0].contentType == captured[1].contentType {
+		t.Fatalf("multipart content types = %q, want a fresh boundary per request", []string{captured[0].contentType, captured[1].contentType})
+	}
+}
+
 func TestTranscribeRefreshesAuthOnceAndRetries(t *testing.T) {
 	store := testTranscriptionStore(t)
 	filePath := testTranscriptionFile(t, []byte("synthetic-webm"))

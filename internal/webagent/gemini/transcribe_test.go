@@ -3,6 +3,7 @@ package gemini
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,33 @@ func TestTranscribeReplaysGeminiDictationWebChannel(t *testing.T) {
 	}
 	if !transport.sawInitial || !transport.sawStop {
 		t.Fatalf("WebChannel messages: initial=%v stop=%v", transport.sawInitial, transport.sawStop)
+	}
+}
+
+func TestTranscribeSubstitutesEachNewAudioPayload(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store := testTranscriptionStore(t, now)
+	payloads := [][]byte{
+		append([]byte{0x1a, 0x45, 0xdf, 0xa3}, []byte("first-audio")...),
+		append([]byte{0x1a, 0x45, 0xdf, 0xa3}, []byte("second-distinct-audio")...),
+	}
+	nonces := make([]string, 0, len(payloads))
+	for _, audio := range payloads {
+		transport := &fakeGeminiWebChannel{transcript: "synthetic transcript"}
+		result := Transcribe(context.Background(), TranscribeConfig{
+			Store: store, HTTPClient: &http.Client{Transport: transport},
+			Now: func() time.Time { return now },
+		}, writeGeminiAudio(t, audio), 100)
+		if !result.OK {
+			t.Fatalf("Transcribe() = %+v", result)
+		}
+		if got := transport.audioBytes(); string(got) != string(audio) {
+			t.Fatalf("uploaded audio = %q, want only %q", got, audio)
+		}
+		nonces = append(nonces, transport.bootstrapNonce())
+	}
+	if nonces[0] == "" || nonces[0] == nonces[1] {
+		t.Fatalf("bootstrap nonces = %q, want fresh dynamic value per request", nonces)
 	}
 }
 
@@ -123,6 +151,41 @@ func TestTranscribeDoesNotExposeRetryAfterBoundedAuthRepair(t *testing.T) {
 	}
 }
 
+func TestTranscribeReportsAuthRefreshFailure(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	result := Transcribe(context.Background(), TranscribeConfig{
+		Store:      testTranscriptionStore(t, now),
+		HTTPClient: &http.Client{Transport: &fakeGeminiWebChannel{rejectBootstraps: 1}},
+		Now:        func() time.Time { return now },
+		RefreshAuth: func(context.Context, string) error {
+			return errors.New("refresh unavailable")
+		},
+	}, writeGeminiAudio(t, []byte("webm")), 100)
+	if result.OK || result.Error == nil || result.Error.Code != "gemini_auth_refresh_failed" || result.Error.ErrClass != "auth" {
+		t.Fatalf("Transcribe() = %+v", result)
+	}
+}
+
+func TestGeminiTranscriptionFailureCodesAreStable(t *testing.T) {
+	tests := []struct {
+		name, code, class string
+		failure           *transcribeFailure
+	}{
+		{"timeout", "gemini_transcription_timeout", "timeout", &transcribeFailure{code: "gemini_transcription_timeout", errClass: "timeout"}},
+		{"transport", "gemini_dictation_unavailable", "connection", connectionTranscriptionFailure("unavailable")},
+		{"response shape", "gemini_dictation_response_changed", "provider", providerTranscriptionFailure("changed")},
+		{"replay status", "gemini_dictation_http_failed", "provider", geminiHTTPFailure(http.StatusBadGateway)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := transcriptionFailureResult("run", "test", TranscriptionData{}, *test.failure)
+			if result.Error == nil || result.Error.Code != test.code || result.Error.ErrClass != test.class {
+				t.Fatalf("error = %+v, want code=%q class=%q", result.Error, test.code, test.class)
+			}
+		})
+	}
+}
+
 type fakeGeminiWebChannel struct {
 	mu               sync.Mutex
 	transcript       string
@@ -131,6 +194,7 @@ type fakeGeminiWebChannel struct {
 	sawInitial       bool
 	sawStop          bool
 	audio            []byte
+	bootstrapZX      string
 	finalReady       chan struct{}
 	finalOnce        sync.Once
 }
@@ -150,6 +214,7 @@ func (f *fakeGeminiWebChannel) RoundTrip(request *http.Request) (*http.Response,
 	if request.Method == http.MethodPost && request.URL.Query().Get("X-HTTP-Session-Id") == "gsessionid" {
 		f.mu.Lock()
 		f.bootstraps++
+		f.bootstrapZX = request.URL.Query().Get("zx")
 		attempt := f.bootstraps
 		f.mu.Unlock()
 		if string(body) != "count=0" {
@@ -218,6 +283,12 @@ func (f *fakeGeminiWebChannel) audioBytes() []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]byte(nil), f.audio...)
+}
+
+func (f *fakeGeminiWebChannel) bootstrapNonce() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bootstrapZX
 }
 
 func fakeHTTPResponse(status int, body string, header http.Header) *http.Response {

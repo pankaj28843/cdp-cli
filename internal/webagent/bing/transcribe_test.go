@@ -3,6 +3,7 @@ package bing
 import (
 	"bytes"
 	"context"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -43,6 +44,62 @@ func TestRunSessionSendsAudioAndReturnsSpeechPhrase(t *testing.T) {
 	}
 	if writes[3].messageType != augloop.MessageBinary || writes[3].payload[0] != 0 || writes[3].payload[1] != 'c' {
 		t.Fatalf("PCM audio frame prefix = %#v", writes[3].payload[:2])
+	}
+}
+
+func TestRunSessionReplaysOnlyEachAudioWithFreshRequestData(t *testing.T) {
+	firstPCM := bytes.Repeat([]byte{0x11, 0x12}, 64)
+	secondPCM := bytes.Repeat([]byte{0x21, 0x22}, 64)
+	run := func(pcm []byte, transcript string) (*fakeSocket, *url.URL) {
+		fake := newFakeSocket(augloop.MessageText, []byte("Content-Type:application/json; charset=utf-8\r\nPath:speech.phrase\r\n\r\n{\"RecognitionStatus\":\"Success\",\"DisplayText\":\""+transcript+"\"}"))
+		var rawURL string
+		attempt, err := runSession(context.Background(), pcm, TranscribeConfig{
+			Dial: func(_ context.Context, dialURL, _ string) (Socket, error) {
+				rawURL = dialURL
+				return fake, nil
+			},
+			Sleep: func(context.Context, time.Duration) error { return nil },
+		})
+		if err != nil || attempt.transcript != transcript {
+			t.Fatalf("Bing session = %+v, %v", attempt, err)
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fake, parsed
+	}
+
+	firstSocket, firstParsed := run(firstPCM, "first")
+	secondSocket, secondParsed := run(secondPCM, "second")
+	firstRequestID := firstParsed.Query().Get("uqurequestid")
+	secondRequestID := secondParsed.Query().Get("uqurequestid")
+	if firstRequestID == "" || secondRequestID == "" || firstRequestID == secondRequestID ||
+		firstParsed.Query().Get("X-ConnectionId") == secondParsed.Query().Get("X-ConnectionId") {
+		t.Fatal("sequential Bing requests reused dynamic request data")
+	}
+
+	for requestIndex, proof := range []struct {
+		writes    []fakeWrite
+		pcm       []byte
+		requestID string
+	}{
+		{writes: firstSocket.writesSnapshot(), pcm: firstPCM, requestID: firstRequestID},
+		{writes: secondSocket.writesSnapshot(), pcm: secondPCM, requestID: secondRequestID},
+	} {
+		if len(proof.writes) != 5 {
+			t.Fatalf("request %d write count = %d, want 5", requestIndex+1, len(proof.writes))
+		}
+		audio := proof.writes[3].payload
+		headerEnd := bytes.LastIndex(audio, []byte("\r\n"))
+		if headerEnd < 0 || !bytes.Equal(audio[headerEnd+2:], proof.pcm) {
+			t.Fatalf("request %d did not replay only its own audio", requestIndex+1)
+		}
+		for _, write := range proof.writes {
+			if !bytes.Contains(write.payload, []byte(proof.requestID)) {
+				t.Fatalf("request %d write omitted its fresh request ID", requestIndex+1)
+			}
+		}
 	}
 }
 
