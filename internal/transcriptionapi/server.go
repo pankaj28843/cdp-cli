@@ -436,6 +436,17 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		writeProviderError(w, providerErr)
 		return
 	}
+	if silent, _ := mostlySilentAudio(request.Audio.PersistedPath); silent {
+		contentErr := mostlySilenceError()
+		s.failRecord(r.Context(), &record, contentErr)
+		s.traceFile("file.failed", transport, record, contentErr)
+		if request.Stream {
+			s.writeSSEError(w, contentErr)
+			return
+		}
+		writeAPIError(w, contentErr.Status, apiErrorFrom(contentErr))
+		return
+	}
 	if err := ensureProviderAuth(r.Context(), provider, s.config.AuthTimeout); err != nil {
 		s.recordObservedFileFailure(provider, err)
 		s.failRecord(r.Context(), &record, err)
@@ -1271,6 +1282,10 @@ func apiErrorFrom(err error) APIError {
 			apiError.Message = providerErr.Error()
 		}
 		return apiError
+	}
+	var contentErr *AudioContentError
+	if errors.As(err, &contentErr) && contentErr != nil {
+		return contentErr.APIError
 	}
 	var validationError *ValidationError
 	if errors.As(err, &validationError) && validationError != nil {

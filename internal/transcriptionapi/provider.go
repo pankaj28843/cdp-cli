@@ -74,6 +74,32 @@ func (e *ProviderError) Unwrap() error {
 	return ErrProviderUnavailable
 }
 
+// AudioContentError is a deterministic client-content result, not a provider
+// outage. The HTTP service uses it for known mostly-silent canonical WAVs so
+// every provider has the same response and no provider request is dispatched.
+type AudioContentError struct {
+	APIError APIError
+	Status   int
+}
+
+func (e *AudioContentError) Error() string {
+	if e == nil || e.APIError.Message == "" {
+		return "audio content could not be transcribed"
+	}
+	return e.APIError.Message
+}
+
+func mostlySilenceError() *AudioContentError {
+	return &AudioContentError{
+		Status: 422,
+		APIError: APIError{
+			Type:    "audio_content_error",
+			Code:    "mostly_silence",
+			Message: "audio is mostly silence; record again and retry",
+		},
+	}
+}
+
 func providerError(status int, kind, code, message string, retryable bool) error {
 	return &ProviderError{
 		Status:    status,

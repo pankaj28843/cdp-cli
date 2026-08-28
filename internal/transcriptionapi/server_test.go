@@ -612,6 +612,53 @@ func TestServerRetainsAudioWhenProviderFails(t *testing.T) {
 	}
 }
 
+func TestServerReturnsStableMostlySilenceErrorBeforeProvider(t *testing.T) {
+	for _, providerID := range []ProviderID{ProviderChatGPT, ProviderGemini, ProviderClaude} {
+		t.Run(string(providerID), func(t *testing.T) {
+			provider := &fakeProvider{id: providerID, result: Result{Text: "must not run"}}
+			server, store := newTestServer(t, provider)
+			httpServer := httptest.NewServer(server.Handler())
+			defer httpServer.Close()
+
+			request := newMultipartRequest(
+				t,
+				httpServer.URL+"/v1/audio/transcriptions",
+				"mostly-silent-"+string(providerID),
+				"silence.wav",
+				testSilentWAV(24_000, 24_000*3),
+				map[string]string{"model": DefaultModel, "provider": string(providerID)},
+			)
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			var envelope ErrorEnvelope
+			if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusUnprocessableEntity || envelope.Error.Type != "audio_content_error" || envelope.Error.Code != "mostly_silence" {
+				t.Fatalf("status=%d error=%+v", response.StatusCode, envelope.Error)
+			}
+
+			provider.requestMu.Lock()
+			calls := provider.transcribeCall
+			ensureCalls := provider.ensureCalls
+			provider.requestMu.Unlock()
+			if calls != 0 || ensureCalls != 0 {
+				t.Fatalf("provider was reached: transcribe=%d auth=%d", calls, ensureCalls)
+			}
+			record, err := store.LoadRecord(context.Background(), "mostly-silent-"+string(providerID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.Phase != PhaseFailed || record.Error == nil || record.Error.Code != "mostly_silence" {
+				t.Fatalf("record=%+v", record)
+			}
+		})
+	}
+}
+
 func TestServerTracesCompletedFileLifecycleWithoutTranscript(t *testing.T) {
 	provider := &fakeProvider{id: ProviderChatGPT, result: Result{Text: "private transcript text"}}
 	server, store := newTestServer(t, provider)

@@ -29,7 +29,7 @@
     "/v1/audio/transcriptions": {
       "post": {
         "summary": "Transcribe an audio file",
-        "description": "OpenAI Whisper-compatible multipart request. The compatibility default is 25 MB and ten minutes. Set stream=true for SSE transcript events on providers that support completed-file streaming.",
+        "description": "OpenAI Whisper-compatible multipart request. The compatibility default is 25 MB and ten minutes. The service performs a conservative near-silence check on canonical mono PCM WAV input before provider dispatch. Set stream=true for SSE transcript events on providers that support completed-file streaming.",
         "requestBody": {
           "required": true,
           "content": {
@@ -109,7 +109,7 @@
     "responses": {
       "BadRequest": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
       "PayloadTooLarge": { "description": "Configured upload/session limit exceeded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "ProviderFailure": { "description": "Provider unavailable or returned an unrecognized shape", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+      "ProviderFailure": { "description": "Provider unavailable, returned an unrecognized shape, or the valid audio was classified as mostly silent. The latter uses error.code=mostly_silence and HTTP 422.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
     },
     "schemas": {
       "Error": {

@@ -265,6 +265,36 @@ The API retains JSON request/result records but uses ephemeral transaction
 media by default. Use `--persist-audio` only when the API itself must retain
 audio for a later retry; VoxInput may still keep its own local retry copy.
 
+### Mostly-silent audio
+
+The file boundary has one provider-neutral content result for a known empty
+turn. For the canonical mono 16-bit PCM WAV emitted by VoxInput, cdp-cli uses
+30 ms energy windows, an adaptive low-percentile noise floor, and a
+conservative signal floor. It is a near-silence preflight, not a speech
+segmenter: a clear frame keeps the provider path open, and unsupported or
+malformed formats fail open to the provider adapter.
+
+When the preflight classifies the upload as mostly silent, the service does not
+run auth repair or call the selected provider. It records a failed request and
+returns the same response for every provider:
+
+```json
+{
+  "error": {
+    "type": "audio_content_error",
+    "code": "mostly_silence",
+    "message": "audio is mostly silence; record again and retry"
+  }
+}
+```
+
+The HTTP status is `422`. Clients should show a standard “Mostly silence
+detected. Record again and retry.” recovery message, retain only their normal
+bounded failed-audio copy, and avoid routing the same deterministic silence to
+every provider. The cdp-cli service remains the second boundary for clients
+that do not run the local preflight; provider-specific failures that happen
+after dispatch remain provider failures.
+
 ## Debugging a live session
 
 Every service instance writes a bounded, owner-only metadata trace next to its
