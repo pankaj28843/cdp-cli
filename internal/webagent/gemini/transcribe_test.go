@@ -76,6 +76,33 @@ func TestTranscribeSubstitutesEachNewAudioPayload(t *testing.T) {
 	}
 }
 
+func TestTranscribeConvertsNonWebMAudioBeforeReplay(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	store := testTranscriptionStore(t, now)
+	converted := append([]byte{0x1a, 0x45, 0xdf, 0xa3}, []byte("converted-webm")...)
+	audioPath := t.TempDir() + "/recording.wav"
+	if err := os.WriteFile(audioPath, []byte("wav-audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transport := &fakeGeminiWebChannel{transcript: "converted transcript"}
+	called := false
+	result := Transcribe(context.Background(), TranscribeConfig{
+		Store:      store,
+		HTTPClient: &http.Client{Transport: transport},
+		EncodeWebM: func(_ context.Context, path string) ([]byte, error) {
+			called = path == audioPath
+			return converted, nil
+		},
+		Now: func() time.Time { return now },
+	}, audioPath, 100)
+	if !result.OK || !called {
+		t.Fatalf("Transcribe() = %+v, encoder called=%v", result, called)
+	}
+	if got := string(transport.audioBytes()); got != string(converted) {
+		t.Fatalf("uploaded audio = %q, want converted WebM", got)
+	}
+}
+
 func TestGeminiInitialMessageMatchesObservedStableBytes(t *testing.T) {
 	const observed = "ChViZXlvbmQtYTJhLXJlY29nbml6ZXIQAcKIjwEGEgQKAmVu4o6PAQkVAAB6RhgLIAGCx48BGBIRYmFyZC13ZWItZnJvbnRlbmRCA1dlYqLmjwEOCgRSAmVuKAHAAgGgAwE="
 	message := geminiInitialMessage("en")

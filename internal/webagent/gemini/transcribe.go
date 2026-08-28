@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ type TranscribeConfig struct {
 	Store       *Store
 	BuildCommit string
 	HTTPClient  *http.Client
+	EncodeWebM  func(context.Context, string) ([]byte, error)
 	RefreshAuth func(context.Context, string) error
 	Language    string
 	Now         func() time.Time
@@ -81,7 +83,7 @@ func Transcribe(ctx context.Context, config TranscribeConfig, filePath string, d
 			message: "Gemini transcription duration must be between 1 ms and 10 minutes",
 		})
 	}
-	audio, failure := readGeminiAudio(filePath)
+	audio, failure := prepareGeminiAudio(ctx, filePath, config.EncodeWebM)
 	if failure != nil {
 		return transcriptionFailureResult(runID, config.BuildCommit, data, *failure)
 	}
@@ -116,7 +118,7 @@ func Transcribe(ctx context.Context, config TranscribeConfig, filePath string, d
 	}
 }
 
-func readGeminiAudio(filePath string) ([]byte, *transcribeFailure) {
+func prepareGeminiAudio(ctx context.Context, filePath string, encode func(context.Context, string) ([]byte, error)) ([]byte, *transcribeFailure) {
 	info, err := os.Lstat(filePath)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, &transcribeFailure{code: "gemini_audio_file_missing", errClass: "usage", message: "Gemini transcription audio must be an existing regular file"}
@@ -128,10 +130,63 @@ func readGeminiAudio(filePath string) ([]byte, *transcribeFailure) {
 	if err != nil {
 		return nil, &transcribeFailure{code: "gemini_audio_file_unreadable", errClass: "connection", message: "Gemini transcription audio could not be read"}
 	}
-	if len(audio) < 4 || audio[0] != 0x1a || audio[1] != 0x45 || audio[2] != 0xdf || audio[3] != 0xa3 {
-		return nil, &transcribeFailure{code: "gemini_audio_format_unsupported", errClass: "usage", message: "Gemini dictation currently requires WebM/Opus audio"}
+	if isWebM(audio) {
+		return audio, nil
 	}
-	return audio, nil
+	if encode == nil {
+		encode = encodeGeminiWebM
+	}
+	converted, err := encode(ctx, filePath)
+	if err != nil {
+		return nil, &transcribeFailure{code: "gemini_audio_encode_failed", errClass: "usage", message: "Gemini transcription could not convert audio to WebM/Opus"}
+	}
+	if len(converted) == 0 || int64(len(converted)) > maxTranscriptionAudioBytes || !isWebM(converted) {
+		return nil, &transcribeFailure{code: "gemini_audio_encode_invalid", errClass: "usage", message: "Gemini transcription conversion did not produce valid WebM/Opus audio"}
+	}
+	return converted, nil
+}
+
+func isWebM(audio []byte) bool {
+	return len(audio) >= 4 && audio[0] == 0x1a && audio[1] == 0x45 && audio[2] == 0xdf && audio[3] == 0xa3
+}
+
+func encodeGeminiWebM(ctx context.Context, filePath string) ([]byte, error) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return nil, err
+	}
+	command := exec.CommandContext(
+		ctx,
+		ffmpeg,
+		"-hide_banner", "-loglevel", "error",
+		"-i", filePath,
+		"-vn", "-c:a", "libopus", "-application", "voip", "-b:a", "32k",
+		"-ar", "24000", "-ac", "1", "-f", "webm", "pipe:1",
+	)
+	output := &boundedAudioBuffer{limit: maxTranscriptionAudioBytes}
+	command.Stdout = output
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+type boundedAudioBuffer struct {
+	data  []byte
+	limit int64
+}
+
+func (b *boundedAudioBuffer) Write(data []byte) (int, error) {
+	if int64(len(b.data)+len(data)) > b.limit {
+		return 0, errors.New("encoded audio exceeds bound")
+	}
+	b.data = append(b.data, data...)
+	return len(data), nil
+}
+
+func (b *boundedAudioBuffer) Bytes() []byte {
+	return b.data
 }
 
 func transcribeAttempt(ctx context.Context, config TranscribeConfig, audio []byte) (string, int, string, *transcribeFailure) {

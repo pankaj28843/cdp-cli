@@ -416,7 +416,9 @@ The registry currently supports:
   16 kHz mono linear PCM, `CloseStream`, `TranscriptText`, and
   `TranscriptEndpoint`; it creates no chat or conversation.
 - `gemini-web`: direct completed-file replay using Gemini's minimum owner-only
-  browser-derived request/auth template.
+  browser-derived request/auth template. The service accepts the API's bounded
+  WAV/MP3/M4A/WebM compatibility inputs; non-WebM input is normalized to
+  WebM/Opus with the installed `ffmpeg` binary before the Gemini replay.
 - `microsoft-365-web`: direct Microsoft 365/AugLoop WebSocket transport using
   browser-refreshed auth evidence.
 - `bing-web`: direct public Bing Speech SDK WebSocket transcription. It
@@ -472,7 +474,8 @@ the configured headed cdp-cli browser runtime only for auth/request-template
 refresh. Their transcription hot paths remain direct. The local
 OpenAI-compatible provider does not require a browser; file adapters may need
 `ffprobe`/`ffmpeg` when
-`duration_ms` or audio decoding cannot be supplied by the caller.
+`duration_ms`, audio decoding, or Gemini WebM/Opus normalization cannot be
+supplied by the caller.
 
 ## Compatibility gate
 
