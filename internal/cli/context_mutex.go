@@ -36,6 +36,19 @@ func (m *contextMutex) Lock(ctx context.Context) error {
 	}
 }
 
+func (m *contextMutex) TryLock() bool {
+	if m == nil {
+		return false
+	}
+	m.init()
+	select {
+	case <-m.token:
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *contextMutex) Unlock() {
 	if m == nil {
 		return

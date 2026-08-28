@@ -48,6 +48,24 @@ func TestWebAgentProviderErrorHidesProviderResponseShapeDetails(t *testing.T) {
 	}
 }
 
+func TestWebAgentProviderErrorPreservesRetrySafety(t *testing.T) {
+	err := webAgentProviderError(webagent.Result{
+		Error: &webagent.OperationError{
+			Code:      "chatgpt_exact_target_cleanup_failed",
+			ErrClass:  "provider",
+			Message:   "exact target cleanup was not yet proven",
+			RetrySafe: true,
+		},
+	})
+	var providerErr *transcriptionapi.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderError", err, err)
+	}
+	if !providerErr.Retryable {
+		t.Fatal("retry-safe web-agent failure became a terminal provider error")
+	}
+}
+
 func TestAuthRefreshScheduleDefaultsOnAndAllowsExplicitDisable(t *testing.T) {
 	for _, test := range []struct {
 		name          string

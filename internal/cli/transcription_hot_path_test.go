@@ -3,12 +3,45 @@ package cli
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/bing"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
 )
+
+func TestChatGPTAuthUsesValidTemplateWhileBackgroundRefreshIsBusy(t *testing.T) {
+	store, err := chatgpt.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveTemplate(context.Background(), chatgpt.RequestTemplate{
+		SchemaVersion:    chatgpt.AuthTemplateSchemaVersion,
+		Method:           "GET",
+		URL:              "https://chatgpt.com/backend-api/conversations",
+		Headers:          map[string]string{"user-agent": "test-agent", "authorization": "Bearer test"},
+		Cookies:          map[string]string{"__Secure-next-auth.session-token": "test-session"},
+		CookieHeader:     "__Secure-next-auth.session-token=test-session",
+		BrowserUserAgent: "test-agent",
+		CapturedAt:       time.Now().UTC().Add(-50 * time.Minute).Format(time.RFC3339Nano),
+		Source:           "headed-cdp-observed-read-request",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &chatGPTTranscriptionProvider{store: store}
+	if err := provider.authMu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.authMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := provider.EnsureAuthFresh(ctx); err != nil {
+		t.Fatalf("still-valid auth waited behind proactive refresh: %v", err)
+	}
+}
 
 func TestBingTranscriptionUsesDirectWebSocketAdapter(t *testing.T) {
 	app := &app{build: BuildInfo{Commit: "test"}}

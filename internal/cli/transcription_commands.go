@@ -405,8 +405,14 @@ func (p *chatGPTTranscriptionProvider) Capabilities(ctx context.Context) transcr
 }
 
 func (p *chatGPTTranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
-	if err := p.authMu.Lock(ctx); err != nil {
+	now := time.Now()
+	status := p.store.AuthStatus(ctx, now, chatgpt.DefaultAuthTTL)
+	locked, err := lockProviderAuthRefresh(ctx, &p.authMu, status.Ready, status.ExpiresAt, now)
+	if err != nil {
 		return err
+	}
+	if !locked {
+		return nil
 	}
 	defer p.authMu.Unlock()
 	return p.ensureAuthFreshLocked(ctx)
@@ -587,8 +593,14 @@ func (p *m365TranscriptionProvider) Capabilities(ctx context.Context) transcript
 }
 
 func (p *m365TranscriptionProvider) EnsureAuthFresh(ctx context.Context) error {
-	if err := p.authMu.Lock(ctx); err != nil {
+	now := time.Now()
+	status := p.store.AuthStatus(ctx, now, m365.DefaultAuthTTL)
+	locked, err := lockProviderAuthRefresh(ctx, &p.authMu, status.Ready, status.ExpiresAt, now)
+	if err != nil {
 		return err
+	}
+	if !locked {
+		return nil
 	}
 	defer p.authMu.Unlock()
 	return p.ensureAuthFreshLocked(ctx)
@@ -801,7 +813,7 @@ func webAgentProviderError(result webagent.Result) error {
 		code = "provider_transcript_unavailable"
 		message = "The transcription provider did not return a usable result; retry the saved audio"
 	}
-	return transcriptionProviderError(status, "provider", code, message, false)
+	return transcriptionProviderError(status, "provider", code, message, result.Error.RetrySafe)
 }
 
 func isUnusableTranscriptionResult(code string) bool {
@@ -866,4 +878,29 @@ func authEvidenceExpiringSoon(expiresAt string, now time.Time) bool {
 		return true
 	}
 	return !now.UTC().Add(15 * time.Minute).Before(expires.UTC())
+}
+
+func lockProviderAuthRefresh(
+	ctx context.Context,
+	mutex *contextMutex,
+	ready bool,
+	expiresAt string,
+	now time.Time,
+) (bool, error) {
+	if ready {
+		if !authEvidenceExpiringSoon(expiresAt, now) {
+			return false, nil
+		}
+		// A still-valid template remains usable while one proactive refresh owns
+		// the headed browser. The 15-minute margin leaves that refresh bounded
+		// repair time without placing user requests behind its mutex.
+		if !mutex.TryLock() {
+			return false, nil
+		}
+		return true, nil
+	}
+	if err := mutex.Lock(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
