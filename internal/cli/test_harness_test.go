@@ -44,6 +44,7 @@ var fakeDelayedWaitEvalAttempts atomic.Int64
 var fakeSemanticDriftActionabilityAttempts atomic.Int64
 var fakeSemanticReplacementDescribeAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
+var fakePageNavigateCount atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -378,6 +379,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Browser.resetPermissions" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.navigate" {
+				fakePageNavigateCount.Add(1)
 				var params struct {
 					URL string `json:"url"`
 				}

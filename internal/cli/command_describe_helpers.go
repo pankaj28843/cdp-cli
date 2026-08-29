@@ -727,6 +727,8 @@ func commandExamples(path string) []string {
 		},
 		"cdp workflow verify": {
 			"cdp workflow verify 'https://example.com' --json",
+			"cdp workflow verify --target-index 2 --wait 2s --json",
+			"cdp workflow verify 'https://example.com' --target-index 2 --wait 2s --json",
 		},
 		"cdp workflow debug-bundle": {
 			"cdp workflow debug-bundle --url 'https://example.com' --since 5s --screenshot-view --out-dir tmp/debug-bundle --task-id research-preflight --json",
@@ -754,6 +756,8 @@ func commandExamples(path string) []string {
 		"cdp workflow a11y": {
 			"cdp workflow a11y 'https://example.com' --wait 5s --json",
 			"cdp workflow a11y 'https://example.com' --limit 50 --wait 5s --json",
+			"cdp workflow a11y --target-index 2 --wait 5s --json",
+			"cdp workflow a11y 'https://example.com' --target-index 2 --wait 5s --json",
 		},
 		"cdp workflow visible-posts": {
 			"cdp workflow visible-posts 'https://x.com/<handle>' --limit 5 --json",
@@ -799,6 +803,8 @@ func commandExamples(path string) []string {
 		"cdp workflow perf": {
 			"cdp workflow perf 'https://example.com' --wait 5s --json",
 			"cdp workflow perf 'https://example.com' --wait 5s --trace tmp/perf.local.json --trace-max-bytes 16777216 --redact safe --json",
+			"cdp workflow perf --target-index 2 --wait 5s --json",
+			"cdp workflow perf 'https://example.com' --target-index 2 --wait 5s --json",
 		},
 		"cdp workflow console-errors": {
 			"cdp workflow console-errors --wait 2s --json",

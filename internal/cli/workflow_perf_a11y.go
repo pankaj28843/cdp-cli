@@ -15,10 +15,11 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 	var tracePath string
 	var traceMaxBytes int
 	var traceRedact string
+	var targetIndex int
 	cmd := &cobra.Command{
-		Use:   "perf <url>",
+		Use:   "perf [url]",
 		Short: "Collect post-load performance metrics",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 || traceMaxBytes <= 0 || traceMaxBytes > 64*1024*1024 {
 				return commandError("usage", "usage", "--wait must be non-negative and --trace-max-bytes must be between 1 and 67108864", ExitUsage, []string{"cdp workflow perf 'https://example.com' --wait 5s --trace-max-bytes 16777216 --json"})
@@ -27,6 +28,10 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 			if traceRedact != "none" && traceRedact != "safe" && traceRedact != "headers" {
 				return commandError("usage", "usage", "--redact must be none, safe, or headers", ExitUsage, []string{"cdp workflow perf 'https://example.com' --redact safe --json"})
 			}
+			rawURL, err := diagnosticWorkflowURL(cmd, args, targetIndex, "cdp workflow perf 'https://example.com' --wait 5s --json")
+			if err != nil {
+				return err
+			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {
 				fallback = 30 * time.Second
@@ -34,7 +39,6 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			rawURL := strings.TrimSpace(args[0])
 			client, closeClient, err := a.browserEventCDPClient(ctx)
 			if err != nil {
 				return commandError(
@@ -52,12 +56,10 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 				}
 			}()
 
-			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "perf")
+			target, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "perf", targetIndex)
 			if err != nil {
 				return err
 			}
-			target.TargetID = createdID
 
 			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
 			if err != nil {
@@ -85,9 +87,13 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 					}
 				}()
 			}
-			_, err = session.Navigate(ctx, rawURL)
-			if err != nil {
-				collectorErrors = append(collectorErrors, collectorError("navigation", err))
+			if rawURL != "" {
+				_, err = session.Navigate(ctx, rawURL)
+				if err != nil {
+					collectorErrors = append(collectorErrors, collectorError("navigation", err))
+				} else {
+					target.URL = rawURL
+				}
 			}
 
 			if wait > 0 {
@@ -144,16 +150,21 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 					"partial":          len(collectorErrors) > 0,
 					"next_commands": []string{
 						fmt.Sprintf("cdp protocol exec Performance.getMetrics --target %s --json", target.TargetID),
-						"cdp workflow page-load " + rawURL + " --wait 10s --json",
+						diagnosticWorkflowTargetCommand("page-load", rawURL, targetIndex, target.TargetID) + " --wait 10s",
 					},
 				},
 			}
+			addWorkflowTargetIndex(report, targetIndex)
 			if trace.Artifact != nil {
 				report["artifact"] = trace.Artifact
 				report["artifacts"] = []map[string]any{trace.Artifact}
 			}
 
-			human := fmt.Sprintf("perf\t%s\t%d metrics", rawURL, len(performance))
+			displayURL := rawURL
+			if displayURL == "" {
+				displayURL = target.URL
+			}
+			human := fmt.Sprintf("perf\t%s\t%d metrics", displayURL, len(performance))
 			return a.render(ctx, human, report)
 		},
 	}
@@ -161,22 +172,28 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 	cmd.Flags().StringVar(&tracePath, "trace", "", "optional path for the streamed JSON performance trace artifact")
 	cmd.Flags().IntVar(&traceMaxBytes, "trace-max-bytes", 16*1024*1024, "positive maximum trace artifact bytes (up to 64 MiB)")
 	cmd.Flags().StringVar(&traceRedact, "redact", "safe", "trace artifact redaction preset: safe, headers, or none")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes")
 	return cmd
 }
 
 func (a *app) newWorkflowA11yCommand() *cobra.Command {
 	var wait time.Duration
 	var limit int
+	var targetIndex int
 	cmd := &cobra.Command{
-		Use:   "a11y <url>",
+		Use:   "a11y [url]",
 		Short: "Run a focused accessibility workflow",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 {
 				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow a11y 'https://example.com' --wait 5s --json"})
 			}
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp workflow a11y 'https://example.com' --limit 100 --json"})
+			}
+			rawURL, err := diagnosticWorkflowURL(cmd, args, targetIndex, "cdp workflow a11y 'https://example.com' --wait 5s --json")
+			if err != nil {
+				return err
 			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {
@@ -185,7 +202,6 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			rawURL := strings.TrimSpace(args[0])
 			client, closeClient, err := a.browserEventCDPClient(ctx)
 			if err != nil {
 				return commandError(
@@ -203,12 +219,10 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 				}
 			}()
 
-			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "a11y")
+			target, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "a11y", targetIndex)
 			if err != nil {
 				return err
 			}
-			target.TargetID = createdID
 
 			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
 			if err != nil {
@@ -225,8 +239,12 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 			defer session.Close(ctx)
 
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"console": true, "network": true})
-			if _, err = session.Navigate(ctx, rawURL); err != nil {
-				collectorErrors = append(collectorErrors, collectorError("navigation", err))
+			if rawURL != "" {
+				if _, err = session.Navigate(ctx, rawURL); err != nil {
+					collectorErrors = append(collectorErrors, collectorError("navigation", err))
+				} else {
+					target.URL = rawURL
+				}
 			}
 
 			requests, requestsTruncated, messages, messagesTruncated, err := collectPageLoadEvents(ctx, client, session.SessionID, wait, limit, map[string]bool{"console": true, "network": true})
@@ -273,7 +291,7 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 					"form_controls_without_name": a11ySignals.FormControlsWithoutName,
 					"heading_skips":              a11ySignals.HeadingSkips,
 					"focusable_without_label":    a11ySignals.FocusableWithoutLabel,
-					"next_commands":              []string{"cdp workflow page-load " + rawURL + " --wait 10s --json", "cdp workflow verify " + rawURL + " --wait 5s --json"},
+					"next_commands":              []string{diagnosticWorkflowTargetCommand("page-load", rawURL, targetIndex, target.TargetID) + " --wait 10s", diagnosticWorkflowTargetCommand("verify", rawURL, targetIndex, target.TargetID) + " --wait 5s"},
 				},
 				"workflow": map[string]any{
 					"name":               "a11y",
@@ -288,12 +306,18 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 					"partial":            len(collectorErrors) > 0,
 				},
 			}
+			addWorkflowTargetIndex(report, targetIndex)
 
-			human := fmt.Sprintf("a11y\t%s\t%d potential issues", rawURL, issueCount)
+			displayURL := rawURL
+			if displayURL == "" {
+				displayURL = target.URL
+			}
+			human := fmt.Sprintf("a11y\t%s\t%d potential issues", displayURL, issueCount)
 			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect evidence before sampling signals")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of events per collector; use 0 for no limit")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes")
 	return cmd
 }

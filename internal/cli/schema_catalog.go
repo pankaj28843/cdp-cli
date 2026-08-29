@@ -2406,10 +2406,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-a11y": {
 			Name:        "workflow-a11y",
-			Description: "Focused accessibility signal collection with basic console/network evidence.",
+			Description: "Focused accessibility signal collection with basic console/network evidence; accepts a mutually exclusive 1-based page --target-index and an optional URL for indexed navigation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the accessibility workflow completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Failed network request rows observed during the signal window."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console/log errors and warnings observed during the signal window."},
 				{Name: "a11y", Type: "object", Required: true, Description: "Accessibility signal counts and suggested follow-up commands."},
@@ -2418,10 +2419,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-perf": {
 			Name:        "workflow-perf",
-			Description: "Collected performance metrics, real streamed trace evidence, and honest compact insights from a page-load window.",
+			Description: "Collected performance metrics, real streamed trace evidence, and honest compact insights from a page-load window; accepts a mutually exclusive 1-based page --target-index and an optional URL for indexed navigation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the workflow completed, even if some collectors were partial."},
-				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "performance", Type: "performance_metrics", Required: true, Description: "Performance.getMetrics output after Performance.enable."},
 				{Name: "insights", Type: "performance_insights", Required: true, Description: "LCP, CLS, long-task, and blocking-request summaries; unavailable metrics include reasons rather than invented values."},
 				{Name: "trace", Type: "performance_trace_summary", Required: true, Description: "Tracing ReturnAsStream, bounded IO.read, mandatory IO.close, max-byte, and artifact-safety metadata."},
@@ -2446,10 +2448,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-verify": {
 			Name:        "workflow-verify",
-			Description: "Focused URL verification evidence with console and failed network requests.",
+			Description: "Focused URL verification evidence with console and failed network requests; accepts a mutually exclusive 1-based page --target-index and an optional URL for indexed navigation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the verification workflow completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Failed/errored network requests captured during verification."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Error and warning console/log messages captured during verification."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "Optional JSON report artifact when --out is used."},

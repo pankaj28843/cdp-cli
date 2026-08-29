@@ -940,6 +940,26 @@ protocol_index_open_output="$("$binary" open "$app_url?protocol-index=1" --new-t
 protocol_index_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$protocol_index_open_output")"
 protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
 test "$protocol_index" -gt 0
+diagnostic_page_count_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+diagnostic_verify_index_report="$state_dir/workflow-verify-target-index.json"
+"$binary" workflow verify --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$diagnostic_verify_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .workflow.trigger == "observe" and .workflow.requested_url == "" and (.workflow.collector_errors | length == 0)' "$diagnostic_verify_index_report" >/dev/null
+diagnostic_a11y_index_report="$state_dir/workflow-a11y-target-index.json"
+"$binary" workflow a11y --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$diagnostic_a11y_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .workflow.requested_url == "" and (.workflow.collector_errors | length == 0)' "$diagnostic_a11y_index_report" >/dev/null
+diagnostic_perf_index_trace="$state_dir/workflow-perf-target-index.json"
+diagnostic_perf_index_report="$state_dir/workflow-perf-target-index-report.json"
+"$binary" workflow perf --target-index "$protocol_index" --wait 0s --trace "$diagnostic_perf_index_trace" --state-dir "$state_dir/cdp-state" --json >"$diagnostic_perf_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg path "$diagnostic_perf_index_trace" '.ok == true and .target.id == $id and .target_index == $index and .workflow.requested_url == "" and .trace.stream.closed == true and .artifact.path == $path' "$diagnostic_perf_index_report" >/dev/null
+require_artifact "$diagnostic_perf_index_trace"
+diagnostic_page_count_after_observe="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$diagnostic_page_count_after_observe" -eq "$diagnostic_page_count_before"
+diagnostic_navigation_url="$app_url?diagnostic-indexed-navigation=1"
+diagnostic_navigation_report="$state_dir/workflow-verify-target-index-navigation.json"
+"$binary" workflow verify "$diagnostic_navigation_url" --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$diagnostic_navigation_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg url "$diagnostic_navigation_url" '.ok == true and .target.id == $id and .target_index == $index and .target.url == $url and .workflow.trigger == "navigate" and .workflow.requested_url == $url' "$diagnostic_navigation_report" >/dev/null
+diagnostic_page_count_after_navigation="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$diagnostic_page_count_after_navigation" -eq "$diagnostic_page_count_before"
 storage_index_report="$state_dir/storage-target-index.json"
 "$binary" storage list --target-index "$protocol_index" --include localStorage,sessionStorage,cookies --state-dir "$state_dir/cdp-state" --json >"$storage_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.local_storage | has("entries")) and (.storage.session_storage | has("keys"))' "$storage_index_report" >/dev/null

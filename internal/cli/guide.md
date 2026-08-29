@@ -427,6 +427,25 @@ positional-URL navigation behavior. Collector bounds, reload/cache policy,
 storage-key privacy, content-state classification, and artifact paths are
 unchanged.
 
+## Diagnostic workflow existing-page selection
+
+`workflow verify`, `workflow perf`, and `workflow a11y` accept
+`--target-index N` to inspect an existing page using the 1-based page order
+shown by `cdp pages`; workers and other non-page targets do not consume
+indexes. The positional URL is optional only when an explicit index is
+provided:
+
+    cdp workflow verify --target-index 2 --wait 2s --json
+    cdp workflow perf --target-index 2 --wait 5s --trace tmp/perf.json --json
+    cdp workflow a11y --target-index 2 --wait 5s --json
+    cdp workflow verify https://example.com --target-index 2 --wait 2s --json
+
+With no URL, the selected page is observed in place. With a URL, the selected
+page is navigated before collection. Both forms preserve the caller-owned
+page and add `target_index` to JSON evidence. Without an index, a URL remains
+required and keeps the workflow-owned disposable-page behavior. Invalid and
+out-of-range indexes fail before attachment or collector/trace setup.
+
 ## Rendered-extract existing-page selection
 
 `workflow rendered-extract --target-index N` selects an existing page using

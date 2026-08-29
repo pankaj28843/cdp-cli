@@ -14,16 +14,21 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 	var wait time.Duration
 	var limit int
 	var outPath string
+	var targetIndex int
 	cmd := &cobra.Command{
-		Use:   "verify <url>",
-		Short: "Open a URL and collect basic verification evidence",
-		Args:  cobra.ExactArgs(1),
+		Use:   "verify [url]",
+		Short: "Inspect a page and collect basic verification evidence",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 {
 				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow verify 'https://example.com' --wait 2s --json"})
 			}
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp workflow verify 'https://example.com' --limit 50 --json"})
+			}
+			rawURL, err := diagnosticWorkflowURL(cmd, args, targetIndex, "cdp workflow verify 'https://example.com' --json")
+			if err != nil {
+				return err
 			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {
@@ -32,7 +37,6 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			rawURL := strings.TrimSpace(args[0])
 			client, closeClient, err := a.browserEventCDPClient(ctx)
 			if err != nil {
 				return commandError(
@@ -50,12 +54,10 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 				}
 			}()
 
-			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "verify")
+			target, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "verify", targetIndex)
 			if err != nil {
 				return err
 			}
-			target.TargetID = createdID
 
 			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
 			if err != nil {
@@ -74,12 +76,14 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 			includeSet := map[string]bool{"console": true, "network": true}
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, includeSet)
 			trigger := "observe"
-			_, err = session.Navigate(ctx, rawURL)
-			if err != nil {
-				collectorErrors = append(collectorErrors, collectorError("navigation", err))
-			} else {
-				target.URL = rawURL
-				trigger = "navigate"
+			if rawURL != "" {
+				_, err = session.Navigate(ctx, rawURL)
+				if err != nil {
+					collectorErrors = append(collectorErrors, collectorError("navigation", err))
+				} else {
+					target.URL = rawURL
+					trigger = "navigate"
+				}
 			}
 
 			requests, requestsTruncated, messages, messagesTruncated, err := collectPageLoadEvents(ctx, client, session.SessionID, wait, limit, includeSet)
@@ -127,6 +131,7 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 					},
 				},
 			}
+			addWorkflowTargetIndex(report, targetIndex)
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
@@ -140,12 +145,17 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 				report["artifacts"] = []map[string]any{{"type": "workflow-verify", "path": writtenPath, "bytes": len(b) + 1}}
 			}
 
-			human := fmt.Sprintf("verify\t%s\t%d failed requests\t%d errors", rawURL, len(requests), len(messages))
+			displayURL := rawURL
+			if displayURL == "" {
+				displayURL = target.URL
+			}
+			human := fmt.Sprintf("verify\t%s\t%d failed requests\t%d errors", displayURL, len(requests), len(messages))
 			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect evidence after navigation")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of events to return; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON verification report artifact")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes")
 	return cmd
 }
