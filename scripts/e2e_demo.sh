@@ -546,11 +546,12 @@ hydrated_dir="$state_dir/rendered-extract-hydrated"
 hydrated_report="$state_dir/rendered-extract-hydrated.json"
 "$binary" eval '(() => { const main = document.querySelector("main"); main.innerHTML = "<p>Loading</p>"; setTimeout(() => { main.innerHTML = "<article><h1>Hydrated extraction marker</h1><p>The delayed application content now contains enough meaningful words to satisfy every configured extraction quality threshold.</p><p>This second sentence proves the workflow waited for hydrated content and then observed a full stable interval before capture.</p></article>"; }, 800); return true; })()' --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .result.value == true' >/dev/null
-"$binary" workflow rendered-extract --url-contains "$app_url" --selector main --state-dir "$state_dir/cdp-state" --out-dir "$hydrated_dir" --min-visible-words 12 --min-markdown-words 12 --min-html-chars 64 --wait 5s --settle 1s --json >"$hydrated_report"
+"$binary" workflow rendered-extract --target-index 1 --selector main --state-dir "$state_dir/cdp-state" --out-dir "$hydrated_dir" --min-visible-words 12 --min-markdown-words 12 --min-html-chars 64 --wait 5s --settle 1s --json >"$hydrated_report"
 jq -e --arg dir "$hydrated_dir" '
   .ok == true and
   .workflow.created_page == false and
   .workflow.reused_page == true and
+  .target_index == 1 and
   .workflow.closed == false and
   .readiness.thresholds_met == true and
   .readiness.content_settled_seen == true and

@@ -824,6 +824,7 @@ func commandExamples(path string) []string {
 			"cdp --browser-mode headed workflow rendered-extract 'https://www.reddit.com/r/example/comments/1abc234/a_post/' --content-extractor auto --out-dir tmp/rendered-reddit --json",
 			"cdp --browser-mode headed workflow rendered-extract 'https://www.reddit.com/user/example/' --content-extractor auto --out-dir tmp/rendered-reddit-user --json",
 			"cdp workflow rendered-extract --target <target-id> --reload --out-dir tmp/rendered-existing --json",
+			"cdp workflow rendered-extract --target-index 2 --wait 10s --settle 0s --out-dir tmp/rendered-indexed --json",
 			"cdp workflow rendered-extract --url-contains localhost --out-dir tmp/rendered-selected --json",
 			"cdp workflow rendered-extract 'https://www.google.com/search?q=agentic+engineering&safe=active&tbs=qdr:m' --serp google --out-dir tmp/rendered-google --json",
 		},

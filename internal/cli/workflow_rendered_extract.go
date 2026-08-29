@@ -168,6 +168,7 @@ type renderedExtractOptions struct {
 	TargetID           string
 	URLContains        string
 	TitleContains      string
+	TargetIndex        int
 	Selector           string
 	Wait               time.Duration
 	Settle             time.Duration
@@ -348,6 +349,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var selector string
 	var wait time.Duration
 	var settle time.Duration
@@ -368,6 +370,9 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 		Short: "Extract rendered content from a new URL or an existing page target",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			rawURL := ""
 			if len(args) == 1 {
 				rawURL = args[0]
@@ -380,6 +385,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 				TargetID:           targetID,
 				URLContains:        urlContains,
 				TitleContains:      titleContains,
+				TargetIndex:        targetIndex,
 				Selector:           selector,
 				Wait:               wait,
 				Settle:             settle,
@@ -410,6 +416,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "existing page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique existing page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique existing page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes and this cannot be combined with --target, --url-contains, or --title-contains")
 	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected existing page before extraction")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload the selected existing page while bypassing cache")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector for readiness and generic capture/fallback; auto uses semantic roots for arXiv/Hacker News plus strict X, LinkedIn, and Reddit post, thread, and profile-feed routes")
@@ -428,12 +435,12 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) openExistingRenderedExtractPage(ctx context.Context, targetID, urlContains, titleContains string) (*renderedExtractReusablePage, cdp.TargetInfo, error) {
+func (a *app) openExistingRenderedExtractPage(ctx context.Context, targetID, urlContains, titleContains string, targetIndex int) (*renderedExtractReusablePage, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		return nil, cdp.TargetInfo{}, commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 	}
-	target, err := a.resolveUniqueRenderedExtractTarget(ctx, client, targetID, urlContains, titleContains)
+	target, err := a.resolveUniqueRenderedExtractTarget(ctx, client, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		closeRenderedExtractSession(nil, closeClient)
 		return nil, cdp.TargetInfo{}, err
@@ -446,7 +453,7 @@ func (a *app) openExistingRenderedExtractPage(ctx context.Context, targetID, url
 	return &renderedExtractReusablePage{Client: client, CloseClient: closeClient, Session: session, TargetID: target.TargetID}, target, nil
 }
 
-func (a *app) resolveUniqueRenderedExtractTarget(ctx context.Context, client cdp.CommandClient, targetID, urlContains, titleContains string) (cdp.TargetInfo, error) {
+func (a *app) resolveUniqueRenderedExtractTarget(ctx context.Context, client cdp.CommandClient, targetID, urlContains, titleContains string, targetIndex int) (cdp.TargetInfo, error) {
 	targetID = strings.TrimSpace(targetID)
 	urlContains = strings.TrimSpace(urlContains)
 	titleContains = strings.TrimSpace(titleContains)
@@ -458,6 +465,9 @@ func (a *app) resolveUniqueRenderedExtractTarget(ctx context.Context, client cdp
 	}
 	if selectors > 1 {
 		return cdp.TargetInfo{}, commandError("conflicting_target_selectors", "usage", "pass only one of --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp workflow rendered-extract --target <target-id> --json", "cdp pages --json"})
+	}
+	if targetIndex > 0 {
+		return a.resolvePageTargetWithClientIndex(ctx, client, "", "", "", targetIndex)
 	}
 	if selectors == 0 {
 		return a.resolvePageTargetWithClient(ctx, client, "", "", "")
@@ -556,8 +566,8 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 		createdPage = false
 		reusedPage = true
 		selectedTarget = cdp.TargetInfo{TargetID: createdID, Type: "page", URL: rawURL}
-	} else if rawURL == "" || strings.TrimSpace(options.TargetID) != "" || strings.TrimSpace(options.URLContains) != "" || strings.TrimSpace(options.TitleContains) != "" {
-		reusablePage, target, err := a.openExistingRenderedExtractPage(ctx, options.TargetID, options.URLContains, options.TitleContains)
+	} else if rawURL == "" || options.TargetIndex > 0 || strings.TrimSpace(options.TargetID) != "" || strings.TrimSpace(options.URLContains) != "" || strings.TrimSpace(options.TitleContains) != "" {
+		reusablePage, target, err := a.openExistingRenderedExtractPage(ctx, options.TargetID, options.URLContains, options.TitleContains, options.TargetIndex)
 		if err != nil {
 			return renderedExtractResult{}, err
 		}
@@ -955,6 +965,7 @@ func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExt
 			"partial":           renderedExtractWorkflowPartial(qualityPassed, collectorErrors),
 		},
 	}
+	addWorkflowTargetIndex(report, options.TargetIndex)
 	if googleAIResponse != nil {
 		report["google_ai"] = googleAIResponse
 	}

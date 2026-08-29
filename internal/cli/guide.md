@@ -412,6 +412,24 @@ positional-URL navigation behavior. Collector bounds, reload/cache policy,
 storage-key privacy, content-state classification, and artifact paths are
 unchanged.
 
+## Rendered-extract existing-page selection
+
+`workflow rendered-extract --target-index N` selects an existing page using
+the 1-based page order shown by `cdp pages`; workers and other non-page targets
+do not consume indexes. The selected index is reported as `target_index` beside
+the metadata-only target row, and an indexed extraction reuses the caller-owned
+page without closing it:
+
+    cdp workflow rendered-extract --target-index 2 --wait 10s --settle 0s --json
+    cdp workflow rendered-extract https://example.com --target-index 2 --out-dir tmp/rendered-indexed --json
+
+The index is mutually exclusive with `--target`, `--url-contains`, and
+`--title-contains`; invalid, conflicting, and out-of-range values fail before
+attachment. A positional URL without an existing-page selector keeps the
+workflow-owned `about:blank` creation and cleanup behavior. Adding an explicit
+index selects an existing page, preserves positional-URL navigation, and
+retains caller-owned cleanup semantics.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable

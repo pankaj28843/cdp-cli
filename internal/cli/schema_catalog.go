@@ -2514,10 +2514,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-rendered-extract": {
 			Name:        "workflow-rendered-extract",
-			Description: "Rendered research extraction from a newly created URL target or a uniquely selected existing target, with source-aware Markdown profiles, SPA-aware readiness, ownership-safe cleanup, quality gates, and SERP links.",
+			Description: "Rendered research extraction from a newly created URL target or a uniquely or index-selected existing target, with source-aware Markdown profiles, SPA-aware readiness, ownership-safe cleanup, quality gates, and SERP links.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when extraction completed and artifacts were written."},
 				{Name: "target", Type: "page", Required: true, Description: "Created or reused page target metadata with exact target ID and final URL."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "readiness", Type: "rendered_extract_readiness", Required: true, Description: "Non-about:blank, document readiness, selector, DOM/text/HTML stability, growth, and useful-content signals."},
 				{Name: "content", Type: "rendered_extract_content", Required: true, Description: "Source-profile choice, representation navigation, native extraction outcome, fallback evidence, and representation links."},
 				{Name: "artifacts", Type: "object", Required: true, Description: "Stable artifact paths keyed by visible_json, visible_txt, html_json, markdown, links_json, and diagnostics_json when present."},

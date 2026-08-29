@@ -148,7 +148,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp events tap", want: []string{"--target-index", "--enable", "--match", "--duration", "--max-events", "--ready-file"}},
 		{path: "cdp events interactions", want: []string{"--target-index", "--match", "--duration", "--max-events", "--ready-file"}},
 		{path: "cdp workflow page-load", want: []string{"--reload", "--target-index 2"}},
-		{path: "cdp workflow rendered-extract", want: []string{"--serp google", "x.com/karpathy/status", "x.com/karpathy'", "linkedin.com/company", "reddit.com/user", "reddit.com/r/example/comments"}},
+		{path: "cdp workflow rendered-extract", want: []string{"--serp google", "--target-index 2", "x.com/karpathy/status", "x.com/karpathy'", "linkedin.com/company", "reddit.com/user", "reddit.com/r/example/comments"}},
 		{path: "cdp workflow reddit posts", want: []string{"reddit.com/r/formula1/top/?t=week", "--limit 200", "reddit.com/r/golang/new/"}},
 		{path: "cdp workflow reddit collect", want: []string{"reddit.com/r/formula1/top/?t=week", "reddit.com/r/codex/comments", "reddit.com/user/celticpaladin/comments"}},
 		{path: "cdp workflow x collect", want: []string{"x.com/karpathy/status", "x.com/karpathy", "--limit 200"}},
