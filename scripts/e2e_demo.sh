@@ -903,6 +903,12 @@ indexed_chooser_backend_node_id="$(jq -er '.file_chooser.backend_node_id | selec
 indexed_chooser_trial_report="$state_dir/file-chooser-target-index-trial.json"
 "$binary" file chooser "$indexed_chooser_backend_node_id" "$upload_file" --target-index "$protocol_index" --trial --state-dir "$state_dir/cdp-state" --json >"$indexed_chooser_trial_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .file_chooser.backend_node_id > 0 and .file_chooser.file_count == 1 and .file_chooser.files_set == false and .file_chooser.trial == true and .file_chooser.content_omitted == true' "$indexed_chooser_trial_report" >/dev/null
+indexed_form_values_report="$state_dir/form-values-target-index.json"
+"$binary" form values --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_form_values_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .form.count >= 1 and (.controls | length >= 1)' "$indexed_form_values_report" >/dev/null
+indexed_form_get_report="$state_dir/form-get-target-index.json"
+"$binary" form get "#agent-input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_form_get_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .form.selector == "#agent-input" and .control.selector_hint == "input#agent-input"' "$indexed_form_get_report" >/dev/null
 protocol_index_report="$state_dir/protocol-target-index.json"
 "$binary" protocol exec Runtime.evaluate --target-index "$protocol_index" --params '{"expression":"document.title","returnByValue":true}' --state-dir "$state_dir/cdp-state" --json >"$protocol_index_report"
 jq -e --arg id "$protocol_index_target_id" '.ok == true and .scope == "target" and .target.id == $id and (.session_id | type == "string" and length > 0) and .method == "Runtime.evaluate"' "$protocol_index_report" >/dev/null

@@ -787,9 +787,13 @@ func (a *app) newFormValuesCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	var includeHidden bool
 	cmd := &cobra.Command{Use: "values", Short: "List input, textarea, select, and contenteditable values", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -801,21 +805,28 @@ func (a *app) newFormValuesCommand() *cobra.Command {
 		if result.Error != nil {
 			return invalidSelectorError("form controls", result.Error, "cdp form values --json")
 		}
-		return a.render(ctx, fmt.Sprintf("form\t%d controls", result.Count), map[string]any{"ok": true, "target": pageRow(target), "form": result, "controls": result.Controls})
+		report := map[string]any{"ok": true, "target": pageRow(target), "form": result, "controls": result.Controls}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, fmt.Sprintf("form\t%d controls", result.Count), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().BoolVar(&includeHidden, "include-hidden", false, "include hidden form controls such as UI-library measurement clones")
+	addInputTargetIndexFlag(cmd)
 	return cmd
 }
 
 func (a *app) newFormGetCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	cmd := &cobra.Command{Use: "get <selector>", Short: "Return one form control value by CSS selector", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -830,11 +841,14 @@ func (a *app) newFormGetCommand() *cobra.Command {
 		if result.Count == 0 {
 			return commandError("selector_not_found", "check_failed", fmt.Sprintf("selector %q matched no form controls", args[0]), ExitCheckFailed, []string{"cdp form values --json", "cdp dom query " + args[0] + " --json"})
 		}
-		return a.render(ctx, result.Control.Value, map[string]any{"ok": true, "target": pageRow(target), "form": result, "control": result.Control})
+		report := map[string]any{"ok": true, "target": pageRow(target), "form": result, "control": result.Control}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, result.Control.Value, report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	return cmd
 }
 

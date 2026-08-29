@@ -219,6 +219,28 @@ file_chooser_index_code=$?
 set -e
 test "$file_chooser_index_code" -eq 2
 jq -e '.ok == false and .code == "invalid_target_index"' <<<"$file_chooser_index_output" >/dev/null
+for form_command in values get; do
+  case "$form_command" in
+    values)
+      form_command_args=(form values)
+      form_schema=form-values
+      ;;
+    get)
+      form_command_args=(form get '#out')
+      form_schema=form-get
+      ;;
+  esac
+  "$binary" describe --command "form $form_command" --json \
+    | jq -e '.ok == true and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.examples | any(contains("--target-index 2")))' >/dev/null
+  "$binary" schema "$form_schema" --json \
+    | jq -e '.ok == true and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
+  set +e
+  form_index_output="$("$binary" "${form_command_args[@]}" --target-index 0 --state-dir "$state_dir" --json)"
+  form_index_code=$?
+  set -e
+  test "$form_index_code" -eq 2
+  jq -e '.ok == false and .code == "invalid_target_index"' <<<"$form_index_output" >/dev/null
+done
 agent_help="$("$binary" workflow agent --help)"
 grep -q 'agents.google.exclusive_ai_mode' <<<"$agent_help"
 grep -q -- '--google-ai auto|mode|off' <<<"$agent_help"

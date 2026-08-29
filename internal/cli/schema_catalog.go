@@ -1307,6 +1307,28 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "clear", Type: "object", Required: true, Description: "Selector, cleared state, and bounded previous/current value evidence."},
 			},
 		},
+		"form-values": {
+			Name:        "form-values",
+			Description: "List visible or explicitly included form-control values from a selected page; accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when form controls were inspected."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "form", Type: "form_values_result", Required: true, Description: "Page URL/title, control count, bounded control metadata, and optional evaluation error."},
+				{Name: "controls", Type: "array<form_control>", Required: true, Description: "Form controls duplicated at the top level for jq-friendly inspection."},
+			},
+		},
+		"form-get": {
+			Name:        "form-get",
+			Description: "Inspect one CSS-selected form control on a selected page; accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the selector matched one or more form controls."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "form", Type: "form_get_result", Required: true, Description: "Page URL/title, selector, match count, selected control, and optional evaluation error."},
+				{Name: "control", Type: "form_control", Required: true, Description: "Bounded value, identity, visibility, and editability metadata for the first matched control."},
+			},
+		},
 		"select": {
 			Name:        "select",
 			Description: "Set the selected option on the first matching select control on an optionally indexed page with --target-index after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-select state.",

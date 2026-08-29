@@ -218,6 +218,19 @@ The index is mutually exclusive with `--target`, `--url-contains`, and
 `--target`. Invalid and out-of-range indexes fail before page attachment or
 file mutation, and workers do not change page order.
 
+Form inspection uses the same page-only selector. `form values` lists visible
+controls (or all controls with `--include-hidden`), while `form get` returns
+one CSS-selected control. Indexed reports include `target_index`; invalid,
+conflicting, and out-of-range indexes fail before page attachment:
+
+    cdp form values --target-index 2 --json
+    cdp form get 'input[name=email]' --target-index 2 --json
+
+The index is mutually exclusive with `--target`, `--url-contains`, and
+`--title-contains`, and workers do not change page order. See
+`cdp schema form-values --json` and `cdp schema form-get --json` for the
+stable output contracts.
+
 Read-only inspection commands use the same page-only selector: `frames`,
 `locator find`, `dom query`, `css inspect`, `layout overflow`, and
 `a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`. Successful indexed

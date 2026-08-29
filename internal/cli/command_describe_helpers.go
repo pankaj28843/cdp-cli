@@ -897,8 +897,8 @@ func commandExamples(path string) []string {
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}
 	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}
 	examples["cdp workflow lighthouse"] = []string{"cdp --browser-mode headless workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --redact safe --json"}
-	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json"}
-	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json"}
+	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json", "cdp form values --target-index 2 --json"}
+	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json", "cdp form get 'input[name=email]' --target-index 2 --json"}
 	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --target-index 2 --timeout 5s --json", "cdp assert value 'Search' expected --by label --poll 100ms --json"}
 	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --target-index 2 --timeout 5s --json", "cdp assert text 'Search' 'Search' --by role --role button --poll 100ms --json"}
 	examples["cdp assert url"] = []string{"cdp assert url example.com --mode contains --target-index 2 --timeout 5s --json", "cdp assert url '^https://example\\.com/' --mode regex --poll 100ms --json"}
