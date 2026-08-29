@@ -24,6 +24,7 @@ app_url=""
 managed_state=""
 managed_stop_verification_state=""
 stream_pid=""
+generic_stream_pid=""
 interaction_pid=""
 future_interaction_pid=""
 
@@ -65,6 +66,10 @@ cleanup() {
   if [[ -n "$stream_pid" ]]; then
     kill "$stream_pid" 2>/dev/null || true
     wait "$stream_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$generic_stream_pid" ]]; then
+    kill "$generic_stream_pid" 2>/dev/null || true
+    wait "$generic_stream_pid" 2>/dev/null || true
   fi
   if [[ -n "$interaction_pid" ]]; then
     kill "$interaction_pid" 2>/dev/null || true
@@ -262,6 +267,36 @@ jq -s -e --arg target "$collector_target_id" '
 ' "$stream_output" >/dev/null
 if [[ -e "$stream_ready_file" ]]; then
   echo "event stream readiness artifact remained after stream exit" >&2
+  exit 1
+fi
+generic_stream_ready_root="$state_dir/generic-stream-ready"
+generic_stream_ready_file="$generic_stream_ready_root/events.ready.json"
+generic_stream_output="$state_dir/events-stream-generic-domain.jsonl"
+mkdir -m 700 "$generic_stream_ready_root"
+"$binary" events stream --target "$collector_target_id" --enable DOM --match DOM.documentUpdated --duration 3s --max-events 1 --ready-file "$generic_stream_ready_file" --state-dir "$state_dir/cdp-state" --json < <(sleep 5) >"$generic_stream_output" &
+generic_stream_pid=$!
+for _ in {1..100}; do
+  [[ -s "$generic_stream_ready_file" ]] && break
+  if ! kill -0 "$generic_stream_pid" 2>/dev/null; then
+    echo "generic-domain event stream exited before readiness" >&2
+    sed -n '1,80p' "$generic_stream_output" >&2 || true
+    wait "$generic_stream_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and (.enabled_domains | sort == ["DOM"])' "$generic_stream_ready_file" >/dev/null
+"$binary" page reload --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "reloaded"' >/dev/null
+wait "$generic_stream_pid"
+generic_stream_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .stream.session_bound == true and (.stream.enabled_domains | sort == ["DOM"]))] | length) == 1 and
+  ([.[] | select(.type == "event" and .event.method == "DOM.documentUpdated" and (.event.sessionId | type == "string" and length > 0))] | length) >= 1 and
+  ([.[] | select(.type == "stopped" and .reason == "max_events" and .event_count == 1 and .truncated == true)] | length) == 1
+' "$generic_stream_output" >/dev/null
+if [[ -e "$generic_stream_ready_file" ]]; then
+  echo "generic-domain event stream readiness artifact remained after stream exit" >&2
   exit 1
 fi
 interaction_ready_root="$state_dir/interaction-ready"

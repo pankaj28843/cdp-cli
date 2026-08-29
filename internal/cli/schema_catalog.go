@@ -31,7 +31,7 @@ func withCommandRetrySchemaFields(fields []schemaField, includeLastObservedTarge
 }
 
 func schemaCatalog() map[string]schemaInfo {
-	return map[string]schemaInfo{
+	catalog := map[string]schemaInfo{
 		"guide": {
 			Name:        "guide",
 			Description: "Version-matched public cdp-cli agent guide returned as content or a readable installed/materialized file path.",
@@ -2784,6 +2784,17 @@ func schemaCatalog() map[string]schemaInfo {
 			},
 		},
 	}
+	catalog["events-tap"] = schemaInfo{
+		Name:        catalog["events-tap"].Name,
+		Description: "Duration-bounded, exact-session raw CDP event stream with validated target-domain enablement.",
+		Fields:      catalog["events-tap"].Fields,
+	}
+	catalog["events-stream"] = schemaInfo{
+		Name:        catalog["events-stream"].Name,
+		Description: "Persistent exact-session CDP event stream with validated target-domain enablement emitted as one JSON record per line.",
+		Fields:      catalog["events-stream"].Fields,
+	}
+	return catalog
 }
 
 func schemaNames() []string {

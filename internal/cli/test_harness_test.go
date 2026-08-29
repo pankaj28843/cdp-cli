@@ -440,6 +440,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Page.navigateToHistoryEntry" {
 				resp["result"] = map[string]any{}
+			} else if req.Method == "DOM.enable" || req.Method == "DOM.disable" || req.Method == "Performance.enable" || req.Method == "Performance.disable" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "DOM.getDocument" {
 				resp["result"] = map[string]any{"root": map[string]any{"nodeId": 1}}
 			} else if req.Method == "DOM.querySelector" {

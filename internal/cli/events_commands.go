@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +29,10 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 		if duration < 0 || maxEvents < 0 {
 			return commandError("usage", "usage", "--duration and --max-events must be non-negative", ExitUsage, []string{"cdp events tap --duration 10s --max-events 50 --json"})
 		}
+		enabledDomains, err := parseEventDomains(enable)
+		if err != nil {
+			return err
+		}
 		ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
 		defer cancel()
 		client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
@@ -37,17 +40,12 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 			return err
 		}
 		defer session.Close(ctx)
-		enabledDomains := parseCSVSet(enable)
-		for domain := range enabledDomains {
-			if _, ok := eventDomainEnableMethod(domain); !ok {
-				return commandError("usage", "usage", fmt.Sprintf("unsupported --enable domain %q", domain), ExitUsage, []string{"cdp events tap --enable page,network,runtime,log --json"})
-			}
+		for _, domain := range enabledDomains.names() {
 			if err := enableEventDomain(ctx, client, session.SessionID, domain); err != nil {
 				return commandError("collector_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", domain, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 			}
 		}
-		domainNames := setKeys(enabledDomains)
-		sort.Strings(domainNames)
+		domainNames := enabledDomains.names()
 		removeReady, err := publishCollectorReadiness(readyFile, target.TargetID, session.SessionID, domainNames)
 		if err != nil {
 			return collectorReadinessError(err)
@@ -86,7 +84,7 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
-	cmd.Flags().StringVar(&enable, "enable", "page,network,runtime,log", "comma-separated domains to enable: page,network,runtime,log")
+	cmd.Flags().StringVar(&enable, "enable", "page,network,runtime,log", "comma-separated CDP target domains to enable (for example page,network,runtime,log,DOM,Performance)")
 	cmd.Flags().StringVar(&match, "match", "", "comma-separated event method names to keep")
 	cmd.Flags().DurationVar(&duration, "duration", 5*time.Second, "maximum event collection duration")
 	cmd.Flags().IntVar(&maxEvents, "max-events", 100, "maximum events to collect; 0 disables the count limit")

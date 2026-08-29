@@ -46,7 +46,7 @@ func (a *app) newEventsStreamCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&options.titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().IntVar(&options.targetIndex, "target-index", 0, "select a 1-based page target index")
-	cmd.Flags().StringVar(&options.enable, "enable", "page,network,runtime,log", "comma-separated domains to enable: page,network,runtime,log")
+	cmd.Flags().StringVar(&options.enable, "enable", "page,network,runtime,log", "comma-separated CDP target domains to enable (for example page,network,runtime,log,DOM,Performance)")
 	cmd.Flags().StringVar(&options.match, "match", "", "comma-separated event method names to keep")
 	cmd.Flags().DurationVar(&options.duration, "duration", 0, "maximum stream duration; 0 waits for count, EOF, cancellation, or the global timeout")
 	cmd.Flags().IntVar(&options.maxEvents, "max-events", 0, "maximum matching events; 0 disables the count limit")
@@ -90,13 +90,16 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 		_ = session.Close(cleanupCtx)
 	}()
 
-	enabledDomains := parseCSVSet(options.enable)
-	for _, domain := range setKeys(enabledDomains) {
+	enabledDomains, err := parseEventDomains(options.enable)
+	if err != nil {
+		return err
+	}
+	for _, domain := range enabledDomains.names() {
 		if err := enableEventDomain(setupCtx, client, session.SessionID, domain); err != nil {
 			return commandError("collector_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", domain, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 		}
 	}
-	removeReady, err := publishCollectorReadiness(options.readyFile, target.TargetID, session.SessionID, setKeys(enabledDomains))
+	removeReady, err := publishCollectorReadiness(options.readyFile, target.TargetID, session.SessionID, enabledDomains.names())
 	if err != nil {
 		return collectorReadinessError(err)
 	}
@@ -207,15 +210,23 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 			}
 			if input.operation == '+' {
 				domain := eventMethodDomain(input.method)
-				if !enabledDomains[domain] {
-					if err := enableEventDomain(streamCtx, client, session.SessionID, domain); err != nil {
-						streamErr := commandError("subscription_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", domain, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				canonicalDomain, ok := canonicalEventDomain(domain)
+				if !ok {
+					streamErr := commandError("subscription_enable_failed", "usage", fmt.Sprintf("invalid event domain %q", domain), ExitUsage, []string{"cdp protocol domains --json"})
+					if writeErr := writer.write(eventStreamErrorRecord(streamErr)); writeErr != nil {
+						return writeErr
+					}
+					continue
+				}
+				if !enabledDomains.contains(canonicalDomain) {
+					if err := enableEventDomain(streamCtx, client, session.SessionID, canonicalDomain); err != nil {
+						streamErr := commandError("subscription_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", canonicalDomain, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 						if writeErr := writer.write(eventStreamErrorRecord(streamErr)); writeErr != nil {
 							return writeErr
 						}
 						continue
 					}
-					enabledDomains[domain] = true
+					enabledDomains.add(canonicalDomain)
 				}
 				changed := subscriptions.add(input.method)
 				if err := writer.write(map[string]any{"ok": true, "type": "subscription", "operation": "add", "method": input.method, "active": true, "changed": changed}); err != nil {
@@ -483,22 +494,15 @@ func validIdentifier(value string) bool {
 
 func eventMethodDomain(method string) string {
 	domain, _, _ := strings.Cut(method, ".")
-	return strings.ToLower(domain)
+	return domain
 }
 
 func eventDomainEnableMethod(domain string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(domain)) {
-	case "page":
-		return "Page.enable", true
-	case "network":
-		return "Network.enable", true
-	case "runtime":
-		return "Runtime.enable", true
-	case "log":
-		return "Log.enable", true
-	default:
+	canonical, ok := canonicalEventDomain(domain)
+	if !ok {
 		return "", false
 	}
+	return canonical + ".enable", true
 }
 
 func enableEventDomain(ctx context.Context, client browserEventClient, sessionID, domain string) error {
@@ -516,15 +520,148 @@ func eventStreamCallContext(ctx context.Context) (context.Context, context.Cance
 }
 
 func validateEventDomains(value string) error {
-	for _, domain := range setKeys(parseCSVSet(value)) {
-		if _, ok := eventDomainEnableMethod(domain); !ok {
-			return commandError("usage", "usage", fmt.Sprintf("unsupported --enable domain %q", domain), ExitUsage, []string{"cdp events stream --enable page,network,runtime,log --json"})
-		}
-	}
-	return nil
+	_, err := parseEventDomains(value)
+	return err
 }
 
-func eventStreamMetadata(target cdp.TargetInfo, sessionID string, options eventStreamOptions, subscriptions eventSubscriptionSet, enabledDomains map[string]bool) map[string]any {
+type eventDomainSet map[string]string
+
+func parseEventDomains(value string) (eventDomainSet, error) {
+	set := eventDomainSet{}
+	for _, raw := range strings.Split(value, ",") {
+		domain := strings.TrimSpace(raw)
+		if domain == "" {
+			continue
+		}
+		canonical, ok := canonicalEventDomain(domain)
+		if !ok {
+			return nil, commandError("invalid_event_domain", "usage", fmt.Sprintf("invalid or browser-scoped event domain %q", domain), ExitUsage, []string{"cdp protocol domains --json", "cdp events stream --enable DOM,Performance --json"})
+		}
+		set.add(canonical)
+	}
+	return set, nil
+}
+
+func (s eventDomainSet) add(domain string) {
+	canonical, ok := canonicalEventDomain(domain)
+	if !ok {
+		return
+	}
+	s[strings.ToLower(canonical)] = canonical
+}
+
+func (s eventDomainSet) contains(domain string) bool {
+	canonical, ok := canonicalEventDomain(domain)
+	if !ok {
+		return false
+	}
+	_, exists := s[strings.ToLower(canonical)]
+	return exists
+}
+
+func (s eventDomainSet) names() []string {
+	names := make([]string, 0, len(s))
+	for _, domain := range s {
+		names = append(names, eventDomainDisplayName(domain))
+	}
+	sort.Slice(names, func(i, j int) bool {
+		left, right := strings.ToLower(names[i]), strings.ToLower(names[j])
+		if left == right {
+			return names[i] < names[j]
+		}
+		return left < right
+	})
+	return names
+}
+
+func eventDomainDisplayName(domain string) string {
+	switch strings.ToLower(domain) {
+	case "page", "network", "runtime", "log":
+		return strings.ToLower(domain)
+	default:
+		return domain
+	}
+}
+
+var canonicalEventDomains = map[string]string{
+	"animation":            "Animation",
+	"audits":               "Audits",
+	"autofill":             "Autofill",
+	"backgroundservice":    "BackgroundService",
+	"bluetoothemulation":   "BluetoothEmulation",
+	"browser":              "Browser",
+	"cast":                 "Cast",
+	"console":              "Console",
+	"css":                  "CSS",
+	"database":             "Database",
+	"deviceaccess":         "DeviceAccess",
+	"deviceorientation":    "DeviceOrientation",
+	"dom":                  "DOM",
+	"domdebugger":          "DOMDebugger",
+	"domsnapshot":          "DOMSnapshot",
+	"domstorage":           "DOMStorage",
+	"emulation":            "Emulation",
+	"eventbreakpoints":     "EventBreakpoints",
+	"extensions":           "Extensions",
+	"fedcm":                "FedCm",
+	"fetch":                "Fetch",
+	"filesystem":           "FileSystem",
+	"headlessexperimental": "HeadlessExperimental",
+	"heapprofiler":         "HeapProfiler",
+	"indexeddb":            "IndexedDB",
+	"input":                "Input",
+	"inspector":            "Inspector",
+	"io":                   "IO",
+	"layertree":            "LayerTree",
+	"log":                  "Log",
+	"media":                "Media",
+	"memory":               "Memory",
+	"network":              "Network",
+	"overlay":              "Overlay",
+	"page":                 "Page",
+	"performance":          "Performance",
+	"performancetimeline":  "PerformanceTimeline",
+	"preload":              "Preload",
+	"profiler":             "Profiler",
+	"pwa":                  "PWA",
+	"runtime":              "Runtime",
+	"security":             "Security",
+	"servicenetworking":    "ServiceNetworking",
+	"serviceworker":        "ServiceWorker",
+	"storage":              "Storage",
+	"systeminfo":           "SystemInfo",
+	"target":               "Target",
+	"tethering":            "Tethering",
+	"tracing":              "Tracing",
+	"webaudio":             "WebAudio",
+	"webauthn":             "WebAuthn",
+	"schema":               "Schema",
+}
+
+var browserScopedEventDomains = map[string]bool{
+	"browser":    true,
+	"schema":     true,
+	"systeminfo": true,
+	"target":     true,
+	"tethering":  true,
+}
+
+func canonicalEventDomain(domain string) (string, bool) {
+	trimmed := strings.TrimSpace(domain)
+	if !validIdentifier(trimmed) {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if canonical, known := canonicalEventDomains[lower]; known {
+		if browserScopedEventDomains[lower] {
+			return "", false
+		}
+		return canonical, true
+	}
+	return trimmed, true
+}
+
+func eventStreamMetadata(target cdp.TargetInfo, sessionID string, options eventStreamOptions, subscriptions eventSubscriptionSet, enabledDomains eventDomainSet) map[string]any {
 	return map[string]any{
 		"duration":        durationString(options.duration),
 		"max_events":      options.maxEvents,
@@ -533,7 +670,7 @@ func eventStreamMetadata(target cdp.TargetInfo, sessionID string, options eventS
 		"target_id":       target.TargetID,
 		"all_events":      subscriptions.all,
 		"subscriptions":   subscriptions.methods(),
-		"enabled_domains": setKeys(enabledDomains),
+		"enabled_domains": enabledDomains.names(),
 	}
 }
 

@@ -58,7 +58,20 @@ wait, so an event is not matched twice:
     cdp events wait --file tmp/events.jsonl --from-offset 123 --method Network.loadingFailed --contains /api/ --print-offset --json
     cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json > tmp/interactions.jsonl
 
-Use repeated --method flags for any-of method matching and repeated --contains
+The stream and tap collectors keep the historical defaults of Page, Network,
+Runtime, and Log. Their --enable flag also accepts other target-scoped CDP
+domains using protocol spelling, for example DOM or Performance:
+
+    cdp events stream --enable DOM,Performance --match DOM.documentUpdated,Performance.metrics --json
+    printf '+DOM.documentUpdated\n' | cdp events stream --enable page --json
+
+Each generic domain is enabled as Domain.enable on the exact attached target
+session. Browser-scoped domains, invalid identifiers, and domains that do not
+expose an enable method fail explicitly; they are never reported as active.
+Use cdp protocol domains --json and cdp protocol describe Domain.event --json
+to confirm the live browser surface before relying on a less common domain.
+
+Use repeated `--method` flags for any-of method matching and repeated `--contains`
 flags for all-of line matching. cdp events wait accepts cdp-cli stream records
 and raw CDP event records, ignores incomplete final lines until their newline,
 and never opens a browser connection. It is a bounded blocking wait, not a
