@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
@@ -25,7 +26,92 @@ func (a *app) newBrowserCommand() *cobra.Command {
 	cmd.AddCommand(a.newBrowserPreflightCommand())
 	cmd.AddCommand(a.newBrowserModeCommand())
 	cmd.AddCommand(a.newBrowserProfileCommand())
+	cmd.AddCommand(a.newBrowserMarkerCommand())
 	return cmd
+}
+
+func (a *app) newBrowserMarkerCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "marker",
+		Short: "Mark the selected headed browser window for human recognition",
+		Long:  "Manage an explicit, daemon-backed visual marker for the selected headed browser. The marker is click-through, applies to current and future page targets, and stores metadata only. It is opt-in because headed mode may use the user’s existing default-profile Chrome.",
+	}
+	cmd.AddCommand(a.newBrowserMarkerEnableCommand())
+	cmd.AddCommand(a.newBrowserMarkerDisableCommand())
+	cmd.AddCommand(a.newBrowserMarkerStatusCommand())
+	return cmd
+}
+
+func (a *app) newBrowserMarkerEnableCommand() *cobra.Command {
+	var name string
+	cmd := &cobra.Command{
+		Use:   "enable",
+		Short: "Enable a visual marker on the selected headed browser",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			if a.browserModeName() != string(config.BrowserModeHeaded) {
+				return commandError("invalid_browser_mode", "usage", "browser marker is available only in headed mode", ExitUsage, []string{"cdp --browser-mode headed browser marker enable --name agent --json"})
+			}
+			if strings.TrimSpace(name) == "" {
+				name = a.connectionStateName(ctx)
+			}
+			runtime, err := a.requiredDaemonRuntime(ctx)
+			if err != nil {
+				return err
+			}
+			status, err := (daemon.RuntimeClient{Runtime: runtime}).EnableWindowMarker(ctx, name)
+			if err != nil {
+				return commandError("window_marker_enable_failed", "lifecycle", err.Error(), ExitConnection, []string{"cdp browser marker status --json", "cdp browser marker enable --name agent --json"})
+			}
+			return a.render(ctx, "window marker enabled", map[string]any{"ok": true, "marker": status})
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "marker name; defaults to the selected browser connection name")
+	return cmd
+}
+
+func (a *app) newBrowserMarkerDisableCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable",
+		Short: "Remove the visual marker from the selected browser",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			runtime, err := a.requiredDaemonRuntime(ctx)
+			if err != nil {
+				return err
+			}
+			status, err := (daemon.RuntimeClient{Runtime: runtime}).DisableWindowMarker(ctx)
+			if err != nil {
+				return commandError("window_marker_disable_failed", "lifecycle", err.Error(), ExitConnection, []string{"cdp browser marker status --json"})
+			}
+			return a.render(ctx, "window marker disabled", map[string]any{"ok": true, "marker": status})
+		},
+	}
+}
+
+func (a *app) newBrowserMarkerStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show the selected browser window marker status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+			runtime, err := a.requiredDaemonRuntime(ctx)
+			if err != nil {
+				return err
+			}
+			status, err := (daemon.RuntimeClient{Runtime: runtime}).WindowMarkerStatus(ctx)
+			if err != nil {
+				return commandError("window_marker_status_failed", "connection", err.Error(), ExitConnection, []string{"cdp daemon status --json"})
+			}
+			return a.render(ctx, fmt.Sprintf("window marker %s", status.State), map[string]any{"ok": true, "marker": status})
+		},
+	}
 }
 
 func (a *app) newBrowserModeCommand() *cobra.Command {

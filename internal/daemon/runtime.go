@@ -33,6 +33,9 @@ const (
 	RPCMethodEndInvocationLease   = "Daemon.endInvocationLease"
 	RPCMethodMarkTargetDisposable = "Daemon.markTargetDisposable"
 	RPCMethodMarkTargetPersistent = "Daemon.markTargetPersistent"
+	RPCMethodEnableWindowMarker   = "Daemon.enableWindowMarker"
+	RPCMethodDisableWindowMarker  = "Daemon.disableWindowMarker"
+	RPCMethodWindowMarkerStatus   = "Daemon.windowMarkerStatus"
 )
 
 type Runtime struct {
@@ -716,6 +719,42 @@ func (c RuntimeClient) FetchProtocol(ctx context.Context) (cdp.Protocol, error) 
 	return protocol, nil
 }
 
+func (c RuntimeClient) EnableWindowMarker(ctx context.Context, name string) (WindowMarkerStatus, error) {
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodEnableWindowMarker, map[string]any{"name": name})
+	if err != nil {
+		return WindowMarkerStatus{}, err
+	}
+	var status WindowMarkerStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return WindowMarkerStatus{}, fmt.Errorf("decode daemon window marker status: %w", err)
+	}
+	return status, nil
+}
+
+func (c RuntimeClient) DisableWindowMarker(ctx context.Context) (WindowMarkerStatus, error) {
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodDisableWindowMarker, nil)
+	if err != nil {
+		return WindowMarkerStatus{}, err
+	}
+	var status WindowMarkerStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return WindowMarkerStatus{}, fmt.Errorf("decode daemon window marker status: %w", err)
+	}
+	return status, nil
+}
+
+func (c RuntimeClient) WindowMarkerStatus(ctx context.Context) (WindowMarkerStatus, error) {
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodWindowMarkerStatus, nil)
+	if err != nil {
+		return WindowMarkerStatus{}, err
+	}
+	var status WindowMarkerStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return WindowMarkerStatus{}, fmt.Errorf("decode daemon window marker status: %w", err)
+	}
+	return status, nil
+}
+
 func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string, params any) (json.RawMessage, error) {
 	return CallRuntimeWithOwner(ctx, runtime, "", sessionID, method, params)
 }
@@ -894,6 +933,15 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 
 	cycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	marker := newWindowMarkerController(stateDir, browserMode, client)
+	if err := marker.rehydrate(cycleCtx); err != nil {
+		appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "window_marker_rehydrate_failed", Message: err.Error(), PID: pid})
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = marker.close(closeCtx)
+		closeCancel()
+	}()
 	go leases.Run(cycleCtx, client, func(result LeaseReconcileResult, reconcileErr error) {
 		if reconcileErr != nil {
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "lease_reconcile_failed", Message: reconcileErr.Error(), PID: pid})
@@ -903,7 +951,7 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "lease_reconciled", Message: fmt.Sprintf("expired_leases=%d closed_targets=%d pending_targets=%d", result.ExpiredLeaseCount, result.ClosedTargetCount, len(result.PendingTargetIDs)), PID: pid})
 		}
 	})
-	go serveRPC(cycleCtx, listener, client, opts, leases)
+	go serveRPC(cycleCtx, listener, client, opts, leases, marker)
 	return keepAlive(cycleCtx, client, reconnect)
 }
 
@@ -943,7 +991,7 @@ func listenRuntimeSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, opts holdOptions, leases *LeaseManager) {
+func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, opts holdOptions, leases *LeaseManager, marker *windowMarkerController) {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -953,11 +1001,11 @@ func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, op
 		if err != nil {
 			return
 		}
-		go handleRPC(ctx, conn, client, opts, leases)
+		go handleRPC(ctx, conn, client, opts, leases, marker)
 	}
 }
 
-func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts holdOptions, leases *LeaseManager) {
+func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts holdOptions, leases *LeaseManager, marker *windowMarkerController) {
 	defer conn.Close()
 	var req RPCRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
@@ -1052,6 +1100,44 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 			return
 		}
 		writeRPCResult(conn, map[string]any{"target_id": params.TargetID, "disposable": disposable})
+		return
+	case RPCMethodEnableWindowMarker:
+		if marker == nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("window_marker_unavailable", "lifecycle", "window marker controller is unavailable"))
+			return
+		}
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("window_marker_params_invalid", "usage", err.Error()))
+			return
+		}
+		status, err := marker.Enable(callCtx, params.Name)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("window_marker_enable_failed", "lifecycle", err))
+			return
+		}
+		writeRPCResult(conn, status)
+		return
+	case RPCMethodDisableWindowMarker:
+		if marker == nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("window_marker_unavailable", "lifecycle", "window marker controller is unavailable"))
+			return
+		}
+		status, err := marker.Disable(callCtx)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("window_marker_disable_failed", "lifecycle", err))
+			return
+		}
+		writeRPCResult(conn, status)
+		return
+	case RPCMethodWindowMarkerStatus:
+		if marker == nil {
+			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("window_marker_unavailable", "lifecycle", "window marker controller is unavailable"))
+			return
+		}
+		writeRPCResult(conn, marker.Status())
 		return
 	case RPCMethodDrainEvents:
 		writeRPCResult(conn, client.DrainEvents())

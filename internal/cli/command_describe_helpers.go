@@ -193,7 +193,23 @@ func commandExamples(path string) []string {
 			"cdp --browser-mode headless browser preflight --repair --cleanup --json",
 			"cdp browser mode get --json",
 			"cdp browser profile status --json",
+			"cdp browser marker status --json",
 			"CDP_BROWSER_MODE=headless cdp browser mode get --json",
+		},
+		"cdp browser marker": {
+			"cdp browser marker enable --name agent --json",
+			"cdp browser marker status --json",
+			"cdp browser marker disable --json",
+		},
+		"cdp browser marker enable": {
+			"cdp browser marker enable --name agent --json",
+			"cdp browser marker enable --json",
+		},
+		"cdp browser marker disable": {
+			"cdp browser marker disable --json",
+		},
+		"cdp browser marker status": {
+			"cdp browser marker status --json",
 		},
 		"cdp browser preflight": {
 			"cdp browser preflight --json",
@@ -323,6 +339,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp click": {
 			"cdp click 'button.submit' --json",
+			"cdp click 'Search' --target-index 2 --json",
 			"cdp click 'Search' --by role --role button --json",
 			"cdp click 'Search' --by role --role button --trial --json",
 			"cdp click 'button.covered' --force --json",

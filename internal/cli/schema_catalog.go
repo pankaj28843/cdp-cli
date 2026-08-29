@@ -659,6 +659,30 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Suggested commands for starting or inspecting the headless runtime."},
 			},
 		},
+		"browser-window-marker": {
+			Name:        "browser-window-marker",
+			Description: "Daemon-backed visual marker status for the selected headed browser; state contains metadata only and never page content.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the marker operation or status query completed."},
+				{Name: "marker", Type: "window_marker", Required: true, Description: "Marker lifecycle, identity, color, active session count, and safe state path."},
+			},
+		},
+		"window-marker": {
+			Name:        "window-marker",
+			Description: "Safe daemon window-marker metadata; host identity is represented only as a presence bit.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Window marker schema version, currently cdp-window-marker/v1."},
+				{Name: "state", Type: "string", Required: true, Description: "disabled, configured, enabled, or error."},
+				{Name: "enabled", Type: "boolean", Required: true, Description: "True when the daemon is configured to mark current and future page targets."},
+				{Name: "name", Type: "string", Required: false, Description: "Human-recognizable marker name."},
+				{Name: "color", Type: "string", Required: false, Description: "Stable curated palette color derived from the marker name."},
+				{Name: "host_id_present", Type: "boolean", Required: true, Description: "Whether a randomized page-marker host identity is configured; the identity itself is not emitted."},
+				{Name: "active_session_count", Type: "integer", Required: true, Description: "Number of page sessions currently supervised by the daemon marker."},
+				{Name: "setup_failure_count", Type: "integer", Required: false, Description: "Bounded count of page setup attempts that failed since this daemon connection started."},
+				{Name: "state_path", Type: "string", Required: true, Description: "Owner-local state path for marker metadata."},
+				{Name: "warning", Type: "string", Required: false, Description: "Sanitized marker state warning when persisted configuration could not be rehydrated."},
+			},
+		},
 		"profile-seed-status": {
 			Name:        "profile-seed-status",
 			Description: "Privacy-safe persisted headless profile seed outcome and freshness summary.",
@@ -1192,6 +1216,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the click completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: clicked for dispatched clicks, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Final selected page target metadata after the click and any requested wait."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "before_target", Type: "page", Required: true, Description: "Selected page target metadata before dispatching the click."},
 				{Name: "after_target", Type: "page", Required: true, Description: "Selected page target metadata refreshed after the click and any requested wait."},
 				{Name: "final_target", Type: "page", Required: true, Description: "Alias of after_target for jq-friendly final URL/title extraction."},

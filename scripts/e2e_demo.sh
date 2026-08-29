@@ -165,6 +165,16 @@ fi
   | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .status == "pass")' >/dev/null
 "$binary" daemon start --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
+set +e
+marker_headless_output="$("$binary" --browser-mode headless browser marker enable --name demo-marker --state-dir "$state_dir/cdp-state" --json)"
+marker_headless_code=$?
+set -e
+if [[ "$marker_headless_code" -ne 2 ]]; then
+  echo "installed headless marker guard exit code: $marker_headless_code" >&2
+  printf '%s\n' "$marker_headless_output" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "invalid_browser_mode" and (.message | contains("headed"))' <<<"$marker_headless_output" >/dev/null
 "$binary" daemon keepalive --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .state == "healthy" and .action == "none"' >/dev/null
 "$binary" daemon logs --state-dir "$state_dir/cdp-state" --tail 20 --json \

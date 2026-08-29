@@ -145,6 +145,7 @@ type frameSummary struct {
 
 func (a *app) newClickCommand() *cobra.Command {
 	var targetID string
+	var targetIndex int
 	var urlContains string
 	var titleContains string
 	var strategy string
@@ -196,6 +197,12 @@ func (a *app) newClickCommand() *cobra.Command {
 		Short: "Click the first matching element by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			}
 			strategy = strings.ToLower(strings.TrimSpace(strategy))
 			if strategy == "" {
 				strategy = "auto"
@@ -284,7 +291,7 @@ func (a *app) newClickCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -687,6 +694,9 @@ func (a *app) newClickCommand() *cobra.Command {
 				"click":         result,
 				"actionability": actionability,
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if locator != nil {
 				report["locator"] = locator
 				if !semanticLocatorNeedsIdentityBinding(locator) {
@@ -798,6 +808,7 @@ func (a *app) newClickCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&strategy, "strategy", "auto", "click strategy: auto, dom, or raw-input")

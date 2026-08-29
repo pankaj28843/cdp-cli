@@ -47,6 +47,63 @@ func TestClickJSON(t *testing.T) {
 	}
 }
 
+func TestClickTargetIndexJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "first-page", "type": "page", "title": "First", "url": "https://example.test/first", "attached": false},
+		{"targetId": "second-page", "type": "page", "title": "Second", "url": "https://example.test/second", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "main", "--target-index", "2", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("indexed click exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK          bool `json:"ok"`
+		TargetIndex int  `json:"target_index"`
+		Target      struct {
+			ID string `json:"id"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("indexed click output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.TargetIndex != 2 || got.Target.ID != "second-page" {
+		t.Fatalf("indexed click output = %+v, want second page and index evidence", got)
+	}
+}
+
+func TestClickRejectsInvalidTargetIndexSelection(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "zero", args: []string{"click", "main", "--target-index", "0", "--json"}, want: "invalid_target_index"},
+		{name: "combined", args: []string{"click", "main", "--target-index", "1", "--target", "page-1", "--json"}, want: "invalid_target_selector"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), test.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitUsage {
+				t.Fatalf("%s exit code = %d, want %d; stdout=%s stderr=%s", test.name, code, cli.ExitUsage, out.String(), errOut.String())
+			}
+			var got struct {
+				OK   bool   `json:"ok"`
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("%s error is invalid JSON: %v", test.name, err)
+			}
+			if got.OK || got.Code != test.want {
+				t.Fatalf("%s error = %+v, want code %q", test.name, got, test.want)
+			}
+		})
+	}
+}
+
 func TestClickWaitURLJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterURL": "https://example.test/results?q=agent", "afterTitle": "Results"},

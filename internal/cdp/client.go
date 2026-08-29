@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,11 +31,19 @@ type Client struct {
 	eventMu      sync.Mutex
 	eventBuf     []Event
 	eventNotify  chan struct{}
+	handlerMu    sync.Mutex
+	handlers     map[string]map[uint64]EventHandler
+	nextHandler  atomic.Uint64
 	terminalErr  error
 	terminalDone bool
 	terminalWait chan struct{}
 	terminalOnce sync.Once
 }
+
+// EventHandler observes an unsolicited CDP event. Returning true consumes the
+// event before it reaches the shared event queue. This lets daemon internals
+// react to protocol events without polluting unrelated event consumers.
+type EventHandler func(Event) bool
 
 type CommandClient interface {
 	Call(ctx context.Context, method string, params any, result any) error
@@ -80,6 +89,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		pending:      map[int64]chan pendingResponse{},
 		readCancel:   cancel,
 		eventNotify:  make(chan struct{}, 1),
+		handlers:     map[string]map[uint64]EventHandler{},
 		terminalWait: make(chan struct{}),
 	}
 	client.writeGate <- struct{}{}
@@ -89,6 +99,38 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 
 func (c *Client) Endpoint() string {
 	return c.endpoint
+}
+
+// SubscribeEvent registers one handler for a CDP method and returns an
+// idempotent unsubscribe function. Handlers run on the read-loop goroutine and
+// must return quickly; a handler that needs I/O should start its own bounded
+// goroutine.
+func (c *Client) SubscribeEvent(method string, handler EventHandler) func() {
+	method = strings.TrimSpace(method)
+	if method == "" || handler == nil {
+		return func() {}
+	}
+	id := c.nextHandler.Add(1)
+	c.handlerMu.Lock()
+	if c.handlers[method] == nil {
+		c.handlers[method] = map[uint64]EventHandler{}
+	}
+	c.handlers[method][id] = handler
+	c.handlerMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.handlerMu.Lock()
+			defer c.handlerMu.Unlock()
+			if handlers := c.handlers[method]; handlers != nil {
+				delete(handlers, id)
+				if len(handlers) == 0 {
+					delete(c.handlers, method)
+				}
+			}
+		})
+	}
 }
 
 // Done is closed when the shared browser transport becomes unusable. Daemon
@@ -235,6 +277,9 @@ func (c *Client) readLoop(ctx context.Context) {
 			return
 		}
 		if event, ok := resp.event(); ok {
+			if c.dispatchEvent(event) {
+				continue
+			}
 			c.bufferEvent(event)
 			continue
 		}
@@ -249,6 +294,32 @@ func (c *Client) readLoop(ctx context.Context) {
 			ch <- pendingResponse{resp: resp}
 		}
 	}
+}
+
+func (c *Client) dispatchEvent(event Event) bool {
+	c.handlerMu.Lock()
+	registered := c.handlers[event.Method]
+	handlers := make([]EventHandler, 0, len(registered))
+	for _, handler := range registered {
+		handlers = append(handlers, handler)
+	}
+	c.handlerMu.Unlock()
+	consumed := false
+	for _, handler := range handlers {
+		if invokeEventHandler(handler, event) {
+			consumed = true
+		}
+	}
+	return consumed
+}
+
+func invokeEventHandler(handler EventHandler, event Event) (consumed bool) {
+	defer func() {
+		if recover() != nil {
+			consumed = false
+		}
+	}()
+	return handler(event)
 }
 
 func (c *Client) failPending(err error) {
