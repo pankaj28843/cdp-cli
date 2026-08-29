@@ -24,6 +24,8 @@ app_url=""
 managed_state=""
 managed_stop_verification_state=""
 stream_pid=""
+interaction_pid=""
+future_interaction_pid=""
 
 require_artifact() {
   local path=$1
@@ -63,6 +65,14 @@ cleanup() {
   if [[ -n "$stream_pid" ]]; then
     kill "$stream_pid" 2>/dev/null || true
     wait "$stream_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$interaction_pid" ]]; then
+    kill "$interaction_pid" 2>/dev/null || true
+    wait "$interaction_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$future_interaction_pid" ]]; then
+    kill "$future_interaction_pid" 2>/dev/null || true
+    wait "$future_interaction_pid" 2>/dev/null || true
   fi
   if [[ -n "$chrome_pid" ]]; then
     "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
@@ -252,6 +262,67 @@ jq -s -e --arg target "$collector_target_id" '
 ' "$stream_output" >/dev/null
 if [[ -e "$stream_ready_file" ]]; then
   echo "event stream readiness artifact remained after stream exit" >&2
+  exit 1
+fi
+interaction_ready_root="$state_dir/interaction-ready"
+interaction_ready_file="$interaction_ready_root/interactions.ready.json"
+interaction_output="$state_dir/events-interactions.jsonl"
+mkdir -m 700 "$interaction_ready_root"
+"$binary" events interactions --target "$collector_target_id" --match click --max-events 1 --duration 5s --ready-file "$interaction_ready_file" --state-dir "$state_dir/cdp-state" --json >"$interaction_output" &
+interaction_pid=$!
+for _ in {1..100}; do
+  [[ -s "$interaction_ready_file" ]] && break
+  if ! kill -0 "$interaction_pid" 2>/dev/null; then
+    echo "interaction observer exited before readiness" >&2
+    sed -n '1,80p' "$interaction_output" >&2 || true
+    wait "$interaction_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and (.enabled_domains | sort == ["page","runtime"]) and (has("url") | not) and (has("headers") | not) and (has("cookies") | not)' "$interaction_ready_file" >/dev/null
+"$binary" click "Click target" --by role --role button --strategy raw-input --force --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "clicked"' >/dev/null
+wait "$interaction_pid"
+interaction_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .observer.sanitized_payload == true and .observer.current_document_installed == true and .observer.future_documents_installed == true)] | length) == 1 and
+  ([.[] | select(.type == "interaction" and .interaction.type == "click" and .event.method == "Runtime.bindingCalled" and ((.interaction | has("text")) | not) and ((.interaction | has("value")) | not) and ((.interaction | has("key")) | not))] | length) == 1 and
+  ([.[] | select(.type == "stopped" and .reason == "max_events" and .cleanup.current_document_removed == true and .cleanup.future_document_removed == true and .cleanup.binding_removed == true)] | length) == 1
+' "$interaction_output" >/dev/null
+if [[ -e "$interaction_ready_file" ]]; then
+  echo "interaction observer readiness artifact remained after observer exit" >&2
+  exit 1
+fi
+future_interaction_ready_root="$state_dir/future-interaction-ready"
+future_interaction_ready_file="$future_interaction_ready_root/interactions.ready.json"
+future_interaction_output="$state_dir/events-interactions-future.jsonl"
+mkdir -m 700 "$future_interaction_ready_root"
+"$binary" events interactions --target "$collector_target_id" --match click --max-events 1 --duration 8s --ready-file "$future_interaction_ready_file" --state-dir "$state_dir/cdp-state" --json >"$future_interaction_output" &
+future_interaction_pid=$!
+for _ in {1..100}; do
+  [[ -s "$future_interaction_ready_file" ]] && break
+  if ! kill -0 "$future_interaction_pid" 2>/dev/null; then
+    echo "future-document interaction observer exited before readiness" >&2
+    sed -n '1,80p' "$future_interaction_output" >&2 || true
+    wait "$future_interaction_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+"$binary" page reload --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "reloaded"' >/dev/null
+"$binary" click "Click target" --by role --role button --strategy raw-input --force --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "clicked"' >/dev/null
+wait "$future_interaction_pid"
+future_interaction_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .observer.future_documents_installed == true)] | length) == 1 and
+  ([.[] | select(.type == "interaction" and .interaction.type == "click" and .event.method == "Runtime.bindingCalled")] | length) == 1 and
+  ([.[] | select(.type == "stopped" and .reason == "max_events" and .cleanup.current_document_removed == true and .cleanup.future_document_removed == true and .cleanup.binding_removed == true)] | length) == 1
+' "$future_interaction_output" >/dev/null
+if [[ -e "$future_interaction_ready_file" ]]; then
+  echo "future-document interaction readiness artifact remained after observer exit" >&2
   exit 1
 fi
 reuse_open_output="$("$binary" open "$app_url?cdp_reused=1" --reuse --url-contains "$app_url" --budget-summary --state-dir "$state_dir/cdp-state" --json)"

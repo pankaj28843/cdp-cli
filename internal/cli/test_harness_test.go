@@ -209,6 +209,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 		defer conn.Close(websocket.StatusNormalClosure, "done")
 
 		blockedSessions := map[string]bool{}
+		bindingNames := map[string]string{}
 		for {
 			var req struct {
 				ID        int64           `json:"id"`
@@ -421,6 +422,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Page.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.handleJavaScriptDialog" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Page.addScriptToEvaluateOnNewDocument" {
+				resp["result"] = map[string]any{"identifier": "interaction-script-1"}
+			} else if req.Method == "Page.removeScriptToEvaluateOnNewDocument" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.reload" {
 				resp["result"] = map[string]any{}
@@ -760,6 +765,16 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						},
 					},
 				})
+			} else if req.Method == "Runtime.addBinding" {
+				var params struct {
+					Name string `json:"name"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				bindingNames[req.SessionID] = params.Name
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Runtime.removeBinding" {
+				delete(bindingNames, req.SessionID)
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Log.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Log.enable" {
@@ -852,6 +867,33 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					}
 				} else {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &redditUserRecordCalls, &xProfileRecordCalls, &navigatedURLs, targetInfos)
+					if bindingName := bindingNames[req.SessionID]; bindingName != "" && strings.Contains(string(req.Params), "targetMetadata") {
+						payloads := []string{`{"type":"click","x":12,"y":34,"button":0,"detail":1,"target":{"tag":"button","editable":false}}`}
+						targetID := strings.TrimPrefix(req.SessionID, "session-")
+						if fakeTargetBool(targetInfos, targetID, "fakeInteractionForeignPayload") {
+							events = append(events, map[string]any{
+								"sessionId": "session-foreign-interaction-target",
+								"method":    "Runtime.bindingCalled",
+								"params": map[string]any{
+									"name":    bindingName,
+									"payload": payloads[0],
+								},
+							})
+						}
+						if fakeTargetBool(targetInfos, targetID, "fakeInteractionUnsafePayload") {
+							payloads = append([]string{`{"type":"click","x":1,"y":2,"button":0,"detail":1,"text":"synthetic-secret"}`}, payloads...)
+						}
+						for _, payload := range payloads {
+							events = append(events, map[string]any{
+								"sessionId": req.SessionID,
+								"method":    "Runtime.bindingCalled",
+								"params": map[string]any{
+									"name":    bindingName,
+									"payload": payload,
+								},
+							})
+						}
+					}
 					events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)

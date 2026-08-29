@@ -842,6 +842,10 @@ func commandExamples(path string) []string {
 		"cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json",
 		"cdp events wait --file tmp/events.jsonl --from-offset 123 --contains /results/ --print-offset --json",
 	}
+	examples["cdp events interactions"] = []string{
+		"cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json",
+		"cdp events interactions --target <target-id> --match click --max-events 1 --ready-file tmp/interaction.ready.json --json",
+	}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}
 	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}

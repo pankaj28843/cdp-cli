@@ -63,6 +63,7 @@ cdp observe --json
 cdp wait text Ready --timeout 10s --json
 cdp events stream --target-index 1 --match Page.loadEventFired,Network.loadingFailed --json > tmp/events.jsonl
 cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json
+cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json > tmp/interactions.jsonl
 cdp snapshot --selector body --limit 50 --json
 cdp screenshot --out tmp/page.png --json
 cdp console --errors --wait 2s --json
@@ -676,6 +677,7 @@ selected cdp state directory. Its JSON includes reclaimed PIDs and safety checks
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Persistent event observation: `cdp events stream --json` attaches one exact page session, emits ready/event/subscription/stopped JSONL records, accepts `+Method`/`-Method` commands on stdin, and detaches on normal exit paths. Use `--duration`, `--max-events`, or the global `--timeout` to bound unattended runs; pipe the JSONL downstream instead of using `--jq`.
 - Race-safe event waiting: `cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --json` reads complete historical or appended records from a byte offset, supports repeated method/content predicates, and never opens a browser connection. Pass the returned `.offset` as `--from-offset` for the next wait; it is a blocking bounded wait, not a harness-level interrupt.
+- Cause-aware interaction observation: `cdp events interactions --match click,scroll --json` adapts the source `Runtime.addBinding` bridge through the daemon, installs guarded listeners on current and future documents, and emits bounded metadata-only JSONL. It intentionally omits selection text, key values, input values, HTML, cookies, screenshots, and arbitrary binding payloads; compose it with `events wait` when a file-backed wait is useful.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.
 - Evidence bundles by manifest: use `cdp workflow debug-bundle --out-dir tmp/debug-bundle --task-id <task> --json` to arm collectors and hard-reload an existing target with ordinary HTTP cache bypass by default, then write a public-safe bundle manifest, command log, stage log, and local-only browser artifacts by path. `--url` performs one collector-armed cache-bypassing navigation instead of a navigate-plus-reload pair. Use `--reload=false --ignore-cache=false` for passive/cache-faithful observation. This never clears cookies, browser cache, web storage, IndexedDB, CacheStorage, or service workers. Raw request, console, and snapshot payloads stay out of default JSON unless `--inline-payloads` is explicitly set.
 - Signed-in YouTube cookies: use `cdp --browser-mode headed workflow youtube cookies --out ~/.local/state/yt-dlp/cookies.txt --json` to hard-refresh an owned YouTube tab, export current YouTube cookies from the headed profile as an owner-only Netscape file, and close the exact workflow tab. The command requires a signed-in YouTube cookie and never includes cookie values in its result.

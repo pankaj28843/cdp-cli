@@ -56,6 +56,7 @@ wait, so an event is not matched twice:
     cdp events stream --target-index 1 --match Page.loadEventFired,Network.loadingFailed --json > tmp/events.jsonl &
     cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json
     cdp events wait --file tmp/events.jsonl --from-offset 123 --method Network.loadingFailed --contains /api/ --print-offset --json
+    cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json > tmp/interactions.jsonl
 
 Use repeated --method flags for any-of method matching and repeated --contains
 flags for all-of line matching. cdp events wait accepts cdp-cli stream records
@@ -63,6 +64,23 @@ and raw CDP event records, ignores incomplete final lines until their newline,
 and never opens a browser connection. It is a bounded blocking wait, not a
 harness-level Monitor interrupt; subscribe to failure events as well as the
 success event you expect.
+
+For the interaction causes ordinary CDP events miss, use the source-inspired
+binding bridge:
+
+    cdp events interactions --target <target-id> --match click --max-events 1 --json
+
+The observer attaches through the daemon, registers a unique `Runtime` binding,
+installs a guarded listener for the current document and future documents, and
+emits `ready`, `interaction`, and `stopped` JSONL records. Supported kinds are
+`click`, `scroll`, `selectionchange`, and `keydown`; `--match` filters them.
+The result is intentionally sanitized: it includes only event kind and safe
+metadata such as coordinates, modifiers, scroll position, selection state, and
+coarse target metadata. It never returns selection text, key values, input
+values, HTML, cookies, screenshots, or raw page-controlled binding payloads.
+Use `--duration`, `--max-events`, or the global `--timeout` to bound it. The
+observer removes current listeners, the future-document script, and the
+binding before detaching.
 
 ## JSON and errors
 

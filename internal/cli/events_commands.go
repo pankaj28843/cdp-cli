@@ -13,10 +13,11 @@ import (
 )
 
 func (a *app) newEventsCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "events", Short: "Observe bounded raw CDP event streams"}
+	cmd := &cobra.Command{Use: "events", Short: "Observe bounded CDP events and DOM interaction causes"}
 	cmd.AddCommand(a.newEventsTapCommand())
 	cmd.AddCommand(a.newEventsStreamCommand())
 	cmd.AddCommand(a.newEventsWaitCommand())
+	cmd.AddCommand(a.newEventsInteractionsCommand())
 	return cmd
 }
 

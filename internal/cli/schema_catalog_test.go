@@ -109,6 +109,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"stop-state-classify",
 		"protocol-examples",
 		"events-wait",
+		"events-interactions",
 		"storage",
 		"rendered-extract-content",
 		"rendered-extract-readiness",
