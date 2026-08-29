@@ -47,6 +47,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var reload bool
 	var ignoreCache bool
 	var wait time.Duration
@@ -59,6 +60,9 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 		Short: "Capture console, network, storage, and performance signals around a page load",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			if wait < 0 || limit < 0 {
 				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow page-load 'https://example.com' --wait 10s --json"})
 			}
@@ -92,14 +96,19 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 			}()
 
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			if rawURL != "" && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
+			if rawURL != "" && targetIndex == 0 && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 				createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "page-load")
 				if err != nil {
 					return err
 				}
 				target.TargetID = createdID
 			} else {
-				selected, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+				var selected cdp.TargetInfo
+				if targetIndex > 0 {
+					selected, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+				} else {
+					selected, err = a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+				}
 				if err != nil {
 					return err
 				}
@@ -202,6 +211,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 					},
 				},
 			}
+			addWorkflowTargetIndex(report, targetIndex)
 			if includeSet["storage"] {
 				report["storage"] = storage
 			}
@@ -230,6 +240,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based page index from cdp pages; workers do not consume indexes")
 	cmd.Flags().BoolVar(&reload, "reload", false, "reload the selected page after attaching collectors")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect events after navigation or reload")

@@ -433,8 +433,8 @@ app_origin="${app_url%/}"
   | jq -e --arg origin "$app_origin" '.ok == true and .permissions.action == "set" and .permissions.origin == $origin and .permissions.setting == "denied" and (.permissions.permissions[] | select(.name == "notifications" and .setting == "denied" and .method == "Browser.setPermission")) and (.permissions.reset_command | contains("permissions reset"))' >/dev/null
 "$binary" permissions reset --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .permissions.action == "reset" and .permissions.method == "Browser.resetPermissions" and .permissions.browser_scoped == true and .permissions.reset_all_origins == true' >/dev/null
-"$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
-  | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
+"$binary" workflow page-load --target-index 1 --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
+  | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .target_index == 1 and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
 require_artifact "$state_dir/page-load.local.json"
 "$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null

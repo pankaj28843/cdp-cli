@@ -2502,6 +2502,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the workflow completed, even if individual collectors are partial."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected or created page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Network requests observed after collectors were attached."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console and log messages observed after collectors were attached."},
 				{Name: "content_state", Type: "page_load_content_state", Required: true, Description: "Machine-readable classification of content, block, bot-check, login-wall, or cookie-wall state."},

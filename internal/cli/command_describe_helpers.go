@@ -811,6 +811,7 @@ func commandExamples(path string) []string {
 			"cdp workflow page-load 'https://example.com' --wait 10s --json",
 			"cdp workflow page-load --url-contains localhost --reload --include console,network,performance --out tmp/page-load.local.json --json",
 			"cdp workflow page-load --target <target-id> --wait 30s --ready-file tmp/page-load.ready.json --json",
+			"cdp workflow page-load --target-index 2 --wait 10s --include console,network --json",
 		},
 		"cdp workflow rendered-extract": {
 			"cdp workflow rendered-extract 'https://example.com' --wait 20s --settle 2s --out-dir tmp/rendered-example --json",

@@ -393,6 +393,25 @@ The index cannot be combined with `--target`, `--url-contains`, or
 page attachment or emulation mutation; use the cleanup command in an indexed
 report when a later command must address the same exact page.
 
+## Page-load existing-page selection
+
+`workflow page-load --target-index N` selects an existing page using the
+1-based page order shown by `cdp pages`; workers and other non-page targets do
+not consume indexes. The selected index is reported as `target_index` beside
+the metadata-only target row. Zero, negative, out-of-range, and conflicting
+index values fail before attachment or collector enablement:
+
+    cdp workflow page-load --target-index 2 --wait 10s --json
+    cdp workflow page-load https://example.com --target-index 2 --wait 10s --json
+
+The index is mutually exclusive with `--target`, `--url-contains`, and
+`--title-contains`. A positional URL without an existing-page selector keeps
+the existing workflow-owned `about:blank` creation and navigation behavior;
+adding an explicit index selects an existing page and preserves the current
+positional-URL navigation behavior. Collector bounds, reload/cache policy,
+storage-key privacy, content-state classification, and artifact paths are
+unchanged.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
