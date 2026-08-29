@@ -1180,10 +1180,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"eval": {
 			Name:        "eval",
-			Description: "Page-scoped JavaScript evaluation result.",
+			Description: "Page-scoped JavaScript evaluation result; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when JavaScript evaluation completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "result", Type: "runtime_object", Required: true, Description: "Runtime object with type, value, and description fields."},
 				{Name: "attempts", Type: "array<command_retry_attempt>", Required: false, Description: "Per-attempt transient retry evidence when --retry transient is enabled."},
 				{Name: "attempt_count", Type: "number", Required: false, Description: "Number of attempts made when retry is enabled."},
@@ -1196,10 +1197,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"text": {
 			Name:        "text",
-			Description: "Compact visible text extracted from a CSS selector.",
+			Description: "Compact visible text extracted from a CSS selector; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when text extraction completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "text", Type: "text_result", Required: true, Description: "Selector, joined text, and per-element text items."},
 				{Name: "items", Type: "array<text_item>", Required: true, Description: "Text items duplicated for jq convenience."},
 				{Name: "attempts", Type: "array<command_retry_attempt>", Required: false, Description: "Per-attempt transient retry evidence when --retry transient is enabled."},
@@ -1435,20 +1437,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"observe": {
 			Name:        "observe",
-			Description: "Visible interactive element summaries for agent planning before action.",
+			Description: "Visible interactive element summaries for agent planning before action; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when observation completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "observe", Type: "observe_result", Required: true, Description: "URL, title, selector, count, and visible interactive candidates."},
 				{Name: "interactive", Type: "array<observe_node>", Required: true, Description: "Interactive candidates duplicated for jq convenience."},
 			},
 		},
 		"html": {
 			Name:        "html",
-			Description: "Compact HTML extracted from a CSS selector.",
+			Description: "Compact HTML extracted from a CSS selector; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when HTML extraction completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "html", Type: "html_result", Required: true, Description: "Selector and truncated HTML items."},
 				{Name: "warnings", Type: "array<string>", Required: false, Description: "Warnings emitted when extraction succeeds but returns zero items."},
 				{Name: "diagnostics", Type: "extraction_diagnostics", Required: false, Description: "Optional --diagnose-empty page facts for empty successful extractions."},
@@ -1859,10 +1863,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"snapshot": {
 			Name:        "snapshot",
-			Description: "Visible text extracted from selected page elements.",
+			Description: "Visible text extracted from selected page elements; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when snapshot extraction completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "snapshot", Type: "snapshot", Required: true, Description: "Page URL, title, selector, count, and extracted items."},
 				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible text items duplicated for jq convenience."},
 				{Name: "warnings", Type: "array<string>", Required: false, Description: "Warnings emitted when extraction succeeds but returns zero items."},

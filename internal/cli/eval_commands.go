@@ -12,6 +12,7 @@ func (a *app) newEvalCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var awaitPromise bool
 	var retryOpts commandRetryOptions
 	cmd := &cobra.Command{
@@ -19,11 +20,14 @@ func (a *app) newEvalCommand() *cobra.Command {
 		Short: "Evaluate JavaScript in a page target",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
-				session, target, err := a.attachPageSession(attemptCtx, targetID, urlContains, titleContains)
+				session, target, err := a.attachPageSessionWithIndex(attemptCtx, targetID, urlContains, titleContains, targetIndex)
 				if err != nil {
 					if target.TargetID != "" {
 						return commandRetryResult{Target: &target}, err
@@ -68,14 +72,18 @@ func (a *app) newEvalCommand() *cobra.Command {
 				if human == "" {
 					human = result.Object.Description
 				}
+				data := map[string]any{
+					"ok":     true,
+					"target": pageRow(target),
+					"result": result.Object,
+				}
+				if targetIndex > 0 {
+					data["target_index"] = targetIndex
+				}
 				return commandRetryResult{
 					Human:  human,
 					Target: &target,
-					Data: map[string]any{
-						"ok":     true,
-						"target": pageRow(target),
-						"result": result.Object,
-					},
+					Data:   data,
 				}, nil
 			})
 			if err != nil {
@@ -88,6 +96,7 @@ func (a *app) newEvalCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&awaitPromise, "await-promise", true, "wait for promise results before returning")
 	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd

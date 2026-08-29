@@ -127,6 +127,7 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var selector string
 	var limit int
 	var minChars int
@@ -137,10 +138,13 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 		Use:   "snapshot",
 		Short: "Print compact visible text from a page target",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -158,6 +162,9 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 				"items":            snapshot.Items,
 				"interactive_only": interactiveOnly,
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if snapshot.Count == 0 {
 				report["warnings"] = []string{"selector matched zero visible text items; rerun with --diagnose-empty for page diagnostics"}
 				if diagnoseEmpty || debugEmpty {
@@ -170,6 +177,7 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract visible text from; use article for social feeds")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of text items to return; use 0 for no limit")
 	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")

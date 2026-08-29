@@ -190,19 +190,23 @@ func (a *app) newObserveCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var selector string
 	var limit int
 	cmd := &cobra.Command{
 		Use:   "observe",
 		Short: "Summarize visible interactive elements for agent planning",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp observe --limit 30 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -220,17 +224,22 @@ func (a *app) newObserveCommand() *cobra.Command {
 				label := firstNonEmpty(node.Name, node.Text, node.Href, node.Selector)
 				lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s", node.Ref, node.Role, node.Selector, label))
 			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+			data := map[string]any{
 				"ok":          true,
 				"target":      pageRow(target),
 				"observe":     result,
 				"interactive": result.Interactive,
-			})
+			}
+			if targetIndex > 0 {
+				data["target_index"] = targetIndex
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), data)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&selector, "selector", "a[href], button, input, textarea, select, [role=button], [role=link], [role=menuitem], [contenteditable=true]", "CSS selector for candidate interactive elements")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum interactive elements to return; use 0 for no limit")
 	return cmd
@@ -240,6 +249,7 @@ func (a *app) newTextCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var limit int
 	var minChars int
 	var retryOpts commandRetryOptions
@@ -248,6 +258,9 @@ func (a *app) newTextCommand() *cobra.Command {
 		Short: "Extract compact visible text for a CSS selector",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -255,7 +268,7 @@ func (a *app) newTextCommand() *cobra.Command {
 				return commandError("usage", "usage", "--limit and --min-chars must be non-negative", ExitUsage, []string{"cdp text main --limit 20 --json"})
 			}
 			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
-				session, target, err := a.attachPageSession(attemptCtx, targetID, urlContains, titleContains)
+				session, target, err := a.attachPageSessionWithIndex(attemptCtx, targetID, urlContains, titleContains, targetIndex)
 				if err != nil {
 					if target.TargetID != "" {
 						return commandRetryResult{Target: &target}, err
@@ -271,15 +284,19 @@ func (a *app) newTextCommand() *cobra.Command {
 				if text.Error != nil {
 					return commandRetryResult{Target: &target}, invalidSelectorError(args[0], text.Error, "cdp text body --json")
 				}
+				data := map[string]any{
+					"ok":     true,
+					"target": pageRow(target),
+					"text":   text,
+					"items":  text.Items,
+				}
+				if targetIndex > 0 {
+					data["target_index"] = targetIndex
+				}
 				return commandRetryResult{
 					Human:  text.Text,
 					Target: &target,
-					Data: map[string]any{
-						"ok":     true,
-						"target": pageRow(target),
-						"text":   text,
-						"items":  text.Items,
-					},
+					Data:   data,
 				}, nil
 			})
 			if err != nil {
@@ -292,6 +309,7 @@ func (a *app) newTextCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().IntVar(&limit, "limit", 20, "maximum number of text elements to return; use 0 for no limit")
 	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")
 	addCommandRetryFlags(cmd, &retryOpts)
@@ -302,6 +320,7 @@ func (a *app) newHTMLCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var limit int
 	var maxChars int
 	var diagnoseEmpty bool
@@ -311,13 +330,16 @@ func (a *app) newHTMLCommand() *cobra.Command {
 		Short: "Extract compact HTML for a CSS selector",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			if limit < 0 || maxChars < 0 {
 				return commandError("usage", "usage", "--limit and --max-chars must be non-negative", ExitUsage, []string{"cdp html main --max-chars 4000 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -339,6 +361,9 @@ func (a *app) newHTMLCommand() *cobra.Command {
 				"target": pageRow(target),
 				"html":   result,
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if result.Count == 0 {
 				report["warnings"] = []string{"selector produced zero HTML items; rerun with --diagnose-empty for page diagnostics"}
 				if diagnoseEmpty || debugEmpty {
@@ -351,6 +376,7 @@ func (a *app) newHTMLCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().IntVar(&limit, "limit", 5, "maximum number of elements to return; use 0 for no limit")
 	cmd.Flags().IntVar(&maxChars, "max-chars", 4000, "maximum HTML characters per element; use 0 for no truncation")
 	cmd.Flags().BoolVar(&diagnoseEmpty, "diagnose-empty", false, "include page diagnostics when extraction succeeds but returns zero items")

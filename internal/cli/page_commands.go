@@ -1874,6 +1874,16 @@ func (a *app) resolvePageTargetWithClientIndex(ctx context.Context, client cdp.C
 	return resolvePageTargetByIndex(targets, targetIndex)
 }
 
+func validatePageTargetIndexSelector(cmd *cobra.Command, targetID, urlContains, titleContains string, targetIndex int) error {
+	if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+		return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+	}
+	if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "") {
+		return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+	}
+	return nil
+}
+
 func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) (cdp.TargetInfo, bool) {
 	store, err := a.stateStore()
 	if err != nil {

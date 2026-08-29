@@ -65,7 +65,9 @@ cdp page forward --target-index 2 --json
 cdp page activate --target-index 2 --json
 cdp page close --target-index 2 --wait-gone --json
 cdp eval 'document.title' --json
+cdp eval 'document.title' --target-index 2 --json
 cdp observe --json
+cdp observe --target-index 2 --json
 cdp wait text Ready --timeout 10s --json
 cdp events stream --target-index 1 --match Page.loadEventFired,Network.loadingFailed --json > tmp/events.jsonl
 cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json
@@ -116,6 +118,13 @@ browser-scoped execution or use the other selectors for non-page targets.
 The same explicit page index is available on `page select`, `page reload`,
 `page back`, `page forward`, `page activate`, and `page close`; each rejects a
 conflicting ID, URL, title, or positional selector.
+
+Core observation commands also accept the same mutually exclusive selector:
+`eval`, `observe`, `text`, `html`, and `snapshot`. Their successful JSON
+reports include `target_index` when an index was supplied, alongside the
+resolved page target evidence. The index is 1-based and follows the page-only
+order shown by `cdp pages`, so worker and other non-page targets do not shift
+the selection.
 
 Multi-engine SERP research runs engines concurrently and reuses one workflow tab
 lane per engine, so large query files avoid opening a fresh tab for every

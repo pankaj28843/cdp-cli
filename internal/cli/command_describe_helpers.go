@@ -343,10 +343,12 @@ func commandExamples(path string) []string {
 			"cdp eval 'document.title' --retry transient --max-attempts 3 --json",
 			"cdp eval 'Array.from(document.querySelectorAll(\"article\"), el => el.innerText)' --url-contains x.com --json",
 			"cdp eval 'document.title' --title-contains Example --json",
+			"cdp eval 'document.title' --target-index 2 --json",
 		},
 		"cdp observe": {
 			"cdp observe --json",
 			"cdp observe --selector 'button, a[href], input' --limit 30 --json",
+			"cdp observe --target-index 2 --json",
 		},
 		"cdp click": {
 			"cdp click 'button.submit' --json",
@@ -370,6 +372,7 @@ func commandExamples(path string) []string {
 			"cdp text main --json",
 			"cdp text main --retry transient --max-attempts 3 --json",
 			"cdp text article --limit 10 --url-contains localhost --json",
+			"cdp text article --target-index 2 --json",
 		},
 		"cdp locator": {
 			"cdp locator find Search --by label --json",
@@ -424,6 +427,7 @@ func commandExamples(path string) []string {
 			"cdp html main --max-chars 4000 --json",
 			"cdp html '#root' --limit 1 --json",
 			"cdp html body --diagnose-empty --json",
+			"cdp html body --target-index 2 --json",
 		},
 		"cdp dom query": {
 			"cdp dom query button --json",
@@ -496,6 +500,7 @@ func commandExamples(path string) []string {
 			"cdp snapshot --selector body --json",
 			"cdp snapshot --selector article --limit 10 --url-contains x.com --json",
 			"cdp snapshot --selector body --diagnose-empty --json",
+			"cdp snapshot --selector body --target-index 2 --json",
 		},
 		"cdp screenshot": {
 			"cdp screenshot --out tmp/page.png --json",

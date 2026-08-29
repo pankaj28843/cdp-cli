@@ -142,6 +142,21 @@ disposable-tab close. It is mutually exclusive with `--target`,
 
     cdp page close --target-index 2 --wait-gone --json
 
+The same explicit page selector is available on the core observation commands
+`eval`, `observe`, `text`, `html`, and `snapshot`. A successful indexed result
+includes `target_index` and the resolved `target`; the index remains 1-based
+and worker targets are excluded just as they are from `cdp pages`:
+
+    cdp eval 'document.title' --target-index 2 --json
+    cdp observe --target-index 2 --json
+    cdp text body --target-index 2 --json
+    cdp html body --target-index 2 --json
+    cdp snapshot --selector body --target-index 2 --json
+
+Each command rejects `--target-index` together with `--target`,
+`--url-contains`, or `--title-contains`; zero, negative, and out-of-range
+indexes fail before page attachment.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
