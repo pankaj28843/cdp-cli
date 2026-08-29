@@ -162,7 +162,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp workflow hacker-news", want: []string{"hacker-news"}},
 		{path: "cdp workflow hacker-news collect", want: []string{"news.ycombinator.com/item?id", "--limit 500"}},
 		{path: "cdp workflow verify", want: []string{"workflow verify"}},
-		{path: "cdp workflow debug-bundle", want: []string{"debug-bundle"}},
+		{path: "cdp workflow debug-bundle", want: []string{"debug-bundle", "--target-index 2"}},
 		{path: "cdp workflow action-capture", want: []string{"--evidence-out-dir", "--include-bodies json,text", "--body-url-contains /api/", "--target-index 2"}},
 		{path: "cdp workflow console-errors", want: []string{"--target-index 2"}},
 		{path: "cdp workflow network-failures", want: []string{"--target-index 2"}},

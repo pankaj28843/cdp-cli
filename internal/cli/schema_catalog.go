@@ -2368,10 +2368,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-debug-bundle": {
 			Name:        "workflow-debug-bundle",
-			Description: "Comprehensive workflow evidence bundle with public-safe manifest metadata, command logs, stage logs, and local-only artifact references.",
+			Description: "Comprehensive workflow evidence bundle from a newly created URL target or an explicitly selected existing page, with public-safe manifest metadata, command logs, stage logs, and local-only artifact references.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when bundle collection completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes and --url creation remains a separate branch."},
 				{Name: "bundle", Type: "evidence_bundle", Required: true, Description: "Bundle schema version, layout, redaction mode, default JSON policy, public-safe/local-only artifact counts, command log records, and stage records."},
 				{Name: "requests", Type: "array<network_request>", Required: false, Description: "Network requests observed during the collect window only when --inline-payloads is explicitly set."},
 				{Name: "messages", Type: "array<console_message>", Required: false, Description: "Console/log messages observed during the collect window only when --inline-payloads is explicitly set."},

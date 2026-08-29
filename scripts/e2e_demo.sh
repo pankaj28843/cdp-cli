@@ -824,8 +824,8 @@ fi
 "$binary" storage cookies set --state-dir "$state_dir/cdp-state" --url "$app_url" --name debug_bundle_sentinel --value preserved --json >/dev/null
 bootstrap_before="$(python3 -c 'import json,sys,urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1]))["count"])' "$app_url/api/bootstrap-count")"
 for run in 1 2; do
-  "$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --since 1s --json \
-    | jq -e '.ok == true and .workflow.trigger == "reload" and .workflow.reloaded == true and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache"' >/dev/null
+  "$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --target-index 1 --since 1s --json \
+    | jq -e '.ok == true and .target_index == 1 and .workflow.trigger == "reload" and .workflow.reloaded == true and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache"' >/dev/null
 done
 bootstrap_after="$(python3 -c 'import json,sys,urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1]))["count"])' "$app_url/api/bootstrap-count")"
 if [[ "$bootstrap_after" -ne $((bootstrap_before + 2)) ]]; then

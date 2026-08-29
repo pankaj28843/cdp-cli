@@ -729,6 +729,7 @@ func commandExamples(path string) []string {
 		"cdp workflow debug-bundle": {
 			"cdp workflow debug-bundle --url 'https://example.com' --since 5s --screenshot-view --out-dir tmp/debug-bundle --task-id research-preflight --json",
 			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --run-id run-1 --task-id task-1 --stage selection --json",
+			"cdp workflow debug-bundle --target-index 2 --out-dir tmp/debug-bundle --since 5s --json",
 			"cdp workflow debug-bundle --target <target-id> --out-dir tmp/debug-bundle --inline-payloads --redact safe --json",
 			"cdp workflow debug-bundle --target <target-id> --reload=false --ignore-cache=false --json",
 		},

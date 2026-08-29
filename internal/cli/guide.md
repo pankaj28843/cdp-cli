@@ -430,6 +430,24 @@ workflow-owned `about:blank` creation and cleanup behavior. Adding an explicit
 index selects an existing page, preserves positional-URL navigation, and
 retains caller-owned cleanup semantics.
 
+## Debug-bundle existing-page selection
+
+`workflow debug-bundle --target-index N` selects an existing page using the
+1-based page order shown by `cdp pages`; workers and other non-page targets do
+not consume indexes. The selected index is reported as `target_index`, and the
+bundle keeps the selected caller-owned page in place while retaining its
+default cache-bypassing reload behavior:
+
+    cdp workflow debug-bundle --target-index 2 --since 5s --out-dir tmp/debug-bundle --json
+    cdp workflow debug-bundle --target-index 2 --reload=false --ignore-cache=false --json
+
+The index is mutually exclusive with `--target`, `--url-contains`, and
+`--title-contains`, and cannot be combined with workflow-created `--url`.
+Invalid, conflicting, and out-of-range values fail before attachment or
+collector/artifact work. Without an index, `--url` retains its existing
+workflow-owned creation and navigation behavior; indexed existing-page output
+retains the current redaction and artifact-reference controls.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
