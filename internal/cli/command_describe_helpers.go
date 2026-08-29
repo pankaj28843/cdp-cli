@@ -577,29 +577,35 @@ func commandExamples(path string) []string {
 			`cdp network mock --rule '{"url_pattern":"*://*/api/config","method":"GET","status":200,"body":"{\"enabled\":true}","max_matches":1}' --duration 10s --json`,
 		},
 		"cdp storage": {
-			"cdp storage list --url-contains localhost --json",
-			"cdp storage snapshot --out tmp/storage.local.json --json",
+			"cdp storage list --target-index 2 --include localStorage,sessionStorage,cookies --json",
+			"cdp storage snapshot --target-index 2 --redact safe --out tmp/storage.local.json --json",
 		},
 		"cdp storage list": {
 			"cdp storage list --url-contains localhost --json",
 			"cdp storage list --include localStorage,sessionStorage,cookies,cache --json",
+			"cdp storage list --target-index 2 --include localStorage,sessionStorage,cookies --json",
 		},
 		"cdp storage get": {
 			"cdp storage get localStorage feature_flag --url-contains localhost --json",
+			"cdp storage get localStorage feature_flag --target-index 2 --json",
 		},
 		"cdp storage set": {
 			"cdp storage set localStorage feature_flag enabled --url-contains localhost --json",
 			"cdp storage set sessionStorage seed @tmp/seed.json --json",
+			"cdp storage set localStorage feature_flag enabled --target-index 2 --json",
 		},
 		"cdp storage delete": {
 			"cdp storage delete localStorage feature_flag --url-contains localhost --json",
+			"cdp storage delete localStorage feature_flag --target-index 2 --json",
 		},
 		"cdp storage clear": {
 			"cdp storage clear sessionStorage --url-contains localhost --json",
+			"cdp storage clear sessionStorage --target-index 2 --json",
 		},
 		"cdp storage snapshot": {
 			"cdp storage snapshot --out tmp/app-storage.local.json --json",
 			"cdp storage snapshot --redact safe --out tmp/app-storage-shareable.json --json",
+			"cdp storage snapshot --target-index 2 --redact safe --out tmp/app-storage-shareable.json --json",
 		},
 		"cdp storage diff": {
 			"cdp storage diff --left tmp/before.local.json --right tmp/after.local.json --json",
@@ -609,12 +615,15 @@ func commandExamples(path string) []string {
 		},
 		"cdp storage cookies list": {
 			"cdp storage cookies list --url-contains localhost --json",
+			"cdp storage cookies list --target-index 2 --url 'https://example.com' --json",
 		},
 		"cdp storage cookies set": {
 			"cdp storage cookies set --url 'https://example.com' --name feature_flag --value enabled --json",
+			"cdp storage cookies set --target-index 2 --url 'https://example.com' --name feature_flag --value enabled --json",
 		},
 		"cdp storage cookies delete": {
 			"cdp storage cookies delete --url 'https://example.com' --name feature_flag --json",
+			"cdp storage cookies delete --target-index 2 --url 'https://example.com' --name feature_flag --json",
 		},
 		"cdp workflow youtube cookies": {
 			"cdp --browser-mode headed workflow youtube cookies --out ~/.local/state/yt-dlp/cookies.txt --json",
@@ -622,24 +631,32 @@ func commandExamples(path string) []string {
 		},
 		"cdp storage indexeddb": {
 			"cdp storage indexeddb list --url-contains localhost --json",
-			"cdp storage indexeddb dump app records --limit 100 --json",
+			"cdp storage indexeddb dump app records --limit 100 --target-index 2 --json",
 		},
 		"cdp storage indexeddb list": {
 			"cdp storage indexeddb list --url-contains localhost --json",
+			"cdp storage indexeddb list --target-index 2 --json",
 		},
 		"cdp storage indexeddb get": {
 			"cdp storage indexeddb get app settings feature --json",
 			"cdp storage indexeddb get app records '[\"compound\",1]' --key-json --json",
+			"cdp storage indexeddb get app settings feature --target-index 2 --json",
 		},
 		"cdp storage indexeddb put": {
 			"cdp storage indexeddb put app settings feature '{\"enabled\":true}' --json",
 			"cdp storage indexeddb put app settings feature @tmp/value.json --json",
+			"cdp storage indexeddb put app settings feature '{\"enabled\":true}' --target-index 2 --json",
+		},
+		"cdp storage indexeddb dump": {
+			"cdp storage indexeddb dump app records --limit 100 --target-index 2 --json",
 		},
 		"cdp storage indexeddb delete": {
 			"cdp storage indexeddb delete app settings feature --json",
+			"cdp storage indexeddb delete app settings feature --target-index 2 --json",
 		},
 		"cdp storage indexeddb clear": {
 			"cdp storage indexeddb clear app settings --json",
+			"cdp storage indexeddb clear app settings --target-index 2 --json",
 		},
 		"cdp storage cache": {
 			"cdp storage cache list --url-contains localhost --json",
@@ -647,30 +664,37 @@ func commandExamples(path string) []string {
 		"cdp storage cache list": {
 			"cdp storage cache list --cache app-cache --json",
 			"cdp storage cache list --request-url-contains /api --json",
+			"cdp storage cache list --target-index 2 --cache app-cache --json",
 		},
 		"cdp storage cache get": {
 			"cdp storage cache get app-cache https://example.com/api/me --max-body-bytes 4096 --json",
+			"cdp storage cache get app-cache https://example.com/api/me --target-index 2 --max-body-bytes 4096 --json",
 		},
 		"cdp storage cache put": {
 			"cdp storage cache put app-cache https://example.com/api/fixture '{\"ok\":true}' --content-type application/json --json",
 			"cdp storage cache put app-cache https://example.com/api/fixture @tmp/fixture.json --json",
+			"cdp storage cache put app-cache https://example.com/api/fixture '{\"ok\":true}' --target-index 2 --content-type application/json --json",
 		},
 		"cdp storage cache delete": {
 			"cdp storage cache delete app-cache https://example.com/api/fixture --json",
+			"cdp storage cache delete app-cache https://example.com/api/fixture --target-index 2 --json",
 		},
 		"cdp storage cache clear": {
 			"cdp storage cache clear app-cache --json",
 			"cdp storage cache clear --all --json",
+			"cdp storage cache clear app-cache --target-index 2 --json",
 		},
 		"cdp storage service-workers": {
 			"cdp storage service-workers list --url-contains localhost --json",
 		},
 		"cdp storage service-workers list": {
 			"cdp storage service-workers list --url-contains localhost --json",
+			"cdp storage service-workers list --target-index 2 --json",
 		},
 		"cdp storage service-workers unregister": {
 			"cdp storage service-workers unregister --scope https://example.com/ --json",
 			"cdp storage service-workers unregister --all --json",
+			"cdp storage service-workers unregister --all --target-index 2 --json",
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",

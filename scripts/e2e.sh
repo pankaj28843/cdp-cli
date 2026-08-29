@@ -570,6 +570,54 @@ done
 "$binary" describe --command "storage cache put" --json | jq -e '.ok == true and .commands.name == "put" and (.commands.examples | any(contains("--content-type")))' >/dev/null
 "$binary" describe --command "storage service-workers" --json | jq -e '.ok == true and .commands.name == "service-workers" and (.commands.children | map(.name) | index("unregister"))' >/dev/null
 "$binary" describe --command "storage service-workers unregister" --json | jq -e '.ok == true and .commands.name == "unregister" and (.commands.examples | any(contains("--scope")))' >/dev/null
+for storage_command in \
+  "storage list" "storage get" "storage set" "storage delete" "storage clear" "storage snapshot" \
+  "storage cookies list" "storage cookies set" "storage cookies delete" \
+  "storage indexeddb list" "storage indexeddb get" "storage indexeddb put" "storage indexeddb dump" "storage indexeddb delete" "storage indexeddb clear" \
+  "storage cache list" "storage cache get" "storage cache put" "storage cache delete" "storage cache clear" \
+  "storage service-workers list" "storage service-workers unregister"; do
+  "$binary" describe --command "$storage_command" --json \
+    | jq -e '.ok == true and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "title-contains" and .type == "string")) and (.commands.examples | any(contains("--target-index 2")))' >/dev/null
+done
+for storage_schema in storage storage-cache storage-indexeddb storage-service-workers storage-snapshot; do
+  "$binary" schema "$storage_schema" --json \
+    | jq -e '.ok == true and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields[] | select(.name == "target_index" and .type == "integer"))' >/dev/null
+done
+"$binary" schema storage-diff --json \
+  | jq -e '.ok == true and ([.schema.fields[] | select(.name == "target_index")] | length == 0)' >/dev/null
+storage_guard_commands=(
+  "storage list --include localStorage"
+  "storage get localStorage feature"
+  "storage set localStorage feature disabled"
+  "storage delete localStorage feature"
+  "storage clear localStorage"
+  "storage snapshot --include localStorage"
+  "storage cookies list"
+  "storage cookies set --name feature --value enabled"
+  "storage cookies delete --name feature"
+  "storage indexeddb list"
+  "storage indexeddb get app settings feature"
+  "storage indexeddb put app settings feature {\"enabled\":true}"
+  "storage indexeddb dump app settings --page-size 2"
+  "storage indexeddb delete app settings feature"
+  "storage indexeddb clear app settings"
+  "storage cache list"
+  "storage cache get app https://example.com/api"
+  "storage cache put app https://example.com/api {\"ok\":true}"
+  "storage cache delete app https://example.com/api"
+  "storage cache clear app-cache"
+  "storage service-workers list"
+  "storage service-workers unregister --all"
+)
+for storage_guard in "${storage_guard_commands[@]}"; do
+  read -r -a storage_guard_args <<<"$storage_guard"
+  set +e
+  storage_guard_output="$("$binary" "${storage_guard_args[@]}" --target-index 0 --json 2>/dev/null)"
+  storage_guard_code=$?
+  set -e
+  test "$storage_guard_code" -eq 2
+  printf '%s\n' "$storage_guard_output" | jq -e '.ok == false and .code == "invalid_target_index"' >/dev/null
+done
 "$binary" describe --command "page close" --json | jq -e '.ok == true and .commands.name == "close" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--target-type service_worker"))) and (.commands.flags[] | select(.name == "target-type" and .type == "string")) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
@@ -601,11 +649,11 @@ done
 "$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture")) and (.schema.fields | map(.name) | index("capture.artifact_safety")) and (.schema.fields | map(.name) | index("har")) and (.schema.fields | map(.name) | index("body_artifacts"))' >/dev/null
 "$binary" schema network-block --json | jq -e '.ok == true and .schema.name == "network-block" and (.schema.fields | map(.name) | index("matched_count")) and (.schema.fields | map(.name) | index("cleanup"))' >/dev/null
 "$binary" schema network-mock --json | jq -e '.ok == true and .schema.name == "network-mock" and (.schema.fields | map(.name) | index("actions")) and (.schema.fields | map(.name) | index("cleanup"))' >/dev/null
-"$binary" schema storage --json | jq -e '.ok == true and .schema.name == "storage"' >/dev/null
-"$binary" schema storage-cache --json | jq -e '.ok == true and .schema.name == "storage-cache" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
-"$binary" schema storage-indexeddb --json | jq -e '.ok == true and .schema.name == "storage-indexeddb" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
-"$binary" schema storage-service-workers --json | jq -e '.ok == true and .schema.name == "storage-service-workers" and (.schema.fields | map(.name) | index("storage"))' >/dev/null
-"$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields | map(.name) | index("storage.artifact_safety")) and (.schema.fields[] | select(.name == "snapshot").description | contains("--redact safe"))' >/dev/null
+"$binary" schema storage --json | jq -e '.ok == true and .schema.name == "storage" and (.schema.fields | map(.name) | index("storage")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
+"$binary" schema storage-cache --json | jq -e '.ok == true and .schema.name == "storage-cache" and (.schema.fields | map(.name) | index("storage")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
+"$binary" schema storage-indexeddb --json | jq -e '.ok == true and .schema.name == "storage-indexeddb" and (.schema.fields | map(.name) | index("storage")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
+"$binary" schema storage-service-workers --json | jq -e '.ok == true and .schema.name == "storage-service-workers" and (.schema.fields | map(.name) | index("storage")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
+"$binary" schema storage-snapshot --json | jq -e '.ok == true and .schema.name == "storage-snapshot" and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields | map(.name) | index("storage.artifact_safety")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields[] | select(.name == "snapshot").description | contains("--redact safe"))' >/dev/null
 "$binary" schema storage-diff --json | jq -e '.ok == true and .schema.name == "storage-diff" and (.schema.fields | map(.name) | index("diff"))' >/dev/null
 "$binary" schema page-select --json | jq -e '.ok == true and .schema.name == "page-select" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("selected_page"))' >/dev/null
 "$binary" schema text --json | jq -e '.ok == true and .schema.name == "text" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("attempts")) and (.schema.fields | map(.name) | index("retry_policy"))' >/dev/null

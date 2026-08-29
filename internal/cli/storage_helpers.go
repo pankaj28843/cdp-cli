@@ -211,9 +211,20 @@ type storageDiffItem struct {
 	After  string `json:"after,omitempty"`
 }
 
-func addStorageTargetFlags(cmd *cobra.Command, targetID, urlContains *string) {
+func (a *app) attachStoragePageSession(ctx context.Context, cmd *cobra.Command, targetID, urlContains, titleContains string) (*cdp.PageSession, cdp.TargetInfo, int, error) {
+	targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return nil, cdp.TargetInfo{}, 0, err
+	}
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
+	return session, target, targetIndex, err
+}
+
+func addStorageTargetFlags(cmd *cobra.Command, targetID, urlContains, titleContains *string) {
 	cmd.Flags().StringVar(targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(urlContains, "url-contains", "", "use the first page whose URL contains this text")
+	cmd.Flags().StringVar(titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 }
 
 func parseStorageInclude(value string) (map[string]bool, error) {

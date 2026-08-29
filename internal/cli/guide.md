@@ -59,6 +59,23 @@ creates a new tab:
     cdp screenshot --target-index 2 --out tmp/page.png --json
     cdp screenshot --target-index 2 --navigate 'https://example.com' --wait 2s --out tmp/page.png --json
 
+Page-bound storage commands use the same mutually exclusive, 1-based page
+selector. This includes Web Storage, cookies, IndexedDB, Cache Storage, and
+Service Workers; workers do not consume page indexes. Cookie `--url` is the
+cookie scope and may be combined with `--target-index`, while `--target`,
+`--url-contains`, and `--title-contains` cannot be combined with it:
+
+    cdp storage list --target-index 2 --include localStorage,sessionStorage --json
+    cdp storage cookies list --target-index 2 --url 'https://example.com' --json
+    cdp storage indexeddb dump app settings --target-index 2 --page-size 100 --json
+    cdp storage cache list --target-index 2 --cache app-cache --json
+    cdp storage service-workers list --target-index 2 --json
+
+Indexed storage reports add `.target_index` without copying storage values into
+selector evidence. Snapshot artifacts retain their existing redaction controls;
+IndexedDB dump artifacts retain their local-record warning. `storage diff` only
+compares two artifact paths and intentionally has no browser target selector.
+
 Wait on an observable condition rather than a fixed sleep:
 
     cdp wait selector main --timeout 10s --json

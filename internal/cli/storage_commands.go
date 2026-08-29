@@ -45,7 +45,7 @@ func (a *app) newStorageListCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -60,11 +60,12 @@ func (a *app) newStorageListCommand() *cobra.Command {
 				"storage":          snapshot,
 				"collector_errors": collectorErrors,
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("storage\tlocal:%d\tsession:%d\tcookies:%d", snapshot.LocalStorage.Count, snapshot.SessionStorage.Count, len(snapshot.Cookies))
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,indexeddb,cache,serviceWorkers,quota,all")
 	return cmd
 }
@@ -84,7 +85,7 @@ func (a *app) newStorageGetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -94,11 +95,12 @@ func (a *app) newStorageGetCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("%s\t%s\tfound=%t", result.Backend, result.Key, result.Found)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -121,7 +123,7 @@ func (a *app) newStorageSetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -131,11 +133,12 @@ func (a *app) newStorageSetCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result, "value_source": source}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("%s\t%s\tset", result.Backend, result.Key)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -155,7 +158,7 @@ func (a *app) newStorageDeleteCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -165,11 +168,12 @@ func (a *app) newStorageDeleteCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("%s\t%s\tdeleted=%t", result.Backend, result.Key, result.Found)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -188,7 +192,7 @@ func (a *app) newStorageClearCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -198,11 +202,12 @@ func (a *app) newStorageClearCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("%s\tcleared=%d", result.Backend, result.Cleared)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -231,7 +236,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -259,6 +264,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 				"snapshot": snapshot,
 				"storage":  meta,
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
@@ -275,7 +281,7 @@ func (a *app) newStorageSnapshotCommand() *cobra.Command {
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&include, "include", "localStorage,sessionStorage,cookies,quota", "comma-separated storage areas: localStorage,sessionStorage,cookies,indexeddb,cache,serviceWorkers,quota,all")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON storage snapshot artifact")
 	cmd.Flags().StringVar(&redact, "redact", "none", "redaction preset for output and artifacts: none or safe")
@@ -343,7 +349,7 @@ func (a *app) newStorageCookiesListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -357,11 +363,12 @@ func (a *app) newStorageCookiesListCommand() *cobra.Command {
 				return storageCommandFailed("list cookies", target.TargetID, err)
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "url": cookieURL, "cookies": cookies, "storage": map[string]any{"count": len(cookies), "names": cookieNames(cookies)}}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cookies\t%d", len(cookies))
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&rawURL, "url", "", "URL whose applicable cookies should be listed; defaults to selected page URL")
 	return cmd
 }
@@ -389,7 +396,7 @@ func (a *app) newStorageCookiesSetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -422,11 +429,12 @@ func (a *app) newStorageCookiesSetCommand() *cobra.Command {
 				return storageCommandFailed("set cookie", target.TargetID, err)
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "url": cookieURL, "cookie": map[string]any{"name": name, "domain": domain, "path": path}, "result": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cookie\t%s\tset", name)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&rawURL, "url", "", "URL to associate with the cookie; defaults to selected page URL")
 	cmd.Flags().StringVar(&name, "name", "", "cookie name")
 	cmd.Flags().StringVar(&value, "value", "", "cookie value")
@@ -458,7 +466,7 @@ func (a *app) newStorageCookiesDeleteCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -482,11 +490,12 @@ func (a *app) newStorageCookiesDeleteCommand() *cobra.Command {
 				return storageCommandFailed("delete cookie", target.TargetID, err)
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "url": cookieURL, "cookie": map[string]any{"name": name, "domain": domain, "path": path}}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cookie\t%s\tdeleted", name)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&rawURL, "url", "", "URL whose matching cookie should be deleted; defaults to selected page URL")
 	cmd.Flags().StringVar(&name, "name", "", "cookie name")
 	cmd.Flags().StringVar(&domain, "domain", "", "cookie domain")
@@ -519,7 +528,7 @@ func (a *app) newStorageIndexedDBListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -529,11 +538,12 @@ func (a *app) newStorageIndexedDBListCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("indexeddb\tdatabases=%d", len(result.Databases))
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -549,7 +559,7 @@ func (a *app) newStorageIndexedDBGetCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -559,11 +569,12 @@ func (a *app) newStorageIndexedDBGetCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("indexeddb\t%s/%s\tfound=%t", result.Database, result.Store, result.Found)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().BoolVar(&keyJSON, "key-json", false, "parse <key> as JSON instead of using it as a string")
 	return cmd
 }
@@ -584,7 +595,7 @@ func (a *app) newStorageIndexedDBPutCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -595,11 +606,12 @@ func (a *app) newStorageIndexedDBPutCommand() *cobra.Command {
 			}
 			result.ValueSource = source
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("indexeddb\t%s/%s\tput", result.Database, result.Store)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().BoolVar(&keyJSON, "key-json", false, "parse <key> as JSON instead of using it as a string")
 	return cmd
 }
@@ -642,7 +654,7 @@ func (a *app) newStorageIndexedDBDumpCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 30*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -660,6 +672,7 @@ func (a *app) newStorageIndexedDBDumpCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
@@ -677,8 +690,7 @@ func (a *app) newStorageIndexedDBDumpCommand() *cobra.Command {
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().IntVar(&limit, "limit", 500, "maximum records to return")
 	cmd.Flags().IntVar(&offset, "offset", 0, "number of records to skip before returning results")
 	cmd.Flags().IntVar(&pageSize, "page-size", 0, "page size for cursor-style pagination; overrides --limit when set")
@@ -703,7 +715,7 @@ func (a *app) newStorageIndexedDBDeleteCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -713,11 +725,12 @@ func (a *app) newStorageIndexedDBDeleteCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("indexeddb\t%s/%s\tdeleted=%t", result.Database, result.Store, result.Deleted)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().BoolVar(&keyJSON, "key-json", false, "parse <key> as JSON instead of using it as a string")
 	return cmd
 }
@@ -733,7 +746,7 @@ func (a *app) newStorageIndexedDBClearCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -743,11 +756,12 @@ func (a *app) newStorageIndexedDBClearCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("indexeddb\t%s/%s\tcleared=%d", result.Database, result.Store, result.Cleared)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -777,7 +791,7 @@ func (a *app) newStorageCacheListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -787,11 +801,12 @@ func (a *app) newStorageCacheListCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cache-storage\tcaches=%d\trequests=%d", len(result.Caches), result.RequestCount)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&cacheName, "cache", "", "limit output to one Cache Storage cache name")
 	cmd.Flags().StringVar(&requestURLContains, "request-url-contains", "", "only include cached requests whose URL contains this text")
 	return cmd
@@ -812,7 +827,7 @@ func (a *app) newStorageCacheGetCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -822,11 +837,12 @@ func (a *app) newStorageCacheGetCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cache-storage\t%s\tfound=%t", result.Cache, result.Found)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().IntVar(&maxBodyBytes, "max-body-bytes", 4096, "maximum cached response body bytes to include inline")
 	return cmd
 }
@@ -851,7 +867,7 @@ func (a *app) newStorageCachePutCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -862,11 +878,12 @@ func (a *app) newStorageCachePutCommand() *cobra.Command {
 			}
 			result.BodySource = source
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cache-storage\t%s\tput\t%s", result.Cache, result.RequestURL)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&contentType, "content-type", "text/plain; charset=utf-8", "Content-Type header for the cached response")
 	cmd.Flags().IntVar(&status, "status", 200, "HTTP status for the cached response")
 	return cmd
@@ -884,7 +901,7 @@ func (a *app) newStorageCacheDeleteCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -894,11 +911,12 @@ func (a *app) newStorageCacheDeleteCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cache-storage\t%s\tdeleted=%t", result.Cache, result.Deleted)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -921,7 +939,7 @@ func (a *app) newStorageCacheClearCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -931,11 +949,12 @@ func (a *app) newStorageCacheClearCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("cache-storage\tcleared=%d", len(result.Cleared))
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().BoolVar(&all, "all", false, "delete every Cache Storage cache for the selected origin")
 	return cmd
 }
@@ -962,7 +981,7 @@ func (a *app) newStorageServiceWorkersListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -972,11 +991,12 @@ func (a *app) newStorageServiceWorkersListCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("service-workers\t%d", result.Count)
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	return cmd
 }
 
@@ -996,7 +1016,7 @@ func (a *app) newStorageServiceWorkersUnregisterCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, 10*time.Second)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, targetIndex, err := a.attachStoragePageSession(ctx, cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
@@ -1006,11 +1026,12 @@ func (a *app) newStorageServiceWorkersUnregisterCommand() *cobra.Command {
 				return err
 			}
 			report := map[string]any{"ok": true, "target": pageRow(target), "storage": result}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("service-workers\tunregistered=%d", len(result.Unregistered))
 			return a.render(ctx, human, report)
 		},
 	}
-	addStorageTargetFlags(cmd, &targetID, &urlContains)
+	addStorageTargetFlags(cmd, &targetID, &urlContains, &titleContains)
 	cmd.Flags().StringVar(&scope, "scope", "", "service worker registration scope URL to unregister")
 	cmd.Flags().BoolVar(&all, "all", false, "unregister every service worker registration for the selected origin")
 	return cmd

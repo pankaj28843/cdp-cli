@@ -4024,6 +4024,221 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_list__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "list",
+					"available": true,
+					"count":     1,
+					"databases": []map[string]any{{
+						"name":    "cdp-demo-db",
+						"version": 1,
+						"stores":  []map[string]any{{"name": "settings", "count": 2}},
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_get__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "get",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"key":       "feature",
+					"value":     map[string]any{"enabled": true},
+					"count":     1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_put__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "put",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"key":       "feature",
+					"value":     map[string]any{"enabled": true},
+					"created":   true,
+					"count":     1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_delete__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "delete",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"key":       "feature",
+					"deleted":   true,
+					"count":     0,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_clear__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "clear",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"cleared":   2,
+					"count":     0,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_list__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":           "https://example.test/app",
+					"origin":        "https://example.test",
+					"operation":     "list",
+					"available":     true,
+					"found":         true,
+					"request_count": 1,
+					"cache_names":   []string{"app-cache"},
+					"caches": []map[string]any{{
+						"name": "app-cache", "count": 1,
+						"requests": []map[string]any{{"url": "https://example.test/api", "method": "GET"}},
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_get__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":         "https://example.test/app",
+					"origin":      "https://example.test",
+					"operation":   "get",
+					"available":   true,
+					"found":       true,
+					"cache":       "app-cache",
+					"request_url": "https://example.test/api",
+					"response":    map[string]any{"status": 200, "content_type": "application/json"},
+					"body":        map[string]any{"text": `{"ok":true}`, "bytes": 11, "omitted": false},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_put__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":         "https://example.test/app",
+					"origin":      "https://example.test",
+					"operation":   "put",
+					"available":   true,
+					"found":       true,
+					"cache":       "app-cache",
+					"request_url": "https://example.test/api",
+					"created":     true,
+					"body":        map[string]any{"bytes": 11},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_delete__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":         "https://example.test/app",
+					"origin":      "https://example.test",
+					"operation":   "delete",
+					"available":   true,
+					"found":       true,
+					"deleted":     true,
+					"cache":       "app-cache",
+					"request_url": "https://example.test/api",
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_clear__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "clear",
+					"available": true,
+					"found":     true,
+					"cache":     "app-cache",
+					"cleared":   []string{"app-cache"},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_service_workers_list__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":           "https://example.test/app",
+					"origin":        "https://example.test",
+					"operation":     "list",
+					"available":     true,
+					"count":         1,
+					"registrations": []map[string]any{{"scope_url": "https://example.test/"}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_service_workers_unregister__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":          "https://example.test/app",
+					"origin":       "https://example.test",
+					"operation":    "unregister",
+					"available":    true,
+					"found":        true,
+					"count":        1,
+					"unregistered": []map[string]any{{"scope_url": "https://example.test/", "result": true}},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_storage_get__") {
 		return map[string]any{
 			"result": map[string]any{

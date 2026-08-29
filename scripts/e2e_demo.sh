@@ -889,6 +889,43 @@ protocol_index_open_output="$("$binary" open "$app_url?protocol-index=1" --new-t
 protocol_index_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$protocol_index_open_output")"
 protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
 test "$protocol_index" -gt 0
+storage_index_report="$state_dir/storage-target-index.json"
+"$binary" storage list --target-index "$protocol_index" --include localStorage,sessionStorage,cookies --state-dir "$state_dir/cdp-state" --json >"$storage_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.local_storage | has("entries")) and (.storage.session_storage | has("keys"))' "$storage_index_report" >/dev/null
+"$binary" storage set localStorage indexed_target yes --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.value == "yes"' >/dev/null
+"$binary" storage get localStorage indexed_target --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.value == "yes"' >/dev/null
+"$binary" storage delete localStorage indexed_target --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index' >/dev/null
+"$binary" storage cookies list --target-index "$protocol_index" --url "$app_url" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.url | type == "string")' >/dev/null
+"$binary" storage cookies set --target-index "$protocol_index" --url "$app_url" --name indexed_target --value yes --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .cookie.name == "indexed_target"' >/dev/null
+"$binary" storage cookies delete --target-index "$protocol_index" --url "$app_url" --name indexed_target --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .cookie.name == "indexed_target"' >/dev/null
+storage_index_snapshot="$state_dir/storage-target-index-snapshot.json"
+"$binary" storage snapshot --target-index "$protocol_index" --include localStorage --redact safe --out "$storage_index_snapshot" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg path "$storage_index_snapshot" '.ok == true and .target.id == $id and .target_index == $index and .artifact.path == $path and .storage.redact == "safe"' >/dev/null
+require_artifact "$storage_index_snapshot"
+"$binary" storage indexeddb list --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.databases | type == "array")' >/dev/null
+"$binary" storage indexeddb get cdp-demo-db settings feature --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.found == true' >/dev/null
+"$binary" storage indexeddb put cdp-demo-db settings indexed-target '{"from":"target-index"}' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.value_source == "inline"' >/dev/null
+"$binary" storage indexeddb delete cdp-demo-db settings indexed-target --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.deleted == true' >/dev/null
+"$binary" storage cache list --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.caches | type == "array")' >/dev/null
+"$binary" storage cache get cdp-demo-cache "$app_url/api/cached" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.found == true' >/dev/null
+"$binary" storage cache put cdp-demo-cache "$app_url/api/indexed-target" '{"from":"target-index"}' --content-type application/json --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.body_source == "inline"' >/dev/null
+"$binary" storage cache delete cdp-demo-cache "$app_url/api/indexed-target" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.deleted == true' >/dev/null
+"$binary" storage service-workers list --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.registrations | type == "array")' >/dev/null
 indexed_file_trial_report="$state_dir/file-target-index-trial.json"
 "$binary" file "#upload-file" "$upload_file" --target-index "$protocol_index" --trial --state-dir "$state_dir/cdp-state" --json >"$indexed_file_trial_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .file.accepted == true and .file.file_set == false and .file.trial == true and .file.content_omitted == true and .actionability.actionable == true' "$indexed_file_trial_report" >/dev/null
