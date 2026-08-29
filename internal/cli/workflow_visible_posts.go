@@ -33,21 +33,15 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 				_ = closeClient(ctx)
 				return err
 			}
-			closeWorkflowPage := func() (bool, string) {
-				if keepOpen {
-					return false, ""
-				}
-				if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
-					return false, err.Error()
-				}
-				return true, ""
-			}
+			closeWorkflowPage := a.workflowPageCloser(client, targetID, rawURL, keepOpen)
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 			if err != nil {
+				_, _ = closeWorkflowPage()
 				_ = closeClient(ctx)
 				return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 			}
 			defer session.Close(ctx)
+			defer func() { _, _ = closeWorkflowPage() }()
 
 			snapshot, err := waitForSnapshotItems(ctx, session, selector, limit, minChars, wait)
 			if err != nil {

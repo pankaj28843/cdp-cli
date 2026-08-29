@@ -1179,6 +1179,65 @@ jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.o
 "$binary" page close --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg id "$protocol_index_target_id" '.ok == true and .action == "closed" and .target.id == $id and .target_gone == true' >/dev/null
 
+workflow_cleanup_baseline="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+workflow_cleanup_feeds_url="$app_url?workflow-cleanup-feeds=1"
+set +e
+workflow_cleanup_feeds_output="$("$binary" workflow feeds "$workflow_cleanup_feeds_url" --wait-load 0s --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_feeds_code=$?
+set -e
+if [[ "$workflow_cleanup_feeds_code" -eq 0 ]]; then
+  echo "workflow feeds unexpectedly succeeded for empty-feed cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "feed_not_found"' <<<"$workflow_cleanup_feeds_output" >/dev/null
+workflow_cleanup_after_feeds="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_feeds" -eq "$workflow_cleanup_baseline"
+
+workflow_cleanup_visible_url="$app_url?workflow-cleanup-visible=1"
+set +e
+workflow_cleanup_visible_output="$("$binary" workflow visible-posts "$workflow_cleanup_visible_url" --selector 'article[data-cdp-never]' --wait 0s --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_visible_code=$?
+set -e
+if [[ "$workflow_cleanup_visible_code" -eq 0 ]]; then
+  echo "workflow visible-posts unexpectedly succeeded for empty-selector cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "no_visible_posts"' <<<"$workflow_cleanup_visible_output" >/dev/null
+workflow_cleanup_after_visible="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_visible" -eq "$workflow_cleanup_baseline"
+
+workflow_cleanup_hn_url="$app_url?workflow-cleanup-hacker-news=1"
+set +e
+workflow_cleanup_hn_output="$("$binary" workflow hacker-news "$workflow_cleanup_hn_url" --wait 0s --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_hn_code=$?
+set -e
+if [[ "$workflow_cleanup_hn_code" -eq 0 ]]; then
+  echo "workflow hacker-news unexpectedly succeeded for empty-story cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "no_visible_posts"' <<<"$workflow_cleanup_hn_output" >/dev/null
+workflow_cleanup_after_hn="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_hn" -eq "$workflow_cleanup_baseline"
+
+workflow_cleanup_keep_open_url="$app_url?workflow-cleanup-keep-open=1"
+set +e
+workflow_cleanup_keep_open_output="$("$binary" workflow feeds "$workflow_cleanup_keep_open_url" --wait-load 0s --keep-open --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_keep_open_code=$?
+set -e
+if [[ "$workflow_cleanup_keep_open_code" -eq 0 ]]; then
+  echo "workflow feeds unexpectedly succeeded for keep-open cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "feed_not_found"' <<<"$workflow_cleanup_keep_open_output" >/dev/null
+workflow_cleanup_keep_open_target="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg marker 'workflow-cleanup-keep-open' '.pages[] | select(.url | contains($marker)) | .id' | head -n 1)"
+test -n "$workflow_cleanup_keep_open_target"
+workflow_cleanup_keep_open_pages="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_keep_open_pages" -eq $((workflow_cleanup_baseline + 1))
+"$binary" page close --target "$workflow_cleanup_keep_open_target" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "closed" and .target_gone == true' >/dev/null
+workflow_cleanup_after_keep_open="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_keep_open" -eq "$workflow_cleanup_baseline"
+
 if [[ -n "${CDP_E2E_REAL_BUNDLE_URL:-}" ]]; then
   real_bundle_dir="$state_dir/real-bundle"
   real_bundle_path="$real_bundle_dir/debug-bundle.bundle.json"

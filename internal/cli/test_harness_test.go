@@ -282,13 +282,24 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						URL string `json:"url"`
 					}
 					_ = json.Unmarshal(req.Params, &params)
-					targetInfos = append(targetInfos, map[string]any{
+					createdTarget := map[string]any{
 						"targetId": targetID,
 						"type":     "page",
 						"title":    "Created",
 						"url":      params.URL,
 						"attached": false,
-					})
+					}
+					lowerURL := strings.ToLower(params.URL)
+					if strings.Contains(lowerURL, "no-results") {
+						createdTarget["fakeNoResults"] = true
+					}
+					if strings.Contains(lowerURL, "attach-error") {
+						createdTarget["fakeAttachErrorOnce"] = true
+					}
+					if strings.Contains(lowerURL, "evaluate-error") {
+						createdTarget["fakeRuntimeEvaluateErrorOnce"] = true
+					}
+					targetInfos = append(targetInfos, createdTarget)
 					resp["result"] = map[string]any{"targetId": targetID}
 				}
 			} else if req.Method == "Target.attachToTarget" {
@@ -3912,7 +3923,17 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	targetID := strings.TrimPrefix(sessionID, "session-")
+	if strings.Contains(req.Expression, `link[rel~="alternate"]`) && fakeTargetBool(targetInfos, targetID, "fakeNoResults") {
+		return map[string]any{"result": map[string]any{"type": "object", "value": []map[string]string{}}}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_hn_frontpage__") {
+		if fakeTargetBool(targetInfos, targetID, "fakeNoResults") {
+			return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{
+				"url": "https://news.ycombinator.com/", "title": "Hacker News", "count": 0,
+				"stories": []map[string]any{}, "organization": map[string]string{"page_kind": "table-based link aggregator front page"},
+			}}}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
