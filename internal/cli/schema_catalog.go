@@ -1274,11 +1274,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"fill": {
 			Name:        "fill",
-			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks. Optional text, selector, or URL waits verify post-fill state.",
+			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks. Optional text, selector, or URL waits verify post-fill state. Accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when fill command completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: filled for value updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "fill", Type: "fill_result", Required: true, Description: "Selector, matched count, filled boolean, trial/force flags, optional verification boolean, and previous/current values."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective actionability evidence for attached, visible, enabled, editable, supporting checks, force, and skipped-check state."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1330,11 +1331,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"type": {
 			Name:        "type",
-			Description: "Type text into an editable control after locator resolution and fill-like actionability checks, or run non-mutating checks with --trial. --force records skipped visible evidence. Optional text, selector, or URL waits verify post-type state.",
+			Description: "Type text into an editable control after locator resolution and fill-like actionability checks, or run non-mutating checks with --trial. --force records skipped visible evidence. Optional text, selector, or URL waits verify post-type state. Accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when type completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: typed for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "type", Type: "type_result", Required: true, Description: "Selector, matched count, typed string, previous value, strategy, trial/force flags, optional verification boolean, and success flag."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective type actionability evidence for attached, visible, enabled, editable, force, and skipped-check state. Stable and receives-events are reported but not required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1345,20 +1347,22 @@ func schemaCatalog() map[string]schemaInfo {
 
 		"insert-text": {
 			Name:        "insert-text",
-			Description: "Text inserted through the browser input pipeline into an editable element.",
+			Description: "Text inserted through the browser input pipeline into an editable element on a selected page; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when text insertion completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "insert_text", Type: "type_result", Required: true, Description: "Selector, match count, previous text, resulting value/text, element kind, and strategy."},
 			},
 		},
 		"press": {
 			Name:        "press",
-			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching; optional text, selector, or URL waits verify post-press state.",
+			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching; optional text, selector, or URL waits verify post-press state. Accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when press command completed and any requested verification matched, or --trial target evidence passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: pressed, trial, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "press", Type: "press_result", Required: true, Description: "Selector, key name, matched count, trial flag, dispatch status, and optional verification boolean."},
 				{Name: "actionability", Type: "actionability_result", Required: false, Description: "Locator/selector target evidence for press. Playwright locator.press does not require visible/stable/enabled/editable checks, so only attachment is required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},

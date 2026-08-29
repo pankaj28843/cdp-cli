@@ -386,6 +386,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp fill": {
 			"cdp fill input[name='email'] user@example.com --json",
+			"cdp fill input[name='email'] user@example.com --target-index 2 --json",
 			"cdp fill 'Search Wikipedia' Aarhus --by label --json",
 			"cdp fill 'Search Wikipedia' Aarhus --by label --wait-selector '.suggestions' --json",
 			"cdp fill 'Search Wikipedia' Aarhus --by label --wait-url-contains /search --json",
@@ -395,6 +396,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp type": {
 			"cdp type input[name='email'] user@example.com --json",
+			"cdp type input[name='email'] user@example.com --target-index 2 --json",
 			"cdp type 'Search Wikipedia' Aarhus --by label --json",
 			"cdp type 'Search Wikipedia' Aarhus --by label --wait-text Results --json",
 			"cdp type 'Search Wikipedia' Aarhus --by label --wait-url-contains /search --json",
@@ -404,11 +406,16 @@ func commandExamples(path string) []string {
 		},
 		"cdp press": {
 			"cdp press Enter --json",
+			"cdp press Enter --selector 'input[name=\"q\"]' --target-index 2 --json",
 			"cdp press Tab --selector 'input[name=\"q\"]' --json",
 			"cdp press Enter 'Search Wikipedia' --by label --json",
 			"cdp press Enter 'Search Wikipedia' --by label --wait-text Results --json",
 			"cdp press Enter 'Search Wikipedia' --by label --wait-url-contains /search --json",
 			"cdp press Enter 'Search Wikipedia' --by label --trial --json",
+		},
+		"cdp insert-text": {
+			"cdp insert-text '[contenteditable=true]' hello --json",
+			"cdp insert-text '[contenteditable=true]' hello --target-index 2 --json",
 		},
 		"cdp hover": {
 			"cdp hover button.primary --json",

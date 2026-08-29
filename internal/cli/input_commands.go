@@ -1389,6 +1389,27 @@ func clickDiagnostics(beforeTarget, afterTarget cdp.TargetInfo, selector, reques
 	}
 	return diagnostics
 }
+func addInputTargetIndexFlag(cmd *cobra.Command) {
+	cmd.Flags().Int("target-index", 0, "select a 1-based page target index")
+}
+
+func inputTargetIndex(cmd *cobra.Command, targetID, urlContains, titleContains string) (int, error) {
+	targetIndex, err := cmd.Flags().GetInt("target-index")
+	if err != nil {
+		return 0, err
+	}
+	if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+		return 0, err
+	}
+	return targetIndex, nil
+}
+
+func addInputTargetIndexEvidence(report map[string]any, targetIndex int) {
+	if targetIndex > 0 {
+		report["target_index"] = targetIndex
+	}
+}
+
 func (a *app) newFillCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
@@ -1406,6 +1427,10 @@ func (a *app) newFillCommand() *cobra.Command {
 		Short: "Set the value of the first matching form control by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
@@ -1434,7 +1459,7 @@ func (a *app) newFillCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -1466,6 +1491,7 @@ func (a *app) newFillCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				if !actionability.Actionable {
 					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("fill", selector, actionability), ExitCheckFailed, actionabilityRemediations("fill", args[0], selector, locatorOpts), report)
 				}
@@ -1484,6 +1510,7 @@ func (a *app) newFillCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("fill", selector, actionability), ExitCheckFailed, actionabilityRemediations("fill", args[0], selector, locatorOpts), report)
 			}
 
@@ -1548,6 +1575,7 @@ func (a *app) newFillCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("filled\t%s\t%s", target.TargetID, result.Selector)
 			if !verified {
 				human = fmt.Sprintf("fill-unverified\t%s\t%s", target.TargetID, result.Selector)
@@ -1558,6 +1586,7 @@ func (a *app) newFillCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing the value")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential fill actionability checks and record skipped checks in JSON")
@@ -1587,6 +1616,10 @@ func (a *app) newTypeCommand() *cobra.Command {
 		Short: "Type text into the first matching editable element by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			strategy = strings.ToLower(strings.TrimSpace(strategy))
 			if strategy == "" {
 				strategy = "auto"
@@ -1622,7 +1655,7 @@ func (a *app) newTypeCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -1654,6 +1687,7 @@ func (a *app) newTypeCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				if !actionability.Actionable {
 					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("type", selector, actionability), ExitCheckFailed, actionabilityRemediations("type", args[0], selector, locatorOpts), report)
 				}
@@ -1672,6 +1706,7 @@ func (a *app) newTypeCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("type", selector, actionability), ExitCheckFailed, actionabilityRemediations("type", args[0], selector, locatorOpts), report)
 			}
 
@@ -1736,6 +1771,7 @@ func (a *app) newTypeCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("typed\t%s\t%s", target.TargetID, result.Selector)
 			if !verified {
 				human = fmt.Sprintf("type-unverified\t%s\t%s", target.TargetID, result.Selector)
@@ -1746,6 +1782,7 @@ func (a *app) newTypeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&strategy, "strategy", "auto", "text input strategy: auto, dom, or insert-text")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without typing text")
@@ -1767,10 +1804,14 @@ func (a *app) newInsertTextCommand() *cobra.Command {
 		Short: "Insert text through the browser input pipeline",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -1786,17 +1827,20 @@ func (a *app) newInsertTextCommand() *cobra.Command {
 			if !result.Typing {
 				return commandError("invalid_selector", "usage", fmt.Sprintf("no editable element found for selector %q", args[0]), ExitUsage, []string{"cdp insert-text '[contenteditable=true]' hello --json"})
 			}
-			return a.render(ctx, fmt.Sprintf("inserted-text\t%s\t%s", target.TargetID, result.Selector), map[string]any{
+			report := map[string]any{
 				"ok":          true,
 				"action":      "inserted_text",
 				"target":      pageRow(target),
 				"insert_text": result,
-			})
+			}
+			addInputTargetIndexEvidence(report, targetIndex)
+			return a.render(ctx, fmt.Sprintf("inserted-text\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	return cmd
 }
 
@@ -1835,6 +1879,10 @@ func (a *app) newPressCommand() *cobra.Command {
 		Short: "Press a key on the focused element or a resolved selector/locator",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
@@ -1880,7 +1928,7 @@ func (a *app) newPressCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -1924,6 +1972,7 @@ func (a *app) newPressCommand() *cobra.Command {
 					if locator != nil {
 						report["locator"] = locator
 					}
+					addInputTargetIndexEvidence(report, targetIndex)
 					if !trial {
 						report["action"] = "blocked"
 					}
@@ -1950,6 +1999,7 @@ func (a *app) newPressCommand() *cobra.Command {
 					if locator != nil {
 						report["locator"] = locator
 					}
+					addInputTargetIndexEvidence(report, targetIndex)
 					return a.render(ctx, fmt.Sprintf("press-trial\t%s\t%q", target.TargetID, result.Key), report)
 				}
 			}
@@ -2045,6 +2095,7 @@ func (a *app) newPressCommand() *cobra.Command {
 			if locator != nil {
 				report["locator"] = locator
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("pressed\t%s\t%q", target.TargetID, result.Key)
 			if !verified {
 				human = fmt.Sprintf("press-unverified\t%s\t%q", target.TargetID, result.Key)
@@ -2055,6 +2106,7 @@ func (a *app) newPressCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&selector, "selector", "", "optional selector to focus before pressing the key")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "resolve selector/locator and report press target evidence without dispatching keyboard events")

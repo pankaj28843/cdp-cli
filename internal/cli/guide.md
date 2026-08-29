@@ -245,6 +245,21 @@ The assertion index is mutually exclusive with `--target`, `--url-contains`,
 and `--title-contains`; invalid and out-of-range values fail before page
 attachment.
 
+The text and keyboard actions `fill`, `type`, `insert-text`, and `press` also
+accept the same mutually exclusive page-only selector. The selected page is
+resolved before actionability checks or input dispatch, and indexed success or
+bounded actionability failure data includes `target_index`:
+
+    cdp fill 'Search' Aarhus --by label --target-index 2 --json
+    cdp type 'Search' Aarhus --by label --target-index 2 --json
+    cdp insert-text '[contenteditable=true]' hello --target-index 2 --json
+    cdp press Enter --selector 'input[name=q]' --target-index 2 --json
+
+These commands retain their existing locator, trusted-input, mutation, wait,
+and cleanup behavior. Zero, negative, out-of-range, and selector-conflicting
+indexes fail before page attachment; worker targets do not change the page
+order.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
