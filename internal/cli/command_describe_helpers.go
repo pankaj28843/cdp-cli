@@ -419,11 +419,13 @@ func commandExamples(path string) []string {
 		},
 		"cdp hover": {
 			"cdp hover button.primary --json",
+			"cdp hover button.primary --target-index 2 --json",
 			"cdp hover 'Save changes' --by role --role button --trial --json",
 			"cdp hover '#covered-action' --force --url-contains localhost --json",
 		},
 		"cdp drag": {
 			"cdp drag '.draggable' 10 20 --json",
+			"cdp drag '.draggable' 10 20 --target-index 2 --json",
 			"cdp drag drag-target 8 12 --by test-id --trial --json",
 			"cdp drag '#drag-handle' -8 12 --force --url-contains localhost --json",
 		},
@@ -843,7 +845,7 @@ func commandExamples(path string) []string {
 	examples["cdp uncheck"] = []string{"cdp uncheck 'Subscribe to newsletter' --by label --json", "cdp uncheck Subscribe --by role --role checkbox --trial --json", "cdp uncheck '#covered-checkbox' --force --json"}
 	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json", "cdp file 'Upload file' tmp/upload.txt --by label --trial --json"}
 	examples["cdp file chooser"] = []string{"cdp file chooser 247 tmp/upload.txt --target <target-id> --trial --json", "cdp file chooser 247 tmp/first.epub tmp/second.epub --target <target-id> --json"}
-	examples["cdp scroll"] = []string{"cdp scroll '#results' --json", "cdp scroll 'Load more' --by role --role button --trial --json", "cdp scroll 'footer' --block end --inline nearest --json"}
+	examples["cdp scroll"] = []string{"cdp scroll '#results' --json", "cdp scroll '#results' --target-index 2 --json", "cdp scroll 'Load more' --by role --role button --trial --json", "cdp scroll 'footer' --block end --inline nearest --json"}
 	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --json"}
 	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}
 	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json"}

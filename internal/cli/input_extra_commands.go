@@ -340,10 +340,13 @@ func (a *app) newScrollCommand() *cobra.Command {
 		Short: "Scroll a CSS selector or strict locator into the viewport and report before/after evidence",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
-			var err error
 			block, err = normalizeScrollAlignment(block, "--block")
 			if err != nil {
 				return err
@@ -355,7 +358,7 @@ func (a *app) newScrollCommand() *cobra.Command {
 
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -398,6 +401,7 @@ func (a *app) newScrollCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("scroll", selector, actionability), ExitCheckFailed, actionabilityRemediations("scroll", args[0], selector, locatorOpts), report)
 			}
 
@@ -427,6 +431,7 @@ func (a *app) newScrollCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if !trial && !result.After.InViewport {
 				return commandErrorWithData("scroll_failed", "check_failed", fmt.Sprintf("scroll %q did not bring the element into the viewport", selector), ExitCheckFailed, []string{"cdp layout overflow --json", "cdp scroll " + shellQuote(selector) + " --block center --json"}, report)
 			}
@@ -436,6 +441,7 @@ func (a *app) newScrollCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "resolve the target and report scroll evidence without changing page scroll")
 	cmd.Flags().StringVar(&block, "block", "center", "vertical scroll alignment: start, center, end, or nearest")

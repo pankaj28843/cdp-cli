@@ -929,6 +929,13 @@ input_index_report="$state_dir/input-target-index.json"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "filled" and .target.id == $id and .target_index == $index and .fill.selector == "#agent-input" and .fill.filled == true and .actionability.actionable == true' "$input_index_report" >/dev/null
 "$binary" assert value "#agent-input" "indexed input" --target-index "$protocol_index" --timeout 5s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .assertion.passed == true and .assertion.actual == "indexed input"' >/dev/null
+pointer_scroll_index_report="$state_dir/pointer-scroll-target-index.json"
+"$binary" hover "Click target" --by role --role button --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$pointer_scroll_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .hover.trial == true and .hover.hovered == false and .actionability.actionable == true' "$pointer_scroll_index_report" >/dev/null
+"$binary" drag "Click target" 8 12 --by role --role button --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .drag.trial == true and .drag.dragged == false and .drag.delta_x == 8 and .drag.delta_y == 12 and .actionability.actionable == true' >/dev/null
+"$binary" scroll "scroll-target" --by test-id --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .scroll.trial == true and .scroll.scrolled == false and .scroll.changed == false and .actionability.actionable == true' >/dev/null
 event_tap_index_report="$state_dir/event-tap-target-index.json"
 "$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null

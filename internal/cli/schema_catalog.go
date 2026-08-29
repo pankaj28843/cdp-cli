@@ -1372,11 +1372,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"hover": {
 			Name:        "hover",
-			Description: "Resolve a CSS selector or strict locator, enforce hover actionability, then dispatch pointer hover events unless running a trial.",
+			Description: "Resolve a CSS selector or strict locator on an optionally indexed page with --target-index, enforce hover actionability, then dispatch pointer hover events unless running a trial.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when hover completed or trial actionability passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: hovered, trial, or blocked in error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "1-based page index used to select the target, following `cdp pages` order and excluding workers."},
 				{Name: "hover", Type: "hover_result", Required: true, Description: "Selector, matched count, hovered flag, trial/force flags, and hover coordinates."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Visible, stable, and receives-events checks used before dispatch; enabled is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal hover auto-scrolled an offscreen target before rechecking actionability."},
@@ -1386,11 +1387,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"drag": {
 			Name:        "drag",
-			Description: "Resolve a CSS selector or strict locator, enforce drag actionability, then drag by a delta unless running a trial.",
+			Description: "Resolve a CSS selector or strict locator on an optionally indexed page with --target-index, enforce drag actionability, then drag by a delta unless running a trial.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when drag completed or trial actionability passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: dragged, trial, or blocked in error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "1-based page index used to select the target, following `cdp pages` order and excluding workers."},
 				{Name: "drag", Type: "drag_result", Required: true, Description: "Selector, matched count, drag success flag, trial/force flags, delta, and coordinates."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Visible, stable, and receives-events checks used before dispatch; enabled is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal drag auto-scrolled an offscreen target before rechecking actionability."},
@@ -1400,11 +1402,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"scroll": {
 			Name:        "scroll",
-			Description: "Resolve a CSS selector or strict locator, require attached/stable target evidence, then scroll it into view unless running a non-mutating trial.",
+			Description: "Resolve a CSS selector or strict locator on an optionally indexed page with --target-index, require attached/stable target evidence, then scroll it into view unless running a non-mutating trial.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when scroll completed, or when --trial target checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: scrolled, trial, or blocked in error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "1-based page index used to select the target, following `cdp pages` order and excluding workers."},
 				{Name: "scroll", Type: "scroll_result", Required: true, Description: "Selector, matched count, scrolled/changed/trial flags, alignment options, and before/after viewport evidence."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Attached and stable checks used before scrolling. Visible, receives-events, enabled, editable, and in-viewport are reported but not required."},
 				{Name: "locator", Type: "locator_result", Required: false, Description: "Strict locator resolution details when --by is not css."},

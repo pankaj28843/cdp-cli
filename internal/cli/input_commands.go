@@ -2130,13 +2130,17 @@ func (a *app) newHoverCommand() *cobra.Command {
 		Short: "Dispatch pointer hover events over the first matching element by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -2185,6 +2189,7 @@ func (a *app) newHoverCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				if !actionability.Actionable {
 					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("hover", selector, actionability), ExitCheckFailed, actionabilityRemediations("hover", args[0], selector, locatorOpts), report)
 				}
@@ -2206,6 +2211,7 @@ func (a *app) newHoverCommand() *cobra.Command {
 				if autoScroll != nil {
 					report["auto_scroll"] = autoScroll
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("hover", selector, actionability), ExitCheckFailed, actionabilityRemediations("hover", args[0], selector, locatorOpts), report)
 			}
 
@@ -2246,12 +2252,14 @@ func (a *app) newHoverCommand() *cobra.Command {
 			if autoScroll != nil {
 				report["auto_scroll"] = autoScroll
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			return a.render(ctx, fmt.Sprintf("hovered\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching hover events")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential hover actionability checks and record skipped checks in JSON")
@@ -2270,6 +2278,10 @@ func (a *app) newDragCommand() *cobra.Command {
 		Short: "Drag the first matching element by a delta using CSS selector or strict locator",
 		Args:  cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
@@ -2285,7 +2297,7 @@ func (a *app) newDragCommand() *cobra.Command {
 				return commandError("invalid_argument", "usage", "dy must be an integer", ExitUsage, []string{"cdp drag '.node' 10 20 --json"})
 			}
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -2334,6 +2346,7 @@ func (a *app) newDragCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				if !actionability.Actionable {
 					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("drag", selector, actionability), ExitCheckFailed, actionabilityRemediations("drag", args[0], selector, locatorOpts), report)
 				}
@@ -2355,6 +2368,7 @@ func (a *app) newDragCommand() *cobra.Command {
 				if autoScroll != nil {
 					report["auto_scroll"] = autoScroll
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("drag", selector, actionability), ExitCheckFailed, actionabilityRemediations("drag", args[0], selector, locatorOpts), report)
 			}
 
@@ -2395,12 +2409,14 @@ func (a *app) newDragCommand() *cobra.Command {
 			if autoScroll != nil {
 				report["auto_scroll"] = autoScroll
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			return a.render(ctx, fmt.Sprintf("dragged\t%s\t%s", target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without dispatching drag events")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential drag actionability checks and record skipped checks in JSON")

@@ -260,6 +260,21 @@ and cleanup behavior. Zero, negative, out-of-range, and selector-conflicting
 indexes fail before page attachment; worker targets do not change the page
 order.
 
+Pointer and viewport actions `hover`, `drag`, and `scroll` accept the same
+mutually exclusive page-only selector. Indexed reports include
+`target_index` beside the selected page while preserving pointer actionability,
+offscreen auto-scroll, trial, dispatch, alignment, and viewport evidence:
+
+    cdp hover 'Save changes' --by role --role button --target-index 2 --json
+    cdp drag '.draggable' 10 20 --target-index 2 --json
+    cdp scroll '#results' --target-index 2 --block center --json
+
+`hover` and `drag` retain visible/stable/hit-test checks, optional `--trial`
+and `--force` behavior, and bounded auto-scroll re-check. `scroll` retains its
+attached/stable checks and non-mutating `--trial` mode. Invalid or
+selector-conflicting indexes fail before page attachment or pointer/scroll
+mutation; worker targets do not change page order.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
