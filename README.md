@@ -188,6 +188,21 @@ negative, out-of-range, and selector-conflicting indexes fail before page
 attachment or pointer/scroll mutation; worker targets do not change page
 order.
 
+Control-state and selection actions `focus`, `clear`, `check`, `uncheck`, and
+`select` accept the same mutually exclusive page-only selector. Indexed
+reports include `target_index` beside the selected page while preserving each
+command's existing mutation, locator, actionability, trial, auto-scroll, and
+verification behavior:
+
+    cdp focus 'input[name=email]' --target-index 2 --json
+    cdp clear 'input[name=email]' --target-index 2 --json
+    cdp check 'Subscribe to newsletter' --by label --target-index 2 --json
+    cdp uncheck 'Subscribe to newsletter' --by label --target-index 2 --json
+    cdp select Plan pro --by label --target-index 2 --json
+
+Zero, negative, out-of-range, and selector-conflicting indexes fail before
+page attachment or form-control mutation; workers do not change page order.
+
 Read-only inspection commands use the same page-only selector: `frames`,
 `locator find`, `dom query`, `css inspect`, `layout overflow`, and
 `a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`. Successful indexed

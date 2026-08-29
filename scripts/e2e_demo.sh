@@ -929,6 +929,23 @@ input_index_report="$state_dir/input-target-index.json"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "filled" and .target.id == $id and .target_index == $index and .fill.selector == "#agent-input" and .fill.filled == true and .actionability.actionable == true' "$input_index_report" >/dev/null
 "$binary" assert value "#agent-input" "indexed input" --target-index "$protocol_index" --timeout 5s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .assertion.passed == true and .assertion.actual == "indexed input"' >/dev/null
+control_selection_index_report="$state_dir/control-selection-target-index.json"
+"$binary" focus "#agent-input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$control_selection_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .focus.selector == "#agent-input" and .focus.focused == true' "$control_selection_index_report" >/dev/null
+"$binary" clear "#agent-input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$control_selection_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .clear.selector == "#agent-input" and .clear.cleared == true and .clear.value == ""' "$control_selection_index_report" >/dev/null
+"$binary" fill "#agent-input" "indexed input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .fill.filled == true' >/dev/null
+"$binary" eval 'document.querySelector("#subscribe").scrollIntoView({block:"center"})' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" check "Subscribe to newsletter" --by label --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .check.trial == true and .check.changed == false and .actionability.actionable == true' >/dev/null
+"$binary" uncheck "Subscribe to newsletter" --by label --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .uncheck.trial == true and .uncheck.changed == false and .actionability.actionable == true' >/dev/null
+"$binary" select "Plan" pro --by label --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .select.trial == true and .select.selected == false and .actionability.actionable == true' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
 pointer_scroll_index_report="$state_dir/pointer-scroll-target-index.json"
 "$binary" hover "Click target" --by role --role button --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$pointer_scroll_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .hover.trial == true and .hover.hovered == false and .actionability.actionable == true' "$pointer_scroll_index_report" >/dev/null

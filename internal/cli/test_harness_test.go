@@ -3183,6 +3183,29 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
 	}
+	if strings.Contains(req.Expression, "focused: document.activeElement === el") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "input#q"
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{
+			"selector": selector,
+			"focused":  true,
+			"tag":      "input",
+		}}}
+	}
+	if strings.Contains(req.Expression, "cleared:true") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "input#q"
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{
+			"selector": selector,
+			"cleared":  true,
+			"previous": "before",
+			"value":    "",
+		}}}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_select__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")
 		value := expressionStringArg(req.Expression, "const requestedValue = String(")

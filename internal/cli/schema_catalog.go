@@ -1287,13 +1287,34 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, or URL wait result when --wait-text, --wait-selector, --wait-url, or --wait-url-contains is used."},
 			},
 		},
+		"focus": {
+			Name:        "focus",
+			Description: "Focus the first matching form element on an optionally indexed page with --target-index and return bounded focus evidence.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the focus evaluation completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "focus", Type: "object", Required: true, Description: "Selector, focused state, and bounded element tag evidence."},
+			},
+		},
+		"clear": {
+			Name:        "clear",
+			Description: "Clear the first matching form control on an optionally indexed page with --target-index and return bounded value-change evidence.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the clear evaluation completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "clear", Type: "object", Required: true, Description: "Selector, cleared state, and bounded previous/current value evidence."},
+			},
+		},
 		"select": {
 			Name:        "select",
-			Description: "Set the selected option on the first matching select control after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-select state.",
+			Description: "Set the selected option on the first matching select control on an optionally indexed page with --target-index after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-select state.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when select completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: selected for value updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "select", Type: "select_result", Required: true, Description: "Selector, matched count, selected boolean, trial/force flags, optional verification boolean, previous value, requested value, selected value, selected values, and match mode."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective select actionability evidence for attached, visible, enabled, supporting checks, force, and skipped-check state. Stable, receives-events, and editable are reported but not required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1303,11 +1324,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"check": {
 			Name:        "check",
-			Description: "Set a checkbox or radio-like control to checked after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
+			Description: "Set a checkbox or radio-like control to checked on an optionally indexed page with --target-index after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when check completed, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: checked for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "check", Type: "check_result", Required: true, Description: "Selector, matched count, checked state, desired state, previous state, changed/already flags, trial/force flags, and element identity."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective check actionability evidence for attached, visible, stable, receives-events, enabled, supporting checks, force, and skipped-check state. Editable is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal check auto-scrolled an offscreen target before rechecking actionability."},
@@ -1317,11 +1339,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"uncheck": {
 			Name:        "uncheck",
-			Description: "Set a checkbox-like control to unchecked after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
+			Description: "Set a checkbox-like control to unchecked on an optionally indexed page with --target-index after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when uncheck completed, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: unchecked for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "uncheck", Type: "check_result", Required: true, Description: "Selector, matched count, checked state, desired state, previous state, changed/already flags, trial/force flags, and element identity."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective uncheck actionability evidence for attached, visible, stable, receives-events, enabled, supporting checks, force, and skipped-check state. Editable is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal uncheck auto-scrolled an offscreen target before rechecking actionability."},

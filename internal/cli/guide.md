@@ -260,6 +260,21 @@ and cleanup behavior. Zero, negative, out-of-range, and selector-conflicting
 indexes fail before page attachment; worker targets do not change the page
 order.
 
+Control-state and selection actions `focus`, `clear`, `check`, `uncheck`, and
+`select` use the same mutually exclusive, page-only `--target-index`. Indexed
+reports include `target_index` while preserving the commands' existing
+mutation, locator, actionability, trial, auto-scroll, verification, and cleanup
+contracts:
+
+    cdp focus 'input[name=email]' --target-index 2 --json
+    cdp clear 'input[name=email]' --target-index 2 --json
+    cdp check 'Subscribe to newsletter' --by label --target-index 2 --json
+    cdp uncheck 'Subscribe to newsletter' --by label --target-index 2 --json
+    cdp select Plan pro --by label --target-index 2 --json
+
+Zero, negative, out-of-range, and selector-conflicting indexes fail before page
+attachment or form-control mutation; worker targets do not change page order.
+
 Pointer and viewport actions `hover`, `drag`, and `scroll` accept the same
 mutually exclusive page-only selector. Indexed reports include
 `target_index` beside the selected page while preserving pointer actionability,

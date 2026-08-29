@@ -161,7 +161,7 @@ if [[ "$marker_headless_code" -ne 2 || "$click_zero_code" -ne 2 ]]; then
 fi
 jq -e '.ok == false and .code == "invalid_browser_mode" and (.message | contains("headed"))' <<<"$marker_headless_output" >/dev/null
 jq -e '.ok == false and .code == "invalid_target_index" and (.message | contains("greater than zero"))' <<<"$click_zero_output" >/dev/null
-for input_command in fill type insert-text press hover drag scroll; do
+for input_command in fill type insert-text press focus clear check uncheck select hover drag scroll; do
   case "$input_command" in
     fill|type)
       input_command_args=("$input_command" "input#q" hello)
@@ -171,6 +171,21 @@ for input_command in fill type insert-text press hover drag scroll; do
       ;;
     press)
       input_command_args=(press Enter "input#q")
+      ;;
+    focus)
+      input_command_args=(focus "input#q")
+      ;;
+    clear)
+      input_command_args=(clear "input#q")
+      ;;
+    check)
+      input_command_args=(check "input#subscribe" --trial)
+      ;;
+    uncheck)
+      input_command_args=(uncheck "input#subscribe" --trial)
+      ;;
+    select)
+      input_command_args=(select "select#plan" pro --trial)
       ;;
     hover)
       input_command_args=(hover "button#submit")

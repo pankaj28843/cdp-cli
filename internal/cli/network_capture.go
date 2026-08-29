@@ -166,7 +166,7 @@ func collectNetworkRequests(ctx context.Context, client browserEventClient, sess
 		}
 	}
 
-	var requests []networkRequest
+	requests := make([]networkRequest, 0, len(order))
 	for _, id := range order {
 		req := *requestsByID[id]
 		if failedOnly && !requestFailed(req) {
