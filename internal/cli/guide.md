@@ -66,10 +66,15 @@ wait, so an event is not matched twice:
     cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json
     cdp events wait --file tmp/events.jsonl --from-offset 123 --method Network.loadingFailed --contains /api/ --print-offset --json
     cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json > tmp/interactions.jsonl
+    cdp events tap --target-index 1 --match Page.loadEventFired,Network.loadingFailed --duration 10s --max-events 50 --json
 
 The stream and tap collectors keep the historical defaults of Page, Network,
 Runtime, and Log. Their --enable flag also accepts other target-scoped CDP
 domains using protocol spelling, for example DOM or Performance:
+
+Both collectors accept the same mutually exclusive, 1-based page
+`--target-index` selector. The bounded tap reports the selected value in
+`.tap.target_index`; omit it to keep using target ID, URL, or title selectors.
 
     cdp events stream --enable DOM,Performance --match DOM.documentUpdated,Performance.metrics --json
     printf '+DOM.documentUpdated\n' | cdp events stream --enable page --json

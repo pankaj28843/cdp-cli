@@ -839,6 +839,7 @@ func commandExamples(path string) []string {
 	examples["cdp events"] = []string{"cdp events tap --duration 10s --json", "cdp events stream --target <target-id> --enable page,runtime,DOM --match Page.loadEventFired,DOM.documentUpdated --duration 30s --json"}
 	examples["cdp events tap"] = []string{
 		"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json",
+		"cdp events tap --target-index 2 --enable page,network --match Page.loadEventFired,Network.loadingFailed --duration 10s --max-events 50 --json",
 		"cdp events tap --target <target-id> --enable DOM,Performance --match DOM.documentUpdated --duration 10s --json",
 		"cdp events tap --target <target-id> --duration 30s --ready-file tmp/events.ready.json --json",
 	}

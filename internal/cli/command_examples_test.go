@@ -43,6 +43,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp file chooser", want: []string{"--target <target-id>", "--trial", "first.epub", "second.epub"}},
 		{path: "cdp protocol examples", want: []string{"Page.captureScreenshot"}},
 		{path: "cdp events wait", want: []string{"--file", "--method", "--from-offset", "--print-offset"}},
+		{path: "cdp events tap", want: []string{"--target-index", "--enable", "--match", "--duration", "--max-events", "--ready-file"}},
 		{path: "cdp events interactions", want: []string{"--target-index", "--match", "--duration", "--max-events", "--ready-file"}},
 		{path: "cdp workflow page-load", want: []string{"--reload"}},
 		{path: "cdp workflow rendered-extract", want: []string{"--serp google", "x.com/karpathy/status", "x.com/karpathy'", "linkedin.com/company", "reddit.com/user", "reddit.com/r/example/comments"}},

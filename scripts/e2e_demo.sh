@@ -887,6 +887,9 @@ test "$protocol_index" -gt 0
 protocol_index_report="$state_dir/protocol-target-index.json"
 "$binary" protocol exec Runtime.evaluate --target-index "$protocol_index" --params '{"expression":"document.title","returnByValue":true}' --state-dir "$state_dir/cdp-state" --json >"$protocol_index_report"
 jq -e --arg id "$protocol_index_target_id" '.ok == true and .scope == "target" and .target.id == $id and (.session_id | type == "string" and length > 0) and .method == "Runtime.evaluate"' "$protocol_index_report" >/dev/null
+event_tap_index_report="$state_dir/event-tap-target-index.json"
+"$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null
 "$binary" page close --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg id "$protocol_index_target_id" '.ok == true and .action == "closed" and .target.id == $id and .target_gone == true' >/dev/null
 

@@ -70,6 +70,7 @@ cdp wait text Ready --timeout 10s --json
 cdp events stream --target-index 1 --match Page.loadEventFired,Network.loadingFailed --json > tmp/events.jsonl
 cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json
 cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json > tmp/interactions.jsonl
+cdp events tap --target-index 1 --match Page.loadEventFired,Network.loadingFailed --duration 10s --max-events 50 --json
 cdp events stream --target-index 1 --enable DOM,Performance --match DOM.documentUpdated,Performance.metrics --json
 cdp snapshot --selector body --limit 50 --json
 cdp screenshot --out tmp/page.png --json
@@ -693,6 +694,7 @@ selected cdp state directory. Its JSON includes reclaimed PIDs and safety checks
 - Authenticated provider state, capability truth, and exact-target cleanup are documented in `docs/AUTHENTICATED_PROVIDERS.md`.
 - Progressive disclosure: high-level workflows for common debugging, raw CDP passthrough for full protocol reach.
 - Persistent event observation: `cdp events stream --json` attaches one exact page session, emits ready/event/subscription/stopped JSONL records, accepts `+Method`/`-Method` commands on stdin, and detaches on normal exit paths. The `--enable` flag accepts the historical Page/Network/Runtime/Log defaults plus other target CDP domains such as `DOM` and `Performance`, using exact protocol spelling. Use `--duration`, `--max-events`, or the global `--timeout` to bound unattended runs; pipe the JSONL downstream instead of using `--jq`.
+- Bounded event taps: `cdp events tap --target-index 1 --match Page.loadEventFired --duration 10s --json` uses the same mutually exclusive, 1-based page selector as `events stream`, and reports the selected index in `.tap.target_index` while retaining exact-session filtering and readiness cleanup.
 - Race-safe event waiting: `cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --json` reads complete historical or appended records from a byte offset, supports repeated method/content predicates, and never opens a browser connection. Pass the returned `.offset` as `--from-offset` for the next wait; it is a blocking bounded wait, not a harness-level interrupt.
 - Cause-aware interaction observation: `cdp events interactions --match click,scroll --json` adapts the source `Runtime.addBinding` bridge through the daemon, installs guarded listeners on current and future documents, and emits bounded metadata-only JSONL. It intentionally omits selection text, key values, input values, HTML, cookies, screenshots, and arbitrary binding payloads; compose it with `events wait` when a file-backed wait is useful.
 - Heavy artifacts by reference: screenshots, traces, heap snapshots, and dumps should be saved to files.

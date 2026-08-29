@@ -24,10 +24,16 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, enable, match string
 	var readyFile string
 	var duration time.Duration
-	var maxEvents int
+	var maxEvents, targetIndex int
 	cmd := &cobra.Command{Use: "tap", Short: "Collect a bounded stream of CDP events", RunE: func(cmd *cobra.Command, args []string) error {
 		if duration < 0 || maxEvents < 0 {
 			return commandError("usage", "usage", "--duration and --max-events must be non-negative", ExitUsage, []string{"cdp events tap --duration 10s --max-events 50 --json"})
+		}
+		if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+			return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+		}
+		if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "") {
+			return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
 		}
 		enabledDomains, err := parseEventDomains(enable)
 		if err != nil {
@@ -35,7 +41,7 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 		}
 		ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
 		defer cancel()
-		client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+		client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -79,11 +85,12 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 				break
 			}
 		}
-		return a.render(ctx, fmt.Sprintf("events\t%d", len(events)), map[string]any{"ok": true, "target": pageRow(target), "events": events, "tap": map[string]any{"duration": durationString(duration), "max_events": maxEvents, "truncated": maxEvents > 0 && len(events) >= maxEvents, "session_bound": true, "foreign_events_dropped": foreignEventsDropped, "ready_file": readyFile}})
+		return a.render(ctx, fmt.Sprintf("events\t%d", len(events)), map[string]any{"ok": true, "target": pageRow(target), "events": events, "tap": map[string]any{"duration": durationString(duration), "max_events": maxEvents, "target_index": targetIndex, "truncated": maxEvents > 0 && len(events) >= maxEvents, "session_bound": true, "foreign_events_dropped": foreignEventsDropped, "ready_file": readyFile}})
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&enable, "enable", "page,network,runtime,log", "comma-separated CDP target domains to enable (for example page,network,runtime,log,DOM,Performance)")
 	cmd.Flags().StringVar(&match, "match", "", "comma-separated event method names to keep")
 	cmd.Flags().DurationVar(&duration, "duration", 5*time.Second, "maximum event collection duration")
