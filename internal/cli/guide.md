@@ -333,6 +333,29 @@ attached/stable checks and non-mutating `--trial` mode. Invalid or
 selector-conflicting indexes fail before page attachment or pointer/scroll
 mutation; worker targets do not change page order.
 
+## Target-scoped emulation
+
+All direct emulation commands use the same mutually exclusive, page-only
+`--target-index`: `viewport`, `clear`, `media`, `color-scheme`, `user-agent`,
+`geolocation`, `timezone`, `locale`, `cpu`, and `network`. The 1-based index
+follows the page order shown by `cdp pages`, excludes workers, and is resolved
+before attachment. Indexed reports include `target_index` beside the selected
+page while retaining each command's existing CDP payload, same-session
+verification, cleanup command, and best-effort clear behavior:
+
+    cdp emulate viewport --preset mobile --target-index 2 --json
+    cdp emulate media --prefers-color-scheme dark --target-index 2 --json
+    cdp emulate timezone --timezone-id UTC --target-index 2 --json
+    cdp emulate locale --locale de-DE --target-index 2 --json
+    cdp emulate cpu --rate 2 --target-index 2 --json
+    cdp emulate network --preset slow-3g --target-index 2 --json
+    cdp emulate clear --target-index 2 --json
+
+The index cannot be combined with `--target`, `--url-contains`, or
+`--title-contains`. Invalid, conflicting, and out-of-range values fail before
+page attachment or emulation mutation; use the cleanup command in an indexed
+report when a later command must address the same exact page.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable

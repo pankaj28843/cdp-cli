@@ -85,8 +85,10 @@ cdp console --errors --target-index 2 --wait 2s --json
 cdp network --failed --target-index 2 --wait 2s --json
 cdp network capture --target-index 2 --redact safe --wait 2s --json
 cdp wait response --target-index 2 --match-url /api --status 200 --json
+cdp emulate viewport --preset mobile --target-index 2 --json
+cdp emulate media --prefers-color-scheme dark --target-index 2 --json
 cdp emulate network --preset slow-3g --json
-cdp emulate clear --json
+cdp emulate clear --target-index 2 --json
 cdp storage indexeddb list --url-contains localhost --json
 cdp storage indexeddb get app settings feature --json
 cdp storage cache list --url-contains localhost --json
@@ -122,6 +124,19 @@ For target-scoped raw execution, `--target-index N` selects the 1-based page
 order shown by `cdp pages`. It cannot be combined with `--target`,
 `--url-contains`, `--title-contains`, or `--target-type`; omit it for
 browser-scoped execution or use the other selectors for non-page targets.
+
+The direct emulation family uses the same page-only selector: `viewport`,
+`clear`, `media`, `color-scheme`, `user-agent`, `geolocation`, `timezone`,
+`locale`, `cpu`, and `network` all accept `--target-index N`. The index is
+mutually exclusive with `--target`, `--url-contains`, and `--title-contains`,
+is resolved before attachment, and does not count worker targets. Indexed
+reports include `target_index`; the mutation remains scoped to the selected
+page and `clear` remains best-effort across the existing emulation overrides:
+
+    cdp emulate viewport --preset mobile --target-index 2 --json
+    cdp emulate timezone --timezone-id UTC --target-index 2 --json
+    cdp emulate network --preset slow-3g --target-index 2 --json
+    cdp emulate clear --target-index 2 --json
 
 Event-oriented waits (`request`, `response`, `network-idle`, `dialog`,
 `file-chooser`, `popup`, and `download`) accept the same mutually exclusive

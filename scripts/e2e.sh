@@ -706,6 +706,10 @@ done
 "$binary" schema emulate-timezone --json | jq -e '.ok == true and .schema.name == "emulate-timezone" and (.schema.fields | map(.name) | index("emulation"))' >/dev/null
 "$binary" schema emulate-locale --json | jq -e '.ok == true and .schema.name == "emulate-locale" and (.schema.fields | map(.name) | index("emulation"))' >/dev/null
 "$binary" schema emulate-color-scheme --json | jq -e '.ok == true and .schema.name == "emulate-color-scheme" and (.schema.fields | map(.name) | index("emulation"))' >/dev/null
+for emulation_command in viewport clear media color-scheme user-agent geolocation timezone locale cpu network; do
+  "$binary" describe --command "emulate $emulation_command" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+  "$binary" schema "emulate-$emulation_command" --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields[] | select(.name == "target_index" and .type == "integer"))' >/dev/null
+done
 "$binary" describe --command "permissions grant" --json | jq -e '.ok == true and .commands.name == "grant" and (.commands.examples | any(contains("--origin"))) and (.commands.flags[] | select(.name == "origin"))' >/dev/null
 "$binary" describe --command "permissions set" --json | jq -e '.ok == true and .commands.name == "set" and (.commands.examples | any(contains("--setting"))) and (.commands.flags[] | select(.name == "setting")) and (.commands.flags[] | select(.name == "origin"))' >/dev/null
 "$binary" describe --command "permissions reset" --json | jq -e '.ok == true and .commands.name == "reset" and (.commands.examples | any(contains("permissions reset")))' >/dev/null

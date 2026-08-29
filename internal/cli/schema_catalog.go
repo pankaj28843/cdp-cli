@@ -33,6 +33,19 @@ func withCommandRetrySchemaFields(fields []schemaField, includeLastObservedTarge
 	return fields
 }
 
+func emulationCommandSchema(name, description, detail string) schemaInfo {
+	return schemaInfo{
+		Name:        name,
+		Description: description + " Accepts a mutually exclusive 1-based page --target-index selector.",
+		Fields: []schemaField{
+			{Name: "ok", Type: "boolean", Required: true, Description: "True when the emulation command completed."},
+			{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+			{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+			{Name: "emulation", Type: "object", Required: true, Description: detail},
+		},
+	}
+}
+
 func schemaCatalog() map[string]schemaInfo {
 	catalog := map[string]schemaInfo{
 		"guide": {
@@ -2878,6 +2891,20 @@ func schemaCatalog() map[string]schemaInfo {
 			},
 		},
 	}
+	for _, schema := range []schemaInfo{
+		emulationCommandSchema("emulate-viewport", "Viewport emulation result for a page target.", "Contains viewport width, height, device scale factor, mobile mode, preset, and cleanup command."),
+		emulationCommandSchema("emulate-clear", "Cleared emulation result for a page target.", "Contains cleared flag and the list of best-effort overrides cleared."),
+		emulationCommandSchema("emulate-media", "Media-feature emulation result for a page target.", "Contains the applied media feature rows."),
+		emulationCommandSchema("emulate-color-scheme", "Prefers-color-scheme emulation result for a page target.", "Contains color scheme, media features, optional observed scheme, verification, and cleanup command."),
+		emulationCommandSchema("emulate-user-agent", "User-agent emulation result for a page target.", "Contains user-agent string, optional platform, and cleanup command."),
+		emulationCommandSchema("emulate-geolocation", "Geolocation emulation result for a page target.", "Contains latitude, longitude, accuracy, and cleanup command."),
+		emulationCommandSchema("emulate-timezone", "Timezone emulation result for a page target.", "Contains timezone ID, optional observed timezone, verification, and cleanup command."),
+		emulationCommandSchema("emulate-locale", "Locale emulation result for a page target.", "Contains locale, optional observed locale, verification, and cleanup command."),
+		emulationCommandSchema("emulate-cpu", "CPU throttling emulation result for a page target.", "Contains CPU rate and cleanup command."),
+		emulationCommandSchema("emulate-network", "Network throttling emulation result for a page target.", "Contains network conditions, preset label, and cleanup command."),
+	} {
+		catalog[schema.Name] = schema
+	}
 	catalog["events-tap"] = schemaInfo{
 		Name:        catalog["events-tap"].Name,
 		Description: "Duration-bounded, exact-session raw CDP event stream with validated target-domain enablement and mutually exclusive 1-based page --target-index selection.",
@@ -2901,6 +2928,7 @@ func schemaCatalog() map[string]schemaInfo {
 		})
 		catalog[name] = schema
 	}
+	catalog["emulation"] = emulationCommandSchema("emulation", "Target emulation result.", "Applied emulation metadata and cleanup command.")
 	return catalog
 }
 

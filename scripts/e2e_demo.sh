@@ -954,6 +954,29 @@ sleep 0.2
 wait "$indexed_direct_dialog_confirm_pid"
 dialog_wait_pid=""
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.matched == true and .dialog.action == "dismiss" and .dialog.accepted == false and .dialog.handled == true and .dialog.prompt_text_supplied == false' "$indexed_direct_dialog_confirm_report" >/dev/null
+emulation_index_report="$state_dir/emulation-target-index.json"
+"$binary" emulate viewport --preset mobile --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.viewport.width == 390 and .emulation.viewport.height == 844' "$emulation_index_report" >/dev/null
+"$binary" emulate clear --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.cleared == true and (.emulation.cleared_overrides | index("viewport"))' "$emulation_index_report" >/dev/null
+"$binary" emulate media --prefers-color-scheme dark --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.media_features[0].name == "prefers-color-scheme" and .emulation.media_features[0].value == "dark"' "$emulation_index_report" >/dev/null
+"$binary" emulate color-scheme --scheme light --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.color_scheme.scheme == "light"' "$emulation_index_report" >/dev/null
+"$binary" emulate user-agent --user-agent 'SyntheticCdpCliAgent/1.0' --platform Synthetic --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.user_agent == "SyntheticCdpCliAgent/1.0" and .emulation.platform == "Synthetic"' "$emulation_index_report" >/dev/null
+"$binary" emulate geolocation --latitude 55 --longitude 12 --accuracy 50 --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.geolocation.latitude == 55 and .emulation.geolocation.longitude == 12 and .emulation.geolocation.accuracy == 50' "$emulation_index_report" >/dev/null
+"$binary" emulate timezone --timezone-id UTC --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.timezone.timezone_id == "UTC" and (.emulation.timezone.verified == true or (.emulation.timezone.observed_timezone | type == "string"))' "$emulation_index_report" >/dev/null
+"$binary" emulate locale --locale de-DE --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.locale.locale == "de-DE" and (.emulation.locale.verified == true or (.emulation.locale.observed_locale | type == "string"))' "$emulation_index_report" >/dev/null
+"$binary" emulate cpu --rate 2 --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.cpu.rate == 2' "$emulation_index_report" >/dev/null
+"$binary" emulate network --preset fast-3g --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.preset == "fast-3g" and .emulation.network.latency > 0' "$emulation_index_report" >/dev/null
+"$binary" emulate clear --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.cleared == true and (.emulation.cleared_overrides | index("network"))' "$emulation_index_report" >/dev/null
 protocol_index_report="$state_dir/protocol-target-index.json"
 "$binary" protocol exec Runtime.evaluate --target-index "$protocol_index" --params '{"expression":"document.title","returnByValue":true}' --state-dir "$state_dir/cdp-state" --json >"$protocol_index_report"
 jq -e --arg id "$protocol_index_target_id" '.ok == true and .scope == "target" and .target.id == $id and (.session_id | type == "string" and length > 0) and .method == "Runtime.evaluate"' "$protocol_index_report" >/dev/null
