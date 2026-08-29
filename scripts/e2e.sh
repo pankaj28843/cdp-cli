@@ -639,6 +639,7 @@ done
 "$binary" describe --command "workflow hacker-news" --json | jq -e '.ok == true and .commands.name == "hacker-news" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow google-maps-directions" --json | jq -e '.ok == true and .commands.name == "google-maps-directions" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow a11y" --json | jq -e '.ok == true and .commands.name == "a11y" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" describe --command "workflow responsive-audit" --json | jq -e '.ok == true and .commands.name == "responsive-audit" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "workflow console-errors" --json | jq -e '.ok == true and .commands.name == "console-errors" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "workflow network-failures" --json | jq -e '.ok == true and .commands.name == "network-failures" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 workflow_target_index_guards=(
@@ -652,6 +653,7 @@ workflow_target_index_guards=(
   "workflow verify"
   "workflow perf"
   "workflow a11y"
+  "workflow responsive-audit"
   "network block"
   "network mock"
 )
@@ -839,6 +841,7 @@ done
 "$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("capture.artifact_safety"))' >/dev/null
 "$binary" schema network-websocket --json | jq -e '.ok == true and .schema.name == "network-websocket" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("websockets"))' >/dev/null
 "$binary" schema workflow-feeds --json | jq -e '.ok == true and .schema.name == "workflow-feeds"' >/dev/null
+"$binary" schema workflow-responsive-audit --json | jq -e '.ok == true and .schema.name == "workflow-responsive-audit" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("workflow")) and (.schema.fields | map(.name) | index("results")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
 
 mkdir -p "$state_dir/user-data"
 set +e

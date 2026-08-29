@@ -935,7 +935,11 @@ func commandExamples(path string) []string {
 	}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}
-	examples["cdp workflow responsive-audit"] = []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json"}
+	examples["cdp workflow responsive-audit"] = []string{
+		"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json",
+		"cdp workflow responsive-audit --target-index 2 --viewports desktop,tablet,mobile --include console,network,layout,screenshot,a11y --json",
+		"cdp workflow responsive-audit 'https://example.com' --target-index 2 --viewports desktop,tablet,mobile --json",
+	}
 	examples["cdp workflow lighthouse"] = []string{"cdp --browser-mode headless workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --redact safe --json"}
 	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json", "cdp form values --target-index 2 --json"}
 	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json", "cdp form get 'input[name=email]' --target-index 2 --json"}

@@ -99,6 +99,7 @@ cdp storage cache list --target-index 2 --cache app-cache --json
 cdp storage cache get app-cache http://localhost:5173/api/me --target-index 2 --json
 cdp storage service-workers list --target-index 2 --json
 cdp workflow visible-posts 'https://x.com/<handle>' --limit 5 --json
+cdp workflow responsive-audit --target-index 2 --viewports desktop,mobile --include layout --wait 0s --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --out-dir tmp/research --json
 cdp workflow web-research serp --query-file tmp/research/queries.txt --serp all --parallel-engines --out-dir tmp/research-all --json
 cdp workflow web-research extract --url-file tmp/research/visit-urls.txt --out-dir tmp/research/pages --json

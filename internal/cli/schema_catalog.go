@@ -2432,6 +2432,18 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, requested URL, wait, metric count, and next commands."},
 			},
 		},
+		"workflow-responsive-audit": {
+			Name:        "workflow-responsive-audit",
+			Description: "Bounded multi-viewport responsive audit with daemon-backed page-only --target-index selection; an indexed URL is optional and the workflow closes only pages it created.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when all configured responsive viewport passes completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Created workflow page or selected caller-owned page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Viewport list, requested URL, bounded wait/limit, artifact directory, and emulation cleanup policy."},
+				{Name: "results", Type: "array<object>", Required: true, Description: "Per-viewport console, network, layout, screenshot, accessibility, and collector evidence."},
+				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Responsive screenshot artifact references when screenshot collection is enabled."},
+			},
+		},
 		"workflow-lighthouse": {
 			Name:        "workflow-lighthouse",
 			Description: "Lighthouse run against daemon-owned loopback Chrome with compact categories and guarded report artifacts.",

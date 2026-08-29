@@ -960,6 +960,25 @@ diagnostic_navigation_report="$state_dir/workflow-verify-target-index-navigation
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg url "$diagnostic_navigation_url" '.ok == true and .target.id == $id and .target_index == $index and .target.url == $url and .workflow.trigger == "navigate" and .workflow.requested_url == $url' "$diagnostic_navigation_report" >/dev/null
 diagnostic_page_count_after_navigation="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
 test "$diagnostic_page_count_after_navigation" -eq "$diagnostic_page_count_before"
+responsive_url_only_report="$state_dir/workflow-responsive-url-only.json"
+responsive_url_only_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+"$binary" workflow responsive-audit "$app_url?responsive-created=1" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_url_only_report"
+jq -e '.ok == true and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.cleanup == "emulation-cleared"' "$responsive_url_only_report" >/dev/null
+responsive_url_only_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$responsive_url_only_after" -eq "$responsive_url_only_before"
+responsive_index_report="$state_dir/workflow-responsive-target-index.json"
+responsive_index_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+"$binary" workflow responsive-audit --target-index "$protocol_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.cleanup == "emulation-cleared"' "$responsive_index_report" >/dev/null
+responsive_index_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$responsive_index_after" -eq "$responsive_index_before"
+responsive_navigation_url="$app_url?responsive-indexed-navigation=1"
+responsive_navigation_report="$state_dir/workflow-responsive-target-index-navigation.json"
+responsive_navigation_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+"$binary" workflow responsive-audit "$responsive_navigation_url" --target-index "$protocol_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_navigation_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg url "$responsive_navigation_url" '.ok == true and .target.id == $id and .target_index == $index and .target.url == $url and .workflow.url == $url and (.results | length == 1) and .workflow.cleanup == "emulation-cleared"' "$responsive_navigation_report" >/dev/null
+responsive_navigation_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$responsive_navigation_after" -eq "$responsive_navigation_before"
 storage_index_report="$state_dir/storage-target-index.json"
 "$binary" storage list --target-index "$protocol_index" --include localStorage,sessionStorage,cookies --state-dir "$state_dir/cdp-state" --json >"$storage_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.local_storage | has("entries")) and (.storage.session_storage | has("keys"))' "$storage_index_report" >/dev/null

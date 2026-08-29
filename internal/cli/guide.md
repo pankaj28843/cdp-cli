@@ -446,6 +446,24 @@ page and add `target_index` to JSON evidence. Without an index, a URL remains
 required and keeps the workflow-owned disposable-page behavior. Invalid and
 out-of-range indexes fail before attachment or collector/trace setup.
 
+## Responsive-audit existing-page selection
+
+`workflow responsive-audit --target-index N` reuses an existing page for each
+configured viewport. The index is 1-based, follows the page order shown by
+`cdp pages`, and excludes workers and other non-page targets. The positional
+URL is optional with an explicit index:
+
+    cdp workflow responsive-audit --target-index 2 --viewports desktop,mobile --include layout --wait 0s --json
+    cdp workflow responsive-audit https://example.com --target-index 2 --viewports desktop,mobile --json
+
+Without a URL, the workflow uses the selected page's current URL. With a URL,
+it navigates that same caller-owned page before each viewport pass. Indexed
+reports include `target_index` and the resolved target; the caller-owned page
+is never closed. URL-only invocation retains the workflow-owned disposable
+page behavior and closes the created page after the audit. Emulation cleanup,
+collector bounds, and screenshot artifact references are unchanged. Invalid
+and out-of-range indexes fail before attachment.
+
 ## Rendered-extract existing-page selection
 
 `workflow rendered-extract --target-index N` selects an existing page using

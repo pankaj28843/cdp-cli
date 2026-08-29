@@ -11,11 +11,12 @@ import (
 )
 
 type responsiveAuditOptions struct {
-	Viewports string
-	Include   string
-	OutDir    string
-	Wait      time.Duration
-	Limit     int
+	Viewports   string
+	Include     string
+	OutDir      string
+	Wait        time.Duration
+	Limit       int
+	TargetIndex int
 }
 
 func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts responsiveAuditOptions) error {
@@ -28,13 +29,39 @@ func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts
 		return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 	}
 	defer closeClient(ctx)
-	targetID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "responsive-audit")
-	if err != nil {
-		return err
+	target := cdp.TargetInfo{Type: "page", URL: strings.TrimSpace(rawURL)}
+	workflowOwned := opts.TargetIndex == 0
+	if workflowOwned {
+		target.TargetID, err = a.createWorkflowPageTarget(ctx, client, "about:blank", "responsive-audit")
+		if err != nil {
+			return err
+		}
+	} else {
+		target, err = a.resolvePageTargetWithClientIndex(ctx, client, "", "", "", opts.TargetIndex)
+		if err != nil {
+			return err
+		}
+		if target.URL != "" && strings.TrimSpace(rawURL) == "" {
+			rawURL = target.URL
+		}
+		target.URL = strings.TrimSpace(rawURL)
 	}
-	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, nil)
+	if workflowOwned {
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), pageCloseDefaultTimeout(a.browserModeName(), defaultPageCloseMaxAttempts))
+			defer cancel()
+			_ = closePageTargetSettled(closeCtx, client, target, pageCloseOptions{
+				WaitGone:     true,
+				MaxAttempts:  defaultPageCloseMaxAttempts,
+				AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+				PollInterval: defaultPageClosePollInterval,
+				RetryBackoff: defaultPageCloseRetryBackoff,
+			})
+		}()
+	}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, nil)
 	if err != nil {
-		return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+		return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 	}
 	defer session.Close(ctx)
 	defer func() {
@@ -60,7 +87,8 @@ func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts
 		artifacts = append(artifacts, viewportArtifacts...)
 	}
 	_ = client.CallSession(ctx, session.SessionID, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
-	report := map[string]any{"ok": true, "target": pageRow(cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}), "workflow": map[string]any{"name": "responsive-audit", "url": rawURL, "viewports": setKeys(parseCSVSet(opts.Viewports)), "include": setKeys(includeSet), "wait": durationString(opts.Wait), "limit": opts.Limit, "out_dir": outDir, "cleanup": "emulation-cleared"}, "results": results, "artifacts": artifacts}
+	report := map[string]any{"ok": true, "target": pageRow(target), "workflow": map[string]any{"name": "responsive-audit", "url": rawURL, "viewports": setKeys(parseCSVSet(opts.Viewports)), "include": setKeys(includeSet), "wait": durationString(opts.Wait), "limit": opts.Limit, "out_dir": outDir, "cleanup": "emulation-cleared"}, "results": results, "artifacts": artifacts}
+	addWorkflowTargetIndex(report, opts.TargetIndex)
 	return a.render(ctx, fmt.Sprintf("responsive-audit\t%d viewports", len(results)), report)
 }
 

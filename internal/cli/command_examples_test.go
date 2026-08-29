@@ -167,6 +167,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp workflow debug-bundle", want: []string{"debug-bundle", "--target-index 2"}},
 		{path: "cdp workflow perf", want: []string{"workflow perf", "--target-index 2"}},
 		{path: "cdp workflow a11y", want: []string{"workflow a11y", "--target-index 2"}},
+		{path: "cdp workflow responsive-audit", want: []string{"responsive-audit", "--target-index 2"}},
 		{path: "cdp workflow action-capture", want: []string{"--evidence-out-dir", "--include-bodies json,text", "--body-url-contains /api/", "--target-index 2"}},
 		{path: "cdp workflow console-errors", want: []string{"--target-index 2"}},
 		{path: "cdp workflow network-failures", want: []string{"--target-index 2"}},
