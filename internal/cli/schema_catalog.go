@@ -1494,10 +1494,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait": {
 			Name:        "wait",
-			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks.",
+			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks. Event-oriented waits accept a mutually exclusive 1-based page --target-index selector.",
 			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, URL condition, CDP event method, load state and readyState when applicable, criteria, match status, eval ready predicate, last_value, attempt_count, attempts, optional attempt artifacts, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, file-chooser interception state, popup target discovery state, download progress state, elapsed time, timeout, and poll interval when applicable."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Per-attempt eval readiness artifact references when cdp wait eval --out-dir is used."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator result when waiting by user-facing locator."},
@@ -1527,10 +1528,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-request": {
 			Name:        "wait-request",
-			Description: "Network request event wait result for Network.requestWillBeSent.",
+			Description: "Network request event wait result for Network.requestWillBeSent; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching request event was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "network_wait_result", Required: true, Description: "Kind, criteria, match status, observed_count, elapsed_ms, timeout, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
 				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched Network.requestWillBeSent event metadata with request_id, URL, method, resource type, and safe URL redaction by default."},
 				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed candidate request event on timeout."},
@@ -1538,10 +1540,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-response": {
 			Name:        "wait-response",
-			Description: "Network response event wait result for Network.responseReceived.",
+			Description: "Network response event wait result for Network.responseReceived; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching response event was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "network_wait_result", Required: true, Description: "Kind, criteria including status/status range, match status, observed_count, elapsed_ms, timeout, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
 				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched Network.responseReceived event metadata with request_id, URL, method, status, resource type, and safe URL redaction by default."},
 				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed candidate response event on timeout."},
@@ -1549,20 +1552,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-network-idle": {
 			Name:        "wait-network-idle",
-			Description: "Network quiet-window wait result.",
+			Description: "Network quiet-window wait result; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the observed network traffic stayed within max_inflight for the configured idle window."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "network_idle_wait_result", Required: true, Description: "Kind, idle window, max_inflight, observed event/request/completion/failure counts, ignored_count, in_flight evidence, elapsed_ms, timeout, warnings, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
 				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed request/response/loading lifecycle event."},
 			},
 		},
 		"wait-dialog": {
 			Name:        "wait-dialog",
-			Description: "JavaScript dialog event wait result for Page.javascriptDialogOpening.",
+			Description: "JavaScript dialog event wait result for Page.javascriptDialogOpening; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching JavaScript dialog was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "dialog_wait_result", Required: true, Description: "Kind, dialog criteria, match status, observed_count, elapsed_ms, timeout, optional handling action, warnings for unhandled dialogs, and bounded evidence."},
 				{Name: "dialog", Type: "dialog_wait_event", Required: false, Description: "Matched JavaScript dialog metadata, safe URL redaction, and optional accept/dismiss handling evidence."},
 				{Name: "last_event", Type: "dialog_wait_event", Required: false, Description: "Last observed dialog event on timeout."},
@@ -1571,10 +1576,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-file-chooser": {
 			Name:        "wait-file-chooser",
-			Description: "File chooser event wait result for Page.fileChooserOpened.",
+			Description: "File chooser event wait result for Page.fileChooserOpened; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching file chooser was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "file_chooser_wait_result", Required: true, Description: "Kind, mode criteria, match status, observed_count, elapsed_ms, timeout, interception status, and bounded evidence."},
 				{Name: "file_chooser", Type: "file_chooser_wait_event", Required: false, Description: "Matched Page.fileChooserOpened metadata, including mode, multiple flag, frame id, backend node id, and CDP method."},
 				{Name: "last_event", Type: "file_chooser_wait_event", Required: false, Description: "Last observed file chooser event on timeout."},
@@ -1583,10 +1589,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-popup": {
 			Name:        "wait-popup",
-			Description: "Popup/new-tab event wait result for Target targetCreated/targetInfoChanged events.",
+			Description: "Popup/new-tab event wait result for Target targetCreated/targetInfoChanged events; accepts a mutually exclusive 1-based opener page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching popup target was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected opener page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected opener page target metadata, including the opener selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based opener page target index used for selection when --target-index was supplied."},
 				{Name: "opener", Type: "page", Required: true, Description: "Selected opener page target metadata duplicated for jq clarity."},
 				{Name: "wait", Type: "popup_wait_result", Required: true, Description: "Kind, opener and popup URL/title criteria, match status, Target discovery CDP methods, baseline_count, observed event counts, elapsed_ms, timeout, warnings when opener_id is absent, and bounded evidence."},
 				{Name: "popup", Type: "popup_wait_event", Required: false, Description: "Matched popup target metadata, including target id, URL, title, opener_id when CDP reports it, opener_matched, and CDP method."},
@@ -1596,10 +1603,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-download": {
 			Name:        "wait-download",
-			Description: "Download event wait result for Browser.downloadWillBegin and Browser.downloadProgress.",
+			Description: "Download event wait result for Browser.downloadWillBegin and Browser.downloadProgress; accepts a mutually exclusive 1-based triggering page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching download reached the requested started or completed state before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected triggering page target metadata. Browser download events are browser-scoped, so use URL or filename criteria when multiple pages may download concurrently."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected triggering page target metadata, including the page selected by index. Browser download events are browser-scoped, so use URL or filename criteria when multiple pages may download concurrently."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based triggering page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "download_wait_result", Required: true, Description: "Kind, URL and filename criteria, requested state, match status, Browser download CDP methods, download_dir, observed event counts, elapsed_ms, timeout, redaction mode, warnings, and bounded evidence."},
 				{Name: "download", Type: "download_wait_summary", Required: false, Description: "Matched download metadata, including guid, safe URL, suggested filename, state, completion/cancel flags, byte counts, and optional file path."},
 				{Name: "event", Type: "download_wait_event", Required: false, Description: "Matched Browser.downloadWillBegin metadata with safe URL and suggested filename."},

@@ -53,6 +53,7 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var dialogType string
 	var message string
 	var messageContains string
@@ -64,6 +65,9 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 		Short: "Wait for a JavaScript dialog to open",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			opts := dialogWaitOptions{
 				Criteria: dialogWaitCriteria{
 					Type:            dialogType,
@@ -85,7 +89,7 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, pageURLContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, pageURLContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -96,6 +100,9 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 			elapsed := time.Since(start)
 			report := dialogWaitReport(observation, opts, elapsed, a.effectiveNetworkWaitTimeout(), redactor)
 			report["target"] = pageRow(target)
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return dialogWaitError(ctx, session.TargetID, opts, report, err)
 			}
@@ -108,6 +115,7 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&dialogType, "type", "", "dialog type to match: alert, confirm, prompt, or beforeunload")
 	cmd.Flags().StringVar(&message, "message", "", "exact dialog message to match")
 	cmd.Flags().StringVar(&messageContains, "message-contains", "", "substring that the dialog message must contain")

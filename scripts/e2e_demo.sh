@@ -907,6 +907,15 @@ jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.o
 network_index_report="$state_dir/network-target-index.json"
 "$binary" network --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$network_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.network.count | type == "number")' "$network_index_report" >/dev/null
+wait_index_probe="$(date +%s%N)"
+wait_index_report="$state_dir/wait-response-target-index.json"
+"$binary" wait response --target-index "$protocol_index" --match-url "wait-index=$wait_index_probe" --method GET --status 200 --resource-type Fetch --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_index_report" &
+wait_index_pid=$!
+sleep 0.3
+"$binary" eval "fetch('$app_url/api/ok?wait-index=$wait_index_probe').then(r => r.status)" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value == 200' >/dev/null
+wait "$wait_index_pid"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg probe "wait-index=$wait_index_probe" '.ok == true and .target.id == $id and .target_index == $index and .wait.kind == "response" and .wait.matched == true and (.event.url | contains($probe)) and .event.cdp_method == "Network.responseReceived" and .event.status == 200' "$wait_index_report" >/dev/null
 event_tap_index_report="$state_dir/event-tap-target-index.json"
 "$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null

@@ -56,6 +56,7 @@ func (a *app) newWaitPopupCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var matchURL string
 	var matchTitle string
 	cmd := &cobra.Command{
@@ -63,6 +64,9 @@ func (a *app) newWaitPopupCommand() *cobra.Command {
 		Short: "Wait for a page popup or new tab opened by the selected page",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -78,7 +82,12 @@ func (a *app) newWaitPopupCommand() *cobra.Command {
 			}
 			defer closeClient(ctx)
 
-			opener, err := a.resolvePageTargetWithClient(ctx, client, targetID, pageURLContains, titleContains)
+			var opener cdp.TargetInfo
+			if targetIndex > 0 {
+				opener, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, pageURLContains, titleContains, targetIndex)
+			} else {
+				opener, err = a.resolvePageTargetWithClient(ctx, client, targetID, pageURLContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -101,6 +110,9 @@ func (a *app) newWaitPopupCommand() *cobra.Command {
 				_ = teardown(teardownCtx)
 			}
 			report := popupWaitReport(observation, criteria, opener, elapsed, a.effectiveNetworkWaitTimeout(), len(baselineTargets))
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return popupWaitError(ctx, opener.TargetID, criteria, report, err)
 			}
@@ -110,6 +122,7 @@ func (a *app) newWaitPopupCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "opener page target id or unique prefix")
 	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first opener page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first opener page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based opener page target index")
 	cmd.Flags().StringVar(&matchURL, "match-url", "", "substring that the popup URL must contain")
 	cmd.Flags().StringVar(&matchTitle, "match-title", "", "substring that the popup title must contain")
 	return cmd

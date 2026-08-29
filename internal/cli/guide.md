@@ -204,6 +204,19 @@ These observers reject zero, negative, out-of-range, and selector-conflicting
 indexes before page attachment, and the index follows the page-only order
 shown by `cdp pages`, excluding workers and other non-page targets.
 
+Event-oriented waits use the same page-only selector for `request`, `response`,
+`network-idle`, `dialog`, `file-chooser`, `popup`, and `download`. Indexed
+success reports include `target_index` beside the resolved target:
+
+    cdp wait response --target-index 2 --match-url /api --status 200 --json
+    cdp wait dialog --target-index 2 --type confirm --action dismiss --json
+
+For popup and download waits, the index selects the opener or triggering page;
+Target and Browser events remain browser-scoped, so keep the existing URL,
+title, filename, or state criteria when more than one page may produce an event.
+Zero, negative, out-of-range, and selector-conflicting values fail before
+attachment or event waiting.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable

@@ -83,6 +83,7 @@ cdp screenshot --target-index 2 --out tmp/page.png --json
 cdp console --errors --target-index 2 --wait 2s --json
 cdp network --failed --target-index 2 --wait 2s --json
 cdp network capture --target-index 2 --redact safe --wait 2s --json
+cdp wait response --target-index 2 --match-url /api --status 200 --json
 cdp emulate network --preset slow-3g --json
 cdp emulate clear --json
 cdp storage indexeddb list --url-contains localhost --json
@@ -120,6 +121,14 @@ For target-scoped raw execution, `--target-index N` selects the 1-based page
 order shown by `cdp pages`. It cannot be combined with `--target`,
 `--url-contains`, `--title-contains`, or `--target-type`; omit it for
 browser-scoped execution or use the other selectors for non-page targets.
+
+Event-oriented waits (`request`, `response`, `network-idle`, `dialog`,
+`file-chooser`, `popup`, and `download`) accept the same mutually exclusive
+page-only selector. Successful indexed reports include `target_index` beside
+the resolved target. For popup and download waits, the index selects the
+opener or triggering page; the resulting browser-scoped event still needs its
+existing URL, title, filename, or status criteria when concurrent pages are
+active.
 
 The same explicit page index is available on `page select`, `page reload`,
 `page back`, `page forward`, `page activate`, and `page close`; each rejects a

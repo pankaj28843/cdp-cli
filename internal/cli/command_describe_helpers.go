@@ -476,30 +476,37 @@ func commandExamples(path string) []string {
 		"cdp wait request": {
 			"cdp wait request --match-url /api/search --method POST --timeout 10s --json",
 			"cdp wait request --url https://example.com/api --resource-type Fetch --json",
+			"cdp wait request --target-index 2 --match-url /api/search --method POST --json",
 		},
 		"cdp wait response": {
 			"cdp wait response --match-url /api/search --status 200 --timeout 10s --json",
 			"cdp wait response --method GET --status-min 200 --status-max 399 --json",
+			"cdp wait response --target-index 2 --match-url /api/search --status 200 --json",
 		},
 		"cdp wait network-idle": {
 			"cdp wait network-idle --idle 500ms --timeout 10s --json",
 			"cdp wait network-idle --ignore-url-contains /events --idle 1s --json",
+			"cdp wait network-idle --target-index 2 --idle 500ms --json",
 		},
 		"cdp wait dialog": {
 			"cdp wait dialog --type confirm --action dismiss --timeout 10s --json",
 			"cdp wait dialog --message-contains 'Delete item?' --action accept --json",
+			"cdp wait dialog --target-index 2 --type confirm --action dismiss --json",
 		},
 		"cdp wait file-chooser": {
 			"cdp wait file-chooser --mode single --timeout 10s --json",
 			"cdp wait file-chooser --mode multiple --json",
+			"cdp wait file-chooser --target-index 2 --mode single --json",
 		},
 		"cdp wait popup": {
 			"cdp wait popup --match-url /oauth/callback --timeout 10s --json",
 			"cdp wait popup --title-contains Checkout --match-title Receipt --json",
+			"cdp wait popup --target-index 2 --match-url /oauth/callback --json",
 		},
 		"cdp wait download": {
 			"cdp wait download --match-url /report.csv --filename-contains report --download-dir tmp/downloads --json",
 			"cdp wait download --state started --timeout 10s --json",
+			"cdp wait download --target-index 2 --match-url /report.csv --download-dir tmp/downloads --json",
 		},
 		"cdp snapshot": {
 			"cdp snapshot --selector body --json",

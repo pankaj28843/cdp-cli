@@ -41,12 +41,16 @@ func (a *app) newWaitFileChooserCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var mode string
 	cmd := &cobra.Command{
 		Use:   "file-chooser",
 		Short: "Wait for a file chooser to open without showing a native dialog",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			criteria := fileChooserWaitCriteria{Mode: mode}
 			if err := normalizeFileChooserWaitCriteria(&criteria); err != nil {
 				return err
@@ -55,7 +59,7 @@ func (a *app) newWaitFileChooserCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, pageURLContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, pageURLContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -71,6 +75,9 @@ func (a *app) newWaitFileChooserCommand() *cobra.Command {
 			}
 			report := fileChooserWaitReport(observation, criteria, elapsed, a.effectiveNetworkWaitTimeout())
 			report["target"] = pageRow(target)
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return fileChooserWaitError(ctx, session.TargetID, criteria, report, err)
 			}
@@ -80,6 +87,7 @@ func (a *app) newWaitFileChooserCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&mode, "mode", "", "input mode to match: selectSingle/single or selectMultiple/multiple")
 	return cmd
 }
