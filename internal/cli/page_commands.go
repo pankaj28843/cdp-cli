@@ -265,16 +265,23 @@ func (a *app) newPageCommand() *cobra.Command {
 func (a *app) newPageSelectCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{
 		Use:   "select [target-id]",
 		Short: "Select the default page target for subsequent commands",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
 			targetID := ""
 			if len(args) == 1 {
 				targetID = args[0]
 			}
-			if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
+			if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || urlContains != "" || titleContains != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with a target id, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex == 0 && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 				return commandError(
 					"missing_page_selector",
 					"usage",
@@ -299,7 +306,12 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			var target cdp.TargetInfo
+			if targetIndex > 0 {
+				target, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+			} else {
+				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -333,6 +345,7 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "select the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "select the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
@@ -340,16 +353,23 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var ignoreCache bool
 	cmd := &cobra.Command{
 		Use:   "reload",
 		Short: "Reload a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -375,6 +395,7 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
 	return cmd
 }
@@ -383,15 +404,22 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{
 		Use:   name,
 		Short: short,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -407,8 +435,8 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
 			}
-			targetIndex := history.CurrentIndex + offset
-			if targetIndex < 0 || targetIndex >= len(history.Entries) {
+			historyIndex := history.CurrentIndex + offset
+			if historyIndex < 0 || historyIndex >= len(history.Entries) {
 				return commandError(
 					"navigation_unavailable",
 					"usage",
@@ -417,7 +445,7 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 					[]string{"cdp page reload --json", "cdp open <url> --new-tab=false --target <target-id> --json"},
 				)
 			}
-			entry := history.Entries[targetIndex]
+			entry := history.Entries[historyIndex]
 			if err := session.NavigateToHistoryEntry(ctx, entry.ID); err != nil {
 				return commandError(
 					"connection_failed",
@@ -433,7 +461,7 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 				"target": pageRow(target),
 				"history": map[string]any{
 					"current_index": history.CurrentIndex,
-					"target_index":  targetIndex,
+					"target_index":  historyIndex,
 					"entry_id":      entry.ID,
 					"entry":         entry,
 				},
@@ -443,6 +471,7 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
@@ -1421,11 +1450,18 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -1441,7 +1477,12 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			var target cdp.TargetInfo
+			if targetIndex > 0 {
+				target, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+			} else {
+				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -1464,6 +1505,7 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 

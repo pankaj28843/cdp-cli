@@ -1144,11 +1144,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"page-action": {
 			Name:        "page-action",
-			Description: "Page target control result for reload, history navigation, activate, and close; page close accepts a mutually exclusive 1-based --target-index selector.",
+			Description: "Page target control result for reload, history navigation, activate, and close; direct page lifecycle commands accept a mutually exclusive 1-based --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page action completed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name such as reloaded, back, forward, activated, or closed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata; page close can select it with a 1-based --target-index."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata; direct page lifecycle commands can select it with a 1-based --target-index."},
 				{Name: "history", Type: "object", Required: false, Description: "History metadata for back and forward actions."},
 				{Name: "closed", Type: "boolean", Required: false, Description: "True when close was sent or the target was already gone."},
 				{Name: "target_gone", Type: "boolean", Required: false, Description: "True when target listing no longer contains the closed page target."},
@@ -1170,11 +1170,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"page-select": {
 			Name:        "page-select",
-			Description: "Selected default page target for the effective browser connection.",
+			Description: "Selected default page target for the effective browser connection; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page selection was saved."},
 				{Name: "selected_page", Type: "page_selection", Required: true, Description: "Browser-mode and connection-scoped selected target id, url, title, and timestamp."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
 				{Name: "state_path", Type: "string", Required: true, Description: "Local state file path where the selection was saved."},
 			},
 		},

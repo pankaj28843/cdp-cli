@@ -57,7 +57,12 @@ cdp --browser-mode headless daemon keepalive --repair --json
 cdp --browser-mode headless daemon maintenance --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
 cdp page select --url-contains example.com --json
+cdp page select --target-index 2 --json
 cdp open https://example.com --json
+cdp page reload --target-index 2 --json
+cdp page back --target-index 2 --json
+cdp page forward --target-index 2 --json
+cdp page activate --target-index 2 --json
 cdp page close --target-index 2 --wait-gone --json
 cdp eval 'document.title' --json
 cdp observe --json
@@ -106,6 +111,10 @@ For target-scoped raw execution, `--target-index N` selects the 1-based page
 order shown by `cdp pages`. It cannot be combined with `--target`,
 `--url-contains`, `--title-contains`, or `--target-type`; omit it for
 browser-scoped execution or use the other selectors for non-page targets.
+
+The same explicit page index is available on `page select`, `page reload`,
+`page back`, `page forward`, `page activate`, and `page close`; each rejects a
+conflicting ID, URL, title, or positional selector.
 
 Multi-engine SERP research runs engines concurrently and reuses one workflow tab
 lane per engine, so large query files avoid opening a fresh tab for every

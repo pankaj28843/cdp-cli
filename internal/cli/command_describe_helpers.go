@@ -288,20 +288,25 @@ func commandExamples(path string) []string {
 		},
 		"cdp page select": {
 			"cdp page select <target-id> --json",
+			"cdp page select --target-index 2 --json",
 			"cdp page select --url-contains localhost --json",
 		},
 		"cdp page reload": {
 			"cdp page reload --target <target-id> --json",
+			"cdp page reload --target-index 2 --json",
 			"cdp page reload --url-contains localhost --ignore-cache --json",
 		},
 		"cdp page back": {
 			"cdp page back --target <target-id> --json",
+			"cdp page back --target-index 2 --json",
 		},
 		"cdp page forward": {
 			"cdp page forward --target <target-id> --json",
+			"cdp page forward --target-index 2 --json",
 		},
 		"cdp page activate": {
 			"cdp page activate --target <target-id> --json",
+			"cdp page activate --target-index 2 --json",
 		},
 		"cdp page close": {
 			"cdp page close --target <target-id> --wait-gone --max-attempts 3 --json",

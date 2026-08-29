@@ -41,6 +41,15 @@ visible split control whose center point is not the hit target, explicit
 an unrelated overlay remains blocked, including with --force. auto and
 raw-input keep their trusted-input requirements.
 
+The same explicit 1-based page selector works across direct lifecycle commands:
+`page select`, `page reload`, `page back`, `page forward`, `page activate`, and
+`page close`. It is mutually exclusive with each command's ID, URL, title, or
+positional selector, and invalid or out-of-range values fail before mutation:
+
+    cdp page select --target-index 2 --json
+    cdp page reload --target-index 2 --json
+    cdp page activate --target-index 2 --json
+
 Wait on an observable condition rather than a fixed sleep:
 
     cdp wait selector main --timeout 10s --json
