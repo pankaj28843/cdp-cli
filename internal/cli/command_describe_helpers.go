@@ -860,7 +860,7 @@ func commandExamples(path string) []string {
 	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json", "cdp a11y find --role button --target-index 2 --json"}
 	examples["cdp a11y node"] = []string{"cdp a11y node button[type=submit] --json", "cdp a11y node button --target-index 2 --json"}
 	examples["cdp a11y snapshot"] = []string{"cdp a11y snapshot --selector body --depth 4 --json", "cdp a11y snapshot --limit 20 --json", "cdp a11y snapshot --target-index 2 --json"}
-	examples["cdp assert aria-snapshot"] = []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --selector body --json", "cdp assert aria-snapshot --file tmp/aria-snapshot.txt --mode exact --json"}
+	examples["cdp assert aria-snapshot"] = []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --selector body --target-index 2 --json", "cdp assert aria-snapshot --file tmp/aria-snapshot.txt --mode exact --json"}
 	examples["cdp perf summary"] = []string{"cdp perf summary --duration 5s --json", "cdp perf summary --target-index 2 --duration 5s --json"}
 	examples["cdp memory counters"] = []string{"cdp memory counters --json", "cdp memory counters --target-index 2 --json"}
 	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json", "cdp memory heap-snapshot --target-index 2 --out tmp/page.heapsnapshot --json"}
@@ -890,29 +890,29 @@ func commandExamples(path string) []string {
 	examples["cdp workflow lighthouse"] = []string{"cdp --browser-mode headless workflow lighthouse 'https://example.com' --categories accessibility,best-practices --out-dir tmp/lighthouse --redact safe --json"}
 	examples["cdp form values"] = []string{"cdp form values --url-contains localhost --json"}
 	examples["cdp form get"] = []string{"cdp form get 'textarea[aria-label=Output]' --json"}
-	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --timeout 5s --json", "cdp assert value 'Search' expected --by label --poll 100ms --json"}
-	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --timeout 5s --json", "cdp assert text 'Search' 'Search' --by role --role button --poll 100ms --json"}
-	examples["cdp assert url"] = []string{"cdp assert url example.com --mode contains --timeout 5s --json", "cdp assert url '^https://example\\.com/' --mode regex --poll 100ms --json"}
-	examples["cdp assert title"] = []string{"cdp assert title 'Example Domain' --mode exact --timeout 5s --json", "cdp assert title Checkout --mode contains --poll 100ms --json"}
-	examples["cdp assert count"] = []string{"cdp assert count '.result-item' 10 --timeout 5s --json", "cdp assert count 'Search result' 3 --by role --role listitem --poll 100ms --json"}
-	examples["cdp assert attribute"] = []string{"cdp assert attribute 'button[type=submit]' data-state ready --mode exact --timeout 5s --json", "cdp assert attribute Checkout aria-expanded true --by role --role button --poll 100ms --json"}
-	examples["cdp assert class"] = []string{"cdp assert class 'button[type=submit]' primary --timeout 5s --json", "cdp assert class Checkout primary --by role --role button --poll 100ms --json"}
-	examples["cdp assert focused"] = []string{"cdp assert focused 'input[name=q]' --timeout 5s --json", "cdp assert focused 'Search' --by label --poll 100ms --json"}
-	examples["cdp assert css"] = []string{"cdp assert css 'button[type=submit]' background-color 'rgb(20, 92, 160)' --mode exact --timeout 5s --json", "cdp assert css Checkout color 'rgb(255, 255, 255)' --by role --role button --poll 100ms --json"}
-	examples["cdp assert role"] = []string{"cdp assert role 'button[type=submit]' button --timeout 5s --json", "cdp assert role Checkout button --by role --role button --poll 100ms --json"}
-	examples["cdp assert name"] = []string{"cdp assert name 'button[type=submit]' Submit --mode exact --timeout 5s --json", "cdp assert name Checkout Checkout --by role --role button --poll 100ms --json"}
-	examples["cdp assert attached"] = []string{"cdp assert attached '#app' --timeout 5s --json", "cdp assert attached 'Search' --by role --role button --poll 100ms --json"}
-	examples["cdp assert detached"] = []string{"cdp assert detached '#loading-spinner' --timeout 5s --json", "cdp assert detached 'Gone' --by text --poll 100ms --json"}
-	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
-	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
-	examples["cdp assert in-viewport"] = []string{"cdp assert in-viewport '#footer' --timeout 5s --json", "cdp assert in-viewport 'Load more' --by role --role button --poll 100ms --json"}
-	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}
-	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --timeout 5s --json", "cdp assert disabled 'Submit' --by role --role button --poll 100ms --json"}
-	examples["cdp assert editable"] = []string{"cdp assert editable 'input[name=email]' --timeout 5s --json", "cdp assert editable 'Search' --by label --poll 100ms --json"}
-	examples["cdp assert readonly"] = []string{"cdp assert readonly 'textarea[readonly]' --timeout 5s --json", "cdp assert readonly 'Read-only notes' --by label --poll 100ms --json"}
-	examples["cdp assert checked"] = []string{"cdp assert checked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert checked Subscribe --by role --role checkbox --poll 100ms --json"}
-	examples["cdp assert unchecked"] = []string{"cdp assert unchecked 'Subscribe to newsletter' --by label --timeout 5s --json", "cdp assert unchecked '#subscribe' --poll 100ms --json"}
-	examples["cdp assert indeterminate"] = []string{"cdp assert indeterminate '#partial-selection' --timeout 5s --json", "cdp assert indeterminate 'Partial selection' --by role --role checkbox --poll 100ms --json"}
+	examples["cdp assert value"] = []string{"cdp assert value 'textarea[aria-label=Output]' expected --mode exact --target-index 2 --timeout 5s --json", "cdp assert value 'Search' expected --by label --poll 100ms --json"}
+	examples["cdp assert text"] = []string{"cdp assert text 'Saved successfully' --mode contains --target-index 2 --timeout 5s --json", "cdp assert text 'Search' 'Search' --by role --role button --poll 100ms --json"}
+	examples["cdp assert url"] = []string{"cdp assert url example.com --mode contains --target-index 2 --timeout 5s --json", "cdp assert url '^https://example\\.com/' --mode regex --poll 100ms --json"}
+	examples["cdp assert title"] = []string{"cdp assert title 'Example Domain' --mode exact --target-index 2 --timeout 5s --json", "cdp assert title Checkout --mode contains --poll 100ms --json"}
+	examples["cdp assert count"] = []string{"cdp assert count '.result-item' 10 --target-index 2 --timeout 5s --json", "cdp assert count 'Search result' 3 --by role --role listitem --poll 100ms --json"}
+	examples["cdp assert attribute"] = []string{"cdp assert attribute 'button[type=submit]' data-state ready --mode exact --target-index 2 --timeout 5s --json", "cdp assert attribute Checkout aria-expanded true --by role --role button --poll 100ms --json"}
+	examples["cdp assert class"] = []string{"cdp assert class 'button[type=submit]' primary --target-index 2 --timeout 5s --json", "cdp assert class Checkout primary --by role --role button --poll 100ms --json"}
+	examples["cdp assert focused"] = []string{"cdp assert focused 'input[name=q]' --target-index 2 --timeout 5s --json", "cdp assert focused 'Search' --by label --poll 100ms --json"}
+	examples["cdp assert css"] = []string{"cdp assert css 'button[type=submit]' background-color 'rgb(20, 92, 160)' --mode exact --target-index 2 --timeout 5s --json", "cdp assert css Checkout color 'rgb(255, 255, 255)' --by role --role button --poll 100ms --json"}
+	examples["cdp assert role"] = []string{"cdp assert role 'button[type=submit]' button --target-index 2 --timeout 5s --json", "cdp assert role Checkout button --by role --role button --poll 100ms --json"}
+	examples["cdp assert name"] = []string{"cdp assert name 'button[type=submit]' Submit --mode exact --target-index 2 --timeout 5s --json", "cdp assert name Checkout Checkout --by role --role button --poll 100ms --json"}
+	examples["cdp assert attached"] = []string{"cdp assert attached '#app' --target-index 2 --timeout 5s --json", "cdp assert attached 'Search' --by role --role button --poll 100ms --json"}
+	examples["cdp assert detached"] = []string{"cdp assert detached '#loading-spinner' --target-index 2 --timeout 5s --json", "cdp assert detached 'Gone' --by text --poll 100ms --json"}
+	examples["cdp assert visible"] = []string{"cdp assert visible 'button[type=submit]' --target-index 2 --timeout 5s --json", "cdp assert visible 'Search' --by role --role button --poll 100ms --json"}
+	examples["cdp assert hidden"] = []string{"cdp assert hidden '#loading-spinner' --target-index 2 --timeout 5s --json", "cdp assert hidden 'Dismiss' --by role --role button --poll 100ms --json"}
+	examples["cdp assert in-viewport"] = []string{"cdp assert in-viewport '#footer' --target-index 2 --timeout 5s --json", "cdp assert in-viewport 'Load more' --by role --role button --poll 100ms --json"}
+	examples["cdp assert enabled"] = []string{"cdp assert enabled 'button[type=submit]' --target-index 2 --timeout 5s --json", "cdp assert enabled 'Search' --by role --role button --poll 100ms --json"}
+	examples["cdp assert disabled"] = []string{"cdp assert disabled 'button[disabled]' --target-index 2 --timeout 5s --json", "cdp assert disabled 'Submit' --by role --role button --poll 100ms --json"}
+	examples["cdp assert editable"] = []string{"cdp assert editable 'input[name=email]' --target-index 2 --timeout 5s --json", "cdp assert editable 'Search' --by label --poll 100ms --json"}
+	examples["cdp assert readonly"] = []string{"cdp assert readonly 'textarea[readonly]' --target-index 2 --timeout 5s --json", "cdp assert readonly 'Search' --by label --poll 100ms --json"}
+	examples["cdp assert checked"] = []string{"cdp assert checked 'Subscribe to newsletter' --by label --target-index 2 --timeout 5s --json", "cdp assert checked Subscribe --by role --role checkbox --poll 100ms --json"}
+	examples["cdp assert unchecked"] = []string{"cdp assert unchecked 'Subscribe to newsletter' --by label --target-index 2 --timeout 5s --json", "cdp assert unchecked '#subscribe' --poll 100ms --json"}
+	examples["cdp assert indeterminate"] = []string{"cdp assert indeterminate '#partial-selection' --target-index 2 --timeout 5s --json", "cdp assert indeterminate 'Partial selection' --by role --role checkbox --poll 100ms --json"}
 	for _, provider := range []string{"alex", "chatgpt", "claude", "gemini", "grok", "perplexity", "tripadvisor"} {
 		command := "cdp workflow agent " + provider + " capabilities"
 		examples[command] = []string{

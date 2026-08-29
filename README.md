@@ -142,6 +142,21 @@ resolved page target evidence. The index is 1-based and follows the page-only
 order shown by `cdp pages`, so worker and other non-page targets do not shift
 the selection.
 
+The full assertion family accepts the same page-only selector: `assert value`,
+`text`, `url`, `title`, `count`, `attribute`, `class`, `focused`, `css`,
+`role`, `name`, `aria-snapshot`, `attached`, `detached`, `visible`, `hidden`,
+`in-viewport`, `enabled`, `disabled`, `editable`, `readonly`, `checked`,
+`unchecked`, and `indeterminate`. Indexed reports include `target_index`
+beside the selected target while preserving each assertion's locator, polling,
+retry, and failure diagnostics:
+
+    cdp assert text 'Ready' --target-index 2 --timeout 5s --json
+    cdp assert checked 'Subscribe to newsletter' --by label --target-index 2 --json
+
+The assertion index is mutually exclusive with `--target`, `--url-contains`,
+and `--title-contains`; invalid and out-of-range values fail before page
+attachment.
+
 Read-only inspection commands use the same page-only selector: `frames`,
 `locator find`, `dom query`, `css inspect`, `layout overflow`, and
 `a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`. Successful indexed

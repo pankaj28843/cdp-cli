@@ -921,6 +921,9 @@ wait_condition_index_report="$state_dir/wait-eval-target-index.json"
   | jq -e '.ok == true and .result.value == true' >/dev/null
 "$binary" wait eval 'window.__cdpWaitTargetIndexReady === true' --target-index "$protocol_index" --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_condition_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.kind == "eval" and .wait.expression == "window.__cdpWaitTargetIndexReady === true" and .wait.matched == true and .wait.ready == true' "$wait_condition_index_report" >/dev/null
+assertion_index_report="$state_dir/assertion-target-index.json"
+"$binary" assert title "cdp-cli demo app" --mode exact --target-index "$protocol_index" --timeout 5s --poll 100ms --state-dir "$state_dir/cdp-state" --json >"$assertion_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .assertion.field == "title" and .assertion.passed == true' "$assertion_index_report" >/dev/null
 event_tap_index_report="$state_dir/event-tap-target-index.json"
 "$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null

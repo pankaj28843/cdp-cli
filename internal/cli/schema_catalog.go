@@ -1,6 +1,9 @@
 package cli
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 type schemaInfo struct {
 	Name        string        `json:"name"`
@@ -2817,6 +2820,19 @@ func schemaCatalog() map[string]schemaInfo {
 		Name:        catalog["events-stream"].Name,
 		Description: "Persistent exact-session CDP event stream with validated target-domain enablement emitted as one JSON record per line.",
 		Fields:      catalog["events-stream"].Fields,
+	}
+	for name, schema := range catalog {
+		if !strings.HasPrefix(name, "assert-") {
+			continue
+		}
+		schema.Description += " Accepts a mutually exclusive 1-based page --target-index selector."
+		schema.Fields = append(schema.Fields, schemaField{
+			Name:        "target_index",
+			Type:        "integer",
+			Required:    false,
+			Description: "The 1-based page target index used for selection when --target-index was supplied.",
+		})
+		catalog[name] = schema
 	}
 	return catalog
 }

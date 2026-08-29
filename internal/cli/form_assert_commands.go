@@ -864,7 +864,31 @@ func (a *app) newAssertCommand() *cobra.Command {
 	cmd.AddCommand(a.newAssertCheckedCommand())
 	cmd.AddCommand(a.newAssertUncheckedCommand())
 	cmd.AddCommand(a.newAssertIndeterminateCommand())
+	for _, child := range cmd.Commands() {
+		addAssertionTargetIndexFlag(child)
+	}
 	return cmd
+}
+
+func addAssertionTargetIndexFlag(cmd *cobra.Command) {
+	cmd.Flags().Int("target-index", 0, "select a 1-based page target index")
+}
+
+func assertionTargetIndex(cmd *cobra.Command, targetID, urlContains, titleContains string) (int, error) {
+	targetIndex, err := cmd.Flags().GetInt("target-index")
+	if err != nil {
+		return 0, err
+	}
+	if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+		return 0, err
+	}
+	return targetIndex, nil
+}
+
+func addAssertionTargetIndexEvidence(report map[string]any, targetIndex int) {
+	if targetIndex > 0 {
+		report["target_index"] = targetIndex
+	}
 }
 
 func (a *app) newAssertValueCommand() *cobra.Command {
@@ -913,6 +937,10 @@ func locatorOptionsNeedQuery(opts locatorActionOptions) bool {
 }
 
 func (a *app) runAssertValueCommand(cmd *cobra.Command, query, expected, mode string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert value 'Search' expected --by label --poll 250ms --json"})
 	}
@@ -921,7 +949,7 @@ func (a *app) runAssertValueCommand(cmd *cobra.Command, query, expected, mode st
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -932,6 +960,7 @@ func (a *app) runAssertValueCommand(cmd *cobra.Command, query, expected, mode st
 	start := time.Now()
 	got, locator, selector, err := waitForValueAssertion(assertionCtx, session, query, expected, mode, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -1044,6 +1073,10 @@ func valueAssertionPendingResult(query, expected, mode string, count, attempts i
 }
 
 func (a *app) runAssertTextCommand(cmd *cobra.Command, query, expected, mode string, locatorOpts locatorActionOptions, useLocatorQuery bool, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert text 'Search' 'Search' --by role --role button --poll 250ms --json"})
 	}
@@ -1052,7 +1085,7 @@ func (a *app) runAssertTextCommand(cmd *cobra.Command, query, expected, mode str
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -1063,6 +1096,7 @@ func (a *app) runAssertTextCommand(cmd *cobra.Command, query, expected, mode str
 	start := time.Now()
 	got, locator, selector, err := waitForTextAssertion(assertionCtx, session, query, expected, mode, locatorOpts, useLocatorQuery, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -1198,12 +1232,16 @@ func (a *app) newAssertTitleCommand() *cobra.Command {
 }
 
 func (a *app) runAssertPageCommand(cmd *cobra.Command, field, expected, mode, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert " + field + " expected --poll 250ms --json"})
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -1215,6 +1253,7 @@ func (a *app) runAssertPageCommand(cmd *cobra.Command, field, expected, mode, ta
 	got, err := waitForPageAssertion(assertionCtx, session, field, expected, mode, poll, start)
 	finalTarget := targetWithPageAssertion(target, got)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(finalTarget), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if err != nil {
 		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
 			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("%s assertion for %q did not pass before timeout: %v", field, expected, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, pageAssertionRemediations(field, expected, mode), report)
@@ -1486,6 +1525,10 @@ func validCSSPropertyName(value string) bool {
 }
 
 func (a *app) runAssertCountCommand(cmd *cobra.Command, query string, expected int, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert count '.result' 3 --poll 250ms --json"})
 	}
@@ -1494,7 +1537,7 @@ func (a *app) runAssertCountCommand(cmd *cobra.Command, query string, expected i
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -1505,6 +1548,7 @@ func (a *app) runAssertCountCommand(cmd *cobra.Command, query string, expected i
 	start := time.Now()
 	got, locator, err := waitForCountAssertion(assertionCtx, session, query, expected, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 	}
@@ -1621,6 +1665,10 @@ func locatorMatchID(selector string) string {
 }
 
 func (a *app) runAssertAttributeCommand(cmd *cobra.Command, query, attribute, expected, mode string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert attribute button data-state ready --poll 250ms --json"})
 	}
@@ -1629,7 +1677,7 @@ func (a *app) runAssertAttributeCommand(cmd *cobra.Command, query, attribute, ex
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -1640,6 +1688,7 @@ func (a *app) runAssertAttributeCommand(cmd *cobra.Command, query, attribute, ex
 	start := time.Now()
 	got, locator, selector, err := waitForAttributeAssertion(assertionCtx, session, query, attribute, expected, mode, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -1664,6 +1713,10 @@ func normalizeAssertClassName(value string) (string, error) {
 }
 
 func (a *app) runAssertClassCommand(cmd *cobra.Command, query, className string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert class button primary --poll 250ms --json"})
 	}
@@ -1672,7 +1725,7 @@ func (a *app) runAssertClassCommand(cmd *cobra.Command, query, className string,
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -1683,6 +1736,7 @@ func (a *app) runAssertClassCommand(cmd *cobra.Command, query, className string,
 	start := time.Now()
 	got, locator, selector, err := waitForClassAssertion(assertionCtx, session, query, className, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -1894,6 +1948,10 @@ func attributeAssertionPendingResult(query, attribute, expected, mode string, co
 }
 
 func (a *app) runAssertFocusedCommand(cmd *cobra.Command, query string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert focused 'Search' --by label --poll 250ms --json"})
 	}
@@ -1902,7 +1960,7 @@ func (a *app) runAssertFocusedCommand(cmd *cobra.Command, query string, locatorO
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -1913,6 +1971,7 @@ func (a *app) runAssertFocusedCommand(cmd *cobra.Command, query string, locatorO
 	start := time.Now()
 	got, locator, selector, err := waitForFocusedAssertion(assertionCtx, session, query, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -2006,6 +2065,10 @@ func focusedAssertionPendingResult(query string, count, attempts int, start time
 }
 
 func (a *app) runAssertCSSCommand(cmd *cobra.Command, query, property, expected, mode string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert css button background-color 'rgb(20, 92, 160)' --poll 250ms --json"})
 	}
@@ -2014,7 +2077,7 @@ func (a *app) runAssertCSSCommand(cmd *cobra.Command, query, property, expected,
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -2025,6 +2088,7 @@ func (a *app) runAssertCSSCommand(cmd *cobra.Command, query, property, expected,
 	start := time.Now()
 	got, locator, selector, err := waitForCSSAssertion(assertionCtx, session, query, property, expected, mode, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -2131,6 +2195,10 @@ func cssAssertionPendingResult(query, property, expected, mode string, count, at
 }
 
 func (a *app) runAssertAccessibleCommand(cmd *cobra.Command, field, query, expected, mode string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert name Submit Submit --by role --role button --poll 250ms --json"})
 	}
@@ -2139,7 +2207,7 @@ func (a *app) runAssertAccessibleCommand(cmd *cobra.Command, field, query, expec
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -2150,6 +2218,7 @@ func (a *app) runAssertAccessibleCommand(cmd *cobra.Command, field, query, expec
 	start := time.Now()
 	got, locator, selector, err := waitForAccessibleAssertion(assertionCtx, session, field, query, expected, mode, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil && locatorOpts.By != "css" {
 		report["locator"] = locator
 	}
@@ -2274,6 +2343,10 @@ func accessibleFieldValue(match locatorMatch, field string) string {
 }
 
 func (a *app) runAssertAriaSnapshotCommand(cmd *cobra.Command, expected, mode, targetID, urlContains, titleContains, selector string, depth, limit int, includeIgnored bool, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --poll 250ms --json"})
 	}
@@ -2292,7 +2365,7 @@ func (a *app) runAssertAriaSnapshotCommand(cmd *cobra.Command, expected, mode, t
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -2305,6 +2378,7 @@ func (a *app) runAssertAriaSnapshotCommand(cmd *cobra.Command, expected, mode, t
 	got.Snapshot.URL = target.URL
 	got.Snapshot.Title = target.Title
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got, "snapshot": got.Snapshot}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if err != nil {
 		if assertionCtx.Err() != nil || isTimeoutCommandError(err) {
 			return commandErrorWithData("timeout", "timeout", fmt.Sprintf("ARIA snapshot assertion for %q did not pass before timeout: %v", got.Selector, assertionTimeoutCause(assertionCtx, err)), ExitTimeout, ariaSnapshotAssertionRemediations(got.Selector, depth, limit), report)
@@ -2628,6 +2702,10 @@ func (a *app) newAssertIndeterminateCommand() *cobra.Command {
 }
 
 func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert checked 'Subscribe to newsletter' --by label --poll 250ms --json"})
 	}
@@ -2636,7 +2714,7 @@ func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -2647,6 +2725,7 @@ func (a *app) runAssertCheckedCommand(cmd *cobra.Command, query, expected string
 	start := time.Now()
 	got, locator, selector, err := waitForCheckedAssertion(assertionCtx, session, query, expected, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -2760,6 +2839,10 @@ func waitForNextAssertionPoll(ctx context.Context, poll time.Duration) (bool, er
 }
 
 func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert editable 'Search' --by label --poll 250ms --json"})
 	}
@@ -2768,7 +2851,7 @@ func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected strin
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -2779,6 +2862,7 @@ func (a *app) runAssertEditableCommand(cmd *cobra.Command, query, expected strin
 	start := time.Now()
 	got, locator, selector, err := waitForEditableAssertion(assertionCtx, session, query, expected, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -2879,6 +2963,10 @@ func editableAssertionPendingResult(query, expected string, count, attempts int,
 }
 
 func (a *app) runAssertEnabledCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert enabled 'Search' --by role --role button --poll 250ms --json"})
 	}
@@ -2887,7 +2975,7 @@ func (a *app) runAssertEnabledCommand(cmd *cobra.Command, query, expected string
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -2898,6 +2986,7 @@ func (a *app) runAssertEnabledCommand(cmd *cobra.Command, query, expected string
 	start := time.Now()
 	got, locator, selector, err := waitForEnabledAssertion(assertionCtx, session, query, expected, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if strings.TrimSpace(selector) != "" {
@@ -2996,6 +3085,10 @@ func enabledAssertionPendingResult(query, expected string, count, attempts int, 
 }
 
 func (a *app) runAssertAttachmentCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert attached 'Search' --by role --role button --poll 250ms --json"})
 	}
@@ -3004,7 +3097,7 @@ func (a *app) runAssertAttachmentCommand(cmd *cobra.Command, query, expected str
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -3020,6 +3113,7 @@ func (a *app) runAssertAttachmentCommand(cmd *cobra.Command, query, expected str
 	start := time.Now()
 	got, locator, selector, err := waitForAttachmentAssertion(assertionCtx, session, query, expected, resolveOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if selector != "" {
@@ -3036,6 +3130,10 @@ func (a *app) runAssertAttachmentCommand(cmd *cobra.Command, query, expected str
 }
 
 func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert visible 'Search' --by role --role button --poll 250ms --json"})
 	}
@@ -3044,7 +3142,7 @@ func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected str
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -3060,6 +3158,7 @@ func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected str
 	start := time.Now()
 	got, locator, selector, err := waitForVisibilityAssertion(assertionCtx, session, query, expected, resolveOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if selector != "" {
@@ -3076,6 +3175,10 @@ func (a *app) runAssertVisibilityCommand(cmd *cobra.Command, query, expected str
 }
 
 func (a *app) runAssertViewportCommand(cmd *cobra.Command, query string, locatorOpts locatorActionOptions, targetID, urlContains, titleContains string, poll time.Duration) error {
+	targetIndex, err := assertionTargetIndex(cmd, targetID, urlContains, titleContains)
+	if err != nil {
+		return err
+	}
 	if poll <= 0 {
 		return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp assert in-viewport '#footer' --poll 250ms --json"})
 	}
@@ -3084,7 +3187,7 @@ func (a *app) runAssertViewportCommand(cmd *cobra.Command, query string, locator
 	}
 	ctx, cancel, assertionTimeout := a.retryingAssertionCommandContext(cmd, 5*time.Second)
 	defer cancel()
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
 		return err
 	}
@@ -3095,6 +3198,7 @@ func (a *app) runAssertViewportCommand(cmd *cobra.Command, query string, locator
 	start := time.Now()
 	got, locator, selector, err := waitForViewportAssertion(assertionCtx, session, query, locatorOpts, poll, start)
 	report := map[string]any{"ok": got.Passed, "target": pageRow(target), "assertion": got}
+	addAssertionTargetIndexEvidence(report, targetIndex)
 	if locator != nil {
 		report["locator"] = locator
 		if selector != "" {

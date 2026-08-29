@@ -230,6 +230,21 @@ The index is validated before attachment and follows the page order shown by
 `cdp pages`; zero, negative, out-of-range, and selector-conflicting values
 remain typed usage or target-selection errors.
 
+The full assertion family accepts the same page-only selector: `assert value`,
+`text`, `url`, `title`, `count`, `attribute`, `class`, `focused`, `css`,
+`role`, `name`, `aria-snapshot`, `attached`, `detached`, `visible`, `hidden`,
+`in-viewport`, `enabled`, `disabled`, `editable`, `readonly`, `checked`,
+`unchecked`, and `indeterminate`. An indexed report includes `target_index`
+beside the selected page target and retains the assertion's locator, polling,
+retry, and bounded failure diagnostics:
+
+    cdp assert text Ready --target-index 2 --timeout 5s --json
+    cdp assert checked 'Subscribe to newsletter' --by label --target-index 2 --json
+
+The assertion index is mutually exclusive with `--target`, `--url-contains`,
+and `--title-contains`; invalid and out-of-range values fail before page
+attachment.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
