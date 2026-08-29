@@ -329,7 +329,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp stop-state": {
 			"cdp stop-state classify --text 'Sign in to continue' --json",
-			"cdp stop-state classify --target <target-id> --json",
+			"cdp stop-state classify --target-index 2 --json",
 		},
 		"cdp stop-state classify": {
 			"cdp stop-state classify --text 'Sign in to continue' --json",
@@ -337,6 +337,7 @@ func commandExamples(path string) []string {
 			"cdp stop-state classify --url https://www.google.com/sorry/index --json",
 			"cdp stop-state classify --text 'Oops, something went wrong' --rule-text-contains google_page_error='Something went wrong' --json",
 			"cdp stop-state classify --target <target-id> --json",
+			"cdp stop-state classify --target-index 2 --json",
 		},
 		"cdp eval": {
 			"cdp eval 'document.title' --json",

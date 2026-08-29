@@ -1140,7 +1140,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"stop-state-classify": {
 			Name:        "stop-state-classify",
-			Description: "Conservative browser stop-state classification for supplied text/title/URL or the selected page.",
+			Description: "Conservative browser stop-state classification for supplied text/title/URL or the selected page; browser-backed page inspection accepts a page-only 1-based --target-index.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when classification completed."},
 				{Name: "status", Type: "string", Required: true, Description: "Classification status: ok or blocked."},
@@ -1156,6 +1156,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "remediation_commands", Type: "array<string>", Required: false, Description: "Safe commands an agent can run next for blocked states."},
 				{Name: "input", Type: "object", Required: true, Description: "Safe input summary with URL, title, text presence, and text byte count."},
 				{Name: "classification_ok", Type: "boolean", Required: true, Description: "True when the classifier ran successfully."},
+				{Name: "target", Type: "page", Required: false, Description: "Selected page target metadata when classification read the browser-backed page path."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "Explicit 1-based page index used for browser-backed selection; workers do not consume indexes."},
 			},
 		},
 		"page-action": {

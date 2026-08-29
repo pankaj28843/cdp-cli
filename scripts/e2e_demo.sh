@@ -405,6 +405,11 @@ if [[ "$stop_state_wait_code" -ne 1 ]]; then
   exit 1
 fi
 jq -e '.ok == false and .code == "stop_state" and .stop_state == "login_required" and .stop_state_class == "auth" and .agent_should_stop == true and .human_required == true and .data.wait.kind == "eval" and .data.wait.matched == false and .data.stop_state_result.stop_state == "login_required" and (.next_commands | any(contains("daemon status"))) and (.remediation_commands | any(contains("daemon status")))' <<<"$stop_state_wait_output" >/dev/null
+stop_state_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg url "$stop_url" '([.pages[] | select(.url == $url)][0].id) | select(type == "string" and length > 0)')"
+stop_state_target_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$stop_state_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+stop_state_index_report="$state_dir/stop-state-target-index.json"
+"$binary" stop-state classify --target-index "$stop_state_target_index" --state-dir "$state_dir/cdp-state" --json >"$stop_state_index_report"
+jq -e --arg id "$stop_state_target_id" --argjson index "$stop_state_target_index" '.ok == true and .status == "blocked" and .stop_state == "login_required" and .target.id == $id and .target_index == $index and .input.text_present == true and (.input.text_bytes > 0) and (.target | has("text") | not)' "$stop_state_index_report" >/dev/null
 "$binary" open "$app_url" --reuse --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url" '.ok == true and .reused == true and .created == false and (.page.url | contains($url))' >/dev/null
 "$binary" assert url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \

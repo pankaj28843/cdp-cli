@@ -76,6 +76,15 @@ selector evidence. Snapshot artifacts retain their existing redaction controls;
 IndexedDB dump artifacts retain their local-record warning. `storage diff` only
 compares two artifact paths and intentionally has no browser target selector.
 
+Browser-backed `stop-state classify` uses the same page-only 1-based selector:
+
+    cdp stop-state classify --target-index 2 --json
+
+Supplying `--text`, `--title`, or `--url` keeps classification browser-free;
+an explicit `--target-index` is rejected for those offline inputs rather than
+being ignored. Indexed page classification reports `.target` and
+`.target_index` while retaining the existing bounded stop-state summary.
+
 Wait on an observable condition rather than a fixed sleep:
 
     cdp wait selector main --timeout 10s --json

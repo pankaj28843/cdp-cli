@@ -49,6 +49,8 @@ type stopStateResult struct {
 	Remediation      []string           `json:"remediation_commands,omitempty"`
 	Input            map[string]any     `json:"input"`
 	ClassificationOK bool               `json:"classification_ok"`
+	Target           map[string]any     `json:"target,omitempty"`
+	TargetIndex      int                `json:"target_index,omitempty"`
 }
 
 type stopStateRuleOptions struct {
@@ -90,6 +92,10 @@ state=pattern values, for example:
   cdp stop-state classify --text "$TEXT" --rule-text-contains google_page_error="Something went wrong" --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -102,14 +108,26 @@ state=pattern values, for example:
 				Title: strings.TrimSpace(titleInput),
 				Text:  strings.TrimSpace(textInput),
 			}
+			pageBacked := input.URL == "" && input.Title == "" && input.Text == ""
+			if !pageBacked && cmd.Flags().Changed("target-index") {
+				return commandError("invalid_target_selector", "usage", "--target-index requires browser-backed classification without --text, --title, or --url", ExitUsage, []string{"cdp stop-state classify --target-index 2 --json"})
+			}
+			var target cdp.TargetInfo
 			if input.URL == "" && input.Title == "" && input.Text == "" {
-				pageInput, err := a.stopStateInputFromPage(ctx, targetID, urlContains, titleContains)
+				pageInput, pageTarget, err := a.stopStateInputFromPage(ctx, targetID, urlContains, titleContains, targetIndex)
 				if err != nil {
 					return err
 				}
 				input = pageInput
+				target = pageTarget
 			}
 			result, human := classifyStopState(input, rules)
+			if pageBacked {
+				result.Target = pageRow(target)
+				if targetIndex > 0 {
+					result.TargetIndex = targetIndex
+				}
+			}
 			return a.render(ctx, human, result)
 		},
 	}
@@ -119,19 +137,20 @@ state=pattern values, for example:
 	cmd.Flags().StringVar(&textInput, "text", "", "page text to classify without attaching to a browser")
 	cmd.Flags().StringVar(&titleInput, "title", "", "page title to classify without attaching to a browser")
 	cmd.Flags().StringVar(&urlInput, "url", "", "page URL to classify without attaching to a browser")
+	addInputTargetIndexFlag(cmd)
 	addStopStateRuleFlags(cmd, &ruleOpts)
 	return cmd
 }
 
-func (a *app) stopStateInputFromPage(ctx context.Context, targetID, urlContains, titleContains string) (stopStateInput, error) {
-	session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+func (a *app) stopStateInputFromPage(ctx context.Context, targetID, urlContains, titleContains string, targetIndex int) (stopStateInput, cdp.TargetInfo, error) {
+	session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 	if err != nil {
-		return stopStateInput{}, err
+		return stopStateInput{}, cdp.TargetInfo{}, err
 	}
 	defer session.Close(ctx)
 	input, err := stopStateInputFromSession(ctx, session)
 	if err != nil {
-		return stopStateInput{}, err
+		return stopStateInput{}, cdp.TargetInfo{}, err
 	}
 	if strings.TrimSpace(input.URL) == "" {
 		input.URL = target.URL
@@ -139,7 +158,7 @@ func (a *app) stopStateInputFromPage(ctx context.Context, targetID, urlContains,
 	if strings.TrimSpace(input.Title) == "" {
 		input.Title = target.Title
 	}
-	return input, nil
+	return input, target, nil
 }
 
 func stopStateInputFromSession(ctx context.Context, session *cdp.PageSession) (stopStateInput, error) {

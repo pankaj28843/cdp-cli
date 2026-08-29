@@ -140,6 +140,16 @@ page and `clear` remains best-effort across the existing emulation overrides:
     cdp emulate network --preset slow-3g --target-index 2 --json
     cdp emulate clear --target-index 2 --json
 
+Browser-backed `stop-state classify` also accepts the same page-only index.
+Its `--text`, `--title`, and `--url` inputs remain browser-free; an explicit
+index is rejected with those offline inputs instead of being silently ignored.
+Indexed page classification reports `.target` and `.target_index` alongside
+the existing bounded stop-state summary, while page text remains outside the
+target metadata:
+
+    cdp stop-state classify --target-index 2 --json
+    cdp stop-state classify --text 'Sign in to continue' --json
+
 Event-oriented waits (`request`, `response`, `network-idle`, `dialog`,
 `file-chooser`, `popup`, and `download`) accept the same mutually exclusive
 page-only selector. Successful indexed reports include `target_index` beside

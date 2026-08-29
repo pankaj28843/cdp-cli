@@ -29,7 +29,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp pages", want: []string{"--title-contains", "--retry transient"}},
 		{path: "cdp page cleanup", want: []string{"--browser-mode headed", "--browser-mode headless", "--close", "--root-task-id"}},
 		{path: "cdp open", want: []string{"--task-id", "--reuse", "--budget-summary"}},
-		{path: "cdp stop-state classify", want: []string{"--rule-text-contains", "--target", "Sign in to continue"}},
+		{path: "cdp stop-state classify", want: []string{"--rule-text-contains", "--target", "--target-index 2", "Sign in to continue"}},
 		{path: "cdp eval", want: []string{"--title-contains", "--target-index 2"}},
 		{path: "cdp observe", want: []string{"--target-index 2"}},
 		{path: "cdp fill", want: []string{"--target-index 2"}},
