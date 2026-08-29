@@ -305,6 +305,7 @@ func commandExamples(path string) []string {
 		},
 		"cdp page close": {
 			"cdp page close --target <target-id> --wait-gone --max-attempts 3 --json",
+			"cdp page close --target-index 2 --wait-gone --json",
 		},
 		"cdp page cleanup": {
 			"cdp --browser-mode headed page cleanup --json",

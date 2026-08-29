@@ -454,6 +454,7 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	waitGone := true
 	maxAttempts := defaultPageCloseMaxAttempts
 	cmd := &cobra.Command{
@@ -461,6 +462,12 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 		Short: "Close a page target and wait until it is gone",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			}
 			if maxAttempts <= 0 {
 				return commandError("invalid_argument", "usage", "--max-attempts must be positive", ExitUsage, []string{"cdp page close --target <target-id> --max-attempts 3 --json"})
 			}
@@ -479,7 +486,12 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			var target cdp.TargetInfo
+			if targetIndex > 0 {
+				target, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+			} else {
+				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -530,6 +542,7 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&waitGone, "wait-gone", true, "wait until target listing no longer contains the page")
 	cmd.Flags().IntVar(&maxAttempts, "max-attempts", defaultPageCloseMaxAttempts, "maximum close attempts before reporting failure")
 	return cmd

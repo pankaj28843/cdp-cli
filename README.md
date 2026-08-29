@@ -58,6 +58,7 @@ cdp --browser-mode headless daemon maintenance --json
 cdp pages --json | jq '.pages[] | {id,title,url}'
 cdp page select --url-contains example.com --json
 cdp open https://example.com --json
+cdp page close --target-index 2 --wait-gone --json
 cdp eval 'document.title' --json
 cdp observe --json
 cdp wait text Ready --timeout 10s --json

@@ -122,6 +122,12 @@ other selectors when a non-page target is intended:
 
     cdp protocol exec Runtime.evaluate --target-index 2 --params '{"expression":"document.title","returnByValue":true}' --json
 
+`cdp page close --target-index N` uses the same page-only order for a bounded
+disposable-tab close. It is mutually exclusive with `--target`,
+`--url-contains`, and `--title-contains` on the close command:
+
+    cdp page close --target-index 2 --wait-gone --json
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
