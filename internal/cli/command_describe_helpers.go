@@ -342,6 +342,7 @@ func commandExamples(path string) []string {
 			"cdp click 'Search' --target-index 2 --json",
 			"cdp click 'Search' --by role --role button --json",
 			"cdp click 'Search' --by role --role button --trial --json",
+			"cdp click 'button[aria-label^=Dictate]' --strategy dom --activate --json",
 			"cdp click 'button.covered' --force --json",
 			"cdp click '[data-testid=row]' --strategy raw-input --activate --wait-text 'Opened' --timeout 10s --json",
 			"cdp click 'Sign in' --by role --role link --wait-popup --wait-popup-url '/oauth' --json",

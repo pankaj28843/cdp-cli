@@ -2678,6 +2678,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 	if strings.Contains(req.Expression, "__cdp_cli_actionability__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")
 		action := expressionStringArg(req.Expression, "const action = ")
+		strategy := expressionStringArg(req.Expression, "const strategy = ")
 		if selector == "" {
 			selector = "main"
 		}
@@ -2698,6 +2699,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		inViewport := true
 		rect := map[string]any{"x": 10, "y": 20, "width": 600, "height": 200}
 		point := map[string]any{"x": 310, "y": 120, "hit_tag": tag, "hit_id": "", "hit_role": role, "target_matches": true}
+		domDispatchSafe := true
+		pseudoElements := map[string]any{}
 		if selector == "button#submit" {
 			tag = "button"
 			elementType = "submit"
@@ -2738,6 +2741,31 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			receivesEvents = false
 			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
 			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "overlay", "hit_role": "", "target_matches": false}
+		}
+		if selector == "button#split-control" {
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Split control"
+			receivesEvents = false
+			rect = map[string]any{"x": 10, "y": 20, "width": 200, "height": 40}
+			point = map[string]any{"x": 110, "y": 40, "hit_tag": "body", "hit_id": "", "hit_role": "", "target_matches": false}
+			pseudoElements["after"] = map[string]any{
+				"present":        true,
+				"pointer_events": "auto",
+				"hit_matches":    true,
+				"rect":           map[string]any{"x": 170, "y": 20, "width": 40, "height": 40},
+			}
+		}
+		if selector == "button#occluded" {
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Occluded control"
+			receivesEvents = false
+			domDispatchSafe = false
+			rect = map[string]any{"x": 10, "y": 20, "width": 200, "height": 40}
+			point = map[string]any{"x": 110, "y": 40, "hit_tag": "div", "hit_id": "overlay", "hit_role": "", "target_matches": false}
 		}
 		if selector == "div#drag-target" || selector == "#drag-target" {
 			tag = "div"
@@ -2900,6 +2928,9 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			supportsEditing = false
 		}
 		required := []string{"attached", "visible", "stable", "receives_events", "enabled"}
+		if action == "click" && strategy == "dom" {
+			required = []string{"attached", "visible", "stable", "dom_dispatch_safe", "enabled"}
+		}
 		switch action {
 		case "press":
 			required = []string{"attached"}
@@ -2930,21 +2961,23 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			return out
 		}
 		checks := map[string]any{
-			"attached":        check("attached", count > 0, map[bool]string{true: "", false: "selector matched no elements"}[count > 0]),
-			"visible":         check("visible", visible, map[bool]string{true: "", false: "element has empty box or hidden state"}[visible]),
-			"stable":          check("stable", stable, map[bool]string{true: "", false: "bounding box changed across animation frames"}[stable]),
-			"receives_events": check("receives_events", receivesEvents, map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]),
-			"enabled":         check("enabled", enabled, map[bool]string{true: "", false: "element is disabled"}[enabled]),
-			"editable":        check("editable", editable, map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]),
-			"in_viewport":     map[string]any{"required": false, "passed": inViewport, "skipped": true},
+			"attached":          check("attached", count > 0, map[bool]string{true: "", false: "selector matched no elements"}[count > 0]),
+			"visible":           check("visible", visible, map[bool]string{true: "", false: "element has empty box or hidden state"}[visible]),
+			"stable":            check("stable", stable, map[bool]string{true: "", false: "bounding box changed across animation frames"}[stable]),
+			"receives_events":   check("receives_events", receivesEvents, map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]),
+			"dom_dispatch_safe": check("dom_dispatch_safe", domDispatchSafe, map[bool]string{true: "", false: "DOM click fallback is not safe for this hit path"}[domDispatchSafe]),
+			"enabled":           check("enabled", enabled, map[bool]string{true: "", false: "element is disabled"}[enabled]),
+			"editable":          check("editable", editable, map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]),
+			"in_viewport":       map[string]any{"required": false, "passed": inViewport, "skipped": true},
 		}
 		passedByName := map[string]bool{
-			"attached":        count > 0,
-			"visible":         visible,
-			"stable":          stable,
-			"receives_events": receivesEvents,
-			"enabled":         enabled,
-			"editable":        editable,
+			"attached":          count > 0,
+			"visible":           visible,
+			"stable":            stable,
+			"receives_events":   receivesEvents,
+			"dom_dispatch_safe": domDispatchSafe,
+			"enabled":           enabled,
+			"editable":          editable,
 		}
 		actionable := true
 		for _, checkName := range required {
@@ -2956,6 +2989,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		} else if strings.HasPrefix(selector, tag+"#") {
 			targetElementID = strings.TrimPrefix(selector, tag+"#")
 		}
+		point["pseudo_elements"] = pseudoElements
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",

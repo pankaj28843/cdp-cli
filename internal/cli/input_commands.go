@@ -308,7 +308,7 @@ func (a *app) newClickCommand() *cobra.Command {
 				return err
 			}
 
-			actionability, err := evaluateActionability(ctx, session, selector, "click")
+			actionability, err := evaluateActionabilityWithStrategy(ctx, session, selector, "click", strategy)
 			if err != nil {
 				return err
 			}
@@ -328,7 +328,7 @@ func (a *app) newClickCommand() *cobra.Command {
 					autoScroll.Selector = args[0]
 				}
 				if scrolled.Error == nil && scrolled.After.InViewport {
-					actionability, err = evaluateActionability(ctx, session, selector, "click")
+					actionability, err = evaluateActionabilityWithStrategy(ctx, session, selector, "click", strategy)
 					if err != nil {
 						return err
 					}
@@ -536,7 +536,7 @@ func (a *app) newClickCommand() *cobra.Command {
 			}
 
 			if semanticLocatorNeedsIdentityBinding(locator) {
-				actionability, err = evaluateActionability(ctx, session, selector, "click")
+				actionability, err = evaluateActionabilityWithStrategy(ctx, session, selector, "click", strategy)
 				if err != nil {
 					return err
 				}

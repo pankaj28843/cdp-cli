@@ -1106,6 +1106,104 @@ func TestClickForceSkipsReceivesEventsJSON(t *testing.T) {
 	}
 }
 
+func TestClickDOMStrategyAcceptsRelatedSplitControlJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#split-control", "--strategy", "dom", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("DOM split-control click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Click  struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+		} `json:"click"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Required   []string `json:"required_checks"`
+			Checks     map[string]struct {
+				Required bool   `json:"required"`
+				Passed   bool   `json:"passed"`
+				Message  string `json:"message"`
+			} `json:"checks"`
+			Point struct {
+				TargetMatches  bool `json:"target_matches"`
+				PseudoElements map[string]struct {
+					PointerEvents string `json:"pointer_events"`
+					HitMatches    bool   `json:"hit_matches"`
+					Rect          struct {
+						Width  float64 `json:"width"`
+						Height float64 `json:"height"`
+					} `json:"rect"`
+				} `json:"pseudo_elements"`
+			} `json:"point"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("DOM split-control output is invalid JSON: %v", err)
+	}
+	domSafe := got.Actionability.Checks["dom_dispatch_safe"]
+	if !got.OK || got.Action != "clicked" || !got.Click.Clicked || got.Click.Strategy != "dom" || !got.Actionability.Actionable {
+		t.Fatalf("DOM split-control action = %+v, want successful same-target DOM click", got)
+	}
+	if !containsString(got.Actionability.Required, "dom_dispatch_safe") || containsString(got.Actionability.Required, "receives_events") || !domSafe.Required || !domSafe.Passed || got.Actionability.Point.TargetMatches {
+		t.Fatalf("DOM split-control actionability = %+v, want safe DOM fallback without center hit requirement", got.Actionability)
+	}
+	after := got.Actionability.Point.PseudoElements["after"]
+	if after.PointerEvents != "auto" || !after.HitMatches || after.Rect.Width <= 0 || after.Rect.Height <= 0 {
+		t.Fatalf("DOM split-control pseudo evidence = %+v, want measured interactive pseudo geometry", got.Actionability.Point.PseudoElements)
+	}
+}
+
+func TestClickDOMStrategyRejectsUnrelatedOcclusionJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#occluded", "--strategy", "dom", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("DOM occluded click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Click struct {
+				Clicked bool `json:"clicked"`
+			} `json:"click"`
+			Actionability struct {
+				Checks map[string]struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Message  string `json:"message"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("DOM occluded output is invalid JSON: %v", err)
+	}
+	domSafe := got.Data.Actionability.Checks["dom_dispatch_safe"]
+	if got.OK || got.Code != "actionability_failed" || got.Data.Click.Clicked || !domSafe.Required || domSafe.Passed || domSafe.Message == "" {
+		t.Fatalf("DOM occluded actionability = %+v, want safe rejection with explicit DOM-fallback failure", got)
+	}
+	if got.Data.Actionability.Checks["receives_events"].Required {
+		t.Fatalf("DOM occluded actionability should report receives_events as diagnostic, not its blocker: %+v", got.Data.Actionability.Checks)
+	}
+}
+
 func TestClickRawInputVerifiedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterTitle": "Ready Page", "afterURL": "https://example.test/ready"},

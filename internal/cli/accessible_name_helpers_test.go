@@ -18,3 +18,12 @@ func TestLocatorAndActionabilityShareAccessibleNameAlgorithm(t *testing.T) {
 		}
 	}
 }
+
+func TestActionabilityProbeHasBoundedHitDiagnostics(t *testing.T) {
+	expression := actionabilityExpression("button", "click")
+	for _, marker := range []string{"setTimeout", "elementsFromPoint", "dom_dispatch_safe", "pseudo_elements"} {
+		if !strings.Contains(expression, marker) {
+			t.Fatalf("actionability expression missing bounded diagnostic marker %q", marker)
+		}
+	}
+}
