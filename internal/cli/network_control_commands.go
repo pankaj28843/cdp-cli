@@ -46,6 +46,7 @@ type networkMockRule struct {
 
 func (a *app) newNetworkBlockCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	var patterns []string
 	var duration time.Duration
 	cmd := &cobra.Command{
@@ -53,13 +54,16 @@ func (a *app) newNetworkBlockCommand() *cobra.Command {
 		Short: "Temporarily block explicit request URL patterns",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			patterns = normalizedNonEmptyStrings(patterns)
 			if len(patterns) == 0 || len(patterns) > maxNetworkControlPatterns || duration <= 0 {
 				return commandError("usage", "usage", fmt.Sprintf("--pattern is required (maximum %d) and --duration must be positive", maxNetworkControlPatterns), ExitUsage, []string{"cdp network block --pattern '*://*/analytics/*' --duration 10s --json"})
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
 			defer cancel()
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -94,6 +98,9 @@ func (a *app) newNetworkBlockCommand() *cobra.Command {
 				"control":       map[string]any{"kind": "block", "duration": durationString(duration), "bounded": true},
 				"next_commands": []string{"cdp network --failed --wait 2s --json", "cdp network block --help", "cdp doctor --json"},
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if collectErr != nil {
 				return commandErrorWithData("network_control_failed", "connection", fmt.Sprintf("block requests for target %s: %v", target.TargetID, collectErr), ExitConnection, toStringSlice(report["next_commands"]), report)
 			}
@@ -108,11 +115,13 @@ func (a *app) newNetworkBlockCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based existing page target index; workers do not consume indexes")
 	return cmd
 }
 
 func (a *app) newNetworkMockCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	var rawRules []string
 	var duration time.Duration
 	cmd := &cobra.Command{
@@ -120,6 +129,9 @@ func (a *app) newNetworkMockCommand() *cobra.Command {
 		Short: "Temporarily fulfill matching requests with bounded mock responses",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			rules, err := parseNetworkMockRules(rawRules)
 			if err != nil || duration <= 0 {
 				message := "--duration must be positive"
@@ -130,7 +142,7 @@ func (a *app) newNetworkMockCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
 			defer cancel()
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -173,6 +185,9 @@ func (a *app) newNetworkMockCommand() *cobra.Command {
 				"control":       map[string]any{"kind": "mock", "duration": durationString(duration), "bounded": true},
 				"next_commands": []string{"cdp network capture --wait 2s --redact safe --json", "cdp network mock --help", "cdp doctor --json"},
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if collectErr != nil {
 				return commandErrorWithData("network_control_failed", "connection", fmt.Sprintf("mock requests for target %s: %v", target.TargetID, collectErr), ExitConnection, toStringSlice(report["next_commands"]), report)
 			}
@@ -187,6 +202,7 @@ func (a *app) newNetworkMockCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based existing page target index; workers do not consume indexes")
 	return cmd
 }
 

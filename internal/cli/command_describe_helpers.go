@@ -573,9 +573,11 @@ func commandExamples(path string) []string {
 		},
 		"cdp network block": {
 			"cdp network block --pattern '*://*/analytics/*' --duration 10s --url-contains localhost --json",
+			"cdp network block --target-index 2 --pattern '*://*/analytics/*' --duration 10s --json",
 		},
 		"cdp network mock": {
 			`cdp network mock --rule '{"url_pattern":"*://*/api/config","method":"GET","status":200,"body":"{\"enabled\":true}","max_matches":1}' --duration 10s --json`,
+			`cdp network mock --target-index 2 --rule '{"url_pattern":"*://*/api/config","method":"GET","status":200,"body":"{\"enabled\":true}","max_matches":1}' --duration 10s --json`,
 		},
 		"cdp storage": {
 			"cdp storage list --target-index 2 --include localStorage,sessionStorage,cookies --json",

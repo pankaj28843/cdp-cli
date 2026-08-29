@@ -241,6 +241,21 @@ These observers reject zero, negative, out-of-range, and selector-conflicting
 indexes before page attachment, and the index follows the page-only order
 shown by `cdp pages`, excluding workers and other non-page targets.
 
+The bounded network controls use the same page-only selector. `network block`
+clears its URL rules and disables Network on exit; `network mock` releases every
+paused request before disabling Fetch, including fail-open cleanup after an
+action error. An indexed control reports `.target_index` but does not create,
+close, or persist a page, and rule summaries never include mock bodies or
+header values:
+
+    cdp network block --target-index 2 --pattern '*://*/analytics/*' --duration 10s --json
+    cdp network mock --target-index 2 --rule '{"url_pattern":"*://*/api/config","status":200,"body":"{\"enabled\":true}","max_matches":1}' --duration 10s --json
+
+These controls reject zero, negative, out-of-range, and selector-conflicting
+indexes before Network/Fetch interception is enabled. Workers do not consume
+indexes; use `--target`, `--url-contains`, or `--title-contains` when an
+explicit non-index selector is more appropriate.
+
 Event-oriented waits use the same page-only selector for `request`, `response`,
 `network-idle`, `dialog`, `file-chooser`, `popup`, and `download`. Indexed
 success reports include `target_index` beside the resolved target:

@@ -2009,10 +2009,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"network-block": {
 			Name:        "network-block",
-			Description: "Bounded request blocking with explicit URL rules and independent cleanup.",
+			Description: "Bounded request blocking with explicit URL rules and independent cleanup for a selected page; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when blocking and cleanup completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "matched_count", Type: "number", Required: true, Description: "Requests observed as blocked during the bounded window."},
 				{Name: "rules", Type: "array<network_control_rule>", Required: true, Description: "Explicit URL pattern summaries."},
 				{Name: "cleanup", Type: "network_control_cleanup", Required: true, Description: "Blocked URL clearing and Network.disable state, including cleanup errors."},
@@ -2022,10 +2023,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"network-mock": {
 			Name:        "network-mock",
-			Description: "Bounded Fetch response mocking that resolves every paused request and disables interception on exit.",
+			Description: "Bounded Fetch response mocking for a selected page that resolves every paused request and disables interception on exit; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when mocking and cleanup completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "matched_count", Type: "number", Required: true, Description: "Requests fulfilled by bounded rules."},
 				{Name: "rules", Type: "array<network_control_rule>", Required: true, Description: "Rule summaries without response body or header values."},
 				{Name: "actions", Type: "object", Required: true, Description: "Fulfilled, continued, fail-open continued, and failed action counts."},

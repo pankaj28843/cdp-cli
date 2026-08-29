@@ -109,6 +109,8 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp network", want: []string{"--failed", "--target-index 2"}},
 		{path: "cdp network capture", want: []string{"--redact", "--target-index 2"}},
 		{path: "cdp network websocket", want: []string{"--include-payloads", "--target-index 2"}},
+		{path: "cdp network block", want: []string{"--pattern", "--duration", "--target-index 2"}},
+		{path: "cdp network mock", want: []string{"--rule", "--duration", "--target-index 2"}},
 		{path: "cdp wait request", want: []string{"--match-url", "--target-index 2"}},
 		{path: "cdp wait response", want: []string{"--status", "--target-index 2"}},
 		{path: "cdp wait network-idle", want: []string{"--idle", "--target-index 2"}},

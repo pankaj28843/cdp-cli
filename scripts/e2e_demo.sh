@@ -28,6 +28,8 @@ generic_stream_pid=""
 interaction_pid=""
 future_interaction_pid=""
 dialog_wait_pid=""
+network_block_pid=""
+network_mock_pid=""
 
 require_artifact() {
   local path=$1
@@ -83,6 +85,14 @@ cleanup() {
   if [[ -n "$dialog_wait_pid" ]]; then
     kill "$dialog_wait_pid" 2>/dev/null || true
     wait "$dialog_wait_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$network_block_pid" ]]; then
+    kill "$network_block_pid" 2>/dev/null || true
+    wait "$network_block_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$network_mock_pid" ]]; then
+    kill "$network_mock_pid" 2>/dev/null || true
+    wait "$network_mock_pid" 2>/dev/null || true
   fi
   if [[ -n "$chrome_pid" ]]; then
     "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
@@ -687,6 +697,37 @@ sleep 0.5
 wait "$network_pid"
 require_artifact "$network_output"
 jq -e --arg probe "$probe_id" '.ok == true and (.requests[] | select((.url | contains($probe)) and .status == 503))' "$network_output" >/dev/null
+network_control_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg url "$app_url" '([.pages[] | select(.url | startswith($url))][0].id) | select(type == "string" and length > 0)')"
+network_control_target_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$network_control_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+network_block_probe="$(date +%s%N)"
+network_block_output="$state_dir/network-block-target-index.json"
+"$binary" network block --target-index "$network_control_target_index" --pattern '*://*/api/block-control*' --duration 2s --state-dir "$state_dir/cdp-state" --json >"$network_block_output" &
+network_block_pid=$!
+sleep 0.3
+"$binary" eval "fetch('$app_url/api/block-control?probe=$network_block_probe').then(() => 'unexpected').catch(() => 'blocked')" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value == "blocked"' >/dev/null
+wait "$network_block_pid"
+network_block_pid=""
+jq -e --arg id "$network_control_target_id" --argjson index "$network_control_target_index" '.ok == true and .target.id == $id and .target_index == $index and .matched_count >= 1 and .cleanup.complete == true and .cleanup.blocked_urls_cleared == true and .cleanup.network_disabled == true' "$network_block_output" >/dev/null
+mock_rule='{"url_pattern":"*://*/api/mock-control*","method":"GET","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"mocked\":true}","max_matches":1}'
+network_mock_probe="$(date +%s%N)"
+network_mock_output="$state_dir/network-mock-target-index.json"
+"$binary" network mock --target-index "$network_control_target_index" --rule "$mock_rule" --duration 2s --state-dir "$state_dir/cdp-state" --json >"$network_mock_output" &
+network_mock_pid=$!
+sleep 0.3
+"$binary" eval "fetch('$app_url/api/mock-control?probe=$network_mock_probe').then(r => r.json())" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value.mocked == true' >/dev/null
+wait "$network_mock_pid"
+network_mock_pid=""
+if ! jq -e --arg id "$network_control_target_id" --argjson index "$network_control_target_index" '.ok == true and .target.id == $id and .target_index == $index and .matched_count == 1 and .actions.fulfilled == 1 and .cleanup.complete == true and .cleanup.fetch_disabled == true and (.cleanup.pending_released // 0) == 0' "$network_mock_output" >/dev/null; then
+  echo "indexed network mock assertion failed:" >&2
+  sed -n '1,160p' "$network_mock_output" >&2
+  exit 1
+fi
+if rg -q '"mocked":true' "$network_mock_output"; then
+  echo "network mock metadata leaked the synthetic response body" >&2
+  exit 1
+fi
 request_probe="$(date +%s%N)"
 wait_request_output="$state_dir/wait-request.json"
 "$binary" wait request --match-url "$request_probe" --method GET --resource-type Fetch --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_request_output" &
