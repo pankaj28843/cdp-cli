@@ -1631,6 +1631,10 @@ func (a *app) repairHeadlessDaemonForBrowserCommand(ctx context.Context, storeDi
 }
 
 func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titleContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
+	return a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, 0)
+}
+
+func (a *app) attachPageSessionWithIndex(ctx context.Context, targetID, urlContains, titleContains string, targetIndex int) (*cdp.PageSession, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserCDPClient(ctx)
 	if err != nil {
 		return nil, cdp.TargetInfo{}, commandError(
@@ -1640,6 +1644,25 @@ func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titl
 			ExitConnection,
 			a.connectionRemediationCommands(),
 		)
+	}
+	if targetIndex > 0 {
+		target, err := a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, cdp.TargetInfo{}, err
+		}
+		session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, target, commandError(
+				"connection_failed",
+				"connection",
+				fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+				ExitConnection,
+				[]string{"cdp pages --json", "cdp doctor --json"},
+			)
+		}
+		return session, target, nil
 	}
 	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 		session, target, handled, err := a.attachExactPageSession(ctx, client, closeClient, targetID)

@@ -114,6 +114,13 @@ Use cdp events stream for bounded JSONL observation with isolated event
 subscriptions. Use cdp protocol search, cdp protocol examples, and cdp
 protocol exec when a focused CDP escape hatch is more appropriate than a
 high-level wrapper. The daemon remains the browser boundary for both paths.
+For target-scoped raw execution, `--target-index N` selects the 1-based page
+target order used by `cdp pages`; it is mutually exclusive with
+`--target`, `--url-contains`, `--title-contains`, and
+`--target-type`. Omit it to preserve browser-scoped execution, or use the
+other selectors when a non-page target is intended:
+
+    cdp protocol exec Runtime.evaluate --target-index 2 --params '{"expression":"document.title","returnByValue":true}' --json
 
 ## Lifecycle and safety
 

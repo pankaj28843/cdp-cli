@@ -880,6 +880,15 @@ if ! jq -e --arg path "$state_dir/protocol-shot.png" '.ok == true and .artifact.
   exit 1
 fi
 require_artifact "$state_dir/protocol-shot.png"
+protocol_index_open_output="$("$binary" open "$app_url?protocol-index=1" --new-tab --run-id demo-run --task-id protocol-index --root-task-id protocol-index --state-dir "$state_dir/cdp-state" --json)"
+protocol_index_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$protocol_index_open_output")"
+protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+test "$protocol_index" -gt 0
+protocol_index_report="$state_dir/protocol-target-index.json"
+"$binary" protocol exec Runtime.evaluate --target-index "$protocol_index" --params '{"expression":"document.title","returnByValue":true}' --state-dir "$state_dir/cdp-state" --json >"$protocol_index_report"
+jq -e --arg id "$protocol_index_target_id" '.ok == true and .scope == "target" and .target.id == $id and (.session_id | type == "string" and length > 0) and .method == "Runtime.evaluate"' "$protocol_index_report" >/dev/null
+"$binary" page close --target "$protocol_index_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" '.ok == true and .action == "closed" and .target.id == $id' >/dev/null
 
 if [[ -n "${CDP_E2E_REAL_BUNDLE_URL:-}" ]]; then
   real_bundle_dir="$state_dir/real-bundle"

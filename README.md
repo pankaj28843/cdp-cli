@@ -96,9 +96,15 @@ cdp protocol search screenshot --json
 cdp protocol examples Page.captureScreenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
+cdp protocol exec Runtime.evaluate --target-index 2 --params '{"expression":"document.title","returnByValue":true}' --json
 cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains chrome-extension:// --params '{"expression":"Object.keys(globalThis).slice(0,50)","returnByValue":true}' --json
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
 ```
+
+For target-scoped raw execution, `--target-index N` selects the 1-based page
+order shown by `cdp pages`. It cannot be combined with `--target`,
+`--url-contains`, `--title-contains`, or `--target-type`; omit it for
+browser-scoped execution or use the other selectors for non-page targets.
 
 Multi-engine SERP research runs engines concurrently and reuses one workflow tab
 lane per engine, so large query files avoid opening a fresh tab for every

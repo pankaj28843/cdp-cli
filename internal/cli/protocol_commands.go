@@ -435,6 +435,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	var targetType string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var savePath string
 	var validate bool
 	cmd := &cobra.Command{
@@ -442,6 +443,12 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 		Short: "Execute a raw browser-scoped or target-scoped CDP method",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, --title-contains, or --target-type", ExitUsage, []string{"cdp pages --json"})
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -458,11 +465,13 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
 			}
-			if targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "" {
+			if targetIndex > 0 || targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "" {
 				var session *cdp.PageSession
 				var target cdp.TargetInfo
 				var err error
-				if strings.TrimSpace(targetType) == "" {
+				if targetIndex > 0 {
+					session, target, err = a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
+				} else if strings.TrimSpace(targetType) == "" {
 					session, target, err = a.attachPageSession(ctx, targetID, urlContains, titleContains)
 				} else {
 					session, target, err = a.attachProtocolTargetSession(ctx, targetID, urlContains, titleContains, targetType)
@@ -546,6 +555,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetType, "target-type", "", "target type to include when selecting a target, such as page or service_worker")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first matching target whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first matching target whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index for target-scoped execution")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
 	cmd.Flags().BoolVar(&validate, "validate", false, "validate params against live protocol metadata before executing")
 	return cmd
