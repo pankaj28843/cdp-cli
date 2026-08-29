@@ -2361,6 +2361,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when workflow collection completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Error and warning console/log messages."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, truncation, and suggested next commands."},
 			},
@@ -2389,6 +2390,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the action-capture workflow completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow timings, included collectors, opt-in response-body kinds, byte limit, optional URL substring filter, and collector errors."},
 				{Name: "action", Type: "object", Required: true, Description: "Declared action and nested click/type/insert-text/press result."},
 				{Name: "requests", Type: "array<network_capture_request>", Required: false, Description: "Network records observed during the action window; response bodies are absent unless --include-bodies explicitly selects their MIME kind."},
@@ -2459,6 +2461,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when input, optional submit, and any requested verification completed and matched."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: submit_search for completed workflows or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Final selected page target metadata after input, submit, and any requested wait."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "before_target", Type: "page", Required: true, Description: "Selected page target metadata before the workflow ran."},
 				{Name: "after_target", Type: "page", Required: true, Description: "Selected page target metadata refreshed after the workflow."},
 				{Name: "final_target", Type: "page", Required: true, Description: "Alias of after_target for jq-friendly final URL/title extraction."},
@@ -2488,6 +2491,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when workflow collection completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Failed request rows."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, truncation, and suggested next commands."},
 			},

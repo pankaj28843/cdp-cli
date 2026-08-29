@@ -163,8 +163,10 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp workflow hacker-news collect", want: []string{"news.ycombinator.com/item?id", "--limit 500"}},
 		{path: "cdp workflow verify", want: []string{"workflow verify"}},
 		{path: "cdp workflow debug-bundle", want: []string{"debug-bundle"}},
-		{path: "cdp workflow action-capture", want: []string{"--evidence-out-dir", "--include-bodies json,text", "--body-url-contains /api/"}},
-		{path: "cdp workflow submit-search", want: []string{"--wait-url-contains", "--suggestion", "--submit none", "--wait-load-state", "--wait-response"}},
+		{path: "cdp workflow action-capture", want: []string{"--evidence-out-dir", "--include-bodies json,text", "--body-url-contains /api/", "--target-index 2"}},
+		{path: "cdp workflow console-errors", want: []string{"--target-index 2"}},
+		{path: "cdp workflow network-failures", want: []string{"--target-index 2"}},
+		{path: "cdp workflow submit-search", want: []string{"--wait-url-contains", "--suggestion", "--submit none", "--wait-load-state", "--wait-response", "--target-index 2"}},
 	}
 
 	for _, tt := range tests {

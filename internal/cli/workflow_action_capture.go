@@ -25,6 +25,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var include string
 	var action string
 	var actionJSON string
@@ -48,6 +49,9 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 		Short: "Capture browser evidence around one declared page action",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			if waitBefore < 0 || waitAfter < 0 || limit < 0 || a11yDepth < 0 || a11yLimit < 0 || bodyLimit <= 0 {
 				return commandError("usage", "usage", "--wait-before, --wait-after, --limit, --a11y-depth, and --a11y-limit must be non-negative; --body-limit must be positive", ExitUsage, []string{"cdp workflow action-capture --action press:Enter --body-limit 262144 --json"})
 			}
@@ -91,7 +95,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -205,6 +209,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 				report["evidence"] = evidenceReport
 				report["local_artifact_warning"] = actionCaptureArtifactWarning(len(bodyKinds) > 0)
 			}
+			addWorkflowTargetIndex(report, targetIndex)
 			if len(artifacts) > 0 {
 				report["artifacts"] = artifacts
 			}
@@ -305,6 +310,7 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&include, "include", "network,websocket,console,dom,text", "comma-separated collectors: network,websocket,console,dom,text,a11y,screenshot,all")
 	cmd.Flags().StringVar(&action, "action", "", "action shorthand: click:<selector>, type:<text>, insert-text:<text>, or press:<key>")
 	cmd.Flags().StringVar(&actionJSON, "action-json", "", "JSON action object with type, selector, text/value, or key")

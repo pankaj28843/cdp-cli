@@ -71,6 +71,17 @@ cookie scope and may be combined with `--target-index`, while `--target`,
     cdp storage cache list --target-index 2 --cache app-cache --json
     cdp storage service-workers list --target-index 2 --json
 
+The existing-page workflows use that same page-only selector:
+
+    cdp workflow action-capture --target-index 2 --action press:Enter --selector 'input[name=q]' --json
+    cdp workflow console-errors --target-index 2 --wait 2s --json
+    cdp workflow network-failures --target-index 2 --wait 2s --json
+    cdp workflow submit-search 'Search' 'agentic engineering' --submit none --target-index 2 --json
+
+Workers do not consume indexes. Each workflow rejects an index combined with
+an explicit target, URL filter, or title filter before attaching, and reports
+the selected index as `target_index` in JSON.
+
 Indexed storage reports add `.target_index` without copying storage values into
 selector evidence. Snapshot artifacts retain their existing redaction controls;
 IndexedDB dump artifacts retain their local-record warning. `storage diff` only
