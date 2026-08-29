@@ -1342,12 +1342,16 @@ func (a *app) newA11yCommand() *cobra.Command {
 
 func (a *app) newA11yTreeCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	var depth, limit int
 	var ignored bool
 	cmd := &cobra.Command{Use: "tree", Short: "Return a bounded accessibility tree", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1356,11 +1360,16 @@ func (a *app) newA11yTreeCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return a.render(ctx, fmt.Sprintf("a11y\t%d nodes", len(nodes)), map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated})
+		report := map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, fmt.Sprintf("a11y\t%d nodes", len(nodes)), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().IntVar(&depth, "depth", 4, "maximum tree depth to return")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum nodes to return")
 	cmd.Flags().BoolVar(&ignored, "include-ignored", false, "include ignored accessibility nodes")
@@ -1369,11 +1378,15 @@ func (a *app) newA11yTreeCommand() *cobra.Command {
 
 func (a *app) newA11yFindCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, role, name string
+	var targetIndex int
 	var limit int
 	cmd := &cobra.Command{Use: "find", Short: "Find accessibility nodes by role and accessible name", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1383,11 +1396,16 @@ func (a *app) newA11yFindCommand() *cobra.Command {
 			return err
 		}
 		nodes = filterA11yNodes(nodes, role, name)
-		return a.render(ctx, fmt.Sprintf("a11y-find\t%d nodes", len(nodes)), map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated})
+		report := map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, fmt.Sprintf("a11y-find\t%d nodes", len(nodes)), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&role, "role", "", "accessibility role to match")
 	cmd.Flags().StringVar(&name, "name", "", "accessible name substring to match")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum nodes to inspect")
@@ -1396,10 +1414,14 @@ func (a *app) newA11yFindCommand() *cobra.Command {
 
 func (a *app) newA11yNodeCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{Use: "node <selector>", Short: "Inspect accessibility information for a CSS selector", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1408,19 +1430,28 @@ func (a *app) newA11yNodeCommand() *cobra.Command {
 		if err := evaluateJSONValue(ctx, session, a11yNodeExpression(args[0]), "a11y node", &result); err != nil {
 			return err
 		}
-		return a.render(ctx, "a11y node", map[string]any{"ok": true, "target": pageRow(target), "node": result})
+		report := map[string]any{"ok": true, "target": pageRow(target), "node": result}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, "a11y node", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
 func (a *app) newA11ySnapshotCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, selector string
+	var targetIndex int
 	var depth, limit int
 	var includeIgnored bool
 	cmd := &cobra.Command{Use: "snapshot", Short: "Generate a bounded ARIA snapshot from the accessibility tree", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		if depth < 0 {
 			return commandError("usage", "usage", "--depth must be non-negative", ExitUsage, []string{"cdp a11y snapshot --depth 4 --json"})
 		}
@@ -1429,7 +1460,7 @@ func (a *app) newA11ySnapshotCommand() *cobra.Command {
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1448,11 +1479,15 @@ func (a *app) newA11ySnapshotCommand() *cobra.Command {
 			"text":      snapshot.Text,
 			"truncated": snapshot.Truncated,
 		}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
 		return a.render(ctx, fmt.Sprintf("a11y-snapshot\t%d lines", snapshot.LineCount), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector that names the intended snapshot scope")
 	cmd.Flags().IntVar(&depth, "depth", 4, "maximum accessibility tree depth to include")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum snapshot lines to return")

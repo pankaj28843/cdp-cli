@@ -126,6 +126,12 @@ resolved page target evidence. The index is 1-based and follows the page-only
 order shown by `cdp pages`, so worker and other non-page targets do not shift
 the selection.
 
+Read-only inspection commands use the same page-only selector: `frames`,
+`locator find`, `dom query`, `css inspect`, `layout overflow`, and
+`a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`. Successful indexed
+reports include `target_index`; invalid, conflicting, and out-of-range values
+fail before page attachment or inspection.
+
 Multi-engine SERP research runs engines concurrently and reuses one workflow tab
 lane per engine, so large query files avoid opening a fresh tab for every
 engine/query/page combination.

@@ -3593,6 +3593,21 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	if strings.Contains(req.Expression, `el.getAttribute("aria-label")`) {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"selector": "button",
+					"found":    true,
+					"role":     "button",
+					"name":     "Save changes",
+					"disabled": false,
+					"ignored":  false,
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_layout_overflow__") {
 		return map[string]any{
 			"result": map[string]any{

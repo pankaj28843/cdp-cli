@@ -157,6 +157,21 @@ Each command rejects `--target-index` together with `--target`,
 `--url-contains`, or `--title-contains`; zero, negative, and out-of-range
 indexes fail before page attachment.
 
+The same explicit page selector is available on the read-only inspection
+commands `frames`, `locator find`, `dom query`, `css inspect`, `layout
+overflow`, and `a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`.
+Successful indexed reports include `target_index` beside the resolved target;
+the same invalid, conflicting, and out-of-range checks happen before
+inspection:
+
+    cdp frames --target-index 2 --json
+    cdp locator find Save --target-index 2 --json
+    cdp dom query button --target-index 2 --json
+    cdp css inspect main --target-index 2 --json
+    cdp layout overflow --target-index 2 --json
+    cdp a11y tree --target-index 2 --json
+    cdp a11y snapshot --target-index 2 --json
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable

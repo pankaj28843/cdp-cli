@@ -397,19 +397,23 @@ func (a *app) newDOMQueryCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var limit int
 	cmd := &cobra.Command{
 		Use:   "query <selector>",
 		Short: "Return DOM node summaries for a CSS selector",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp dom query button --limit 20 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -426,17 +430,22 @@ func (a *app) newDOMQueryCommand() *cobra.Command {
 			for _, node := range result.Nodes {
 				lines = append(lines, fmt.Sprintf("%s\t%s\t%s", node.UID, node.Tag, node.Text))
 			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+			report := map[string]any{
 				"ok":     true,
 				"target": pageRow(target),
 				"query":  result,
 				"nodes":  result.Nodes,
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum number of nodes to return; use 0 for no limit")
 	return cmd
 }
@@ -454,15 +463,19 @@ func (a *app) newCSSInspectCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{
 		Use:   "inspect <selector>",
 		Short: "Return computed style and box data for the first matching element",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -479,16 +492,21 @@ func (a *app) newCSSInspectCommand() *cobra.Command {
 			if result.Found {
 				human = fmt.Sprintf("%s\tdisplay=%s\tposition=%s", result.Tag, result.Styles["display"], result.Styles["position"])
 			}
-			return a.render(ctx, human, map[string]any{
+			report := map[string]any{
 				"ok":      true,
 				"target":  pageRow(target),
 				"inspect": result,
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
@@ -505,6 +523,7 @@ func (a *app) newLayoutOverflowCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var selector string
 	var limit int
 	cmd := &cobra.Command{
@@ -512,13 +531,16 @@ func (a *app) newLayoutOverflowCommand() *cobra.Command {
 		Short: "Detect elements whose scroll size exceeds their client box",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp layout overflow --limit 20 --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -535,17 +557,22 @@ func (a *app) newLayoutOverflowCommand() *cobra.Command {
 			for _, item := range result.Items {
 				lines = append(lines, fmt.Sprintf("%s\t%s\t%d>%d", item.UID, item.Tag, item.ScrollWidth, item.ClientWidth))
 			}
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+			report := map[string]any{
 				"ok":       true,
 				"target":   pageRow(target),
 				"overflow": result,
 				"items":    result.Items,
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&selector, "selector", "body *", "CSS selector to scan for overflow")
 	cmd.Flags().IntVar(&limit, "limit", 25, "maximum number of overflowing elements to return; use 0 for no limit")
 	return cmd

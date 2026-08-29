@@ -382,6 +382,7 @@ func commandExamples(path string) []string {
 			"cdp locator find Search --by label --json",
 			"cdp locator find Submit --by role --role button --json",
 			"cdp locator find cdp_demo --by test-id --test-id-attr data-testid --json",
+			"cdp locator find Search --target-index 2 --json",
 		},
 		"cdp fill": {
 			"cdp fill input[name='email'] user@example.com --json",
@@ -422,6 +423,7 @@ func commandExamples(path string) []string {
 		"cdp frames": {
 			"cdp frames --json",
 			"cdp frames --url-contains localhost --json",
+			"cdp frames --target-index 2 --json",
 		},
 		"cdp html": {
 			"cdp html main --max-chars 4000 --json",
@@ -432,14 +434,17 @@ func commandExamples(path string) []string {
 		"cdp dom query": {
 			"cdp dom query button --json",
 			"cdp dom query '[role=\"button\"]' --limit 20 --json",
+			"cdp dom query button --target-index 2 --json",
 		},
 		"cdp css inspect": {
 			"cdp css inspect main --json",
 			"cdp css inspect '.panel' --url-contains localhost --json",
+			"cdp css inspect main --target-index 2 --json",
 		},
 		"cdp layout overflow": {
 			"cdp layout overflow --json",
 			"cdp layout overflow --selector 'body *' --limit 20 --json",
+			"cdp layout overflow --target-index 2 --json",
 		},
 		"cdp wait text": {
 			"cdp wait text Ready --timeout 10s --json",
@@ -833,10 +838,10 @@ func commandExamples(path string) []string {
 	examples["cdp permissions set"] = []string{"cdp permissions set notifications --setting denied --origin https://example.com --json", "cdp permissions set geolocation --setting prompt --origin https://example.com --json"}
 	examples["cdp permissions reset"] = []string{"cdp permissions reset --json"}
 	examples["cdp a11y"] = []string{"cdp a11y tree --depth 4 --json"}
-	examples["cdp a11y tree"] = []string{"cdp a11y tree --target <target-id> --depth 4 --json"}
-	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json"}
-	examples["cdp a11y node"] = []string{"cdp a11y node button[type=submit] --json"}
-	examples["cdp a11y snapshot"] = []string{"cdp a11y snapshot --selector body --depth 4 --json", "cdp a11y snapshot --limit 20 --json"}
+	examples["cdp a11y tree"] = []string{"cdp a11y tree --target <target-id> --depth 4 --json", "cdp a11y tree --target-index 2 --json"}
+	examples["cdp a11y find"] = []string{"cdp a11y find --role button --name Save --json", "cdp a11y find --role button --target-index 2 --json"}
+	examples["cdp a11y node"] = []string{"cdp a11y node button[type=submit] --json", "cdp a11y node button --target-index 2 --json"}
+	examples["cdp a11y snapshot"] = []string{"cdp a11y snapshot --selector body --depth 4 --json", "cdp a11y snapshot --limit 20 --json", "cdp a11y snapshot --target-index 2 --json"}
 	examples["cdp assert aria-snapshot"] = []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --selector body --json", "cdp assert aria-snapshot --file tmp/aria-snapshot.txt --mode exact --json"}
 	examples["cdp perf summary"] = []string{"cdp perf summary --duration 5s --json"}
 	examples["cdp memory counters"] = []string{"cdp memory counters --json"}
