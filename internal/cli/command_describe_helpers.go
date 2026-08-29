@@ -846,9 +846,9 @@ func commandExamples(path string) []string {
 	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json", "cdp file 'Upload file' tmp/upload.txt --by label --target-index 2 --trial --json"}
 	examples["cdp file chooser"] = []string{"cdp file chooser 247 tmp/upload.txt --target <target-id> --trial --json", "cdp file chooser 247 tmp/first.epub tmp/second.epub --target-index 2 --json"}
 	examples["cdp scroll"] = []string{"cdp scroll '#results' --json", "cdp scroll '#results' --target-index 2 --json", "cdp scroll 'Load more' --by role --role button --trial --json", "cdp scroll 'footer' --block end --inline nearest --json"}
-	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --json"}
-	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}
-	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json"}
+	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --target-index 2 --json"}
+	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog accept --prompt-text yes --target-index 2 --json"}
+	examples["cdp dialog dismiss"] = []string{"cdp dialog dismiss --json", "cdp dialog dismiss --target-index 2 --json"}
 	examples["cdp emulate"] = []string{"cdp emulate viewport --preset mobile --json", "cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json", "cdp emulate timezone --timezone-id UTC --json", "cdp emulate locale --locale de-DE --json", "cdp emulate color-scheme --scheme dark --json", "cdp emulate network --preset slow-3g --json"}
 	examples["cdp emulate viewport"] = []string{"cdp emulate viewport --width 390 --height 844 --mobile --dpr 1 --json", "cdp emulate viewport --preset iphone-12 --json"}
 	examples["cdp emulate clear"] = []string{"cdp emulate clear --json"}

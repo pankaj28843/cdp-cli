@@ -45,6 +45,9 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 	catalog := schemaCatalog()
 	critical := []string{
 		"guide",
+		"form-values",
+		"form-get",
+		"dialog",
 		"describe",
 		"doctor",
 		"doctor-capabilities",

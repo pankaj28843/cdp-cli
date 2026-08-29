@@ -1329,6 +1329,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "control", Type: "form_control", Required: true, Description: "Bounded value, identity, visibility, and editability metadata for the first matched control."},
 			},
 		},
+		"dialog": {
+			Name:        "dialog",
+			Description: "Accept or dismiss the currently open JavaScript dialog on a selected page; accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when Page.handleJavaScriptDialog completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "dialog", Type: "dialog_action_result", Required: true, Description: "Action, accepted state, and whether prompt text was supplied."},
+			},
+		},
 		"select": {
 			Name:        "select",
 			Description: "Set the selected option on the first matching select control on an optionally indexed page with --target-index after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-select state.",

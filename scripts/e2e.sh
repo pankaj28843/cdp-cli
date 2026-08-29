@@ -712,7 +712,17 @@ done
 "$binary" schema permissions --json | jq -e '.ok == true and .schema.name == "permissions" and (.schema.fields | map(.name) | index("permissions")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" describe --command "emulate cpu" --json | jq -e '.ok == true and .commands.name == "cpu" and (.commands.examples | any(contains("--rate")))' >/dev/null
 "$binary" describe --command "emulate network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--preset slow-3g"))) and (.commands.flags[] | select(.name == "download-kbps"))' >/dev/null
-"$binary" describe --command "dialog accept" --json | jq -e '.ok == true and .commands.name == "accept" and (.commands.flags[] | select(.name == "prompt-text"))' >/dev/null
+"$binary" describe --command "dialog accept" --json | jq -e '.ok == true and .commands.name == "accept" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "prompt-text")) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" describe --command "dialog dismiss" --json | jq -e '.ok == true and .commands.name == "dismiss" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" schema dialog --json | jq -e '.ok == true and .schema.name == "dialog" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("dialog"))' >/dev/null
+for dialog_action in accept dismiss; do
+  set +e
+  dialog_index_output="$("$binary" dialog "$dialog_action" --target-index 0 --state-dir "$state_dir" --json)"
+  dialog_index_code=$?
+  set -e
+  test "$dialog_index_code" -eq 2
+  jq -e '.ok == false and .code == "invalid_target_index"' <<<"$dialog_index_output" >/dev/null
+done
 "$binary" describe --command "events tap" --json | jq -e '.ok == true and .commands.name == "tap" and (.commands.examples | any(contains("--target-index"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "max-events")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null

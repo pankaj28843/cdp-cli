@@ -40,6 +40,8 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp clear", want: []string{"--target-index 2"}},
 		{path: "cdp form values", want: []string{"--target-index 2"}},
 		{path: "cdp form get", want: []string{"--target-index 2"}},
+		{path: "cdp dialog accept", want: []string{"--target-index 2"}},
+		{path: "cdp dialog dismiss", want: []string{"--target-index 2"}},
 		{path: "cdp check", want: []string{"--target-index 2"}},
 		{path: "cdp uncheck", want: []string{"--target-index 2"}},
 		{path: "cdp select", want: []string{"--target-index 2"}},

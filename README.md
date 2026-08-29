@@ -231,6 +231,18 @@ The index is mutually exclusive with `--target`, `--url-contains`, and
 `cdp schema form-values --json` and `cdp schema form-get --json` for the
 stable output contracts.
 
+Direct dialog handling uses the same page-only selector for the page owning
+the currently open JavaScript dialog. Use `wait dialog` when the dialog must
+be observed first; `dialog accept` and `dialog dismiss` then handle only
+that selected page:
+
+    cdp dialog accept --prompt-text yes --target-index 2 --json
+    cdp dialog dismiss --target-index 2 --json
+
+The index is mutually exclusive with `--target`, `--url-contains`, and
+`--title-contains`. Invalid selectors fail before page attachment or dialog
+mutation, and the report includes `target_index` when an index is supplied.
+
 Read-only inspection commands use the same page-only selector: `frames`,
 `locator find`, `dom query`, `css inspect`, `layout overflow`, and
 `a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`. Successful indexed

@@ -27,6 +27,7 @@ stream_pid=""
 generic_stream_pid=""
 interaction_pid=""
 future_interaction_pid=""
+dialog_wait_pid=""
 
 require_artifact() {
   local path=$1
@@ -78,6 +79,10 @@ cleanup() {
   if [[ -n "$future_interaction_pid" ]]; then
     kill "$future_interaction_pid" 2>/dev/null || true
     wait "$future_interaction_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$dialog_wait_pid" ]]; then
+    kill "$dialog_wait_pid" 2>/dev/null || true
+    wait "$dialog_wait_pid" 2>/dev/null || true
   fi
   if [[ -n "$chrome_pid" ]]; then
     "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
@@ -909,6 +914,28 @@ jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.o
 indexed_form_get_report="$state_dir/form-get-target-index.json"
 "$binary" form get "#agent-input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_form_get_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .form.selector == "#agent-input" and .control.selector_hint == "input#agent-input"' "$indexed_form_get_report" >/dev/null
+indexed_dialog_prompt_eval_report="$state_dir/dialog-prompt-eval.json"
+indexed_dialog_prompt_wait_report="$state_dir/dialog-prompt-wait.json"
+"$binary" wait dialog --target-index "$protocol_index" --type prompt --action accept --prompt-text yes --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_prompt_wait_report" &
+indexed_dialog_prompt_wait_pid=$!
+dialog_wait_pid="$indexed_dialog_prompt_wait_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.prompt("Indexed prompt"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_prompt_eval_report"
+jq -e '.ok == true and .result.value == true' "$indexed_dialog_prompt_eval_report" >/dev/null
+wait "$indexed_dialog_prompt_wait_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .dialog.action == "accept" and .dialog.accepted == true and .dialog.prompt_text_supplied == true' "$indexed_dialog_prompt_wait_report" >/dev/null
+indexed_dialog_confirm_eval_report="$state_dir/dialog-confirm-eval.json"
+indexed_dialog_confirm_wait_report="$state_dir/dialog-confirm-wait.json"
+"$binary" wait dialog --target-index "$protocol_index" --type confirm --action dismiss --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_confirm_wait_report" &
+indexed_dialog_confirm_wait_pid=$!
+dialog_wait_pid="$indexed_dialog_confirm_wait_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.confirm("Indexed confirm"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_confirm_eval_report"
+jq -e '.ok == true and .result.value == true' "$indexed_dialog_confirm_eval_report" >/dev/null
+wait "$indexed_dialog_confirm_wait_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .dialog.action == "dismiss" and .dialog.accepted == false and .dialog.prompt_text_supplied == false' "$indexed_dialog_confirm_wait_report" >/dev/null
 protocol_index_report="$state_dir/protocol-target-index.json"
 "$binary" protocol exec Runtime.evaluate --target-index "$protocol_index" --params '{"expression":"document.title","returnByValue":true}' --state-dir "$state_dir/cdp-state" --json >"$protocol_index_report"
 jq -e --arg id "$protocol_index_target_id" '.ok == true and .scope == "target" and .target.id == $id and (.session_id | type == "string" and length > 0) and .method == "Runtime.evaluate"' "$protocol_index_report" >/dev/null
