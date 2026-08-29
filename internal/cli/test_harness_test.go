@@ -804,6 +804,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						{"name": "DomContentLoaded", "value": 124.5},
 					},
 				}
+			} else if req.Method == "Memory.getDOMCounters" {
+				resp["result"] = map[string]any{"documents": 3, "nodes": 42, "jsEventListeners": 5}
+			} else if req.Method == "HeapProfiler.enable" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Tracing.start" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Tracing.end" {

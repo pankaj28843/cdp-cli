@@ -624,13 +624,16 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "console" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 "$binary" describe --command "protocol compat" --json | jq -e '.ok == true and .commands.name == "compat" and (.commands.examples | any(contains("--requires")))' >/dev/null
-"$binary" describe --command "memory heap-snapshot" --json | jq -e '.ok == true and .commands.name == "heap-snapshot" and (.commands.flags[] | select(.name == "out"))' >/dev/null
-"$binary" describe --command "perf summary" --json | jq -e '.ok == true and .commands.name == "summary" and (.commands.flags[] | select(.name == "duration"))' >/dev/null
+"$binary" describe --command "memory heap-snapshot" --json | jq -e '.ok == true and .commands.name == "heap-snapshot" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "out"))' >/dev/null
+"$binary" describe --command "memory counters" --json | jq -e '.ok == true and .commands.name == "counters" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" describe --command "perf summary" --json | jq -e '.ok == true and .commands.name == "summary" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "duration"))' >/dev/null
 "$binary" describe --command "workflow feeds" --json | jq -e '.ok == true and .commands.name == "feeds" and (.commands.examples | any(contains("--wait-load")))' >/dev/null
 "$binary" describe --command "workflow responsive-audit" --json | jq -e '.ok == true and .commands.name == "responsive-audit"' >/dev/null
 "$binary" schema protocol-compat --json | jq -e '.ok == true and .schema.name == "protocol-compat"' >/dev/null
 "$binary" schema a11y --json | jq -e '.ok == true and .schema.name == "a11y" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
 "$binary" schema a11y-snapshot --json | jq -e '.ok == true and .schema.name == "a11y-snapshot" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields | map(.name) | index("lines")) and (.schema.fields | map(.name) | index("text")) and (.schema.fields[] | select(.name == "snapshot").description | contains("include_ignored"))' >/dev/null
+"$binary" schema perf-summary --json | jq -e '.ok == true and .schema.name == "perf-summary" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("metrics"))' >/dev/null
+"$binary" schema memory --json | jq -e '.ok == true and .schema.name == "memory" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("artifact"))' >/dev/null
 "$binary" schema workflow-feeds --json | jq -e '.ok == true and .schema.name == "workflow-feeds"' >/dev/null
 
 mkdir -p "$state_dir/user-data"

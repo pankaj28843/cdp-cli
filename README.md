@@ -75,6 +75,9 @@ cdp events interactions --target-index 1 --match click,scroll --duration 30s --m
 cdp events tap --target-index 1 --match Page.loadEventFired,Network.loadingFailed --duration 10s --max-events 50 --json
 cdp events stream --target-index 1 --enable DOM,Performance --match DOM.documentUpdated,Performance.metrics --json
 cdp snapshot --selector body --limit 50 --json
+cdp perf summary --target-index 2 --duration 5s --json
+cdp memory counters --target-index 2 --json
+cdp memory heap-snapshot --target-index 2 --out tmp/page.heapsnapshot --json
 cdp screenshot --out tmp/page.png --json
 cdp console --errors --wait 2s --json
 cdp emulate network --preset slow-3g --json
@@ -131,6 +134,11 @@ Read-only inspection commands use the same page-only selector: `frames`,
 `a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`. Successful indexed
 reports include `target_index`; invalid, conflicting, and out-of-range values
 fail before page attachment or inspection.
+
+Performance and memory diagnostics also accept the same selector: `perf
+summary`, `memory counters`, and `memory heap-snapshot`. Heap data remains a
+local artifact reference, and indexed reports include `target_index` without
+embedding the artifact payload.
 
 Multi-engine SERP research runs engines concurrently and reuses one workflow tab
 lane per engine, so large query files avoid opening a fresh tab for every

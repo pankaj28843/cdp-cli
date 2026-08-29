@@ -893,6 +893,9 @@ jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.o
 page_inspection_index_report="$state_dir/page-inspection-target-index.json"
 "$binary" frames --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$page_inspection_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.frames | length >= 1)' "$page_inspection_index_report" >/dev/null
+performance_memory_index_report="$state_dir/performance-memory-target-index.json"
+"$binary" perf summary --target-index "$protocol_index" --duration 0s --state-dir "$state_dir/cdp-state" --json >"$performance_memory_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.metrics.count | type == "number")' "$performance_memory_index_report" >/dev/null
 event_tap_index_report="$state_dir/event-tap-target-index.json"
 "$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null

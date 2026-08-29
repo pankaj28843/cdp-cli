@@ -172,6 +172,14 @@ inspection:
     cdp a11y tree --target-index 2 --json
     cdp a11y snapshot --target-index 2 --json
 
+Performance and memory diagnostics use the same page-only selector:
+`perf summary`, `memory counters`, and `memory heap-snapshot`. The heap
+snapshot command keeps its existing local artifact-only output contract:
+
+    cdp perf summary --target-index 2 --duration 5s --json
+    cdp memory counters --target-index 2 --json
+    cdp memory heap-snapshot --target-index 2 --out tmp/page.heapsnapshot --json
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable

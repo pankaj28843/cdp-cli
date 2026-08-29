@@ -843,9 +843,9 @@ func commandExamples(path string) []string {
 	examples["cdp a11y node"] = []string{"cdp a11y node button[type=submit] --json", "cdp a11y node button --target-index 2 --json"}
 	examples["cdp a11y snapshot"] = []string{"cdp a11y snapshot --selector body --depth 4 --json", "cdp a11y snapshot --limit 20 --json", "cdp a11y snapshot --target-index 2 --json"}
 	examples["cdp assert aria-snapshot"] = []string{"cdp assert aria-snapshot --expected '- button \"Save\"' --selector body --json", "cdp assert aria-snapshot --file tmp/aria-snapshot.txt --mode exact --json"}
-	examples["cdp perf summary"] = []string{"cdp perf summary --duration 5s --json"}
-	examples["cdp memory counters"] = []string{"cdp memory counters --json"}
-	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"}
+	examples["cdp perf summary"] = []string{"cdp perf summary --duration 5s --json", "cdp perf summary --target-index 2 --duration 5s --json"}
+	examples["cdp memory counters"] = []string{"cdp memory counters --json", "cdp memory counters --target-index 2 --json"}
+	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json", "cdp memory heap-snapshot --target-index 2 --out tmp/page.heapsnapshot --json"}
 	examples["cdp events"] = []string{"cdp events tap --duration 10s --json", "cdp events stream --target <target-id> --enable page,runtime,DOM --match Page.loadEventFired,DOM.documentUpdated --duration 30s --json"}
 	examples["cdp events tap"] = []string{
 		"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json",

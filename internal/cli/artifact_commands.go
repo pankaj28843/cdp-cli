@@ -28,14 +28,18 @@ func (a *app) newPerfCommand() *cobra.Command {
 
 func (a *app) newPerfSummaryCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	var duration time.Duration
 	cmd := &cobra.Command{Use: "summary", Short: "Collect a compact performance metrics summary", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		if duration < 0 {
 			return commandError("usage", "usage", "--duration must be non-negative", ExitUsage, []string{"cdp perf summary --duration 5s --json"})
 		}
 		ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -54,11 +58,16 @@ func (a *app) newPerfSummaryCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return a.render(ctx, fmt.Sprintf("perf\t%d metrics", len(metrics)), map[string]any{"ok": true, "target": pageRow(target), "duration_ms": duration.Milliseconds(), "metrics": map[string]any{"raw": metrics, "count": len(metrics)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "duration_ms": duration.Milliseconds(), "metrics": map[string]any{"raw": metrics, "count": len(metrics)}}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, fmt.Sprintf("perf\t%d metrics", len(metrics)), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&duration, "duration", 5*time.Second, "how long to observe before sampling metrics")
 	return cmd
 }
@@ -72,10 +81,14 @@ func (a *app) newMemoryCommand() *cobra.Command {
 
 func (a *app) newMemoryCountersCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{Use: "counters", Short: "Collect DOM and JS heap memory counters", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -84,23 +97,32 @@ func (a *app) newMemoryCountersCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Memory.getDOMCounters", map[string]any{}, &counters); err != nil {
 			return commandError("connection_failed", "connection", fmt.Sprintf("collect memory counters: %v", err), ExitConnection, []string{"cdp protocol describe Memory.getDOMCounters --json"})
 		}
-		return a.render(ctx, "memory counters", map[string]any{"ok": true, "target": pageRow(target), "memory": map[string]any{"counters": counters}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "memory": map[string]any{"counters": counters}}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, "memory counters", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
 func (a *app) newMemoryHeapSnapshotCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, outPath string
+	var targetIndex int
 	cmd := &cobra.Command{Use: "heap-snapshot", Short: "Write a heap snapshot artifact path without embedding heap data", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		if strings.TrimSpace(outPath) == "" {
 			return commandError("usage", "usage", "--out is required for heap snapshots", ExitUsage, []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"})
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -114,11 +136,16 @@ func (a *app) newMemoryHeapSnapshotCommand() *cobra.Command {
 			return err
 		}
 		artifact := map[string]any{"type": "heap-snapshot", "path": writtenPath, "bytes": len(payload), "warnings": []string{"Heap snapshots may contain page strings and user data"}}
-		return a.render(ctx, "heap snapshot", map[string]any{"ok": true, "target": pageRow(target), "artifact": artifact, "artifacts": []map[string]any{artifact}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "artifact": artifact, "artifacts": []map[string]any{artifact}}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, "heap snapshot", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&outPath, "out", "", "required path for the heap snapshot artifact")
 	return cmd
 }
