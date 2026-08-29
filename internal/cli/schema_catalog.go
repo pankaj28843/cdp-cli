@@ -1494,7 +1494,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait": {
 			Name:        "wait",
-			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks. Event-oriented waits accept a mutually exclusive 1-based page --target-index selector.",
+			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks. Page-condition and event-oriented waits accept a mutually exclusive 1-based page --target-index selector.",
 			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
@@ -1519,10 +1519,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-url": {
 			Name:        "wait-url",
-			Description: "Page URL wait result for exact or substring URL matching.",
+			Description: "Page URL wait result for exact or substring URL matching; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page URL matched before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind url, URL match needle, condition exact or contains, final observed URL, title, match status, count, bounded evidence, elapsed_ms, and poll_interval."},
 			},
 		},

@@ -603,19 +603,23 @@ func (a *app) newWaitTextCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "text <needle>",
 		Short: "Wait until visible page text contains a string",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait text Ready --poll 250ms --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				if timeoutErr := waitAttachTimeoutError(ctx, "text", target, err, []string{"cdp wait text <needle> --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
 					return timeoutErr
@@ -638,16 +642,21 @@ func (a *app) newWaitTextCommand() *cobra.Command {
 			}
 			result.ElapsedMS = time.Since(start).Milliseconds()
 			result.PollInterval = poll.String()
-			return a.render(ctx, fmt.Sprintf("matched text\t%s", args[0]), map[string]any{
+			report := map[string]any{
 				"ok":     true,
 				"target": pageRow(target),
 				"wait":   result,
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, fmt.Sprintf("matched text\t%s", args[0]), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	return cmd
 }
@@ -656,6 +665,7 @@ func (a *app) newWaitURLCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var mode string
 	var poll time.Duration
 	cmd := &cobra.Command{
@@ -663,6 +673,9 @@ func (a *app) newWaitURLCommand() *cobra.Command {
 		Short: "Wait until the page URL matches",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -677,7 +690,7 @@ func (a *app) newWaitURLCommand() *cobra.Command {
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait url /results --mode contains --poll 250ms --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				if timeoutErr := waitAttachTimeoutError(ctx, "url", target, err, []string{"cdp wait url <expected> --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
 					return timeoutErr
@@ -706,16 +719,21 @@ func (a *app) newWaitURLCommand() *cobra.Command {
 			if strings.TrimSpace(result.Title) != "" {
 				target.Title = result.Title
 			}
-			return a.render(ctx, fmt.Sprintf("matched url\t%s", expected), map[string]any{
+			report := map[string]any{
 				"ok":     true,
 				"target": pageRow(target),
 				"wait":   result,
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, fmt.Sprintf("matched url\t%s", expected), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&mode, "mode", "contains", "URL match mode: exact or contains")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	return cmd
@@ -725,19 +743,23 @@ func (a *app) newWaitSelectorCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "selector <css>",
 		Short: "Wait until a CSS selector matches at least one element",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait selector main --poll 250ms --json"})
 			}
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				if timeoutErr := waitAttachTimeoutError(ctx, "selector", target, err, []string{"cdp wait selector <css> --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
 					return timeoutErr
@@ -760,16 +782,21 @@ func (a *app) newWaitSelectorCommand() *cobra.Command {
 			}
 			result.ElapsedMS = time.Since(start).Milliseconds()
 			result.PollInterval = poll.String()
-			return a.render(ctx, fmt.Sprintf("matched selector\t%s", args[0]), map[string]any{
+			report := map[string]any{
 				"ok":     true,
 				"target": pageRow(target),
 				"wait":   result,
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, fmt.Sprintf("matched selector\t%s", args[0]), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	return cmd
 }
@@ -778,6 +805,7 @@ func (a *app) newWaitLocatorCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var poll time.Duration
 	var locatorOpts locatorWaitOptions
 	cmd := &cobra.Command{
@@ -785,6 +813,9 @@ func (a *app) newWaitLocatorCommand() *cobra.Command {
 		Short: "Wait until a user-facing locator matches",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			if poll <= 0 {
 				return commandError("usage", "usage", "--poll must be positive", ExitUsage, []string{"cdp wait locator Ready --by text --poll 250ms --json"})
 			}
@@ -795,7 +826,7 @@ func (a *app) newWaitLocatorCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				if timeoutErr := waitAttachTimeoutError(ctx, "locator", target, err, locatorWaitRemediations(args[0], locatorOpts)); timeoutErr != nil {
 					return timeoutErr
@@ -817,6 +848,9 @@ func (a *app) newWaitLocatorCommand() *cobra.Command {
 				report["locator"] = locator
 				report["matches"] = locator.Matches
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				if ctx.Err() == nil {
 					return err
@@ -832,6 +866,7 @@ func (a *app) newWaitLocatorCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	addLocatorWaitFlags(cmd, &locatorOpts)
 	return cmd
@@ -841,6 +876,7 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var poll time.Duration
 	var readyExpr string
 	var readyField string
@@ -854,6 +890,9 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 		Short: "Wait until a JavaScript expression reaches a semantic ready state",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -876,7 +915,7 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 			}
 			readyOpts.StopStateRules = stopRules
 			result, retryReport, err := runCommandWithRetry(ctx, retryOpts, func(attemptCtx context.Context) (commandRetryResult, error) {
-				session, target, err := a.attachPageSession(attemptCtx, targetID, urlContains, titleContains)
+				session, target, err := a.attachPageSessionWithIndex(attemptCtx, targetID, urlContains, titleContains, targetIndex)
 				if err != nil {
 					if timeoutErr := waitAttachTimeoutError(attemptCtx, "eval", target, err, evalWaitRemediations(args[0], readyOpts)); timeoutErr != nil {
 						return commandRetryResult{Target: &target}, timeoutErr
@@ -899,6 +938,9 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 				}
 				if len(wait.Artifacts) > 0 {
 					report["artifacts"] = wait.Artifacts
+				}
+				if targetIndex > 0 {
+					report["target_index"] = targetIndex
 				}
 				if err != nil {
 					var cmdErr *CommandError
@@ -934,6 +976,7 @@ func (a *app) newWaitEvalCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	cmd.Flags().StringVar(&readyExpr, "ready-expr", "", "JavaScript predicate evaluated with value bound to the expression result")
 	cmd.Flags().StringVar(&readyExpr, "ready-expression", "", "alias for --ready-expr")
@@ -950,12 +993,16 @@ func (a *app) newWaitLoadStateCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var poll time.Duration
 	cmd := &cobra.Command{
 		Use:   "load-state <load|domcontentloaded>",
 		Short: "Wait until the document reaches a browser load state",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			state, err := normalizeLoadState(args[0])
 			if err != nil {
 				return err
@@ -967,7 +1014,7 @@ func (a *app) newWaitLoadStateCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				if timeoutErr := waitAttachTimeoutError(ctx, "load-state", target, err, []string{"cdp wait load-state load --timeout 15s --json", "cdp pages --json"}); timeoutErr != nil {
 					return timeoutErr
@@ -984,6 +1031,9 @@ func (a *app) newWaitLoadStateCommand() *cobra.Command {
 				"ok":     err == nil && result.Error == nil,
 				"target": pageRow(target),
 				"wait":   result,
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
 			}
 			if err != nil {
 				if ctx.Err() == nil && exitCode(err) != ExitTimeout {
@@ -1004,6 +1054,7 @@ func (a *app) newWaitLoadStateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while waiting")
 	return cmd
 }

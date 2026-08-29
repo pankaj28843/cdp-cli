@@ -449,18 +449,22 @@ func commandExamples(path string) []string {
 		"cdp wait text": {
 			"cdp wait text Ready --timeout 10s --json",
 			"cdp wait text 'Dashboard loaded' --url-contains localhost --json",
+			"cdp wait text Ready --target-index 2 --json",
 		},
 		"cdp wait selector": {
 			"cdp wait selector main --timeout 10s --json",
 			"cdp wait selector '[data-ready=\"true\"]' --poll 500ms --json",
+			"cdp wait selector main --target-index 2 --json",
 		},
 		"cdp wait url": {
 			"cdp wait url /results --mode contains --timeout 10s --json",
 			"cdp wait url https://example.com/checkout --mode exact --poll 100ms --json",
+			"cdp wait url /results --mode contains --target-index 2 --json",
 		},
 		"cdp wait locator": {
 			"cdp wait locator 'Search' --by role --role button --strict --timeout 10s --json",
 			"cdp wait locator 'Dashboard loaded' --by text --timeout 10s --json",
+			"cdp wait locator 'Search' --by text --target-index 2 --json",
 		},
 		"cdp wait eval": {
 			"cdp wait eval 'window.__rendered === true' --timeout 10s --json",
@@ -468,10 +472,12 @@ func commandExamples(path string) []string {
 			"cdp wait eval 'window.__rendered === true' --retry transient --max-attempts 3 --json",
 			"cdp wait eval 'window.__stageState()' --ready-expr 'value.terminalCondition === \"fare_rows\"' --out-dir tmp/stage-ready --json",
 			"cdp wait eval 'window.__stageState()' --ready-field ready --classify-stop-state --rule-text-contains google_page_error='Something went wrong' --json",
+			"cdp wait eval 'window.__rendered === true' --target-index 2 --json",
 		},
 		"cdp wait load-state": {
 			"cdp wait load-state load --timeout 10s --json",
 			"cdp wait load-state domcontentloaded --poll 100ms --json",
+			"cdp wait load-state load --target-index 2 --json",
 		},
 		"cdp wait request": {
 			"cdp wait request --match-url /api/search --method POST --timeout 10s --json",

@@ -916,6 +916,11 @@ sleep 0.3
   | jq -e '.ok == true and .result.value == 200' >/dev/null
 wait "$wait_index_pid"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg probe "wait-index=$wait_index_probe" '.ok == true and .target.id == $id and .target_index == $index and .wait.kind == "response" and .wait.matched == true and (.event.url | contains($probe)) and .event.cdp_method == "Network.responseReceived" and .event.status == 200' "$wait_index_report" >/dev/null
+wait_condition_index_report="$state_dir/wait-eval-target-index.json"
+"$binary" eval "window.__cdpWaitTargetIndexReady = true" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .result.value == true' >/dev/null
+"$binary" wait eval 'window.__cdpWaitTargetIndexReady === true' --target-index "$protocol_index" --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_condition_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.kind == "eval" and .wait.expression == "window.__cdpWaitTargetIndexReady === true" and .wait.matched == true and .wait.ready == true' "$wait_condition_index_report" >/dev/null
 event_tap_index_report="$state_dir/event-tap-target-index.json"
 "$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null

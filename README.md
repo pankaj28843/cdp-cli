@@ -69,6 +69,7 @@ cdp eval 'document.title' --target-index 2 --json
 cdp observe --json
 cdp observe --target-index 2 --json
 cdp wait text Ready --timeout 10s --json
+cdp wait eval 'window.__rendered === true' --target-index 2 --json
 cdp events stream --target-index 1 --match Page.loadEventFired,Network.loadingFailed --json > tmp/events.jsonl
 cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json
 cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json > tmp/interactions.jsonl

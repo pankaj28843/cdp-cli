@@ -217,6 +217,19 @@ title, filename, or state criteria when more than one page may produce an event.
 Zero, negative, out-of-range, and selector-conflicting values fail before
 attachment or event waiting.
 
+Page-condition waits (`text`, `selector`, `url`, `locator`, `eval`, and
+`load-state`) accept the same page-only selector. Indexed success reports
+include `target_index` beside the resolved target, while eval keeps its
+existing retry, stop-state, and attempt-artifact behavior:
+
+    cdp wait text Ready --target-index 2 --json
+    cdp wait eval 'window.__rendered === true' --target-index 2 --json
+    cdp wait load-state load --target-index 2 --json
+
+The index is validated before attachment and follows the page order shown by
+`cdp pages`; zero, negative, out-of-range, and selector-conflicting values
+remain typed usage or target-selection errors.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable
