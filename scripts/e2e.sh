@@ -15,6 +15,8 @@ export XDG_CONFIG_HOME="$config_dir"
 printf '{}\n' >"$config_path"
 health_state_dir=""
 forced_restart_state_dir=""
+guide_path=""
+guide_path_source=""
 
 cleanup_daemon_state() {
   local dir="${1:-}"
@@ -26,6 +28,9 @@ cleanup_daemon_state() {
 }
 
 cleanup() {
+  if [[ "$guide_path_source" == "materialized" && -n "$guide_path" ]]; then
+    rm -f -- "$guide_path"
+  fi
   cleanup_daemon_state "$state_dir"
   cleanup_daemon_state "${state_dir}-copy-default"
   cleanup_daemon_state "$state_dir/live-browser"
@@ -70,6 +75,13 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" describe --jq '.globals | index("--max-tabs")' >/dev/null
 "$binary" describe --jq '.globals | index("--max-renderer-processes")' >/dev/null
 "$binary" describe --command "version" --json | jq -e '.ok == true and .commands.name == "version" and (.commands.examples | any(contains("version --json")))' >/dev/null
+"$binary" describe --command "guide" --json | jq -e '.ok == true and .commands.name == "guide" and (.commands.examples | any(contains("guide --path"))) and (.commands.flags[] | select(.name == "path"))' >/dev/null
+"$binary" guide --json | jq -e '.ok == true and .schema_version == "guide/v1" and .mode == "content" and (.bytes > 0) and (.content | contains("# cdp-cli Agent Guide"))' >/dev/null
+guide_path_json="$("$binary" guide --path --json)"
+guide_path="$(jq -r 'if .ok == true and .mode == "path" then .path else empty end' <<<"$guide_path_json")"
+guide_path_source="$(jq -r '.source' <<<"$guide_path_json")"
+test -n "$guide_path"
+test -s "$guide_path"
 "$binary" describe --command "targets" --json | jq -e '.ok == true and .commands.name == "targets" and (.commands.flags[] | select(.name == "retry" and .type == "string")) and (.commands.flags[] | select(.name == "max-attempts"))' >/dev/null
 "$binary" describe --command "pages" --json | jq -e '.ok == true and .commands.name == "pages" and (.commands.flags[] | select(.name == "title-contains" and .type == "string")) and (.commands.flags[] | select(.name == "retry" and .type == "string")) and (.commands.flags[] | select(.name == "max-attempts"))' >/dev/null
 "$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
@@ -96,6 +108,38 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" describe --command "connection select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("connection select")))' >/dev/null
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
 "$binary" describe --command "events stream" --json | jq -e '.ok == true and .commands.name == "stream" and (.commands.examples | any(contains("events stream"))) and (.commands.examples | any(contains("--target-index"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "max-events" and .type == "int"))' >/dev/null
+"$binary" describe --command "events wait" --json | jq -e '.ok == true and .commands.name == "wait" and (.commands.examples | any(contains("--file"))) and (.commands.flags[] | select(.name == "file")) and (.commands.flags[] | select(.name == "method")) and (.commands.flags[] | select(.name == "contains")) and (.commands.flags[] | select(.name == "from-offset")) and (.commands.flags[] | select(.name == "print-offset"))' >/dev/null
+"$binary" schema events-wait --json | jq -e '.ok == true and .schema.name == "events-wait" and (.schema.fields | map(.name) | index("record")) and (.schema.fields | map(.name) | index("event")) and (.schema.fields | map(.name) | index("offset")) and (.schema.fields[] | select(.name == "offset").description | contains("--from-offset")) and (.schema.fields[] | select(.name == "wait").description | contains("any-of")) and (.schema.fields[] | select(.name == "wait").description | contains("all-of"))' >/dev/null
+event_wait_file="$state_dir/events-wait.jsonl"
+cat >"$event_wait_file" <<'JSON_EVENT_WAIT'
+{"ok":true,"type":"ready"}
+{"ok":true,"type":"event","event":{"method":"Page.loadEventFired","params":{"marker":"e2e-history"}}}
+{"ok":true,"type":"event","event":{"method":"Runtime.consoleAPICalled","params":{"marker":"e2e-next"}}}
+JSON_EVENT_WAIT
+event_wait_history="$("$binary" events wait --file "$event_wait_file" --method Page.loadEventFired --contains e2e-history --json)"
+printf '%s\n' "$event_wait_history" | jq -e '.ok == true and .event.method == "Page.loadEventFired" and .wait.matched_method == "Page.loadEventFired" and (.offset | type == "number")' >/dev/null
+event_wait_offset="$(jq -r '.offset' <<<"$event_wait_history")"
+test "$event_wait_offset" -gt 0
+"$binary" events wait --file "$event_wait_file" --from-offset "$event_wait_offset" --method Runtime.consoleAPICalled --contains e2e-next --print-offset --json >"$state_dir/events-wait-next.json" 2>"$state_dir/events-wait-next.offset"
+jq -e '.ok == true and .event.method == "Runtime.consoleAPICalled" and .event.params.marker == "e2e-next" and .wait.from_offset > 0' "$state_dir/events-wait-next.json" >/dev/null
+grep -Fxq "offset=$(jq -r '.offset' "$state_dir/events-wait-next.json")" "$state_dir/events-wait-next.offset"
+event_wait_future_file="$state_dir/events-wait-future.jsonl"
+: >"$event_wait_future_file"
+event_wait_future_output="$state_dir/events-wait-future.json"
+"$binary" events wait --file "$event_wait_future_file" --method Runtime.consoleAPICalled --contains e2e-future --timeout 5s --json >"$event_wait_future_output" &
+event_wait_future_pid=$!
+sleep 0.1
+printf '%s' '{"ok":true,"type":"event","event":{"method":"Runtime.consoleAPICalled","params":{"marker":"e2e-future"}}}' >"$event_wait_future_file"
+sleep 0.1
+printf '\n' >>"$event_wait_future_file"
+wait "$event_wait_future_pid"
+jq -e '.ok == true and .event.method == "Runtime.consoleAPICalled" and .event.params.marker == "e2e-future"' "$event_wait_future_output" >/dev/null
+set +e
+event_wait_timeout_output="$("$binary" events wait --file "$event_wait_file" --method Network.loadingFailed --timeout 50ms --json 2>"$state_dir/events-wait-timeout.err")"
+event_wait_timeout_code=$?
+set -e
+test "$event_wait_timeout_code" -eq 5
+printf '%s\n' "$event_wait_timeout_output" | jq -e '.ok == false and .code == "event_wait_timeout" and .data.wait.offset >= 0' >/dev/null
 "$binary" describe --command "click" --json | jq -e '.ok == true and .commands.name == "click" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--strategy dom"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "browser marker" --json | jq -e '.ok == true and .commands.name == "marker" and (.commands.children | map(.name) | index("enable")) and (.commands.children | map(.name) | index("disable")) and (.commands.children | map(.name) | index("status"))' >/dev/null
 "$binary" describe --command "browser marker enable" --json | jq -e '.ok == true and .commands.name == "enable" and (.commands.flags[] | select(.name == "name" and .type == "string")) and (.commands.examples | any(contains("browser marker enable")))' >/dev/null
@@ -169,6 +213,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" schema cron-migrate-pages-polling --json | jq -e '.ok == true and .schema.name == "cron-migrate-pages-polling" and (.schema.fields | map(.name) | index("candidate_count")) and (.schema.fields | map(.name) | index("managed_keepalive_installed")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema headless-security --json | jq -e '.ok == true and .schema.name == "headless-security" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
+"$binary" schema guide --json | jq -e '.ok == true and .schema.name == "guide" and (.schema.fields | map(.name) | index("schema_version")) and (.schema.fields | map(.name) | index("content")) and (.schema.fields | map(.name) | index("path"))' >/dev/null
 "$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("budget")) and (.schema.fields | map(.name) | index("retry_policy")) and (.schema.fields | map(.name) | index("attempt_count"))' >/dev/null
 "$binary" schema targets --json | jq -e '.ok == true and .schema.name == "targets" and (.schema.fields | map(.name) | index("targets")) and (.schema.fields | map(.name) | index("retry_policy")) and (.schema.fields | map(.name) | index("attempt_count"))' >/dev/null
 "$binary" schema open --json | jq -e '.ok == true and .schema.name == "open" and (.schema.fields | map(.name) | index("page")) and (.schema.fields | map(.name) | index("created")) and (.schema.fields | map(.name) | index("reused")) and (.schema.fields | map(.name) | index("reuse")) and (.schema.fields | map(.name) | index("tab_budget")) and (.schema.fields | map(.name) | index("attempts")) and (.schema.fields | map(.name) | index("retry_policy")) and (.schema.fields | map(.name) | index("run_id")) and (.schema.fields | map(.name) | index("task_id")) and (.schema.fields | map(.name) | index("target_task_ids"))' >/dev/null

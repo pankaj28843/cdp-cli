@@ -60,6 +60,11 @@ func commandExamples(path string) []string {
 			"cdp version --json --compact",
 			"cdp version --json | jq --arg head \"$(git rev-parse HEAD)\" '.verified and .commit == $head'",
 		},
+		"cdp guide": {
+			"cdp guide",
+			"cdp guide --path",
+			"cdp guide --json --jq '.path // .content'",
+		},
 		"cdp describe": {
 			"cdp describe --json",
 			"cdp describe --command 'daemon status' --json",
@@ -832,6 +837,10 @@ func commandExamples(path string) []string {
 	examples["cdp events stream"] = []string{
 		"cdp events stream --target <target-id> --enable page,runtime --match Page.loadEventFired --duration 30s --json",
 		"printf '+Runtime.consoleAPICalled\\n' | cdp events stream --target-index 1 --json",
+	}
+	examples["cdp events wait"] = []string{
+		"cdp events wait --file tmp/events.jsonl --method Page.loadEventFired --timeout 20s --json",
+		"cdp events wait --file tmp/events.jsonl --from-offset 123 --contains /results/ --print-offset --json",
 	}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}

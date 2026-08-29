@@ -16,6 +16,7 @@ func (a *app) newEventsCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "events", Short: "Observe bounded raw CDP event streams"}
 	cmd.AddCommand(a.newEventsTapCommand())
 	cmd.AddCommand(a.newEventsStreamCommand())
+	cmd.AddCommand(a.newEventsWaitCommand())
 	return cmd
 }
 

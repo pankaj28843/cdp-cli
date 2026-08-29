@@ -11,6 +11,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		want []string
 	}{
 		{path: "cdp version", want: []string{"version --json"}},
+		{path: "cdp guide", want: []string{"guide --path", "guide --json"}},
 		{path: "cdp daemon start", want: []string{"--auto-connect"}},
 		{path: "cdp daemon stop", want: []string{"--force-managed", "--stale-lock-after"}},
 		{path: "cdp daemon restart", want: []string{"--autoConnect", "--force-managed", "--stale-lock-after"}},
@@ -41,6 +42,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp protocol exec", want: []string{"--target", "--target-type service_worker"}},
 		{path: "cdp file chooser", want: []string{"--target <target-id>", "--trial", "first.epub", "second.epub"}},
 		{path: "cdp protocol examples", want: []string{"Page.captureScreenshot"}},
+		{path: "cdp events wait", want: []string{"--file", "--method", "--from-offset", "--print-offset"}},
 		{path: "cdp workflow page-load", want: []string{"--reload"}},
 		{path: "cdp workflow rendered-extract", want: []string{"--serp google", "x.com/karpathy/status", "x.com/karpathy'", "linkedin.com/company", "reddit.com/user", "reddit.com/r/example/comments"}},
 		{path: "cdp workflow reddit posts", want: []string{"reddit.com/r/formula1/top/?t=week", "--limit 200", "reddit.com/r/golang/new/"}},

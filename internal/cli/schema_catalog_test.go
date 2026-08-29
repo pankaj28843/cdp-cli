@@ -44,6 +44,7 @@ func TestSchemaCatalogInvariants(t *testing.T) {
 func TestSchemaCatalogCriticalCommands(t *testing.T) {
 	catalog := schemaCatalog()
 	critical := []string{
+		"guide",
 		"describe",
 		"doctor",
 		"doctor-capabilities",
@@ -107,6 +108,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"page-cleanup",
 		"stop-state-classify",
 		"protocol-examples",
+		"events-wait",
 		"storage",
 		"rendered-extract-content",
 		"rendered-extract-readiness",

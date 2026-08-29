@@ -106,6 +106,9 @@ func (a *app) newRoot() *cobra.Command {
 			if a.opts.maxTabs < 0 || a.opts.maxRendererProcesses < 0 {
 				return commandError("invalid_resource_budget", "usage", "--max-tabs and --max-renderer-processes must be non-negative", ExitUsage, []string{"cdp --max-tabs 25 --max-renderer-processes 12 pages --json"})
 			}
+			if cmd.Name() == "guide" || (cmd.Name() == "wait" && cmd.Parent() != nil && cmd.Parent().Name() == "events") {
+				return nil
+			}
 			_, err := a.resolveBrowserMode(cmd)
 			if err != nil {
 				return err
@@ -168,6 +171,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.PersistentFlags().IntVar(&a.opts.maxTabs, "max-tabs", envInt("CDP_MAX_TABS", 0), "maximum page-tab resource budget for the selected browser mode; 0 uses the mode default")
 	root.PersistentFlags().IntVar(&a.opts.maxRendererProcesses, "max-renderer-processes", envInt("CDP_MAX_RENDERER_PROCESSES", 0), "maximum renderer-process resource budget; 0 disables the renderer guard and leaves attribution diagnostics enabled")
 
+	root.AddCommand(a.newGuideCommand())
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
 	root.AddCommand(a.newDoctorCommand())
