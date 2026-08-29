@@ -936,6 +936,24 @@ jq -e '.ok == true and .result.value == true' "$indexed_dialog_confirm_eval_repo
 wait "$indexed_dialog_confirm_wait_pid"
 dialog_wait_pid=""
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .dialog.action == "dismiss" and .dialog.accepted == false and .dialog.prompt_text_supplied == false' "$indexed_dialog_confirm_wait_report" >/dev/null
+indexed_direct_dialog_prompt_report="$state_dir/dialog-direct-prompt.json"
+"$binary" dialog accept --wait --target-index "$protocol_index" --type prompt --message "Indexed direct prompt" --prompt-text yes --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_direct_dialog_prompt_report" &
+indexed_direct_dialog_prompt_pid=$!
+dialog_wait_pid="$indexed_direct_dialog_prompt_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.prompt("Indexed direct prompt"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$state_dir/dialog-direct-prompt-eval.json"
+wait "$indexed_direct_dialog_prompt_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.matched == true and .dialog.action == "accept" and .dialog.accepted == true and .dialog.handled == true and .dialog.prompt_text_supplied == true' "$indexed_direct_dialog_prompt_report" >/dev/null
+indexed_direct_dialog_confirm_report="$state_dir/dialog-direct-confirm.json"
+"$binary" dialog dismiss --wait --target-index "$protocol_index" --type confirm --message-contains "Indexed direct confirm" --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_direct_dialog_confirm_report" &
+indexed_direct_dialog_confirm_pid=$!
+dialog_wait_pid="$indexed_direct_dialog_confirm_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.confirm("Indexed direct confirm"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$state_dir/dialog-direct-confirm-eval.json"
+wait "$indexed_direct_dialog_confirm_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.matched == true and .dialog.action == "dismiss" and .dialog.accepted == false and .dialog.handled == true and .dialog.prompt_text_supplied == false' "$indexed_direct_dialog_confirm_report" >/dev/null
 protocol_index_report="$state_dir/protocol-target-index.json"
 "$binary" protocol exec Runtime.evaluate --target-index "$protocol_index" --params '{"expression":"document.title","returnByValue":true}' --state-dir "$state_dir/cdp-state" --json >"$protocol_index_report"
 jq -e --arg id "$protocol_index_target_id" '.ok == true and .scope == "target" and .target.id == $id and (.session_id | type == "string" and length > 0) and .method == "Runtime.evaluate"' "$protocol_index_report" >/dev/null

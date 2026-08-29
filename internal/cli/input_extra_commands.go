@@ -941,16 +941,58 @@ func (a *app) newDialogCommand() *cobra.Command {
 
 func (a *app) newDialogHandleCommand(name string, accept bool) *cobra.Command {
 	var targetID, urlContains, titleContains, promptText string
+	var waitForDialog bool
+	var dialogType, message, messageContains, redact string
 	cmd := &cobra.Command{
 		Use:   name,
-		Short: name + " the currently open JavaScript dialog",
+		Short: name + " a JavaScript dialog, optionally waiting in this session",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
 			if err != nil {
 				return err
 			}
+			waitMode := waitForDialog || cmd.Flags().Changed("type") || cmd.Flags().Changed("message") || cmd.Flags().Changed("message-contains") || cmd.Flags().Changed("redact")
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
+			if waitMode {
+				opts := dialogWaitOptions{
+					Criteria: dialogWaitCriteria{
+						Type:            dialogType,
+						Message:         message,
+						MessageContains: messageContains,
+					},
+					Action:     name,
+					PromptText: promptText,
+					Redact:     redact,
+				}
+				if err := normalizeDialogWaitOptions(&opts); err != nil {
+					return err
+				}
+				redactor, err := networkWaitRedactor(opts.Redact)
+				if err != nil {
+					return err
+				}
+				client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
+				if err != nil {
+					return err
+				}
+				defer session.Close(ctx)
+
+				start := time.Now()
+				observation, err := waitForDialogEvent(ctx, client, session.SessionID, opts.Criteria)
+				elapsed := time.Since(start)
+				report := dialogWaitReport(observation, opts, elapsed, a.effectiveNetworkWaitTimeout(), redactor)
+				report["target"] = pageRow(target)
+				addInputTargetIndexEvidence(report, targetIndex)
+				if err != nil {
+					return dialogWaitError(ctx, session.TargetID, opts, report, err)
+				}
+				if err := handleDialogWaitAction(ctx, client, session.SessionID, session.TargetID, opts, report); err != nil {
+					return err
+				}
+				return a.render(ctx, fmt.Sprintf("handled dialog\t%s", observation.Event.Type), report)
+			}
+
 			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
@@ -972,6 +1014,11 @@ func (a *app) newDialogHandleCommand(name string, accept bool) *cobra.Command {
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
 	cmd.Flags().StringVar(&promptText, "prompt-text", "", "prompt text to send when accepting a prompt dialog")
+	cmd.Flags().BoolVar(&waitForDialog, "wait", false, "wait for a matching dialog and handle it on this same attached session")
+	cmd.Flags().StringVar(&dialogType, "type", "", "dialog type to match in wait mode: alert, confirm, prompt, or beforeunload; implies --wait")
+	cmd.Flags().StringVar(&message, "message", "", "exact dialog message to match in wait mode; implies --wait")
+	cmd.Flags().StringVar(&messageContains, "message-contains", "", "substring that the dialog message must contain in wait mode; implies --wait")
+	cmd.Flags().StringVar(&redact, "redact", "safe", "redaction preset for returned dialog URL in wait mode: safe or none; implies --wait")
 	addInputTargetIndexFlag(cmd)
 	return cmd
 }

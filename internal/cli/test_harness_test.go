@@ -209,6 +209,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 		defer conn.Close(websocket.StatusNormalClosure, "done")
 
 		blockedSessions := map[string]bool{}
+		dialogEnabledSessions := map[string]bool{}
 		bindingNames := map[string]string{}
 		for {
 			var req struct {
@@ -389,6 +390,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{"frameId": "frame-1"}
 			} else if req.Method == "Page.enable" {
 				resp["result"] = map[string]any{}
+				dialogEnabledSessions[req.SessionID] = true
 				if strings.Contains(req.SessionID, "dialog") {
 					events = append(events, map[string]any{
 						"sessionId": req.SessionID,
@@ -421,8 +423,14 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Page.disable" {
 				resp["result"] = map[string]any{}
+				delete(dialogEnabledSessions, req.SessionID)
 			} else if req.Method == "Page.handleJavaScriptDialog" {
-				resp["result"] = map[string]any{}
+				targetID := strings.TrimPrefix(req.SessionID, "session-")
+				if fakeTargetBool(targetInfos, targetID, "requireDialogSession") && !dialogEnabledSessions[req.SessionID] {
+					resp["error"] = map[string]any{"code": -32000, "message": "No dialog is showing"}
+				} else {
+					resp["result"] = map[string]any{}
+				}
 			} else if req.Method == "Page.addScriptToEvaluateOnNewDocument" {
 				resp["result"] = map[string]any{"identifier": "interaction-script-1"}
 			} else if req.Method == "Page.removeScriptToEvaluateOnNewDocument" {

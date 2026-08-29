@@ -1331,12 +1331,15 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"dialog": {
 			Name:        "dialog",
-			Description: "Accept or dismiss the currently open JavaScript dialog on a selected page; accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
+			Description: "Accept or dismiss a JavaScript dialog on a selected page; direct mode handles an already-owned dialog, while optional --wait observes and handles on the same attached session. Accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
 			Fields: []schemaField{
-				{Name: "ok", Type: "boolean", Required: true, Description: "True when Page.handleJavaScriptDialog completed."},
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when Page.handleJavaScriptDialog completed, including same-session wait mode."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
 				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
-				{Name: "dialog", Type: "dialog_action_result", Required: true, Description: "Action, accepted state, and whether prompt text was supplied."},
+				{Name: "wait", Type: "dialog_wait_result", Required: false, Description: "Page.javascriptDialogOpening wait criteria, match counts, bounded timing, and handling action on the same attached session when --wait or a wait criterion is used."},
+				{Name: "dialog", Type: "dialog_action_or_wait_event", Required: true, Description: "Direct action, accepted state, prompt-text presence, and—when waiting—safe dialog event metadata and handling state."},
+				{Name: "last_event", Type: "dialog_wait_event", Required: false, Description: "Last non-matching dialog event when wait mode times out."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Bounded follow-up commands that preserve same-session dialog ownership guidance."},
 			},
 		},
 		"select": {

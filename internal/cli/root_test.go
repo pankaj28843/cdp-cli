@@ -602,7 +602,7 @@ func TestWaitDialogTimeoutJSON(t *testing.T) {
 	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "dialog" || got.Data.Wait.Matched || got.Data.Wait.EventCount != 0 || got.Data.Wait.ObservedCount != 0 || got.Data.Wait.Criteria.Type != "alert" {
 		t.Fatalf("wait dialog timeout = %+v, want timeout envelope with wait criteria", got)
 	}
-	if !containsString(got.RemediationCommands, "cdp dialog dismiss --json") {
+	if !containsString(got.RemediationCommands, "cdp dialog dismiss --wait --json") {
 		t.Fatalf("wait dialog remediation commands = %+v, want dialog dismiss command", got.RemediationCommands)
 	}
 }

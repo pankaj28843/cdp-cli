@@ -282,7 +282,7 @@ func dialogWaitReport(observation dialogWaitObservation, opts dialogWaitOptions,
 		},
 	}
 	if opts.Action == "none" {
-		wait["warnings"] = []string{"JavaScript dialogs block page execution until accepted or dismissed; pass --action accept or --action dismiss, or run cdp dialog accept/dismiss after this wait"}
+		wait["warnings"] = []string{"JavaScript dialogs block page execution until accepted or dismissed; pass --action accept or --action dismiss so observation and handling stay in one session; a later action command cannot assume ownership after this wait detaches"}
 	}
 	report := map[string]any{
 		"ok":   observation.Matched,
@@ -369,7 +369,7 @@ func dialogWaitRemediations(opts dialogWaitOptions) []string {
 	return []string{
 		waitCommand + " --timeout 15s --json",
 		"cdp events tap --enable page --match Page.javascriptDialogOpening --duration 5s --json",
-		"cdp dialog dismiss --json",
+		"cdp dialog dismiss --wait --json",
 		"cdp snapshot --json",
 	}
 }
@@ -379,8 +379,8 @@ func dialogWaitNextCommands(opts dialogWaitOptions) []string {
 		return []string{"cdp snapshot --json", "cdp pages --json"}
 	}
 	return []string{
-		"cdp dialog accept --json",
-		"cdp dialog dismiss --json",
+		"cdp dialog accept --wait --json",
+		"cdp dialog dismiss --wait --json",
 		"cdp events tap --enable page --match Page.javascriptDialogOpening --duration 5s --json",
 	}
 }
