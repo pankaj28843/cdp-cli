@@ -806,10 +806,14 @@ func commandExamples(path string) []string {
 	examples["cdp perf summary"] = []string{"cdp perf summary --duration 5s --json"}
 	examples["cdp memory counters"] = []string{"cdp memory counters --json"}
 	examples["cdp memory heap-snapshot"] = []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"}
-	examples["cdp events"] = []string{"cdp events tap --duration 10s --json"}
+	examples["cdp events"] = []string{"cdp events tap --duration 10s --json", "cdp events stream --target <target-id> --enable page,runtime --match Page.loadEventFired --duration 30s --json"}
 	examples["cdp events tap"] = []string{
 		"cdp events tap --enable page,network,runtime --match Page.lifecycleEvent,Network.loadingFailed --duration 10s --json",
 		"cdp events tap --target <target-id> --duration 30s --ready-file tmp/events.ready.json --json",
+	}
+	examples["cdp events stream"] = []string{
+		"cdp events stream --target <target-id> --enable page,runtime --match Page.loadEventFired --duration 30s --json",
+		"printf '+Runtime.consoleAPICalled\\n' | cdp events stream --target-index 1 --json",
 	}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}

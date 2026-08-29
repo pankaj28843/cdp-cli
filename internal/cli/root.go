@@ -62,6 +62,13 @@ type app struct {
 }
 
 func Execute(ctx context.Context, args []string, out, err io.Writer, build BuildInfo) int {
+	return ExecuteWithInput(ctx, args, os.Stdin, out, err, build)
+}
+
+// ExecuteWithInput is the command entry point with an explicit stdin reader.
+// The installed binary uses os.Stdin through Execute; the injectable reader
+// keeps long-lived stdin protocols deterministic in tests and embedders.
+func ExecuteWithInput(ctx context.Context, args []string, in io.Reader, out, err io.Writer, build BuildInfo) int {
 	a := &app{
 		out:   out,
 		err:   err,
@@ -73,6 +80,7 @@ func Execute(ctx context.Context, args []string, out, err io.Writer, build Build
 
 	cmd := a.newRoot()
 	cmd.SetArgs(args)
+	cmd.SetIn(in)
 	cmd.SetOut(out)
 	cmd.SetErr(err)
 

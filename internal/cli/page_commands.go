@@ -1691,6 +1691,10 @@ func (a *app) attachExactPageSession(ctx context.Context, client cdp.CommandClie
 }
 
 func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains, titleContains string) (browserEventClient, *cdp.PageSession, cdp.TargetInfo, error) {
+	return a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, 0)
+}
+
+func (a *app) attachPageEventSessionWithIndex(ctx context.Context, targetID, urlContains, titleContains string, targetIndex int) (browserEventClient, *cdp.PageSession, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		return nil, nil, cdp.TargetInfo{}, commandError(
@@ -1700,6 +1704,25 @@ func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains,
 			ExitConnection,
 			a.connectionRemediationCommands(),
 		)
+	}
+	if targetIndex > 0 {
+		target, err := a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, nil, cdp.TargetInfo{}, err
+		}
+		session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, nil, cdp.TargetInfo{}, commandError(
+				"connection_failed",
+				"connection",
+				fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+				ExitConnection,
+				[]string{"cdp pages --json", "cdp doctor --json"},
+			)
+		}
+		return client, session, target, nil
 	}
 	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 		session, target, handled, err := a.attachExactPageSession(ctx, client, closeClient, targetID)
@@ -1751,6 +1774,26 @@ func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.Comman
 		)
 	}
 	return resolvePageTarget(targets, targetID, urlContains, titleContains)
+}
+
+func (a *app) resolvePageTargetWithClientIndex(ctx context.Context, client cdp.CommandClient, targetID, urlContains, titleContains string, targetIndex int) (cdp.TargetInfo, error) {
+	if targetIndex <= 0 {
+		return cdp.TargetInfo{}, commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+	}
+	if strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "" {
+		return cdp.TargetInfo{}, commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+	}
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
+		return cdp.TargetInfo{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("list targets: %v", err),
+			ExitConnection,
+			[]string{"cdp doctor --json", "cdp daemon status --json"},
+		)
+	}
+	return resolvePageTargetByIndex(targets, targetIndex)
 }
 
 func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) (cdp.TargetInfo, bool) {
@@ -1943,6 +1986,28 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page title contains %q", titleContains))
 	}
 	return onePageTarget(pages, "default page")
+}
+
+func resolvePageTargetByIndex(targets []cdp.TargetInfo, targetIndex int) (cdp.TargetInfo, error) {
+	pages := make([]cdp.TargetInfo, 0, len(targets))
+	for _, target := range targets {
+		if target.Type == "page" {
+			pages = append(pages, target)
+		}
+	}
+	if targetIndex <= 0 {
+		return cdp.TargetInfo{}, commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+	}
+	if targetIndex > len(pages) {
+		return cdp.TargetInfo{}, commandError(
+			"target_not_found",
+			"usage",
+			fmt.Sprintf("page target index %d is out of range; found %d page targets", targetIndex, len(pages)),
+			ExitUsage,
+			[]string{"cdp pages --json"},
+		)
+	}
+	return pages[targetIndex-1], nil
 }
 
 func onePageTarget(matches []cdp.TargetInfo, label string) (cdp.TargetInfo, error) {

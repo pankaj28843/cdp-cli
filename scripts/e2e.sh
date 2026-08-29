@@ -95,6 +95,7 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" describe --command "connection add" --json | jq -e '.ok == true and .commands.name == "add" and (.commands.examples | any(contains("--auto-connect")))' >/dev/null
 "$binary" describe --command "connection select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("connection select")))' >/dev/null
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
+"$binary" describe --command "events stream" --json | jq -e '.ok == true and .commands.name == "stream" and (.commands.examples | any(contains("events stream"))) and (.commands.examples | any(contains("--target-index"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "max-events" and .type == "int"))' >/dev/null
 agent_help="$("$binary" workflow agent --help)"
 grep -q 'agents.google.exclusive_ai_mode' <<<"$agent_help"
 grep -q -- '--google-ai auto|mode|off' <<<"$agent_help"
@@ -125,6 +126,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
+"$binary" schema events-stream --json | jq -e '.ok == true and .schema.name == "events-stream" and (.schema.fields | map(.name) | index("event")) and (.schema.fields | map(.name) | index("foreign_events_dropped"))' >/dev/null
 "$binary" schema webagent-operation --json | jq -e '.ok == true and .schema.name == "webagent-operation" and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("evidence"))' >/dev/null
 "$binary" schema webagent-capabilities --json | jq -e '.ok == true and .schema.name == "webagent-capabilities" and (.schema.fields | map(.name) | index("operations"))' >/dev/null
 "$binary" schema webagent-cleanup --json | jq -e '.ok == true and .schema.name == "webagent-cleanup" and (.schema.fields[] | select(.name == "identity_omitted" and .type == "boolean" and (.description | contains("privacy-safe") and contains("lifecycle state"))))' >/dev/null

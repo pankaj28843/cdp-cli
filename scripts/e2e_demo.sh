@@ -23,6 +23,7 @@ chrome_pid=""
 app_url=""
 managed_state=""
 managed_stop_verification_state=""
+stream_pid=""
 
 require_artifact() {
   local path=$1
@@ -59,6 +60,10 @@ cleanup() {
 	if [[ -n "$managed_stop_verification_state" ]]; then
 		"$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_stop_verification_state" --json >/dev/null 2>&1 || true
 	fi
+  if [[ -n "$stream_pid" ]]; then
+    kill "$stream_pid" 2>/dev/null || true
+    wait "$stream_pid" 2>/dev/null || true
+  fi
   if [[ -n "$chrome_pid" ]]; then
     "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
     kill "$chrome_pid" 2>/dev/null || true
@@ -208,6 +213,35 @@ wait "$collector_pid"
 jq -e '.ok == true and (.messages[] | select(.type == "exception" and (.text | contains("ready-collector-exception"))))' "$collector_output" >/dev/null
 if [[ -e "$collector_ready_file" ]]; then
   echo "collector readiness artifact remained after collector exit" >&2
+  exit 1
+fi
+stream_ready_root="$state_dir/stream-ready"
+stream_ready_file="$stream_ready_root/events.ready.json"
+stream_output="$state_dir/events-stream.jsonl"
+mkdir -m 700 "$stream_ready_root"
+"$binary" events stream --target "$collector_target_id" --enable runtime --match Runtime.consoleAPICalled --duration 2s --ready-file "$stream_ready_file" --state-dir "$state_dir/cdp-state" --json < <(sleep 5) >"$stream_output" &
+stream_pid=$!
+for _ in {1..100}; do
+  [[ -s "$stream_ready_file" ]] && break
+  if ! kill -0 "$stream_pid" 2>/dev/null; then
+    echo "event stream exited before readiness" >&2
+    sed -n '1,80p' "$stream_output" >&2 || true
+    wait "$stream_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and (.enabled_domains | sort == ["runtime"])' "$stream_ready_file" >/dev/null
+"$binary" eval "console.error('stream-synthetic-marker')" --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json >/dev/null
+wait "$stream_pid"
+stream_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .stream.session_bound == true)] | length) == 1 and
+  ([.[] | select(.type == "event" and .event.method == "Runtime.consoleAPICalled" and (.event.sessionId | type == "string" and length > 0) and (.event.params.args[0].value == "stream-synthetic-marker"))] | length) == 1 and
+  ([.[] | select(.type == "stopped" and .reason == "duration" and .event_count >= 1 and .truncated == false)] | length) == 1
+' "$stream_output" >/dev/null
+if [[ -e "$stream_ready_file" ]]; then
+  echo "event stream readiness artifact remained after stream exit" >&2
   exit 1
 fi
 reuse_open_output="$("$binary" open "$app_url?cdp_reused=1" --reuse --url-contains "$app_url" --budget-summary --state-dir "$state_dir/cdp-state" --json)"

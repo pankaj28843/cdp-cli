@@ -713,6 +713,15 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Runtime.enable" {
 				resp["result"] = map[string]any{}
+				if strings.Contains(req.SessionID, "stream-page") {
+					events = append(events, map[string]any{
+						"sessionId": "session-foreign-stream-target",
+						"method":    "Runtime.consoleAPICalled",
+						"params": map[string]any{
+							"args": []map[string]any{{"type": "string", "value": "foreign-stream-event"}},
+						},
+					})
+				}
 				events = append(events, map[string]any{
 					"sessionId": req.SessionID,
 					"method":    "Runtime.consoleAPICalled",

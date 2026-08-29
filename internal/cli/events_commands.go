@@ -15,6 +15,7 @@ import (
 func (a *app) newEventsCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "events", Short: "Observe bounded raw CDP event streams"}
 	cmd.AddCommand(a.newEventsTapCommand())
+	cmd.AddCommand(a.newEventsStreamCommand())
 	return cmd
 }
 
@@ -36,21 +37,11 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 		defer session.Close(ctx)
 		enabledDomains := parseCSVSet(enable)
 		for domain := range enabledDomains {
-			var enableErr error
-			switch domain {
-			case "page":
-				enableErr = client.CallSession(ctx, session.SessionID, "Page.enable", map[string]any{}, nil)
-			case "network":
-				enableErr = client.CallSession(ctx, session.SessionID, "Network.enable", map[string]any{}, nil)
-			case "runtime":
-				enableErr = client.CallSession(ctx, session.SessionID, "Runtime.enable", map[string]any{}, nil)
-			case "log":
-				enableErr = client.CallSession(ctx, session.SessionID, "Log.enable", map[string]any{}, nil)
-			default:
+			if _, ok := eventDomainEnableMethod(domain); !ok {
 				return commandError("usage", "usage", fmt.Sprintf("unsupported --enable domain %q", domain), ExitUsage, []string{"cdp events tap --enable page,network,runtime,log --json"})
 			}
-			if enableErr != nil {
-				return commandError("collector_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", domain, target.TargetID, enableErr), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+			if err := enableEventDomain(ctx, client, session.SessionID, domain); err != nil {
+				return commandError("collector_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", domain, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 			}
 		}
 		domainNames := setKeys(enabledDomains)
