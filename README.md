@@ -203,6 +203,21 @@ verification behavior:
 Zero, negative, out-of-range, and selector-conflicting indexes fail before
 page attachment or form-control mutation; workers do not change page order.
 
+Local file actions also accept the page-only index. `file` resolves the input
+and assigns a local file on the selected page; detached `file chooser` accepts
+either its existing `--target` or `--target-index` selector because backend
+node IDs are target-scoped. Indexed reports include `target_index`, retain
+trial/actionability evidence, and expose only path/basename/count metadata;
+file contents are never printed:
+
+    cdp file 'Upload file' tmp/upload.txt --by label --target-index 2 --json
+    cdp file chooser 247 tmp/first.epub tmp/second.epub --target-index 2 --json
+
+The index is mutually exclusive with `--target`, `--url-contains`, and
+`--title-contains` on `file`; for `file chooser` it is mutually exclusive with
+`--target`. Invalid and out-of-range indexes fail before page attachment or
+file mutation, and workers do not change page order.
+
 Read-only inspection commands use the same page-only selector: `frames`,
 `locator find`, `dom query`, `css inspect`, `layout overflow`, and
 `a11y tree`, `a11y find`, `a11y node`, and `a11y snapshot`. Successful indexed

@@ -637,6 +637,10 @@ func (a *app) newFileCommand() *cobra.Command {
 		Short: "Set a file input by CSS selector or strict locator without printing file contents",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if _, err := os.Stat(args[1]); err != nil {
 				return commandError("usage", "usage", fmt.Sprintf("file path is not readable: %v", err), ExitUsage, []string{"cdp file input[type=file] tmp/upload.txt --json"})
 			}
@@ -649,7 +653,7 @@ func (a *app) newFileCommand() *cobra.Command {
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -689,6 +693,7 @@ func (a *app) newFileCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("file", selector, actionability), ExitCheckFailed, actionabilityRemediations("file", args[0], selector, locatorOpts), report)
 			}
 			if err := evaluateJSONValue(ctx, session, fileInputExpression(selector, filepath.Base(args[1])), "file", &result); err != nil {
@@ -715,6 +720,7 @@ func (a *app) newFileCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if trial {
 				report["action"] = "trial"
 				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
@@ -730,6 +736,7 @@ func (a *app) newFileCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "resolve and validate the file input without assigning the local file")
 	cmd.AddCommand(a.newFileChooserCommand())
@@ -742,11 +749,15 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "chooser <backend-node-id> <path> [path...]",
 		Short: "Set one or more files on a detached DevTools file chooser",
-		Long:  "Validate a Page.fileChooserOpened backend node, then assign one or more local files through DOM.setFileInputFiles. An explicit page target is required because backend node IDs are target-scoped. File contents are never printed.",
+		Long:  "Validate a Page.fileChooserOpened backend node, then assign one or more local files through DOM.setFileInputFiles. Select the emitting page with --target or the 1-based page-only --target-index because backend node IDs are target-scoped. File contents are never printed.",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(targetID) == "" {
-				return commandError("target_required", "usage", "file chooser requires an explicit --target because backend node IDs are target-scoped", ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json", "cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json"})
+			targetIndex, err := inputTargetIndex(cmd, targetID, "", "")
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(targetID) == "" && targetIndex == 0 {
+				return commandError("target_required", "usage", "file chooser requires --target or --target-index because backend node IDs are target-scoped", ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json", "cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json", "cdp file chooser <backend-node-id> tmp/upload.txt --target-index 2 --trial --json"})
 			}
 			backendNodeID, err := strconv.Atoi(args[0])
 			if err != nil || backendNodeID <= 0 {
@@ -759,7 +770,7 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, "", "")
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, "", "", targetIndex)
 			if err != nil {
 				return err
 			}
@@ -775,6 +786,7 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 				"target":       pageRow(target),
 				"file_chooser": result,
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if trial {
 				report["action"] = "trial"
 				return a.render(ctx, fmt.Sprintf("trial\t%s\t%d\t%d", target.TargetID, backendNodeID, len(fileNames)), report)
@@ -791,6 +803,7 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "explicit page target id or unique prefix that emitted Page.fileChooserOpened")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().BoolVar(&trial, "trial", false, "validate the backend node and local files without assigning them")
 	return cmd
 }

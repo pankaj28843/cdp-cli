@@ -161,7 +161,9 @@ if [[ "$marker_headless_code" -ne 2 || "$click_zero_code" -ne 2 ]]; then
 fi
 jq -e '.ok == false and .code == "invalid_browser_mode" and (.message | contains("headed"))' <<<"$marker_headless_output" >/dev/null
 jq -e '.ok == false and .code == "invalid_target_index" and (.message | contains("greater than zero"))' <<<"$click_zero_output" >/dev/null
-for input_command in fill type insert-text press focus clear check uncheck select hover drag scroll; do
+e2e_upload_path="$state_dir/e2e-upload.txt"
+printf '%s\n' 'synthetic upload' >"$e2e_upload_path"
+for input_command in fill type insert-text press focus clear check uncheck select hover drag scroll file; do
   case "$input_command" in
     fill|type)
       input_command_args=("$input_command" "input#q" hello)
@@ -196,6 +198,9 @@ for input_command in fill type insert-text press focus clear check uncheck selec
     scroll)
       input_command_args=(scroll "div#scroll-target")
       ;;
+    file)
+      input_command_args=(file "input#upload" "$e2e_upload_path")
+      ;;
   esac
   "$binary" describe --command "$input_command" --json \
     | jq -e '.ok == true and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.examples | any(contains("--target-index 2")))' >/dev/null
@@ -208,6 +213,12 @@ for input_command in fill type insert-text press focus clear check uncheck selec
   test "$input_index_code" -eq 2
   jq -e '.ok == false and .code == "invalid_target_index"' <<<"$input_index_output" >/dev/null
 done
+set +e
+file_chooser_index_output="$("$binary" file chooser 247 "$e2e_upload_path" --target-index 0 --state-dir "$state_dir" --json)"
+file_chooser_index_code=$?
+set -e
+test "$file_chooser_index_code" -eq 2
+jq -e '.ok == false and .code == "invalid_target_index"' <<<"$file_chooser_index_output" >/dev/null
 agent_help="$("$binary" workflow agent --help)"
 grep -q 'agents.google.exclusive_ai_mode' <<<"$agent_help"
 grep -q -- '--google-ai auto|mode|off' <<<"$agent_help"
@@ -437,10 +448,10 @@ rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
 "$binary" describe --command "select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("--by label"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("--force"))) and (.commands.examples | any(contains("--wait-text"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "trial")) and (.commands.flags[] | select(.name == "force")) and (.commands.flags[] | select(.name == "wait-text")) and (.commands.flags[] | select(.name == "wait-selector")) and (.commands.flags[] | select(.name == "poll"))' >/dev/null
 "$binary" describe --command "check" --json | jq -e '.ok == true and .commands.name == "check" and (.commands.examples | any(contains("--by label"))) and (.commands.examples | any(contains("--by role"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("--force"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "trial")) and (.commands.flags[] | select(.name == "force"))' >/dev/null
 "$binary" describe --command "uncheck" --json | jq -e '.ok == true and .commands.name == "uncheck" and (.commands.examples | any(contains("--by label"))) and (.commands.examples | any(contains("--by role"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("--force"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "trial")) and (.commands.flags[] | select(.name == "force"))' >/dev/null
-"$binary" describe --command "file" --json | jq -e '.ok == true and .commands.name == "file" and (.commands.examples | any(contains("--by label"))) and (.commands.examples | any(contains("--trial"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "trial"))' >/dev/null
-"$binary" schema file --json | jq -e '.ok == true and .schema.name == "file" and (.schema.fields | map(.name) | index("file")) and (.schema.fields | map(.name) | index("actionability")) and (.schema.fields | map(.name) | index("resolved_selector"))' >/dev/null
-"$binary" describe --command "file chooser" --json | jq -e '.ok == true and .commands.name == "chooser" and (.commands.examples | any(contains("--target <target-id>"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("first.epub") and contains("second.epub"))) and (.commands.flags[] | select(.name == "target")) and (.commands.flags[] | select(.name == "trial"))' >/dev/null
-"$binary" schema file-chooser --json | jq -e '.ok == true and .schema.name == "file-chooser" and (.schema.fields | map(.name) | index("file_chooser")) and (.schema.fields | map(.name) | index("target"))' >/dev/null
+"$binary" describe --command "file" --json | jq -e '.ok == true and .commands.name == "file" and (.commands.examples | any(contains("--by label"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--trial"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "trial"))' >/dev/null
+"$binary" schema file --json | jq -e '.ok == true and .schema.name == "file" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("file")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("actionability")) and (.schema.fields | map(.name) | index("resolved_selector"))' >/dev/null
+"$binary" describe --command "file chooser" --json | jq -e '.ok == true and .commands.name == "chooser" and (.commands.examples | any(contains("--target <target-id>"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("first.epub") and contains("second.epub"))) and (.commands.flags[] | select(.name == "target")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "trial"))' >/dev/null
+"$binary" schema file-chooser --json | jq -e '.ok == true and .schema.name == "file-chooser" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("file_chooser")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
 "$binary" describe --command "scroll" --json | jq -e '.ok == true and .commands.name == "scroll" and (.commands.examples | any(contains("--by role"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--trial"))) and (.commands.examples | any(contains("--block"))) and (.commands.flags[] | select(.name == "by")) and (.commands.flags[] | select(.name == "role")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "trial")) and (.commands.flags[] | select(.name == "block")) and (.commands.flags[] | select(.name == "inline"))' >/dev/null
 "$binary" schema scroll --json | jq -e '.ok == true and .schema.name == "scroll" and (.schema.description | contains("indexed page")) and (.schema.fields | map(.name) | index("scroll")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("actionability")) and (.schema.fields | map(.name) | index("resolved_selector"))' >/dev/null
 "$binary" describe --command "frames" --json | jq -e '.ok == true and .commands.name == "frames" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null

@@ -843,8 +843,8 @@ func commandExamples(path string) []string {
 	examples["cdp select"] = []string{"cdp select select[name=plan] pro --json", "cdp select select[name=plan] pro --target-index 2 --json", "cdp select Plan pro --by label --wait-text 'Plan selected' --json", "cdp select Plan pro --by label --trial --json", "cdp select '#hidden-plan' pro --force --json"}
 	examples["cdp check"] = []string{"cdp check 'Subscribe to newsletter' --by label --json", "cdp check input#subscribe --target-index 2 --json", "cdp check Subscribe --by role --role checkbox --trial --json", "cdp check '#covered-checkbox' --force --json"}
 	examples["cdp uncheck"] = []string{"cdp uncheck 'Subscribe to newsletter' --by label --json", "cdp uncheck input#subscribe --target-index 2 --json", "cdp uncheck Subscribe --by role --role checkbox --trial --json", "cdp uncheck '#covered-checkbox' --force --json"}
-	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json", "cdp file 'Upload file' tmp/upload.txt --by label --trial --json"}
-	examples["cdp file chooser"] = []string{"cdp file chooser 247 tmp/upload.txt --target <target-id> --trial --json", "cdp file chooser 247 tmp/first.epub tmp/second.epub --target <target-id> --json"}
+	examples["cdp file"] = []string{"cdp file input[type=file] tmp/upload.txt --json", "cdp file 'Upload file' tmp/upload.txt --by label --target-index 2 --trial --json"}
+	examples["cdp file chooser"] = []string{"cdp file chooser 247 tmp/upload.txt --target <target-id> --trial --json", "cdp file chooser 247 tmp/first.epub tmp/second.epub --target-index 2 --json"}
 	examples["cdp scroll"] = []string{"cdp scroll '#results' --json", "cdp scroll '#results' --target-index 2 --json", "cdp scroll 'Load more' --by role --role button --trial --json", "cdp scroll 'footer' --block end --inline nearest --json"}
 	examples["cdp dialog"] = []string{"cdp dialog accept --prompt-text yes --json", "cdp dialog dismiss --json"}
 	examples["cdp dialog accept"] = []string{"cdp dialog accept --prompt-text yes --json"}

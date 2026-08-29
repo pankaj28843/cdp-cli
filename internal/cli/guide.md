@@ -275,6 +275,21 @@ contracts:
 Zero, negative, out-of-range, and selector-conflicting indexes fail before page
 attachment or form-control mutation; worker targets do not change page order.
 
+Local file actions use the same page-only selector. `file` resolves an
+`input[type=file]` and assigns a local path; detached `file chooser` accepts
+either `--target` or `--target-index` to identify the page that emitted the
+target-scoped backend node. Indexed success and bounded failure reports include
+`target_index`, while path/basename/count metadata is retained and file
+contents remain omitted:
+
+    cdp file 'Upload file' tmp/upload.txt --by label --target-index 2 --json
+    cdp file chooser 247 tmp/first.epub tmp/second.epub --target-index 2 --json
+
+On `file`, the index is mutually exclusive with `--target`, `--url-contains`,
+and `--title-contains`; on `file chooser`, it is mutually exclusive with
+`--target`. Invalid, conflicting, and out-of-range indexes fail before page
+attachment or file mutation, and workers do not change page order.
+
 Pointer and viewport actions `hover`, `drag`, and `scroll` accept the same
 mutually exclusive page-only selector. Indexed reports include
 `target_index` beside the selected page while preserving pointer actionability,

@@ -1439,11 +1439,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"file": {
 			Name:        "file",
-			Description: "Resolve a CSS selector or strict locator to input[type=file], optionally run a non-mutating trial, then assign the local file path through CDP without printing file contents.",
+			Description: "Resolve a CSS selector or strict locator on a selected page to input[type=file], optionally run a non-mutating trial, then assign the local file path through CDP without printing file contents; page selection accepts a mutually exclusive 1-based --target-index.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when file assignment completed or --trial target checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: file_set for assignment or trial for non-mutating validation."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "file", Type: "file_result", Required: true, Description: "Selector, matched count, accepted input[type=file] state, file_set/trial flags, local path metadata, basename, and content omission marker."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Attached-only target evidence for file inputs. Playwright set_input_files does not require visible/stable/receives-events/enabled/editable checks."},
 				{Name: "locator", Type: "locator_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1452,11 +1453,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"file-chooser": {
 			Name:        "file-chooser",
-			Description: "Validate a detached Page.fileChooserOpened backend node and optionally assign one or more local files through CDP without printing file contents.",
+			Description: "Validate a detached Page.fileChooserOpened backend node and optionally assign one or more local files through CDP without printing file contents; select its target with --target or a mutually exclusive 1-based page --target-index.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when file assignment completed or --trial checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: files_set for assignment or trial for non-mutating validation."},
-				{Name: "target", Type: "page", Required: true, Description: "Explicit selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, chosen by --target or --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "file_chooser", Type: "file_chooser_result", Required: true, Description: "Backend node identity, input type, multiplicity, accept hint, file basenames/count, assignment state, and content omission marker."},
 			},
 		},
