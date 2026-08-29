@@ -1893,20 +1893,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"console": {
 			Name:        "console",
-			Description: "Console and browser log messages captured from a page target.",
+			Description: "Console and browser log messages captured from a page target; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when console capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console/log entries with id, source, type or level, text, timestamp, optional location, stack_trace, args, and exception details."},
 				{Name: "console", Type: "console_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
 			},
 		},
 		"network": {
 			Name:        "network",
-			Description: "Network requests captured from a page target.",
+			Description: "Network requests captured from a page target; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when network capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Request rows with id, URL, method, status, failure state, and size metadata."},
 				{Name: "network", Type: "network_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
 			},
@@ -1940,10 +1942,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"network-capture": {
 			Name:        "network-capture",
-			Description: "Full local network metadata capture with headers, bodies, timing, initiators, WebSocket records, redaction, and artifact output.",
+			Description: "Full local network metadata capture with headers, bodies, timing, initiators, WebSocket records, redaction, and artifact output; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when network capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "requests", Type: "array<network_capture_request>", Required: true, Description: "Full request/response records keyed by CDP request id, optionally including WebSocket lifecycle and frame data."},
 				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, WebSocket options, redaction mode, warning, and collector errors."},
 				{Name: "capture.artifact_safety", Type: "artifact_safety", Required: true, Description: "Shared artifact safety metadata: redaction mode, shareability classification, unsafe opt-in warning, and changed sensitive fields."},
@@ -1956,10 +1959,11 @@ func schemaCatalog() map[string]schemaInfo {
 
 		"network-websocket": {
 			Name:        "network-websocket",
-			Description: "Focused WebSocket lifecycle and frame capture from a page target.",
+			Description: "Focused WebSocket lifecycle and frame capture from a page target; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when WebSocket capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "websockets", Type: "array<network_capture_request>", Required: true, Description: "WebSocket records with handshake metadata, frames, errors, and close status."},
 				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, payload limits, redaction mode, warning, and collector errors."},
 				{Name: "capture.artifact_safety", Type: "artifact_safety", Required: true, Description: "Shared artifact safety metadata: redaction mode, shareability classification, unsafe opt-in warning, and changed sensitive fields."},

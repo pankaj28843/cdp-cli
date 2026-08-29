@@ -15,6 +15,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var wait time.Duration
 	var limit int
 	var failedOnly bool
@@ -24,6 +25,9 @@ func (a *app) newNetworkCommand() *cobra.Command {
 		Short: "Inspect network requests from a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -34,7 +38,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp network --limit 50 --json"})
 			}
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -62,7 +66,7 @@ func (a *app) newNetworkCommand() *cobra.Command {
 				)
 			}
 			lines := networkRequestLines(requests)
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+			report := map[string]any{
 				"ok":       true,
 				"target":   pageRow(target),
 				"requests": requests,
@@ -73,12 +77,17 @@ func (a *app) newNetworkCommand() *cobra.Command {
 					"truncated":   truncated,
 					"failed_only": failedOnly,
 				},
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect network events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of requests to return; use 0 for no limit")
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only return failed requests and HTTP 4xx/5xx responses")
@@ -94,6 +103,7 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var wait time.Duration
 	var limit int
 	var outPath string
@@ -105,6 +115,9 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 		Short: "Capture WebSocket lifecycle events and frames from a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			if wait < 0 || limit < 0 || payloadLimit <= 0 {
 				return commandError("usage", "usage", "--wait and --limit must be non-negative and --payload-limit must be positive", ExitUsage, []string{"cdp network websocket --wait 20s --payload-limit 262144 --json"})
 			}
@@ -122,7 +135,7 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -171,6 +184,9 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 				"websockets": websockets,
 				"capture":    capture,
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
@@ -190,6 +206,7 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect WebSocket events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 0, "maximum WebSocket records to return; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON WebSocket capture artifact")
@@ -213,6 +230,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var wait time.Duration
 	var limit int
 	var outPath string
@@ -236,6 +254,9 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 		Short: "Capture full local network metadata from a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			if wait < 0 || limit < 0 || bodyLimit <= 0 || websocketPayloadLimit <= 0 || bodyArtifactLimit < 1 || bodyArtifactLimit > 100 {
 				return commandError("usage", "usage", "--wait and --limit must be non-negative; body and WebSocket byte limits must be positive; --body-artifact-limit must be between 1 and 100", ExitUsage, []string{"cdp network capture --wait 10s --body-limit 262144 --json"})
 			}
@@ -258,7 +279,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -329,6 +350,9 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				"requests": records,
 				"capture":  capture,
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			artifactList := []map[string]any{}
 			if strings.TrimSpace(bodyOutDir) != "" {
 				bodyArtifacts, bodyArtifactRefs, err := writeNetworkBodyArtifacts(bodyOutDir, records, bodyArtifactLimit, artifactSafety)
@@ -374,6 +398,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect network events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 0, "maximum requests to return; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON network capture artifact")

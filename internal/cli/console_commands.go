@@ -12,6 +12,7 @@ func (a *app) newConsoleCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var wait time.Duration
 	var limit int
 	var errorsOnly bool
@@ -22,6 +23,9 @@ func (a *app) newConsoleCommand() *cobra.Command {
 		Short: "Capture console and browser log messages from a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -44,7 +48,7 @@ func (a *app) newConsoleCommand() *cobra.Command {
 				)
 			}
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -73,7 +77,7 @@ func (a *app) newConsoleCommand() *cobra.Command {
 				)
 			}
 			lines := consoleMessageLines(messages)
-			return a.render(ctx, strings.Join(lines, "\n"), map[string]any{
+			report := map[string]any{
 				"ok":       true,
 				"target":   pageRow(target),
 				"messages": messages,
@@ -85,12 +89,17 @@ func (a *app) newConsoleCommand() *cobra.Command {
 					"errors_only": errorsOnly,
 					"types":       setKeys(typeSet),
 				},
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, strings.Join(lines, "\n"), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&wait, "wait", time.Second, "how long to collect console/log events after attaching")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of messages to return; use 0 for no limit")
 	cmd.Flags().BoolVar(&errorsOnly, "errors", false, "only return warnings, errors, assertions, and exceptions")

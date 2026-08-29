@@ -80,7 +80,9 @@ cdp memory counters --target-index 2 --json
 cdp memory heap-snapshot --target-index 2 --out tmp/page.heapsnapshot --json
 cdp screenshot --out tmp/page.png --json
 cdp screenshot --target-index 2 --out tmp/page.png --json
-cdp console --errors --wait 2s --json
+cdp console --errors --target-index 2 --wait 2s --json
+cdp network --failed --target-index 2 --wait 2s --json
+cdp network capture --target-index 2 --redact safe --wait 2s --json
 cdp emulate network --preset slow-3g --json
 cdp emulate clear --json
 cdp storage indexeddb list --url-contains localhost --json

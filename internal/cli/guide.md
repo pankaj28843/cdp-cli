@@ -189,6 +189,21 @@ snapshot command keeps its existing local artifact-only output contract:
     cdp memory counters --target-index 2 --json
     cdp memory heap-snapshot --target-index 2 --out tmp/page.heapsnapshot --json
 
+Bounded console and network observers use the same page-only selector:
+`console`, `network`, `network capture`, and `network websocket`. Successful
+indexed reports include `target_index` beside the resolved target. Network
+artifacts retain their existing local-output and redaction rules; selecting a
+target by index does not broaden what is captured or persisted:
+
+    cdp console --target-index 2 --wait 2s --json
+    cdp network --target-index 2 --wait 2s --json
+    cdp network capture --target-index 2 --redact safe --wait 20s --json
+    cdp network websocket --target-index 2 --redact safe --wait 20s --json
+
+These observers reject zero, negative, out-of-range, and selector-conflicting
+indexes before page attachment, and the index follows the page-only order
+shown by `cdp pages`, excluding workers and other non-page targets.
+
 ## Lifecycle and safety
 
 Keep created tabs attributable with task/run metadata and close disposable

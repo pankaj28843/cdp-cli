@@ -525,23 +525,27 @@ func commandExamples(path string) []string {
 		"cdp console": {
 			"cdp console --json",
 			"cdp console --errors --wait 2s --json",
+			"cdp console --target-index 2 --wait 2s --json",
 			"cdp console --url-contains localhost --types error,warning --json",
 			"cdp console --target <target-id> --wait 30s --ready-file tmp/console.ready.json --json",
 		},
 		"cdp network": {
 			"cdp network --wait 2s --json",
 			"cdp network --failed --url-contains localhost --json",
+			"cdp network --target-index 2 --wait 2s --json",
 			"cdp network --target <target-id> --wait 30s --ready-file tmp/network.ready.json --json",
 		},
 		"cdp network capture": {
 			"cdp network capture --reload --wait 20s --out tmp/network.local.json --json",
 			"cdp network capture --redact safe --har-out tmp/network.har --json",
+			"cdp network capture --target-index 2 --redact safe --wait 2s --json",
 			"cdp network capture --redact safe --body-out-dir tmp/network-bodies --body-artifact-limit 20 --json",
 			"cdp network capture --include-websockets --include-websocket-payloads --out tmp/network-with-ws.local.json --json",
 			"cdp network capture --url-contains localhost --redact safe --out tmp/network-shareable.json --json",
 		},
 		"cdp network websocket": {
 			"cdp network websocket --wait 20s --include-payloads --out tmp/ws.local.json --json",
+			"cdp network websocket --target-index 2 --redact safe --wait 2s --json",
 			"cdp network websocket --url-contains localhost --redact safe --json",
 		},
 		"cdp network block": {

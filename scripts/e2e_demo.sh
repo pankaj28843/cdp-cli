@@ -901,6 +901,12 @@ screenshot_index_path="$state_dir/screenshot-target-index.png"
 "$binary" screenshot --target-index "$protocol_index" --out "$screenshot_index_path" --state-dir "$state_dir/cdp-state" --json >"$screenshot_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg path "$screenshot_index_path" '.ok == true and .target.id == $id and .target_index == $index and .screenshot.path == $path and .screenshot.bytes > 0' "$screenshot_index_report" >/dev/null
 require_artifact "$screenshot_index_path"
+console_index_report="$state_dir/console-target-index.json"
+"$binary" console --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$console_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.console.count | type == "number")' "$console_index_report" >/dev/null
+network_index_report="$state_dir/network-target-index.json"
+"$binary" network --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$network_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.network.count | type == "number")' "$network_index_report" >/dev/null
 event_tap_index_report="$state_dir/event-tap-target-index.json"
 "$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null
