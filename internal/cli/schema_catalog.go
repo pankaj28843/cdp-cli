@@ -1881,10 +1881,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"screenshot": {
 			Name:        "screenshot",
-			Description: "Page screenshot saved as a local artifact.",
+			Description: "Page screenshot saved as a local artifact; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when screenshot capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "screenshot", Type: "artifact", Required: true, Description: "Path, byte count, format, capture mode, optional viewport preset metadata, tile manifest metadata, element clip, crop, and navigation metadata."},
 				{Name: "render", Type: "object", Required: false, Description: "HTML render source URL, viewport, serve mode, and wait metadata for screenshot render."},
 				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Artifact references for agent workflows."},

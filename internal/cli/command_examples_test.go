@@ -48,7 +48,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 		{path: "cdp perf summary", want: []string{"--target-index 2"}},
 		{path: "cdp memory counters", want: []string{"--target-index 2"}},
 		{path: "cdp memory heap-snapshot", want: []string{"--target-index 2"}},
-		{path: "cdp screenshot", want: []string{"--element"}},
+		{path: "cdp screenshot", want: []string{"--element", "--target-index 2"}},
 		{path: "cdp screenshot render", want: []string{"--serve"}},
 		{path: "cdp storage cookies set", want: []string{"--name"}},
 		{path: "cdp storage indexeddb put", want: []string{"@tmp/value.json"}},

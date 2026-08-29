@@ -896,6 +896,11 @@ jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.o
 performance_memory_index_report="$state_dir/performance-memory-target-index.json"
 "$binary" perf summary --target-index "$protocol_index" --duration 0s --state-dir "$state_dir/cdp-state" --json >"$performance_memory_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.metrics.count | type == "number")' "$performance_memory_index_report" >/dev/null
+screenshot_index_report="$state_dir/screenshot-target-index.json"
+screenshot_index_path="$state_dir/screenshot-target-index.png"
+"$binary" screenshot --target-index "$protocol_index" --out "$screenshot_index_path" --state-dir "$state_dir/cdp-state" --json >"$screenshot_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg path "$screenshot_index_path" '.ok == true and .target.id == $id and .target_index == $index and .screenshot.path == $path and .screenshot.bytes > 0' "$screenshot_index_report" >/dev/null
+require_artifact "$screenshot_index_path"
 event_tap_index_report="$state_dir/event-tap-target-index.json"
 "$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null

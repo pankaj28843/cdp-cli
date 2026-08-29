@@ -79,6 +79,7 @@ cdp perf summary --target-index 2 --duration 5s --json
 cdp memory counters --target-index 2 --json
 cdp memory heap-snapshot --target-index 2 --out tmp/page.heapsnapshot --json
 cdp screenshot --out tmp/page.png --json
+cdp screenshot --target-index 2 --out tmp/page.png --json
 cdp console --errors --wait 2s --json
 cdp emulate network --preset slow-3g --json
 cdp emulate clear --json

@@ -621,6 +621,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" describe --command "emulate network" --json | jq -e '.ok == true and .commands.name == "network" and (.commands.examples | any(contains("--preset slow-3g"))) and (.commands.flags[] | select(.name == "download-kbps"))' >/dev/null
 "$binary" describe --command "dialog accept" --json | jq -e '.ok == true and .commands.name == "accept" and (.commands.flags[] | select(.name == "prompt-text"))' >/dev/null
 "$binary" describe --command "events tap" --json | jq -e '.ok == true and .commands.name == "tap" and (.commands.examples | any(contains("--target-index"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "max-events")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
+"$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 "$binary" describe --command "protocol compat" --json | jq -e '.ok == true and .commands.name == "compat" and (.commands.examples | any(contains("--requires")))' >/dev/null
@@ -634,6 +635,7 @@ rg -q 'cron cleanup' <<<"$page_cleanup_short"
 "$binary" schema a11y-snapshot --json | jq -e '.ok == true and .schema.name == "a11y-snapshot" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("snapshot")) and (.schema.fields | map(.name) | index("lines")) and (.schema.fields | map(.name) | index("text")) and (.schema.fields[] | select(.name == "snapshot").description | contains("include_ignored"))' >/dev/null
 "$binary" schema perf-summary --json | jq -e '.ok == true and .schema.name == "perf-summary" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("metrics"))' >/dev/null
 "$binary" schema memory --json | jq -e '.ok == true and .schema.name == "memory" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("artifact"))' >/dev/null
+"$binary" schema screenshot --json | jq -e '.ok == true and .schema.name == "screenshot" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("screenshot"))' >/dev/null
 "$binary" schema workflow-feeds --json | jq -e '.ok == true and .schema.name == "workflow-feeds"' >/dev/null
 
 mkdir -p "$state_dir/user-data"

@@ -218,6 +218,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var outPath string
 	var outDir string
 	var format string
@@ -237,6 +238,9 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 		Short: "Capture a page screenshot to a file",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -301,7 +305,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				}
 			}
 
-			session, target, err := a.attachOrCreateScreenshotSession(ctx, targetID, urlContains, titleContains, navigateURL)
+			session, target, err := a.attachOrCreateScreenshotSession(ctx, targetID, urlContains, titleContains, navigateURL, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -337,7 +341,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				}
 			}
 			if tileFullPage {
-				return a.captureTiledScreenshot(ctx, session, target, normalizedFormat, quality, outDir, tileHeight, tileMax, selectedPreset, strings.TrimSpace(preset) != "", navigateURL, wait)
+				return a.captureTiledScreenshot(ctx, session, target, targetIndex, normalizedFormat, quality, outDir, tileHeight, tileMax, selectedPreset, strings.TrimSpace(preset) != "", navigateURL, wait)
 			}
 			shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{
 				Format:   normalizedFormat,
@@ -395,19 +399,24 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				screenshot["navigate"] = map[string]any{"url": navigateURL, "wait": durationString(wait)}
 			}
 			human := fmt.Sprintf("%s\t%d bytes", writtenPath, len(data))
-			return a.render(ctx, human, map[string]any{
+			report := map[string]any{
 				"ok":         true,
 				"target":     pageRow(target),
 				"screenshot": screenshot,
 				"artifacts": []map[string]any{
 					{"type": "screenshot", "path": writtenPath},
 				},
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&outPath, "out", "", "required path to write the screenshot image")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for --tile-full-page tile artifacts and manifest")
 	cmd.Flags().StringVar(&format, "format", "", "screenshot format: png, jpeg, or webp; defaults to file extension or png")
@@ -426,7 +435,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) captureTiledScreenshot(ctx context.Context, session *cdp.PageSession, target cdp.TargetInfo, format string, quality int, outDir string, requestedTileHeight int, maxTiles int, selectedPreset responsiveViewport, hasPreset bool, navigateURL string, wait time.Duration) error {
+func (a *app) captureTiledScreenshot(ctx context.Context, session *cdp.PageSession, target cdp.TargetInfo, targetIndex int, format string, quality int, outDir string, requestedTileHeight int, maxTiles int, selectedPreset responsiveViewport, hasPreset bool, navigateURL string, wait time.Duration) error {
 	metrics, err := screenshotLayout(ctx, session)
 	if err != nil {
 		return commandError("connection_failed", "connection", fmt.Sprintf("get screenshot layout metrics target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp protocol describe Page.getLayoutMetrics --json"})
@@ -521,12 +530,16 @@ func (a *app) captureTiledScreenshot(ctx context.Context, session *cdp.PageSessi
 		screenshot["navigate"] = map[string]any{"url": navigateURL, "wait": durationString(wait)}
 	}
 	human := fmt.Sprintf("%s\t%d tiles", manifestPath, len(tileMetas))
-	return a.render(ctx, human, map[string]any{
+	report := map[string]any{
 		"ok":         true,
 		"target":     pageRow(target),
 		"screenshot": screenshot,
 		"artifacts":  artifacts,
-	})
+	}
+	if targetIndex > 0 {
+		report["target_index"] = targetIndex
+	}
+	return a.render(ctx, human, report)
 }
 
 type screenshotLayoutMetrics struct {
@@ -758,7 +771,10 @@ func settleScreenshotRenderFrame(ctx context.Context, session *cdp.PageSession) 
 	return nil
 }
 
-func (a *app) attachOrCreateScreenshotSession(ctx context.Context, targetID, urlContains, titleContains, navigateURL string) (*cdp.PageSession, cdp.TargetInfo, error) {
+func (a *app) attachOrCreateScreenshotSession(ctx context.Context, targetID, urlContains, titleContains, navigateURL string, targetIndex int) (*cdp.PageSession, cdp.TargetInfo, error) {
+	if targetIndex > 0 {
+		return a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
+	}
 	if strings.TrimSpace(navigateURL) == "" || strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "" {
 		return a.attachPageSession(ctx, targetID, urlContains, titleContains)
 	}

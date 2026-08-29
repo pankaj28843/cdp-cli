@@ -50,6 +50,15 @@ positional selector, and invalid or out-of-range values fail before mutation:
     cdp page reload --target-index 2 --json
     cdp page activate --target-index 2 --json
 
+Ordinary screenshots use the same page-only selector. The selected target is
+reported as `.target` and `.target_index`, while image bytes remain a local
+artifact path. With `--navigate`, an indexed screenshot navigates that existing
+page; without a target selector, the historical `--navigate` behavior still
+creates a new tab:
+
+    cdp screenshot --target-index 2 --out tmp/page.png --json
+    cdp screenshot --target-index 2 --navigate 'https://example.com' --wait 2s --out tmp/page.png --json
+
 Wait on an observable condition rather than a fixed sleep:
 
     cdp wait selector main --timeout 10s --json
