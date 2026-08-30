@@ -50,7 +50,8 @@ eight-character `short_id`; target prefixes are case-insensitive. Page rows also
 publish the 1-based `index`
 accepted by `--target-index`. Ambiguous and not-found selector errors expose
 only bounded candidate or available short IDs and counts under `.data`, never
-page URLs or titles. Use
+page URLs or titles. Plain `cdp pages` rows show index, short ID, full ID, URL,
+and quoted title for direct copy/paste. Use
 --target-index only when page-only ordering is the intended contract. For a
 visible split control whose center point is not the hit target, explicit
 --strategy dom may use measured related pointer-event pseudo-element evidence;

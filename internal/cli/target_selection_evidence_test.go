@@ -24,6 +24,22 @@ func TestTargetRowsPublishDirectSelectionMetadata(t *testing.T) {
 	}
 }
 
+func TestHumanTargetRowsPublishCopyReadySelectors(t *testing.T) {
+	targets := []cdp.TargetInfo{
+		{TargetID: "workerabcdef1234", Type: "worker", Title: "Worker\tTitle"},
+		{TargetID: "pageabcdef123456", Type: "page", URL: "https://example.test/app", Title: "App\nTitle"},
+	}
+
+	targetLines := targetHumanLines(targetRows(targets))
+	if len(targetLines) != 2 || targetLines[0] != "WORKERAB\tworkerabcdef1234\tworker\t\"Worker\\tTitle\"" {
+		t.Fatalf("target human lines = %q, want short/full/type/quoted-title", targetLines)
+	}
+	pageLines := pageHumanLines(pageRows(targets))
+	if len(pageLines) != 1 || pageLines[0] != "[1]\tPAGEABCD\tpageabcdef123456\thttps://example.test/app\t\"App\\nTitle\"" {
+		t.Fatalf("page human lines = %q, want index/short/full/URL/quoted-title", pageLines)
+	}
+}
+
 func TestAmbiguousTargetErrorsIncludeBoundedShortIDs(t *testing.T) {
 	targets := make([]cdp.TargetInfo, 0, 12)
 	for i := 0; i < 12; i++ {

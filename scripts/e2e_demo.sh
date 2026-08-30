@@ -255,8 +255,17 @@ jq -e '.ok == false and .code == "timeout" and .err_class == "timeout"' <<<"$eva
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
-collector_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' | head -n 1)"
-collector_target_short_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .short_id | ascii_downcase' | head -n 1)"
+collector_pages_json="$("$binary" pages --state-dir "$state_dir/cdp-state" --json)"
+collector_target_id="$(jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' <<<"$collector_pages_json" | head -n 1)"
+collector_target_short_id_upper="$(jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .short_id' <<<"$collector_pages_json" | head -n 1)"
+collector_target_short_id="$(jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .short_id | ascii_downcase' <<<"$collector_pages_json" | head -n 1)"
+collector_target_index="$(jq -r --arg id "$collector_target_id" '.pages[] | select(.id == $id) | .index' <<<"$collector_pages_json")"
+collector_pages_human="$("$binary" pages --state-dir "$state_dir/cdp-state")"
+printf -v collector_expected_human '[%s]\t%s\t%s\t%s\t"%s"' "$collector_target_index" "$collector_target_short_id_upper" "$collector_target_id" "$app_url/" "cdp-cli demo app"
+grep -Fqx "$collector_expected_human" <<<"$collector_pages_human"
+collector_targets_human="$("$binary" targets --state-dir "$state_dir/cdp-state")"
+printf -v collector_expected_target_human '%s\t%s\t%s\t"%s"' "$collector_target_short_id_upper" "$collector_target_id" "page" "cdp-cli demo app"
+grep -Fqx "$collector_expected_target_human" <<<"$collector_targets_human"
 set +e
 target_not_found_output="$("$binary" eval 'document.title' --target definitely-missing --state-dir "$state_dir/cdp-state" --json)"
 target_not_found_code=$?

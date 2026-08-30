@@ -48,12 +48,8 @@ func (a *app) newTargetsCommand() *cobra.Command {
 				targets = filterTargetsByType(targets, targetType)
 				rows := targetRows(targets)
 				rows = limitRows(rows, limit)
-				var lines []string
-				for _, target := range rows {
-					lines = append(lines, fmt.Sprintf("%s\t%s\t%s", target["id"], target["type"], target["title"]))
-				}
 				return commandRetryResult{
-					Human: strings.Join(lines, "\n"),
+					Human: strings.Join(targetHumanLines(rows), "\n"),
 					Data:  map[string]any{"ok": true, "targets": rows},
 				}, nil
 			})
@@ -100,12 +96,8 @@ func (a *app) newPagesCommand() *cobra.Command {
 				pages = filterRowsContains(pages, "title", titleContains)
 				pages = filterRowsExcludes(pages, "url", excludeURL)
 				pages = limitRows(pages, limit)
-				var lines []string
-				for _, page := range pages {
-					lines = append(lines, fmt.Sprintf("%s\t%s", page["id"], page["title"]))
-				}
 				return commandRetryResult{
-					Human: strings.Join(lines, "\n"),
+					Human: strings.Join(pageHumanLines(pages), "\n"),
 					Data:  map[string]any{"ok": true, "pages": pages, "budget": budget},
 				}, nil
 			})
@@ -240,6 +232,22 @@ func pageRows(targets []cdp.TargetInfo) []map[string]any {
 		pages = append(pages, row)
 	}
 	return pages
+}
+
+func targetHumanLines(rows []map[string]any) []string {
+	lines := make([]string, 0, len(rows))
+	for _, target := range rows {
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%q", target["short_id"], target["id"], target["type"], target["title"]))
+	}
+	return lines
+}
+
+func pageHumanLines(rows []map[string]any) []string {
+	lines := make([]string, 0, len(rows))
+	for _, page := range rows {
+		lines = append(lines, fmt.Sprintf("[%v]\t%s\t%s\t%s\t%q", page["index"], page["short_id"], page["id"], page["url"], page["title"]))
+	}
+	return lines
 }
 
 func pageRow(target cdp.TargetInfo) map[string]any {

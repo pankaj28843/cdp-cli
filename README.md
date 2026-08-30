@@ -173,6 +173,8 @@ URL/title substring selectors also require one unique page; duplicate matches
 return the same bounded candidate evidence instead of selecting the first tab.
 Page commands reject combinations of target ID, URL, title, and index selector
 modes instead of silently prioritizing one; raw protocol filters remain conjunctive.
+Plain `cdp pages` prints index, short ID, full ID, URL, and quoted title; plain
+`cdp targets` prints short ID, full ID, type, and quoted title.
 
 The direct emulation family uses the same page-only selector: `viewport`,
 `clear`, `media`, `color-scheme`, `user-agent`, `geolocation`, `timezone`,
