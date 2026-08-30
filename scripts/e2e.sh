@@ -1159,6 +1159,17 @@ if [[ "${CDP_E2E_MANAGED_HEADLESS_RECOVERY:-}" == "1" || "${CDP_E2E_MANAGED_HEAD
   done
   test -s "$hold_blackhole_port_file"
   hold_blackhole_port="$(<"$hold_blackhole_port_file")"
+  # Darwin's ps-backed process identity has one-second resolution. Cross a
+  # clock tick before starting the synthetic candidate so it cannot share the
+  # active runtime's otherwise-valid generation token.
+  hold_generation_second="$(date +%s)"
+  for _ in $(seq 1 40); do
+    if [[ "$(date +%s)" != "$hold_generation_second" ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  test "$(date +%s)" != "$hold_generation_second"
   mv "$orphan_runtime" "$orphan_runtime_hidden"
   (
     CDP_DAEMON_STATE_DIR="$forced_restart_state_dir" \
