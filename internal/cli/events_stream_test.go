@@ -22,11 +22,18 @@ func TestEventsStreamIsSessionScopedBoundedAndIndexAddressable(t *testing.T) {
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	closeInput := time.AfterFunc(2*time.Second, func() { _ = writer.Close() })
+	defer closeInput.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	var out, errOut bytes.Buffer
-	code := cli.ExecuteWithInput(context.Background(), []string{
+	code := cli.ExecuteWithInput(ctx, []string{
 		"events", "stream", "--target-index", "2", "--enable", "runtime",
 		"--match", "Runtime.consoleAPICalled", "--max-events", "1", "--json",
-	}, strings.NewReader(""), &out, &errOut, cli.BuildInfo{})
+	}, reader, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("events stream exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
@@ -45,6 +52,10 @@ func TestEventsStreamIsSessionScopedBoundedAndIndexAddressable(t *testing.T) {
 	streamMetadata, ok := records[0]["stream"].(map[string]any)
 	if !ok || streamMetadata["session_bound"] != true || streamMetadata["target_index"] != float64(2) {
 		t.Fatalf("ready stream metadata = %#v, want session-bound index 2", records[0]["stream"])
+	}
+	liveness, ok := streamMetadata["liveness"].(map[string]any)
+	if !ok || liveness["enabled"] != true || liveness["heartbeat"] != "Runtime.evaluate" || liveness["poll_interval"] != "15s" || liveness["failure_threshold"] != float64(2) || liveness["read_only"] != true {
+		t.Fatalf("ready liveness metadata = %#v, want read-only 15s two-strike heartbeat", streamMetadata["liveness"])
 	}
 	event, ok := records[1]["event"].(map[string]any)
 	if !ok || event["sessionId"] != "session-stream-page" || event["method"] != "Runtime.consoleAPICalled" {
@@ -147,6 +158,47 @@ func TestEventsStreamStopsOnContextDeadline(t *testing.T) {
 	records := decodeJSONLines(t, out.String())
 	if len(records) < 2 || records[0]["type"] != "ready" || records[len(records)-1]["type"] != "stopped" || records[len(records)-1]["reason"] != "timeout" {
 		t.Fatalf("events stream deadline records = %v, want ready/stopped timeout", recordTypes(records))
+	}
+}
+
+func TestEventsStreamRetiresAfterExactSessionLivenessLoss(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":                       "unhealthy-page",
+		"type":                           "page",
+		"title":                          "Unhealthy",
+		"url":                            "https://example.test/unhealthy",
+		"fakeRuntimeEvaluateErrorAlways": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	code := cli.ExecuteWithInput(ctx, []string{
+		"events", "stream", "--target", "unhealthy-page", "--enable", "page",
+		"--match", "Never.emitted", "--json",
+	}, reader, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("events stream liveness exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	records := decodeJSONLines(t, out.String())
+	if len(records) != 2 || records[0]["type"] != "ready" || records[1]["type"] != "stopped" {
+		t.Fatalf("events stream liveness records = %v, want ready/stopped: %s", recordTypes(records), out.String())
+	}
+	if records[1]["reason"] != "liveness" {
+		t.Fatalf("events stream liveness stop reason = %#v, want liveness", records[1]["reason"])
+	}
+	stream, ok := records[1]["stream"].(map[string]any)
+	if !ok {
+		t.Fatalf("events stream liveness stream metadata = %#v, want object", records[1]["stream"])
+	}
+	liveness, ok := stream["liveness"].(map[string]any)
+	if !ok || liveness["state"] != "retired" || liveness["reason"] != "exact_session_unhealthy" || liveness["consecutive_failures"] != float64(2) || liveness["read_only"] != true {
+		t.Fatalf("events stream liveness metadata = %#v, want metadata-only two-strike retirement", stream["liveness"])
 	}
 }
 

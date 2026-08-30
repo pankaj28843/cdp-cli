@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -717,6 +718,7 @@ func WriteBoundedManagedLog(ctx context.Context, root, path string, maxSize int6
 }
 
 type cappedWriter struct {
+	mu           sync.Mutex
 	writer       io.Writer
 	remaining    int64
 	inputBytes   int64
@@ -724,6 +726,8 @@ type cappedWriter struct {
 }
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.inputBytes += int64(len(p))
 	allowed := len(p)
 	if int64(allowed) > w.remaining {

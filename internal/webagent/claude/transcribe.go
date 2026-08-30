@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/augloop"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -287,11 +287,8 @@ func validateClaudeAudio(filePath string) (os.FileInfo, *transcribeFailure) {
 }
 
 func decodeClaudePCM(ctx context.Context, filePath string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", filePath, "-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", "pipe:1")
 	output := &claudeBoundedBuffer{limit: maxTranscriptionPCMBytes}
-	command.Stdout = output
-	command.Stderr = io.Discard
-	if err := command.Run(); err != nil {
+	if err := processgroup.Run(ctx, "ffmpeg", []string{"-hide_banner", "-loglevel", "error", "-i", filePath, "-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", "pipe:1"}, output, io.Discard); err != nil {
 		return nil, fmt.Errorf("decode Claude audio")
 	}
 	return output.Bytes(), nil

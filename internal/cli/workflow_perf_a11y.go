@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -19,8 +20,9 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "perf [url]",
 		Short: "Collect post-load performance metrics",
+		Long:  "Collect post-load performance metrics. URL-only runs own one disposable page and report bounded exact-target cleanup; --target-index runs retain the caller-owned page.",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			if wait < 0 || traceMaxBytes <= 0 || traceMaxBytes > 64*1024*1024 {
 				return commandError("usage", "usage", "--wait must be non-negative and --trace-max-bytes must be between 1 and 67108864", ExitUsage, []string{"cdp workflow perf 'https://example.com' --wait 5s --trace-max-bytes 16777216 --json"})
 			}
@@ -49,31 +51,31 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 					a.connectionRemediationCommands(),
 				)
 			}
-			closeOwned := true
-			defer func() {
-				if closeOwned {
-					_ = closeClient(ctx)
-				}
-			}()
-
-			target, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "perf", targetIndex)
+			closeClientOnce := idempotentContextCloser(closeClient)
+			defer func() { _ = closeClientOnce(context.Background()) }()
+			target, createdPage, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "perf", targetIndex)
 			if err != nil {
 				return err
 			}
+			cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: target.TargetID, owned: createdPage}
 
-			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClientOnce)
 			if err != nil {
-				closeOwned = true
-				return commandError(
+				cleanup := cleanupGuard.cleanup()
+				primary := commandError(
 					"connection_failed",
 					"connection",
 					fmt.Sprintf("attach target %s: %v", target.TargetID, err),
 					ExitConnection,
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
+				closeRenderedExtractSession(nil, closeClientOnce)
+				return diagnosticWorkflowErrorWithCleanup("perf", primary, cleanup)
 			}
-			closeOwned = false
-			defer session.Close(ctx)
+			defer closeRenderedExtractSession(session, nil)
+			defer func() {
+				retErr = diagnosticWorkflowErrorWithCleanup("perf", retErr, cleanupGuard.cleanup())
+			}()
 
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"performance": true})
 			traceStarted := false
@@ -134,6 +136,7 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 			report := map[string]any{
 				"ok":          true,
 				"target":      pageRow(target),
+				"cleanup":     cleanupGuard.cleanup(),
 				"performance": map[string]any{"metrics": performance, "count": len(performance)},
 				"insights":    trace.Insights,
 				"trace": map[string]any{
@@ -143,6 +146,7 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 				},
 				"workflow": map[string]any{
 					"name":             "perf",
+					"created_page":     createdPage,
 					"requested_url":    rawURL,
 					"wait":             durationString(wait),
 					"metric_count":     len(performance),
@@ -155,6 +159,10 @@ func (a *app) newWorkflowPerfCommand() *cobra.Command {
 				},
 			}
 			addWorkflowTargetIndex(report, targetIndex)
+			cleanup := cleanupGuard.cleanup()
+			if cleanup.Error != "" {
+				return diagnosticWorkflowErrorWithCleanup("perf", nil, cleanup)
+			}
 			if trace.Artifact != nil {
 				report["artifact"] = trace.Artifact
 				report["artifacts"] = []map[string]any{trace.Artifact}
@@ -183,8 +191,9 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "a11y [url]",
 		Short: "Run a focused accessibility workflow",
+		Long:  "Run a focused accessibility workflow. URL-only runs own one disposable page and report bounded exact-target cleanup; --target-index runs retain the caller-owned page.",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			if wait < 0 {
 				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow a11y 'https://example.com' --wait 5s --json"})
 			}
@@ -212,31 +221,31 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 					a.connectionRemediationCommands(),
 				)
 			}
-			closeOwned := true
-			defer func() {
-				if closeOwned {
-					_ = closeClient(ctx)
-				}
-			}()
-
-			target, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "a11y", targetIndex)
+			closeClientOnce := idempotentContextCloser(closeClient)
+			defer func() { _ = closeClientOnce(context.Background()) }()
+			target, createdPage, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "a11y", targetIndex)
 			if err != nil {
 				return err
 			}
+			cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: target.TargetID, owned: createdPage}
 
-			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClientOnce)
 			if err != nil {
-				closeOwned = true
-				return commandError(
+				cleanup := cleanupGuard.cleanup()
+				primary := commandError(
 					"connection_failed",
 					"connection",
 					fmt.Sprintf("attach target %s: %v", target.TargetID, err),
 					ExitConnection,
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
+				closeRenderedExtractSession(nil, closeClientOnce)
+				return diagnosticWorkflowErrorWithCleanup("a11y", primary, cleanup)
 			}
-			closeOwned = false
-			defer session.Close(ctx)
+			defer closeRenderedExtractSession(session, nil)
+			defer func() {
+				retErr = diagnosticWorkflowErrorWithCleanup("a11y", retErr, cleanupGuard.cleanup())
+			}()
 
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, map[string]bool{"console": true, "network": true})
 			if rawURL != "" {
@@ -284,6 +293,7 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 			report := map[string]any{
 				"ok":       true,
 				"target":   pageRow(target),
+				"cleanup":  cleanupGuard.cleanup(),
 				"requests": failedRequests,
 				"messages": errorMessages,
 				"a11y": map[string]any{
@@ -295,6 +305,7 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 				},
 				"workflow": map[string]any{
 					"name":               "a11y",
+					"created_page":       createdPage,
 					"requested_url":      rawURL,
 					"wait":               durationString(wait),
 					"issue_count":        issueCount,
@@ -307,6 +318,10 @@ func (a *app) newWorkflowA11yCommand() *cobra.Command {
 				},
 			}
 			addWorkflowTargetIndex(report, targetIndex)
+			cleanup := cleanupGuard.cleanup()
+			if cleanup.Error != "" {
+				return diagnosticWorkflowErrorWithCleanup("a11y", nil, cleanup)
+			}
 
 			displayURL := rawURL
 			if displayURL == "" {

@@ -151,7 +151,7 @@ func (a *app) newRoot() *cobra.Command {
 
 	root.PersistentFlags().BoolVar(&a.opts.json, "json", false, "emit JSON on stdout")
 	root.PersistentFlags().BoolVar(&a.opts.compact, "compact", false, "emit compact JSON without indentation")
-	root.PersistentFlags().StringVar(&a.opts.jq, "jq", "", "filter the success JSON envelope with a jq expression; implies --json (example: --jq '.records[] | .body')")
+	root.PersistentFlags().StringVar(&a.opts.jq, "jq", "", "filter the success JSON envelope with a jq expression; explicit output stays caller-requested, jq process tree cancellation is owned, and diagnostics are bounded; implies --json (example: --jq '.records[] | .body')")
 	root.PersistentFlags().BoolVar(&a.opts.debug, "debug", false, "write debug details to stderr")
 	root.PersistentFlags().DurationVar(&a.opts.timeout, "timeout", 0, "ceiling-bound command execution, such as 30s or 2m")
 	root.PersistentFlags().StringVar(&a.opts.profile, "profile", config.DefaultProfile, "named cdp-cli profile to use")
@@ -325,15 +325,22 @@ func (a *app) browserEndpoint(ctx context.Context) (string, error) {
 }
 
 func (a *app) browserOptions(ctx context.Context) (browser.ProbeOptions, error) {
-	if err := a.applySelectedConnection(ctx); err != nil {
-		return browser.ProbeOptions{}, err
+	selected := a.opts
+	if selected.browserURL == "" && !selected.autoConnect {
+		conn, source, ok, err := a.resolveConnection(ctx)
+		if err != nil {
+			return browser.ProbeOptions{}, err
+		}
+		if ok && source != "browser_mode_default" {
+			applyConnection(&selected, conn)
+		}
 	}
 	return browser.ProbeOptions{
-		BrowserURL:  a.opts.browserURL,
-		AutoConnect: a.opts.autoConnect,
-		Channel:     a.opts.channel,
-		UserDataDir: a.opts.userDataDir,
-		ActiveProbe: a.opts.activeProbe,
+		BrowserURL:  selected.browserURL,
+		AutoConnect: selected.autoConnect,
+		Channel:     selected.channel,
+		UserDataDir: selected.userDataDir,
+		ActiveProbe: selected.activeProbe,
 	}, nil
 }
 
@@ -370,10 +377,19 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	var runtime daemon.Runtime
 	var ok bool
 	var loadErr error
+	var processCheck daemon.RuntimeProcessCheck
+	var processChecked bool
 	for attempt := 0; attempt < attempts; attempt++ {
 		runtime, ok, loadErr = daemon.LoadRuntimeForMode(ctx, store.Dir, browserMode)
-		if loadErr == nil && ok && daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime) {
-			break
+		if loadErr == nil && ok {
+			processCheck = daemon.CheckRuntimeProcess(ctx, runtime)
+			processChecked = true
+			if processCheck.State == daemon.RuntimeProcessStateIdentityMismatch || processCheck.State == daemon.RuntimeProcessStateIdentityUnavailable {
+				break
+			}
+			if processCheck.Running && daemon.RuntimeSocketReady(ctx, runtime) {
+				break
+			}
 		}
 		if attempt+1 < attempts {
 			timer := time.NewTimer(75 * time.Millisecond)
@@ -391,7 +407,10 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	if !a.runtimeMatchesConnection(runtime) {
 		return status
 	}
-	processRunning := daemon.RuntimeRunning(runtime)
+	if !processChecked {
+		processCheck = daemon.CheckRuntimeProcess(ctx, runtime)
+	}
+	processRunning := processCheck.Running
 	socketReady := processRunning && daemon.RuntimeSocketReady(ctx, runtime)
 	if a.runtimeOverridesSelectedConnection(runtime) {
 		message := "mode-specific managed headless daemon runtime is ready"
@@ -408,7 +427,7 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	} else if !a.hasExplicitConnectionOptions() && runtime.ConnectionMode != status.ConnectionMode {
 		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
 	}
-	status = daemon.WithRuntimeReadiness(status, runtime, processRunning, socketReady)
+	status = daemon.WithRuntimeProcessCheck(status, runtime, processCheck, socketReady)
 	return status
 }
 
@@ -476,7 +495,7 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 	if source == "browser_mode_default" {
 		return nil
 	}
-	a.applyConnection(conn)
+	applyConnection(&a.opts, conn)
 	return nil
 }
 
@@ -484,14 +503,14 @@ func (a *app) hasExplicitConnectionOptions() bool {
 	return a.opts.browserURL != "" || a.opts.autoConnect
 }
 
-func (a *app) applyConnection(conn state.Connection) {
-	a.opts.browserURL = conn.BrowserURL
-	a.opts.autoConnect = conn.AutoConnect || conn.Mode == "auto_connect"
+func applyConnection(opts *options, conn state.Connection) {
+	opts.browserURL = conn.BrowserURL
+	opts.autoConnect = conn.AutoConnect || conn.Mode == "auto_connect"
 	if conn.Channel != "" {
-		a.opts.channel = conn.Channel
+		opts.channel = conn.Channel
 	}
 	if conn.UserDataDir != "" {
-		a.opts.userDataDir = conn.UserDataDir
+		opts.userDataDir = conn.UserDataDir
 	}
 }
 

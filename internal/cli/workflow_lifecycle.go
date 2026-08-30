@@ -3,9 +3,41 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 )
+
+func idempotentContextCloser(closeClient func(context.Context) error) func(context.Context) error {
+	var once sync.Once
+	var closeErr error
+	return func(ctx context.Context) error {
+		once.Do(func() {
+			if closeClient != nil {
+				closeErr = closeClient(ctx)
+			}
+		})
+		return closeErr
+	}
+}
+
+func workflowOwnedCleanupError(workflow string, primary error, cleanup renderedExtractCleanupResult, remediation []string) error {
+	if cleanup.Error == "" {
+		return primary
+	}
+	data := map[string]any{"cleanup": cleanup}
+	message := fmt.Sprintf("%s workflow-owned page cleanup failed: %s", workflow, cleanup.Error)
+	if primary != nil {
+		data["primary_error"] = commandErrorSummary(primary)
+		message = fmt.Sprintf("%s; workflow-owned page cleanup failed: %s", primary.Error(), cleanup.Error)
+	}
+	commands := make([]string, 0, len(remediation)+1)
+	if cleanup.RecoveryCommand != "" {
+		commands = append(commands, cleanup.RecoveryCommand)
+	}
+	commands = append(commands, remediation...)
+	return commandErrorWithData(workflow+"_cleanup_failed", "cleanup", message, ExitInternal, uniqueCommands(commands), data)
+}
 
 // workflowPageCloser returns an idempotent cleanup operation for a page a
 // workflow created. Cleanup deliberately owns its independent bounded context

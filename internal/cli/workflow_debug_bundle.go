@@ -522,7 +522,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	cmd.Flags().StringVar(&runID, "run-id", "", "optional run id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "optional task id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&stageName, "stage", "", "optional stage name recorded in bundle command and stage logs")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for follow-up commands")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for follow-up commands; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	cmd.Flags().BoolVar(&reload, "reload", true, "reload an existing selected target after collectors are armed")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", true, "bypass ordinary HTTP cache for the evidence-triggering reload or navigation")
 	return cmd

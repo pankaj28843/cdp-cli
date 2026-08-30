@@ -1612,7 +1612,15 @@ func (a *app) loadRequiredDaemonRuntime(ctx context.Context, storeDir, browserMo
 	if !a.runtimeMatchesConnection(runtime) {
 		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the effective %s browser-mode connection; inspect `%s`, `%s`, and `%s`, then run `%s` if the effective connection is correct and repair is appropriate for the current unattended context", browserMode, statusCommand, currentCommand, resolveCommand, repairCommand)
 	}
-	if !daemon.RuntimeRunning(runtime) {
+	processCheck := daemon.CheckRuntimeProcess(ctx, runtime)
+	if !processCheck.Running {
+		if processCheck.State == daemon.RuntimeProcessStateIdentityMismatch || processCheck.State == daemon.RuntimeProcessStateIdentityUnavailable {
+			reason := "does not match the recorded owner"
+			if processCheck.State == daemon.RuntimeProcessStateIdentityUnavailable {
+				reason = "could not be verified"
+			}
+			return daemon.Runtime{}, fmt.Errorf("%s daemon runtime process identity %s; inspect `%s` before retrying", browserMode, reason, statusCommand)
+		}
 		if browserMode == string(config.BrowserModeHeadless) {
 			return daemon.Runtime{}, fmt.Errorf("%s daemon process is not running; run `%s` or inspect `%s`", browserMode, repairCommand, statusCommand)
 		}
@@ -1667,7 +1675,7 @@ func (a *app) repairHeadlessDaemonForBrowserCommand(ctx context.Context, storeDi
 		"result":           probe.State,
 		"repair_requested": true,
 	}
-	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, false, 10*time.Minute, status, probeResult, runtimeCheck)
+	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, false, false, 10*time.Minute, status, probeResult, runtimeCheck)
 	if err != nil {
 		return err
 	}
@@ -1923,15 +1931,53 @@ func (a *app) createWorkflowPageTargetWithKeepOpen(ctx context.Context, client c
 		return targetID, err
 	}
 	if err := cdp.MarkTargetPersistent(ctx, client, targetID); err != nil {
-		return targetID, commandError(
-			"lease_target_policy_failed",
-			"lifecycle",
-			fmt.Sprintf("keep %s target %s open: %v", workflow, targetID, err),
-			ExitConnection,
-			[]string{"cdp daemon status --json", "cdp pages --json"},
-		)
+		return targetID, a.keepOpenPromotionFailure(client, targetID, rawURL, workflow, err)
 	}
 	return targetID, nil
+}
+
+func (a *app) keepOpenPromotionFailure(client cdp.CommandClient, targetID, rawURL, workflow string, policyErr error) error {
+	closeCtx, cancel := context.WithTimeout(context.Background(), pageCloseDefaultTimeout(a.browserModeName(), defaultPageCloseMaxAttempts))
+	closeReport := closePageTargetSettled(closeCtx, client, cdp.TargetInfo{
+		TargetID: targetID,
+		Type:     "page",
+		URL:      rawURL,
+	}, pageCloseOptions{
+		WaitGone:     true,
+		MaxAttempts:  defaultPageCloseMaxAttempts,
+		AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+		PollInterval: defaultPageClosePollInterval,
+		RetryBackoff: defaultPageCloseRetryBackoff,
+	})
+	cancel()
+
+	recoveryCommand := "cdp page cleanup --target " + targetID + " --force --close --json"
+	data := map[string]any{
+		"target_id":        targetID,
+		"policy_error":     policyErr.Error(),
+		"primary_error":    commandErrorSummary(policyErr),
+		"close":            closeReport,
+		"recovery_command": recoveryCommand,
+	}
+	message := fmt.Sprintf("keep %s target %s open: %v", workflow, targetID, policyErr)
+	if !closeReport.TargetGone {
+		cleanupError := closeReport.LastError
+		if cleanupError == "" {
+			cleanupError = fmt.Sprintf("target %s close did not settle", targetID)
+		}
+		data["cleanup_error"] = cleanupError
+		message += "; cleanup incomplete: " + cleanupError
+	} else {
+		message += "; created target was closed after policy failure"
+	}
+	return commandErrorWithData(
+		"lease_target_policy_failed",
+		"lifecycle",
+		message,
+		ExitConnection,
+		uniqueCommands([]string{recoveryCommand, "cdp daemon status --json", "cdp pages --json"}),
+		data,
+	)
 }
 
 func (a *app) createPageTargetWithOwnership(ctx context.Context, client cdp.CommandClient, rawURL string, ownership targetOwnershipMetadata) (string, error) {

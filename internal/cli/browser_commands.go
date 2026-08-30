@@ -381,7 +381,7 @@ func (a *app) prepareCopyDefaultProfileSeedMaintenance(ctx context.Context, stat
 		return maintenance, resourcePreflightResult{}, err
 	} else if ok {
 		status.Runtime = &runtime
-		if daemon.RuntimeRunning(runtime) {
+		if daemon.CheckRuntimeProcess(ctx, runtime).Running {
 			maintenance.WasRunning = true
 			maintenance.RuntimeWasRunning = true
 			maintenance.RestartRequested = true

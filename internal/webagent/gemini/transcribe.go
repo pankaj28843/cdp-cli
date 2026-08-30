@@ -23,6 +23,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
@@ -155,18 +156,13 @@ func encodeGeminiWebM(ctx context.Context, filePath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	command := exec.CommandContext(
-		ctx,
-		ffmpeg,
+	output := &boundedAudioBuffer{limit: maxTranscriptionAudioBytes}
+	if err := processgroup.Run(ctx, ffmpeg, []string{
 		"-hide_banner", "-loglevel", "error",
 		"-i", filePath,
 		"-vn", "-c:a", "libopus", "-application", "voip", "-b:a", "32k",
 		"-ar", "24000", "-ac", "1", "-f", "webm", "pipe:1",
-	)
-	output := &boundedAudioBuffer{limit: maxTranscriptionAudioBytes}
-	command.Stdout = output
-	command.Stderr = io.Discard
-	if err := command.Run(); err != nil {
+	}, output, io.Discard); err != nil {
 		return nil, err
 	}
 	return output.Bytes(), nil

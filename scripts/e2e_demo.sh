@@ -155,7 +155,7 @@ done
 "$binary" --browser-mode headless daemon health --state-dir "$managed_state" --json \
   | jq -e '.ok == true and .health.state == "healthy" and .health.usable == true and .health.managed_processes.historical_processes.live_probes_attempted == 0' >/dev/null
 "$binary" --browser-mode headless daemon health-check --managed-process-sweep --require-healthy --chrome-command "$chrome" --state-dir "$managed_state" --json \
-  | jq -e '.ok == true and .state == "healthy" and .usable == true and .managed_process_sweep.state == "healthy"' >/dev/null
+  | jq -e '.ok == true and .state == "healthy" and .usable == true and .managed_process_sweep.state == "healthy" and .cleanup.attempted == true and .cleanup.closed == true and .cleanup.target_gone == true' >/dev/null
 "$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_state" --json >/dev/null
 
 "$chrome" \
@@ -195,6 +195,8 @@ fi
   | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .status == "pass")' >/dev/null
 "$binary" daemon start --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
+preflight_readiness_output="$("$binary" browser preflight --open-readiness --open-url "$app_url?preflight-readiness=1" --state-dir "$state_dir/cdp-state" --json)"
+jq -e '.ok == true and .readiness.ok == true and .readiness.cleanup.attempted == true and .readiness.cleanup.closed == true and .readiness.cleanup.target_gone == true and (.readiness.cleanup.target_id | length > 0)' <<<"$preflight_readiness_output" >/dev/null
 set +e
 marker_headless_output="$("$binary" --browser-mode headless browser marker enable --name demo-marker --state-dir "$state_dir/cdp-state" --json)"
 marker_headless_code=$?
@@ -849,7 +851,8 @@ require_artifact "$capture_artifact"
 require_artifact "$capture_har"
 test -d "$capture_body_dir"
 test -n "$(find "$capture_body_dir" -type f -print -quit)"
-jq -e --arg path "$capture_artifact" --arg har "$capture_har" '.ok == true and .artifact.path == $path and .har.path == $har and .capture.trigger == "reload" and .capture.artifact_safety.shareable == true and (.body_artifacts | length > 0) and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\"")) and (.body.text | contains("demo-network-secret") | not)))' "$capture_output" >/dev/null
+jq -e --arg path "$capture_artifact" --arg har "$capture_har" '.ok == true and .output_mode == "artifact_only" and (has("requests") | not) and .artifact.path == $path and .har.path == $har and .capture.output_mode == "artifact_only" and .capture.trigger == "reload" and .capture.artifact_safety.shareable == true and .body_artifact_count >= 1' "$capture_output" >/dev/null
+jq -e '.ok == true and .output_mode == "artifact_only" and .capture.trigger == "reload" and .capture.artifact_safety.shareable == true and (.body_artifacts | length > 0) and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\"")) and (.body.text | contains("demo-network-secret") | not)))' "$capture_artifact" >/dev/null
 if rg -q 'demo-network-secret' "$capture_output" "$capture_artifact" "$capture_har" "$capture_body_dir"; then
   echo "safe network evidence leaked the synthetic secret" >&2
   exit 1
@@ -963,22 +966,33 @@ test "$diagnostic_page_count_after_navigation" -eq "$diagnostic_page_count_befor
 responsive_url_only_report="$state_dir/workflow-responsive-url-only.json"
 responsive_url_only_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
 "$binary" workflow responsive-audit "$app_url?responsive-created=1" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_url_only_report"
-jq -e '.ok == true and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.cleanup == "emulation-cleared"' "$responsive_url_only_report" >/dev/null
+jq -e '.ok == true and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.emulation_cleared == true and .cleanup.attempted == true and .cleanup.closed == true and .cleanup.target_gone == true and .workflow.cleanup.closed == true' "$responsive_url_only_report" >/dev/null
 responsive_url_only_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
 test "$responsive_url_only_after" -eq "$responsive_url_only_before"
 responsive_index_report="$state_dir/workflow-responsive-target-index.json"
 responsive_index_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
-"$binary" workflow responsive-audit --target-index "$protocol_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_index_report"
-jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.cleanup == "emulation-cleared"' "$responsive_index_report" >/dev/null
+responsive_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+test "$responsive_index" -gt 0
+"$binary" workflow responsive-audit --target-index "$responsive_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_index_report"
+if ! jq -e --arg id "$protocol_index_target_id" --argjson index "$responsive_index" '.ok == true and .target.id == $id and .target_index == $index and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.emulation_cleared == true and .cleanup.skipped == true and .cleanup.reason == "caller_owned" and .workflow.cleanup.reason == "caller_owned"' "$responsive_index_report" >/dev/null; then
+  echo "responsive indexed cleanup assertion failed:" >&2
+  jq --arg id "$protocol_index_target_id" --argjson index "$responsive_index" '{ok: (.ok == true), target: (.target.id == $id), target_index: (.target_index == $index), loopback_url: (.workflow.url | startswith("http://127.0.0.1:")), result_count: (.results | length == 1), emulation_cleared: (.workflow.emulation_cleared == true), cleanup_skipped: (.cleanup.skipped == true), cleanup_reason: .cleanup.reason, workflow_cleanup_reason: .workflow.cleanup.reason}' "$responsive_index_report" >&2
+  sed -n '1,160p' "$responsive_index_report" >&2
+  exit 1
+fi
 responsive_index_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
 test "$responsive_index_after" -eq "$responsive_index_before"
 responsive_navigation_url="$app_url?responsive-indexed-navigation=1"
 responsive_navigation_report="$state_dir/workflow-responsive-target-index-navigation.json"
 responsive_navigation_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
-"$binary" workflow responsive-audit "$responsive_navigation_url" --target-index "$protocol_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_navigation_report"
-jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg url "$responsive_navigation_url" '.ok == true and .target.id == $id and .target_index == $index and .target.url == $url and .workflow.url == $url and (.results | length == 1) and .workflow.cleanup == "emulation-cleared"' "$responsive_navigation_report" >/dev/null
+responsive_navigation_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+test "$responsive_navigation_index" -gt 0
+"$binary" workflow responsive-audit "$responsive_navigation_url" --target-index "$responsive_navigation_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_navigation_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$responsive_navigation_index" --arg url "$responsive_navigation_url" '.ok == true and .target.id == $id and .target_index == $index and .target.url == $url and .workflow.url == $url and (.results | length == 1) and .workflow.emulation_cleared == true and .cleanup.skipped == true and .cleanup.reason == "caller_owned"' "$responsive_navigation_report" >/dev/null
 responsive_navigation_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
 test "$responsive_navigation_after" -eq "$responsive_navigation_before"
+protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+test "$protocol_index" -gt 0
 storage_index_report="$state_dir/storage-target-index.json"
 "$binary" storage list --target-index "$protocol_index" --include localStorage,sessionStorage,cookies --state-dir "$state_dir/cdp-state" --json >"$storage_index_report"
 jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.local_storage | has("entries")) and (.storage.session_storage | has("keys"))' "$storage_index_report" >/dev/null

@@ -67,7 +67,7 @@ func (a *app) newWorkflowVisiblePostsCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 10, "maximum number of visible posts to return")
 	cmd.Flags().IntVar(&minChars, "min-chars", 20, "minimum normalized text length per post")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long to wait for matching visible posts")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	return cmd
 }
 

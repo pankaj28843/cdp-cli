@@ -329,6 +329,9 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					if strings.Contains(lowerURL, "evaluate-error") || strings.Contains(lowerURL, "evaluate_error") {
 						createdTarget["fakeRuntimeEvaluateErrorOnce"] = true
 					}
+					if fakeAnyTargetBool(targetInfos, "fakeRuntimeEvaluateErrorForCreated") {
+						createdTarget["fakeRuntimeEvaluateErrorOnce"] = true
+					}
 					targetInfos = append(targetInfos, createdTarget)
 					resp["result"] = map[string]any{"targetId": targetID}
 				}
@@ -925,6 +928,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						state = "hidden"
 					}
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
+				} else if targetID := strings.TrimPrefix(req.SessionID, "session-"); fakeTargetBool(targetInfos, targetID, "fakeRuntimeEvaluateErrorAlways") {
+					resp["error"] = map[string]any{"code": -32000, "message": "synthetic exact-session heartbeat failure"}
 				} else if targetID := strings.TrimPrefix(req.SessionID, "session-"); fakeTargetBool(targetInfos, targetID, "fakeRuntimeEvaluateErrorOnce") {
 					if _, loaded := runtimeEvaluateErrors.LoadOrStore(targetID, true); !loaded {
 						resp["error"] = map[string]any{"code": -32000, "message": "execution context was destroyed"}

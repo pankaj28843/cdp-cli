@@ -10,15 +10,31 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 )
 
 type LockMetadata struct {
-	Name      string `json:"name"`
-	PID       int    `json:"pid"`
-	StartedAt string `json:"started_at"`
-	Phase     string `json:"phase,omitempty"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	Name             string `json:"name"`
+	PID              int    `json:"pid"`
+	StartedAt        string `json:"started_at"`
+	Phase            string `json:"phase,omitempty"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	ProcessStartTime string `json:"-"`
 }
+
+type lockFileMetadata struct {
+	Name             string `json:"name"`
+	PID              int    `json:"pid"`
+	StartedAt        string `json:"started_at"`
+	Phase            string `json:"phase,omitempty"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	ProcessStartTime string `json:"process_start_time,omitempty"`
+}
+
+const lockProcessIdentityTimeout = time.Second
+
+var lockProcessStartTime = processgroup.ProcessStartTime
 
 type LockHandle struct {
 	Path     string
@@ -62,7 +78,10 @@ func RemoveStaleLocks(ctx context.Context, stateDir string, staleAfter time.Dura
 			continue
 		}
 		path := filepath.Join(stateDir, "locks", entry.Name())
-		info := InspectLock(path, staleAfter)
+		info, inspectErr := InspectLockContext(ctx, path, staleAfter)
+		if inspectErr != nil {
+			return result, inspectErr
+		}
 		result.Checked = append(result.Checked, info)
 		if !info.Stale || (info.OwnerRunning != nil && *info.OwnerRunning && info.StaleReason != "lease_expired") {
 			continue
@@ -121,6 +140,16 @@ func AcquireLockWithLease(ctx context.Context, stateDir, name string, timeout, s
 			if metadata.PID == 0 {
 				metadata.PID = os.Getpid()
 			}
+			identityCtx, identityCancel := context.WithTimeout(ctx, lockProcessIdentityTimeout)
+			if token, identityErr := lockProcessStartTime(identityCtx, metadata.PID); identityErr == nil {
+				metadata.ProcessStartTime = token
+			}
+			identityCancel()
+			if err := ctx.Err(); err != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				return LockHandle{}, false, LockMetadata{}, err
+			}
 			now := time.Now().UTC()
 			if metadata.StartedAt == "" {
 				metadata.StartedAt = now.Format(time.RFC3339Nano)
@@ -128,7 +157,7 @@ func AcquireLockWithLease(ctx context.Context, stateDir, name string, timeout, s
 			if lease > 0 {
 				metadata.ExpiresAt = now.Add(lease).Format(time.RFC3339Nano)
 			}
-			if err := json.NewEncoder(file).Encode(metadata); err != nil {
+			if err := json.NewEncoder(file).Encode(lockFileMetadataFromLockMetadata(metadata)); err != nil {
 				_ = file.Close()
 				_ = os.Remove(path)
 				return LockHandle{}, false, LockMetadata{}, fmt.Errorf("write lock metadata: %w", err)
@@ -143,8 +172,12 @@ func AcquireLockWithLease(ctx context.Context, stateDir, name string, timeout, s
 			return LockHandle{}, false, LockMetadata{}, fmt.Errorf("create lock file: %w", err)
 		}
 
-		existing, stale := readLockMetadata(path, staleAfter)
-		if stale {
+		existingInfo, inspectErr := InspectLockContext(ctx, path, staleAfter)
+		if inspectErr != nil {
+			return LockHandle{}, false, LockMetadata{}, inspectErr
+		}
+		existing := existingInfo.Metadata
+		if existingInfo.Stale && !(existingInfo.OwnerRunning != nil && *existingInfo.OwnerRunning && existingInfo.StaleReason != "lease_expired") {
 			if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
 				continue
 			}
@@ -183,7 +216,7 @@ func (h LockHandle) Update(ctx context.Context, phase string) error {
 		return fmt.Errorf("lock is no longer owned")
 	}
 	h.Metadata.Phase = phase
-	b, err := json.MarshalIndent(h.Metadata, "", "  ")
+	b, err := json.MarshalIndent(lockFileMetadataFromLockMetadata(h.Metadata), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal lock metadata: %w", err)
 	}
@@ -212,11 +245,15 @@ func (h LockHandle) ownsCurrentFile() bool {
 	if err != nil {
 		return false
 	}
-	var current LockMetadata
-	if err := json.Unmarshal(b, &current); err != nil {
+	var currentFile lockFileMetadata
+	if err := json.Unmarshal(b, &currentFile); err != nil {
 		return false
 	}
+	current := lockMetadataFromLockFile(currentFile)
 	if current.Name != h.Metadata.Name || current.PID != h.Metadata.PID || current.StartedAt != h.Metadata.StartedAt {
+		return false
+	}
+	if current.ProcessStartTime != h.Metadata.ProcessStartTime {
 		return false
 	}
 	if current.ExpiresAt != "" {
@@ -228,40 +265,76 @@ func (h LockHandle) ownsCurrentFile() bool {
 	return true
 }
 
-func readLockMetadata(path string, staleAfter time.Duration) (LockMetadata, bool) {
-	info := InspectLock(path, staleAfter)
-	return info.Metadata, info.Stale
+func InspectLock(path string, staleAfter time.Duration) LockInfo {
+	info, _ := InspectLockContext(context.Background(), path, staleAfter)
+	return info
 }
 
-func InspectLock(path string, staleAfter time.Duration) LockInfo {
+// InspectLockContext inspects a lock without making a recovery decision after
+// its caller has been canceled. InspectLock remains the compatibility wrapper
+// for callers that do not have an operation context.
+func InspectLockContext(ctx context.Context, path string, staleAfter time.Duration) (LockInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return LockInfo{Path: path}, err
+	}
 	stat, statErr := os.Stat(path)
 	info := LockInfo{Path: path, Exists: statErr == nil}
+	if err := ctx.Err(); err != nil {
+		return info, err
+	}
 	var metadata LockMetadata
 	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &metadata)
+		var file lockFileMetadata
+		if err := json.Unmarshal(b, &file); err == nil {
+			metadata = lockMetadataFromLockFile(file)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return info, err
 	}
 	info.Metadata = metadata
 	if statErr == nil {
 		info.ModifiedAt = stat.ModTime().UTC().Format(time.RFC3339)
 	}
+	identityUnavailable := false
 	if metadata.PID > 0 {
-		running := lockOwnerRunning(metadata.PID)
+		running, identityState, inspectErr := lockOwnerStatus(ctx, metadata)
+		if inspectErr != nil {
+			return info, inspectErr
+		}
 		info.OwnerRunning = &running
+		if identityState == "mismatch" {
+			info.Stale = true
+			info.StaleReason = "owner_process_identity_mismatch"
+			return info, nil
+		}
+		identityUnavailable = identityState == "unavailable"
 		if !running {
 			info.Stale = true
 			info.StaleReason = "owner_process_not_running"
-			return info
+			return info, nil
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return info, err
 	}
 	if metadata.ExpiresAt != "" {
 		if expires, err := time.Parse(time.RFC3339Nano, metadata.ExpiresAt); err == nil && !time.Now().UTC().Before(expires) {
 			info.Stale = true
 			info.StaleReason = "lease_expired"
-			return info
+			return info, nil
 		}
 	}
+	if identityUnavailable {
+		info.Stale = true
+		info.StaleReason = "owner_process_identity_unavailable"
+		return info, nil
+	}
 	if staleAfter <= 0 {
-		return info
+		return info, nil
 	}
 	var started time.Time
 	if metadata.StartedAt != "" {
@@ -274,21 +347,73 @@ func InspectLock(path string, staleAfter time.Duration) LockInfo {
 		info.Stale = true
 		info.StaleReason = "age_exceeded"
 	}
-	return info
+	if err := ctx.Err(); err != nil {
+		return info, err
+	}
+	return info, nil
 }
 
-func lockOwnerRunning(pid int) bool {
-	if pid <= 0 {
-		return false
+func lockOwnerStatus(ctx context.Context, metadata LockMetadata) (bool, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	process, err := os.FindProcess(pid)
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
+	if metadata.PID <= 0 {
+		return false, "", nil
+	}
+	process, err := os.FindProcess(metadata.PID)
 	if err != nil {
-		return false
+		return false, "", nil
 	}
 	if err := process.Signal(syscall.Signal(0)); err != nil {
-		return errors.Is(err, syscall.EPERM)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, "", ctxErr
+		}
+		return errors.Is(err, syscall.EPERM), "", nil
 	}
-	return true
+	if err := ctx.Err(); err != nil {
+		return true, "", err
+	}
+	if !processgroup.IsStrongProcessStartIdentity(metadata.ProcessStartTime) {
+		return true, "", nil
+	}
+	identityCtx, cancel := context.WithTimeout(ctx, lockProcessIdentityTimeout)
+	actual, identityErr := lockProcessStartTime(identityCtx, metadata.PID)
+	cancel()
+	if err := ctx.Err(); err != nil {
+		return true, "", err
+	}
+	if identityErr != nil {
+		return true, "unavailable", nil
+	}
+	if actual != strings.TrimSpace(metadata.ProcessStartTime) {
+		return false, "mismatch", nil
+	}
+	return true, "", nil
+}
+
+func lockFileMetadataFromLockMetadata(metadata LockMetadata) lockFileMetadata {
+	return lockFileMetadata{
+		Name:             metadata.Name,
+		PID:              metadata.PID,
+		StartedAt:        metadata.StartedAt,
+		Phase:            metadata.Phase,
+		ExpiresAt:        metadata.ExpiresAt,
+		ProcessStartTime: strings.TrimSpace(metadata.ProcessStartTime),
+	}
+}
+
+func lockMetadataFromLockFile(file lockFileMetadata) LockMetadata {
+	return LockMetadata{
+		Name:             file.Name,
+		PID:              file.PID,
+		StartedAt:        file.StartedAt,
+		Phase:            file.Phase,
+		ExpiresAt:        file.ExpiresAt,
+		ProcessStartTime: strings.TrimSpace(file.ProcessStartTime),
+	}
 }
 
 func sanitizeLockName(name string) string {

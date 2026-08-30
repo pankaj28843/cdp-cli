@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os/exec"
+	"strings"
+
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 )
+
+const maxJQDiagnosticBytes = 64 << 10
 
 type Options struct {
 	JSON    bool
@@ -83,19 +87,48 @@ func renderJSON(ctx context.Context, w io.Writer, opts Options, data any) error 
 }
 
 func applyJQ(ctx context.Context, input []byte, expr string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "jq", expr)
-	cmd.Stdin = bytes.NewReader(input)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	out, err := cmd.Output()
+	var out bytes.Buffer
+	stderr := &boundedJQDiagnosticBuffer{}
+	err := processgroup.RunWithOptions(ctx, "jq", []string{expr}, processgroup.Options{
+		Stdin: bytes.NewReader(input),
+	}, &out, stderr)
 	if err != nil {
-		if stderr.Len() > 0 {
-			return nil, fmt.Errorf("run jq: %s", bytes.TrimSpace(stderr.Bytes()))
+		diagnostic := strings.TrimSpace(stderr.String())
+		if diagnostic != "" {
+			if stderr.truncated {
+				diagnostic += fmt.Sprintf("\n[jq diagnostics truncated after %d bytes]", maxJQDiagnosticBytes)
+			}
+			return nil, fmt.Errorf("run jq: %s", diagnostic)
 		}
 		return nil, fmt.Errorf("run jq: %w", err)
 	}
 
-	return out, nil
+	return out.Bytes(), nil
+}
+
+type boundedJQDiagnosticBuffer struct {
+	buffer    bytes.Buffer
+	truncated bool
+}
+
+func (b *boundedJQDiagnosticBuffer) Len() int {
+	return b.buffer.Len()
+}
+
+func (b *boundedJQDiagnosticBuffer) String() string {
+	return b.buffer.String()
+}
+
+func (b *boundedJQDiagnosticBuffer) Write(p []byte) (int, error) {
+	remaining := maxJQDiagnosticBytes - b.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = b.buffer.Write(p[:remaining])
+		b.truncated = true
+		return len(p), nil
+	}
+	return b.buffer.Write(p)
 }

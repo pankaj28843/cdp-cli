@@ -2,14 +2,292 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/pankaj28843/cdp-cli/internal/cdp"
 )
+
+type googleTranslateLifecycleFakeClient struct {
+	mu            sync.Mutex
+	targets       map[string]cdp.TargetInfo
+	events        []string
+	closeErr      map[string]error
+	closeDelay    map[string]int
+	pendingClose  map[string]int
+	targetListErr error
+}
+
+func (f *googleTranslateLifecycleFakeClient) Call(_ context.Context, method string, params any, result any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch method {
+	case "Target.attachToTarget":
+		var input struct {
+			TargetID string `json:"targetId"`
+		}
+		if err := marshalUnmarshalGoogleTranslateLifecycle(params, &input); err != nil {
+			return err
+		}
+		return marshalUnmarshalGoogleTranslateLifecycle(map[string]any{"sessionId": "session-" + input.TargetID}, result)
+	case "Target.detachFromTarget":
+		var input struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := marshalUnmarshalGoogleTranslateLifecycle(params, &input); err != nil {
+			return err
+		}
+		f.events = append(f.events, "detach:"+input.SessionID)
+		return nil
+	case "Target.closeTarget":
+		var input struct {
+			TargetID string `json:"targetId"`
+		}
+		if err := marshalUnmarshalGoogleTranslateLifecycle(params, &input); err != nil {
+			return err
+		}
+		f.events = append(f.events, "close:"+input.TargetID)
+		if err := f.closeErr[input.TargetID]; err != nil {
+			return err
+		}
+		if delay := f.closeDelay[input.TargetID]; delay > 0 {
+			if f.pendingClose == nil {
+				f.pendingClose = map[string]int{}
+			}
+			f.pendingClose[input.TargetID] = delay
+			return marshalUnmarshalGoogleTranslateLifecycle(map[string]any{"success": true}, result)
+		}
+		delete(f.targets, input.TargetID)
+		return marshalUnmarshalGoogleTranslateLifecycle(map[string]any{"success": true}, result)
+	case "Target.getTargets":
+		if f.targetListErr != nil {
+			return f.targetListErr
+		}
+		for targetID, remaining := range f.pendingClose {
+			if remaining <= 1 {
+				delete(f.targets, targetID)
+				delete(f.pendingClose, targetID)
+				continue
+			}
+			f.pendingClose[targetID] = remaining - 1
+		}
+		rows := make([]cdp.TargetInfo, 0, len(f.targets))
+		for _, target := range f.targets {
+			rows = append(rows, target)
+		}
+		return marshalUnmarshalGoogleTranslateLifecycle(map[string]any{"targetInfos": rows}, result)
+	default:
+		return nil
+	}
+}
+
+func (f *googleTranslateLifecycleFakeClient) CallSession(_ context.Context, _ string, method string, _ any, _ any) error {
+	return errors.New("unexpected session method " + method)
+}
+
+func (f *googleTranslateLifecycleFakeClient) eventSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...)
+}
+
+func marshalUnmarshalGoogleTranslateLifecycle(input, output any) error {
+	if output == nil {
+		return nil
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, output)
+}
+
+func TestGoogleTranslateLifecycleTracksChildBeforeSessionCompletion(t *testing.T) {
+	fake := &googleTranslateLifecycleFakeClient{
+		targets: map[string]cdp.TargetInfo{
+			"baseline": {TargetID: "baseline", Type: "page", URL: "https://example.test/keep"},
+			"main":     {TargetID: "main", Type: "page", URL: "https://translate.google.com/"},
+			"child":    {TargetID: "child", Type: "page", URL: "https://example.translate.goog/"},
+		},
+		closeErr:   map[string]error{},
+		closeDelay: map[string]int{"main": 1, "child": 2},
+	}
+	lifecycle := newGoogleTranslateTargetLifecycle(fake, "headed")
+	lifecycle.addTarget(fake.targets["main"])
+	lifecycle.addTarget(fake.targets["child"])
+	cleanup := lifecycle.close()
+	if !cleanup.Closed || len(cleanup.Reports) != 2 {
+		t.Fatalf("cleanup = %+v, want both owned targets settled", cleanup)
+	}
+	for _, report := range cleanup.Reports {
+		if !report.Closed || !report.TargetGone || report.AttemptCount != 1 {
+			t.Fatalf("cleanup report = %+v, want one bounded delayed target-gone attempt", report)
+		}
+	}
+	if _, ok := fake.targets["baseline"]; !ok {
+		t.Fatal("cleanup closed the baseline page")
+	}
+	if len(fake.targets) != 1 {
+		t.Fatalf("remaining targets = %+v, want only baseline", fake.targets)
+	}
+}
+
+func TestGoogleTranslateLifecycleDiscoversOnlyNewTranslatedWebsiteTargets(t *testing.T) {
+	fake := &googleTranslateLifecycleFakeClient{
+		targets: map[string]cdp.TargetInfo{
+			"baseline":           {TargetID: "baseline", Type: "page", URL: "https://example.test/keep"},
+			"existing-translate": {TargetID: "existing-translate", Type: "page", URL: "https://old.translate.goog/"},
+			"main":               {TargetID: "main", Type: "page", URL: "https://translate.google.com/"},
+			"child":              {TargetID: "child", Type: "page", URL: "https://new.translate.goog/"},
+			"unrelated":          {TargetID: "unrelated", Type: "page", URL: "https://example.test/new"},
+		},
+		closeErr: map[string]error{},
+	}
+	lifecycle := newGoogleTranslateTargetLifecycle(fake, "headed")
+	lifecycle.setWebsiteBaseline([]cdp.TargetInfo{fake.targets["baseline"], fake.targets["existing-translate"]}, "main")
+	lifecycle.addTarget(fake.targets["main"])
+	lifecycle.discoverWebsiteTargets(context.Background())
+	cleanup := lifecycle.close()
+	if !cleanup.Closed || len(cleanup.Reports) != 2 {
+		t.Fatalf("cleanup = %+v, want main and newly created child only", cleanup)
+	}
+	for _, targetID := range []string{"baseline", "existing-translate", "unrelated"} {
+		if _, ok := fake.targets[targetID]; !ok {
+			t.Fatalf("discovery cleanup removed caller-owned target %q", targetID)
+		}
+	}
+}
+
+func TestGoogleTranslateLifecycleDoesNotClaimClosedWhenDiscoveryFails(t *testing.T) {
+	fake := &googleTranslateLifecycleFakeClient{
+		targets: map[string]cdp.TargetInfo{
+			"baseline": {TargetID: "baseline", Type: "page", URL: "https://example.test/keep"},
+			"main":     {TargetID: "main", Type: "page", URL: "https://translate.google.com/"},
+		},
+		closeErr:      map[string]error{},
+		targetListErr: errors.New("synthetic discovery failure"),
+	}
+	lifecycle := newGoogleTranslateTargetLifecycle(fake, "headed")
+	lifecycle.setWebsiteBaseline([]cdp.TargetInfo{fake.targets["baseline"]}, "main")
+	lifecycle.addTarget(fake.targets["main"])
+	lifecycle.discoverWebsiteTargets(context.Background())
+	cleanup := lifecycle.close()
+	if cleanup.Closed || !cleanup.Attempted || len(cleanup.Errors) == 0 {
+		t.Fatalf("cleanup = %+v, want conservative failure evidence", cleanup)
+	}
+}
+
+func TestGoogleTranslateLifecycleClosesSessionsBeforeTargets(t *testing.T) {
+	fake := &googleTranslateLifecycleFakeClient{
+		targets: map[string]cdp.TargetInfo{
+			"main":  {TargetID: "main", Type: "page", URL: "https://translate.google.com/"},
+			"child": {TargetID: "child", Type: "page", URL: "https://example.translate.goog/"},
+		},
+		closeErr: map[string]error{},
+	}
+	mainSession, err := cdp.AttachToTargetWithClient(context.Background(), fake, "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childSession, err := cdp.AttachToTargetWithClient(context.Background(), fake, "child", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle := newGoogleTranslateTargetLifecycle(fake, "headed")
+	lifecycle.addTarget(fake.targets["main"])
+	lifecycle.addTarget(fake.targets["child"])
+	lifecycle.addSession(mainSession)
+	lifecycle.addSession(childSession)
+	cleanup := lifecycle.close()
+	if !cleanup.Closed {
+		t.Fatalf("cleanup = %+v, want success", cleanup)
+	}
+	events := fake.eventSnapshot()
+	if want := []string{"detach:session-child", "detach:session-main", "close:child", "close:main"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("lifecycle events = %v, want %v", events, want)
+	}
+}
+
+func TestGoogleTranslateCleanupFailurePreservesPrimaryError(t *testing.T) {
+	primary := commandError("artifact_write_failed", "io", "write translated website: disk full", ExitInternal, nil)
+	result := googleTranslateResult{
+		Cleanup: googleTranslateCleanup{
+			Attempted:       true,
+			Closed:          false,
+			TargetIDs:       []string{"child"},
+			Errors:          []string{"child: synthetic close failure"},
+			RecoveryCommand: "cdp page cleanup --target child --force --close --json",
+		},
+	}
+	err := googleTranslateResultError(primary, result)
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != "google_translate_cleanup_failed" {
+		t.Fatalf("error = %v, want google_translate_cleanup_failed", err)
+	}
+	data, ok := commandErr.Data.(map[string]any)
+	if !ok || data["primary_error"] == nil || data["cleanup"] == nil {
+		t.Fatalf("error data = %#v, want primary_error and cleanup", commandErr.Data)
+	}
+}
+
+func TestGoogleTranslateCleanupFailureProvidesRecoveryCommand(t *testing.T) {
+	fake := &googleTranslateLifecycleFakeClient{
+		targets: map[string]cdp.TargetInfo{
+			"child": {TargetID: "child", Type: "page", URL: "https://example.translate.goog/"},
+		},
+		closeErr:      map[string]error{"child": errors.New("synthetic close failure")},
+		targetListErr: errors.New("synthetic target listing failure"),
+	}
+	cleanup := closeGoogleTranslateTargets(fake, []cdp.TargetInfo{fake.targets["child"]}, "headed")
+	if cleanup.Closed || cleanup.RecoveryCommand != "cdp page cleanup --target child --force --close --json" {
+		t.Fatalf("cleanup = %+v, want failed cleanup with exact recovery", cleanup)
+	}
+}
+
+func TestGoogleTranslateCreationFailureDoesNotBecomeCleanupFailure(t *testing.T) {
+	primary := commandError("connection_failed", "connection", "create target failed", ExitConnection, nil)
+	err := googleTranslateResultError(primary, googleTranslateResult{})
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != "connection_failed" {
+		t.Fatalf("error = %v, want original connection_failed error", err)
+	}
+}
+
+func TestAttachGoogleTranslateResultPreservesPrimaryErrorData(t *testing.T) {
+	primary := commandErrorWithData(
+		"pdf_burst_failed",
+		"extraction",
+		"synthetic Poppler failure",
+		ExitCheckFailed,
+		nil,
+		map[string]any{
+			"output_truncated":    true,
+			"process_termination": "process_group",
+		},
+	)
+	err := attachGoogleTranslateResult(primary, googleTranslateResult{Mode: "image"})
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != "pdf_burst_failed" {
+		t.Fatalf("error = %v, want original pdf_burst_failed error", err)
+	}
+	data, ok := commandErr.Data.(map[string]any)
+	if !ok || data["output_truncated"] != true || data["process_termination"] != "process_group" {
+		t.Fatalf("attached error data = %#v, want primary Poppler metadata preserved", commandErr.Data)
+	}
+	if _, ok := data["result"].(googleTranslateResult); !ok {
+		t.Fatalf("attached error data = %#v, want Google Translate result context", commandErr.Data)
+	}
+}
 
 func TestNormalizeGoogleTranslateLanguage(t *testing.T) {
 	tests := []struct {

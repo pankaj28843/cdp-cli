@@ -30,7 +30,9 @@ func (a *app) newTranscriptionCommand() *cobra.Command {
 		Short: "Run the provider-neutral OpenAI-compatible transcription service",
 		Long: "Expose one local REST, SSE, and realtime WebSocket boundary for VoxInput. " +
 			"Audio is ephemeral transaction media by default and can be explicitly retained with --persist-audio; " +
-			"online provider auth and capability refresh is shared by the service and remains inside the cdp workflow adapter.",
+			"online provider auth and capability refresh is shared by the service and remains inside the cdp workflow adapter. " +
+			"Recurring provider health probes cap decoded PCM and ffprobe diagnostics and terminate only their owned subprocess group on cancellation. " +
+			"Browser-backed provider converters use the same owned process-group boundary.",
 		Example: "  cdp transcription serve --default-provider chatgpt-web\n" +
 			"  cdp transcription serve --local-base-url http://localhost:9000/v1\n" +
 			"  cdp transcription service install --address '[::]:28765' --http-address '[::]:28766' --tls-self-signed --tls-host 192.168.5.249\n" +
@@ -1005,7 +1007,13 @@ func providerAudioDuration(ctx context.Context, request transcriptionapi.FileReq
 	if err != nil {
 		return 0, transcriptionProviderError(422, "usage", "duration_required", "browser-backed transcription adapters need audio duration_ms or ffprobe on PATH", false)
 	}
-	output, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_entries", "format=duration:stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", request.Audio.PersistedPath).Output()
+	output, truncated, err := runBoundedTranscriptionProbeCommand(ctx, ffprobe, []string{"-v", "error", "-show_entries", "format=duration:stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", request.Audio.PersistedPath}, maxExternalProcessOutputBytes)
+	if truncated {
+		return 0, transcriptionProviderError(422, "usage", "duration_probe_output_too_large", "audio duration probe output exceeded its safety limit", false)
+	}
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
 	if err == nil {
 		if duration, ok := probeDurationMilliseconds(string(output)); ok {
 			return duration, nil
@@ -1014,7 +1022,13 @@ func providerAudioDuration(ctx context.Context, request transcriptionapi.FileReq
 	// Browser MediaRecorder WebM often has no container duration. Its packet
 	// timestamps are sufficient and keep normal OpenAI-compatible clients from
 	// having to know the VoxInput duration_ms extension.
-	packets, packetErr := exec.CommandContext(ctx, ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", request.Audio.PersistedPath).Output()
+	packets, truncated, packetErr := runBoundedTranscriptionProbeCommand(ctx, ffprobe, []string{"-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", request.Audio.PersistedPath}, maxExternalProcessOutputBytes)
+	if truncated {
+		return 0, transcriptionProviderError(422, "usage", "duration_probe_output_too_large", "audio duration probe output exceeded its safety limit", false)
+	}
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
 	if packetErr == nil {
 		if duration, ok := probePacketDurationMilliseconds(string(packets)); ok {
 			return duration, nil

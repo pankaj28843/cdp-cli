@@ -37,7 +37,12 @@ func TestResponsiveAuditExposesTargetIndex(t *testing.T) {
 		}
 	}
 	if !describe.OK || !foundFlag || !examplesContainTargetIndex(describe.Commands.Examples) {
-		t.Fatalf("describe responsive-audit = %+v, want integer target-index flag and example", describe)
+		t.Fatalf("describe responsive-audit = %+v, want integer target-index and example", describe)
+	}
+	var helpOut, helpErr bytes.Buffer
+	code = cli.Execute(context.Background(), []string{"workflow", "responsive-audit", "--help"}, &helpOut, &helpErr, cli.BuildInfo{})
+	if code != cli.ExitOK || !containsAny(helpOut.String(), "exact-target cleanup", "caller-owned page") {
+		t.Fatalf("responsive-audit help exit=%d stdout=%s stderr=%s, want ownership cleanup contract", code, helpOut.String(), helpErr.String())
 	}
 
 	var schemaOut, schemaErr bytes.Buffer
@@ -51,8 +56,9 @@ func TestResponsiveAuditExposesTargetIndex(t *testing.T) {
 			Name        string `json:"name"`
 			Description string `json:"description"`
 			Fields      []struct {
-				Name string `json:"name"`
-				Type string `json:"type"`
+				Name        string `json:"name"`
+				Type        string `json:"type"`
+				Description string `json:"description"`
 			} `json:"fields"`
 		} `json:"schema"`
 	}
@@ -60,14 +66,17 @@ func TestResponsiveAuditExposesTargetIndex(t *testing.T) {
 		t.Fatalf("schema responsive-audit output is invalid JSON: %v; output=%s", err, schemaOut.String())
 	}
 	foundField := false
+	foundCleanup := false
 	for _, field := range schema.Schema.Fields {
 		if field.Name == "target_index" && field.Type == "integer" {
 			foundField = true
-			break
+		}
+		if field.Name == "cleanup" && field.Type == "workflow_page_cleanup" && containsAny(field.Description, "target_gone", "caller-owned") {
+			foundCleanup = true
 		}
 	}
-	if !schema.OK || schema.Schema.Name != "workflow-responsive-audit" || !foundField || !containsAny(schema.Schema.Description, "target-index", "existing page") {
-		t.Fatalf("schema responsive-audit = %+v, want indexed existing-page contract", schema)
+	if !schema.OK || schema.Schema.Name != "workflow-responsive-audit" || !foundField || !foundCleanup || !containsAny(schema.Schema.Description, "target-index", "existing page") {
+		t.Fatalf("schema responsive-audit = %+v, want indexed existing-page and cleanup contract", schema)
 	}
 }
 

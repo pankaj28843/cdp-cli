@@ -15,6 +15,7 @@ func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "responsive-audit [url]",
 		Short: "Audit a page across desktop, tablet, and mobile viewport presets",
+		Long:  "Audit a page across desktop, tablet, and mobile viewport presets. URL-only runs own one disposable page, clears emulation, and reports bounded exact-target cleanup before session release; --target-index runs retain the caller-owned page and report cleanup skipped with reason=caller_owned.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validatePageTargetIndexSelector(cmd, "", "", "", targetIndex); err != nil {
@@ -50,6 +51,7 @@ func (a *app) newWorkflowLighthouseCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "lighthouse <url>",
 		Short: "Run Lighthouse CLI and summarize category scores",
+		Long:  "Run Lighthouse CLI against the selected daemon-owned loopback Chrome and summarize category scores. Tool stdout/stderr is bounded, cancellation terminates the owned process group where supported, and success requires validated non-empty JSON and HTML report artifacts.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 {

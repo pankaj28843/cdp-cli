@@ -33,19 +33,20 @@ func commandPrefix(browserMode string) string {
 }
 
 type Status struct {
-	State               string              `json:"state"`
-	Message             string              `json:"message"`
-	BrowserMode         string              `json:"browser_mode"`
-	ConnectionMode      string              `json:"connection_mode"`
-	RequiresUserAllow   bool                `json:"requires_user_allow"`
-	DefaultProfileFlow  bool                `json:"default_profile_flow"`
-	ProcessRunning      bool                `json:"process_running"`
-	RuntimeSocketReady  bool                `json:"runtime_socket_ready"`
-	Runtime             *Runtime            `json:"runtime,omitempty"`
-	BrowserProbe        browser.ProbeResult `json:"browser_probe"`
-	NextCommands        []string            `json:"next_commands"`
-	HumanRepairCommands []string            `json:"human_repair_commands,omitempty"`
-	Health              any                 `json:"health,omitempty"`
+	State                string              `json:"state"`
+	Message              string              `json:"message"`
+	BrowserMode          string              `json:"browser_mode"`
+	ConnectionMode       string              `json:"connection_mode"`
+	RequiresUserAllow    bool                `json:"requires_user_allow"`
+	DefaultProfileFlow   bool                `json:"default_profile_flow"`
+	ProcessRunning       bool                `json:"process_running"`
+	ProcessIdentityState string              `json:"process_identity_state,omitempty"`
+	RuntimeSocketReady   bool                `json:"runtime_socket_ready"`
+	Runtime              *Runtime            `json:"runtime,omitempty"`
+	BrowserProbe         browser.ProbeResult `json:"browser_probe"`
+	NextCommands         []string            `json:"next_commands"`
+	HumanRepairCommands  []string            `json:"human_repair_commands,omitempty"`
+	Health               any                 `json:"health,omitempty"`
 }
 
 func Snapshot(connectionMode string, autoConnect bool, probe browser.ProbeResult) Status {
@@ -112,6 +113,24 @@ func SnapshotForMode(browserMode, connectionMode string, autoConnect bool, probe
 
 func WithRuntime(status Status, runtime Runtime, running bool) Status {
 	return WithRuntimeReadiness(status, runtime, running, running)
+}
+
+// WithRuntimeProcessCheck adds the privacy-safe process identity result to a
+// status snapshot and keeps strong-token failures in the stale-state branch.
+// A caller must pass the socket result separately because socket readiness is
+// a transport check, not proof of process ownership.
+func WithRuntimeProcessCheck(status Status, runtime Runtime, check RuntimeProcessCheck, socketReady bool) Status {
+	status.ProcessIdentityState = check.State
+	status = WithRuntimeReadiness(status, runtime, check.Running, socketReady && check.Running)
+	switch check.State {
+	case RuntimeProcessStateIdentityMismatch:
+		status.State = "stale_state"
+		status.Message = "daemon runtime process identity does not match the recorded owner"
+	case RuntimeProcessStateIdentityUnavailable:
+		status.State = "stale_state"
+		status.Message = "daemon runtime process identity could not be verified"
+	}
+	return status
 }
 
 func WithRuntimeReadiness(status Status, runtime Runtime, processRunning, socketReady bool) Status {

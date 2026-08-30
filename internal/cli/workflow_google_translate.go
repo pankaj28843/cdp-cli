@@ -33,6 +33,7 @@ const (
 	googleTranslateDefaultPoll     = 500 * time.Millisecond
 	googleTranslateTextMaxBytes    = int64(16 << 20)
 	googleTranslateWebsiteMaxBytes = int64(8 << 20)
+	googlePDFBurstMaxOutputBytes   = maxExternalProcessOutputBytes
 )
 
 var googleTranslateLanguageCodePattern = regexp.MustCompile(`^[a-z]{2,3}(?:-[a-z]{2,4})?$`)
@@ -93,11 +94,12 @@ type googleTranslateArtifacts struct {
 }
 
 type googleTranslateCleanup struct {
-	Attempted bool              `json:"attempted"`
-	Closed    bool              `json:"closed"`
-	TargetIDs []string          `json:"target_ids"`
-	Reports   []pageCloseReport `json:"reports"`
-	Errors    []string          `json:"errors,omitempty"`
+	Attempted       bool              `json:"attempted"`
+	Closed          bool              `json:"closed"`
+	TargetIDs       []string          `json:"target_ids"`
+	Reports         []pageCloseReport `json:"reports"`
+	Errors          []string          `json:"errors,omitempty"`
+	RecoveryCommand string            `json:"recovery_command,omitempty"`
 }
 
 type googleTranslateResult struct {
@@ -141,6 +143,108 @@ type googleTranslateTarget struct {
 	Session *cdp.PageSession
 }
 
+type googleTranslateTargetLifecycle struct {
+	client      cdp.CommandClient
+	browserMode string
+	targets     []cdp.TargetInfo
+	sessions    []*cdp.PageSession
+	baseline    map[string]bool
+	mainTarget  string
+	errors      []string
+}
+
+func newGoogleTranslateTargetLifecycle(client cdp.CommandClient, browserMode string) *googleTranslateTargetLifecycle {
+	return &googleTranslateTargetLifecycle{client: client, browserMode: browserMode}
+}
+
+func (l *googleTranslateTargetLifecycle) setWebsiteBaseline(targets []cdp.TargetInfo, mainTargetID string) {
+	if l == nil {
+		return
+	}
+	l.baseline = map[string]bool{}
+	for _, target := range targets {
+		if strings.TrimSpace(target.TargetID) != "" {
+			l.baseline[target.TargetID] = true
+		}
+	}
+	l.mainTarget = strings.TrimSpace(mainTargetID)
+}
+
+func (l *googleTranslateTargetLifecycle) addTarget(target cdp.TargetInfo) {
+	if l == nil || strings.TrimSpace(target.TargetID) == "" {
+		return
+	}
+	for _, existing := range l.targets {
+		if existing.TargetID == target.TargetID {
+			return
+		}
+	}
+	l.targets = append(l.targets, target)
+}
+
+func (l *googleTranslateTargetLifecycle) addSession(session *cdp.PageSession) {
+	if l == nil || session == nil {
+		return
+	}
+	l.sessions = append(l.sessions, session)
+}
+
+func (l *googleTranslateTargetLifecycle) discoverWebsiteTargets(ctx context.Context) {
+	if l == nil || l.client == nil || len(l.baseline) == 0 {
+		return
+	}
+	targets, err := cdp.ListTargetsWithClient(ctx, l.client)
+	if err != nil {
+		l.errors = append(l.errors, fmt.Sprintf("discover translated website targets: %v", err))
+		return
+	}
+	for _, target := range targets {
+		if target.Type != "page" || target.TargetID == l.mainTarget || l.baseline[target.TargetID] || !isGoogleTranslateWebsiteTarget(target) {
+			continue
+		}
+		l.addTarget(target)
+	}
+}
+
+func (l *googleTranslateTargetLifecycle) targetIDs() []string {
+	if l == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(l.targets))
+	for _, target := range l.targets {
+		if target.TargetID != "" {
+			ids = append(ids, target.TargetID)
+		}
+	}
+	return ids
+}
+
+func (l *googleTranslateTargetLifecycle) close() googleTranslateCleanup {
+	if l == nil {
+		return googleTranslateCleanup{}
+	}
+	cleanupErrors := []string{}
+	for index := len(l.sessions) - 1; index >= 0; index-- {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := l.sessions[index].Close(closeCtx); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Sprintf("session %s: %v", l.sessions[index].SessionID, err))
+		}
+		cancel()
+	}
+	cleanup := closeGoogleTranslateTargets(l.client, l.targets, l.browserMode)
+	if len(l.errors) > 0 {
+		cleanup.Attempted = true
+		cleanup.Closed = false
+		cleanup.Errors = append(cleanup.Errors, l.errors...)
+	}
+	if len(cleanupErrors) > 0 {
+		cleanup.Attempted = true
+		cleanup.Closed = false
+		cleanup.Errors = append(cleanup.Errors, cleanupErrors...)
+	}
+	return cleanup
+}
+
 func (a *app) newWorkflowGoogleTranslateCommand() *cobra.Command {
 	var request googleTranslateRequest
 	var ownership targetOwnershipMetadata
@@ -159,10 +263,17 @@ chunk size leaves headroom and preserves every source character in order.
 Language values accept Google language codes (for example da, en, de, zh-CN)
 and common names such as Danish or English; source auto/detect is supported.
 
-Document translation is for text-layer PDFs and supported office files. An
-image-only PDF must use the image path; it is never falsely reported as a
-successful document translation. Website translation follows the new
-translate.goog result target created by Google and closes that target too.`,
+		Document translation is for text-layer PDFs and supported office files. An
+	image-only PDF must use the image path; it is never falsely reported as a
+	successful document translation. Website translation follows the new
+	translate.goog result target created by Google, rediscovering newly created
+	result pages on failure and closing every workflow-owned target too. A
+	cleanup failure returns exact target evidence and a recovery command.
+
+		Scanned-PDF image bursting keeps Poppler diagnostics bounded, terminates
+		its owned process group on cancellation where supported, and requires
+		every generated page artifact to be a regular non-empty file before image
+		translation begins.`,
 		Example: `  cdp --browser-mode headed workflow google-translate --text 'Dette er en kort test.' --source da --target en --json
   cdp --browser-mode headed workflow google-translate --file "$HOME/Downloads/Pelvic floor training confirmation.pdf" --target en --out-dir tmp/translated-scan --json
   cdp --browser-mode headed workflow google-translate --url 'https://da.wikipedia.org/wiki/Danmark' --target en --output tmp/denmark.txt --json
@@ -417,7 +528,7 @@ func (a *app) runGoogleTranslate(ctx context.Context, request googleTranslateReq
 		if targetID != "" {
 			result.Cleanup = closeGoogleTranslateTargets(client, []cdp.TargetInfo{{TargetID: targetID, Type: "page", URL: initialURL}}, a.browserModeName())
 		}
-		return result, createErr
+		return result, googleTranslateResultError(createErr, result)
 	}
 	target := cdp.TargetInfo{TargetID: targetID, Type: "page", URL: initialURL}
 	target, _ = cdp.TargetInfoWithClient(ctx, client, targetID)
@@ -427,20 +538,20 @@ func (a *app) runGoogleTranslate(ctx context.Context, request googleTranslateReq
 	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, func(context.Context) error { return nil })
 	if err != nil {
 		result.Cleanup = closeGoogleTranslateTargets(client, []cdp.TargetInfo{target}, a.browserModeName())
-		return result, commandError("connection_failed", "connection", fmt.Sprintf("attach Google Translate target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --browser-mode headed --json"})
+		primary := commandError("connection_failed", "connection", fmt.Sprintf("attach Google Translate target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --browser-mode headed --json"})
+		return result, googleTranslateResultError(primary, result)
 	}
-	sessions := []*cdp.PageSession{session}
-	targets := []cdp.TargetInfo{target}
+	lifecycle := newGoogleTranslateTargetLifecycle(client, a.browserModeName())
+	lifecycle.addTarget(target)
+	lifecycle.addSession(session)
 	operationErr := error(nil)
 	switch kind {
 	case "text":
 		operationErr = a.translateGoogleText(ctx, session, request, input, outDir, &result)
 	case "website":
 		var child *googleTranslateTarget
-		child, operationErr = a.translateGoogleWebsite(ctx, client, session, request, outDir, &result)
+		child, operationErr = a.translateGoogleWebsite(ctx, client, session, request, outDir, lifecycle, &result)
 		if child != nil {
-			sessions = append(sessions, child.Session)
-			targets = append(targets, child.Target)
 			result.CreatedTargetIDs = append(result.CreatedTargetIDs, child.Target.TargetID)
 		}
 	case "document":
@@ -450,17 +561,21 @@ func (a *app) runGoogleTranslate(ctx context.Context, request googleTranslateReq
 	default:
 		operationErr = commandError("invalid_mode", "usage", fmt.Sprintf("unsupported resolved mode %q", kind), ExitUsage, nil)
 	}
-	for _, activeSession := range sessions {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = activeSession.Close(closeCtx)
+	if kind == "website" {
+		discoverCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		lifecycle.discoverWebsiteTargets(discoverCtx)
 		cancel()
 	}
-	result.Cleanup = closeGoogleTranslateTargets(client, targets, a.browserModeName())
+	result.CreatedTargetIDs = appendUniqueGoogleTranslateTargetIDs(result.CreatedTargetIDs, lifecycle.targetIDs())
+	result.Cleanup = lifecycle.close()
 	result.Input.Target = request.Target
 	result.Input.Source = request.Source
 	result.Artifacts.Metadata = nextGoogleTranslatePath(outDir, "metadata.json")
 	if operationErr != nil {
-		return result, attachGoogleTranslateResult(operationErr, result)
+		return result, googleTranslateResultError(operationErr, result)
+	}
+	if !result.Cleanup.Closed {
+		return result, googleTranslateResultError(nil, result)
 	}
 	result.OK = true
 	result.NextCommands = []string{
@@ -469,11 +584,15 @@ func (a *app) runGoogleTranslate(ctx context.Context, request googleTranslateReq
 	}
 	metadata, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return result, commandError("metadata_encode_failed", "internal", fmt.Sprintf("encode Google Translate metadata: %v", err), ExitInternal, nil)
+		result.OK = false
+		primary := commandError("metadata_encode_failed", "internal", fmt.Sprintf("encode Google Translate metadata: %v", err), ExitInternal, nil)
+		return result, googleTranslateResultError(primary, result)
 	}
 	metadata = append(metadata, '\n')
 	if err := artifacts.WriteOwnerOnlyFileAtomic(result.Artifacts.Metadata, metadata); err != nil {
-		return result, commandError("artifact_write_failed", "io", fmt.Sprintf("write Google Translate metadata: %v", err), ExitInternal, nil)
+		result.OK = false
+		primary := commandError("artifact_write_failed", "io", fmt.Sprintf("write Google Translate metadata: %v", err), ExitInternal, nil)
+		return result, googleTranslateResultError(primary, result)
 	}
 	return result, nil
 }
@@ -481,10 +600,49 @@ func (a *app) runGoogleTranslate(ctx context.Context, request googleTranslateReq
 func attachGoogleTranslateResult(err error, result googleTranslateResult) error {
 	var commandErr *CommandError
 	if errors.As(err, &commandErr) {
-		commandErr.Data = result
+		if commandErr.Data == nil {
+			commandErr.Data = result
+		} else if data, ok := commandErr.Data.(map[string]any); ok {
+			data["result"] = result
+		} else {
+			commandErr.Data = map[string]any{
+				"primary_data": commandErr.Data,
+				"result":       result,
+			}
+		}
 		return err
 	}
 	return commandErrorWithData("google_translate_failed", "runtime", err.Error(), ExitCheckFailed, []string{"cdp workflow google-translate --help"}, result)
+}
+
+func googleTranslateResultError(primary error, result googleTranslateResult) error {
+	if !result.Cleanup.Attempted {
+		if primary == nil {
+			return nil
+		}
+		return attachGoogleTranslateResult(primary, result)
+	}
+	if result.Cleanup.Closed {
+		if primary == nil {
+			return nil
+		}
+		return attachGoogleTranslateResult(primary, result)
+	}
+	commands := []string{}
+	if result.Cleanup.RecoveryCommand != "" {
+		commands = append(commands, result.Cleanup.RecoveryCommand)
+	}
+	commands = append(commands, "cdp --browser-mode headed pages --json")
+	data := map[string]any{
+		"cleanup": result.Cleanup,
+		"result":  result,
+	}
+	message := "Google Translate workflow-owned target cleanup did not settle"
+	if primary != nil {
+		data["primary_error"] = commandErrorSummary(primary)
+		message = fmt.Sprintf("Google Translate failed and workflow-owned target cleanup did not settle: %s", primary.Error())
+	}
+	return commandErrorWithData("google_translate_cleanup_failed", "cleanup", message, ExitInternal, commands, data)
 }
 
 func closeGoogleTranslateTargets(client cdp.CommandClient, targets []cdp.TargetInfo, browserMode string) googleTranslateCleanup {
@@ -509,6 +667,9 @@ func closeGoogleTranslateTargets(client cdp.CommandClient, targets []cdp.TargetI
 		cleanup.Reports = append(cleanup.Reports, report)
 		if !report.Closed || !report.TargetGone {
 			cleanup.Closed = false
+			if cleanup.RecoveryCommand == "" {
+				cleanup.RecoveryCommand = fmt.Sprintf("cdp page cleanup --target %s --force --close --json", target.TargetID)
+			}
 			if report.LastError != "" {
 				cleanup.Errors = append(cleanup.Errors, fmt.Sprintf("%s: %s", target.TargetID, report.LastError))
 			}
@@ -518,6 +679,23 @@ func closeGoogleTranslateTargets(client cdp.CommandClient, targets []cdp.TargetI
 		cleanup.Closed = false
 	}
 	return cleanup
+}
+
+func appendUniqueGoogleTranslateTargetIDs(existing, additional []string) []string {
+	seen := map[string]bool{}
+	for _, id := range existing {
+		if strings.TrimSpace(id) != "" {
+			seen[id] = true
+		}
+	}
+	for _, id := range additional {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			existing = append(existing, id)
+			seen[id] = true
+		}
+	}
+	return existing
 }
 
 func resolveGoogleTranslateInput(ctx context.Context, request googleTranslateRequest) (googleTranslateInput, string, *googleTranslatePDFProbe, error) {
@@ -911,11 +1089,12 @@ func chunkGoogleRoute(source, target string) string {
 	return googleTranslateRoute(source, target, "translate")
 }
 
-func (a *app) translateGoogleWebsite(ctx context.Context, client cdp.CommandClient, session *cdp.PageSession, request googleTranslateRequest, outDir string, result *googleTranslateResult) (*googleTranslateTarget, error) {
+func (a *app) translateGoogleWebsite(ctx context.Context, client cdp.CommandClient, session *cdp.PageSession, request googleTranslateRequest, outDir string, lifecycle *googleTranslateTargetLifecycle, result *googleTranslateResult) (*googleTranslateTarget, error) {
 	baseline, err := cdp.ListTargetsWithClient(ctx, client)
 	if err != nil {
 		return nil, commandError("target_list_failed", "connection", fmt.Sprintf("list targets before website translation: %v", err), ExitConnection, nil)
 	}
+	lifecycle.setWebsiteBaseline(baseline, session.TargetID)
 	inputCtx, cancel := context.WithTimeout(ctx, request.Wait)
 	defer cancel()
 	if _, err := session.Navigate(inputCtx, googleTranslateRoute(request.Source, request.Target, "websites")); err != nil {
@@ -946,14 +1125,15 @@ func (a *app) translateGoogleWebsite(ctx context.Context, client cdp.CommandClie
 	if err != nil {
 		return nil, err
 	}
+	lifecycle.addTarget(child.Target)
 	childSession, err := cdp.AttachToTargetWithClient(inputCtx, client, child.Target.TargetID, func(context.Context) error { return nil })
 	if err != nil {
 		return nil, commandError("website_target_attach_failed", "connection", fmt.Sprintf("attach translated website target %s: %v", child.Target.TargetID, err), ExitConnection, nil)
 	}
 	child.Session = childSession
+	lifecycle.addSession(childSession)
 	state, err := waitGoogleWebsiteBody(inputCtx, childSession, request.Poll)
 	if err != nil {
-		_ = childSession.Close(context.Background())
 		return nil, err
 	}
 	outPath := request.Output
@@ -962,7 +1142,6 @@ func (a *app) translateGoogleWebsite(ctx context.Context, client cdp.CommandClie
 	}
 	outPath = nextGoogleTranslatePathForRequested(outPath, ".txt")
 	if err := artifacts.WriteOwnerOnlyFileAtomic(outPath, []byte(state.Text)); err != nil {
-		_ = childSession.Close(context.Background())
 		return nil, commandError("artifact_write_failed", "io", fmt.Sprintf("write translated website: %v", err), ExitInternal, nil)
 	}
 	result.Artifacts.Output = outPath
@@ -981,7 +1160,7 @@ func waitGoogleWebsiteTarget(ctx context.Context, client cdp.CommandClient, base
 			return nil, commandError("target_list_failed", "connection", fmt.Sprintf("list website translation targets: %v", err), ExitConnection, nil)
 		}
 		for _, target := range targets {
-			if target.Type == "page" && target.TargetID != mainTargetID && !known[target.TargetID] && strings.Contains(target.URL, "translate.goog") {
+			if target.Type == "page" && target.TargetID != mainTargetID && !known[target.TargetID] && isGoogleTranslateWebsiteTarget(target) {
 				return &googleTranslateTarget{Target: target}, nil
 			}
 		}
@@ -993,6 +1172,10 @@ func waitGoogleWebsiteTarget(ctx context.Context, client cdp.CommandClient, base
 		case <-timer.C:
 		}
 	}
+}
+
+func isGoogleTranslateWebsiteTarget(target cdp.TargetInfo) bool {
+	return strings.Contains(strings.ToLower(target.URL), "translate.goog")
 }
 
 func waitGoogleWebsiteBody(ctx context.Context, session *cdp.PageSession, poll time.Duration) (googleTranslateState, error) {
@@ -1340,17 +1523,61 @@ func burstGooglePDF(ctx context.Context, inputPath, outDir string) ([]string, er
 		return nil, commandError("burst_output_unavailable", "io", fmt.Sprintf("create PDF burst directory: %v", err), ExitInternal, nil)
 	}
 	prefix := filepath.Join(burstDir, "page")
-	command := exec.CommandContext(ctx, tool, "-png", "-r", "150", inputPath, prefix)
-	var stderr strings.Builder
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		return nil, commandError("pdf_burst_failed", "extraction", fmt.Sprintf("burst scanned PDF with pdftoppm: %v: %s", err, strings.TrimSpace(stderr.String())), ExitCheckFailed, []string{"verify the PDF opens normally", "brew install poppler"})
+	stdout := &boundedProcessOutput{maxBytes: googlePDFBurstMaxOutputBytes}
+	stderr := &boundedProcessOutput{maxBytes: googlePDFBurstMaxOutputBytes}
+	runErr := runOwnedCommand(ctx, tool, []string{"-png", "-r", "150", inputPath, prefix}, stdout, stderr)
+	if runErr != nil {
+		message := strings.TrimSpace(strings.TrimSpace(stdout.String()) + "\n" + strings.TrimSpace(stderr.String()))
+		if message == "" {
+			message = runErr.Error()
+		}
+		if len(message) > 2048 {
+			message = strings.ToValidUTF8(message[:2048], "") + "<truncated>"
+		}
+		return nil, commandErrorWithData(
+			"pdf_burst_failed",
+			"extraction",
+			fmt.Sprintf("burst scanned PDF with pdftoppm: %v: %s", runErr, message),
+			ExitCheckFailed,
+			[]string{"verify the PDF opens normally", "brew install poppler"},
+			map[string]any{
+				"max_output_bytes_per_stream": googlePDFBurstMaxOutputBytes,
+				"output_truncated":            stdout.truncated || stderr.truncated,
+				"process_termination":         ownedProcessTerminationMode(),
+				"canceled":                    ctx.Err() != nil || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded),
+			},
+		)
 	}
 	paths, err := filepath.Glob(prefix + "-*.png")
 	if err != nil || len(paths) == 0 {
 		return nil, commandError("pdf_burst_empty", "extraction", "pdftoppm produced no PNG pages", ExitCheckFailed, nil)
 	}
 	sort.Slice(paths, func(i, j int) bool { return googlePageNumber(paths[i]) < googlePageNumber(paths[j]) })
+	for _, path := range paths {
+		info, statErr := os.Lstat(path)
+		reason := ""
+		switch {
+		case statErr != nil:
+			reason = "missing"
+		case !info.Mode().IsRegular():
+			reason = "not_regular"
+		case info.Size() <= 0:
+			reason = "empty"
+		}
+		if reason != "" {
+			return nil, commandErrorWithData(
+				"pdf_burst_invalid_page",
+				"extraction",
+				fmt.Sprintf("pdftoppm page artifact %s is %s", filepath.Base(path), reason),
+				ExitCheckFailed,
+				[]string{"verify the PDF opens normally", "cdp workflow google-translate --help"},
+				map[string]any{
+					"page_path": path,
+					"reason":    reason,
+				},
+			)
+		}
+	}
 	return paths, nil
 }
 

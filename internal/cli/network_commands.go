@@ -113,6 +113,7 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "websocket",
 		Short: "Capture WebSocket lifecycle events and frames from a page target",
+		Long:  "Capture WebSocket lifecycle events and frames from a page target. When --out is supplied, JSON stdout is a privacy-safe artifact-only manifest and captured frames remain file-backed. Without --out, --json includes the captured WebSocket records inline.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
@@ -140,6 +141,7 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 				return err
 			}
 			defer session.Close(ctx)
+			captureStartedAt := time.Now().UTC()
 
 			records, truncated, collectorErrors, err := collectNetworkCapture(ctx, client, session.SessionID, networkCaptureOptions{
 				Wait:                  wait,
@@ -159,13 +161,21 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
 			}
+			captureFinishedAt := time.Now().UTC()
 			websockets := filterWebSocketRecords(records)
 			redactor := artifacts.NewRedactor(redact)
 			applyNetworkCaptureRedaction(websockets, redactor)
 			artifactWarning := "websocket capture may include cookies, authorization headers, tokens, and frame payloads; keep this artifact local"
 			artifactSafety := redactor.Metadata(strings.TrimSpace(outPath) != "", artifactWarning)
+			_, websocketCount, frameCount := networkCaptureCounts(websockets)
+			outputMode := "inline"
+			if strings.TrimSpace(outPath) != "" {
+				outputMode = "artifact_only"
+			}
 			capture := map[string]any{
 				"count":            len(websockets),
+				"websocket_count":  websocketCount,
+				"frame_count":      frameCount,
 				"wait":             durationString(wait),
 				"limit":            limit,
 				"truncated":        truncated,
@@ -174,15 +184,19 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 				"redact":           redact,
 				"collector_errors": collectorErrors,
 				"artifact_safety":  artifactSafety,
+				"started_at":       captureStartedAt.Format(time.RFC3339Nano),
+				"finished_at":      captureFinishedAt.Format(time.RFC3339Nano),
+				"output_mode":      outputMode,
 			}
 			if strings.TrimSpace(outPath) != "" && redact == "none" {
 				capture["local_artifact_warning"] = artifactWarning
 			}
 			report := map[string]any{
-				"ok":         true,
-				"target":     pageRow(target),
-				"websockets": websockets,
-				"capture":    capture,
+				"ok":          true,
+				"output_mode": outputMode,
+				"target":      pageRow(target),
+				"websockets":  websockets,
+				"capture":     capture,
 			}
 			if targetIndex > 0 {
 				report["target_index"] = targetIndex
@@ -200,7 +214,11 @@ func (a *app) newNetworkWebSocketCommand() *cobra.Command {
 				report["artifacts"] = []map[string]any{{"type": "network-websocket", "path": writtenPath}}
 			}
 			human := fmt.Sprintf("websocket-capture\t%d sockets", len(websockets))
-			return a.render(ctx, human, report)
+			renderReport := report
+			if strings.TrimSpace(outPath) != "" {
+				renderReport = privacySafeNetworkWebSocketManifest(report)
+			}
+			return a.render(ctx, human, renderReport)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -252,6 +270,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "capture",
 		Short: "Capture full local network metadata from a page target",
+		Long:  "Capture full local network metadata from a page target. When --out is supplied, JSON stdout is a privacy-safe artifact-only manifest and captured request, response, and WebSocket payloads remain file-backed. Without --out, --json includes the captured records inline; use --redact safe for shareable output.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
@@ -284,6 +303,7 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				return err
 			}
 			defer session.Close(ctx)
+			captureStartedAt := time.Now().UTC()
 
 			trigger := "observe"
 			var afterEnable func() error
@@ -316,13 +336,22 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
 			}
+			captureFinishedAt := time.Now().UTC()
 			redactor := artifacts.NewRedactor(redact)
 			applyNetworkCaptureRedaction(records, redactor)
 			artifactWarning := "network capture may include cookies, authorization headers, tokens, request bodies, and response bodies; keep this artifact local"
 			writesArtifact := strings.TrimSpace(outPath) != "" || strings.TrimSpace(harOutPath) != "" || strings.TrimSpace(bodyOutDir) != ""
 			artifactSafety := redactor.Metadata(writesArtifact, artifactWarning)
+			requestCount, websocketCount, frameCount := networkCaptureCounts(records)
+			outputMode := "inline"
+			if strings.TrimSpace(outPath) != "" {
+				outputMode = "artifact_only"
+			}
 			capture := map[string]any{
 				"count":                      len(records),
+				"request_count":              requestCount,
+				"websocket_count":            websocketCount,
+				"frame_count":                frameCount,
 				"wait":                       durationString(wait),
 				"limit":                      limit,
 				"truncated":                  truncated,
@@ -340,15 +369,19 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				"ignore_cache":               ignoreCache,
 				"collector_errors":           collectorErrors,
 				"artifact_safety":            artifactSafety,
+				"started_at":                 captureStartedAt.Format(time.RFC3339Nano),
+				"finished_at":                captureFinishedAt.Format(time.RFC3339Nano),
+				"output_mode":                outputMode,
 			}
 			if writesArtifact && redact == "none" {
 				capture["local_artifact_warning"] = artifactWarning
 			}
 			report := map[string]any{
-				"ok":       true,
-				"target":   pageRow(target),
-				"requests": records,
-				"capture":  capture,
+				"ok":          true,
+				"output_mode": outputMode,
+				"target":      pageRow(target),
+				"requests":    records,
+				"capture":     capture,
 			}
 			if targetIndex > 0 {
 				report["target_index"] = targetIndex
@@ -392,7 +425,11 @@ func (a *app) newNetworkCaptureCommand() *cobra.Command {
 				report["artifacts"] = artifactList
 			}
 			human := fmt.Sprintf("network-capture\t%d requests", len(records))
-			return a.render(ctx, human, report)
+			renderReport := report
+			if strings.TrimSpace(outPath) != "" {
+				renderReport = privacySafeNetworkCaptureManifest(report)
+			}
+			return a.render(ctx, human, renderReport)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
@@ -461,4 +498,134 @@ func writeNetworkBodyArtifacts(outDir string, records []networkCaptureRecord, li
 		artifactRefs = append(artifactRefs, map[string]any{"type": "network-response-body", "path": writtenPath, "bytes": len([]byte(record.Body.Text)), "safety": safety})
 	}
 	return bodyArtifacts, artifactRefs, nil
+}
+
+func networkCaptureCounts(records []networkCaptureRecord) (requestCount, websocketCount, frameCount int) {
+	for _, record := range records {
+		if record.WebSocket == nil {
+			requestCount++
+			continue
+		}
+		websocketCount++
+		frameCount += len(record.WebSocket.Frames)
+	}
+	return requestCount, websocketCount, frameCount
+}
+
+func privacySafeNetworkCaptureManifest(report map[string]any) map[string]any {
+	manifest := privacySafeNetworkArtifactManifest(report)
+	if bodyArtifacts, ok := report["body_artifacts"]; ok {
+		manifest["body_artifact_count"] = networkCaptureCollectionLength(bodyArtifacts)
+	}
+	return manifest
+}
+
+func privacySafeNetworkWebSocketManifest(report map[string]any) map[string]any {
+	return privacySafeNetworkArtifactManifest(report)
+}
+
+func privacySafeNetworkArtifactManifest(report map[string]any) map[string]any {
+	outputMode := "artifact_only"
+	if value, ok := report["output_mode"].(string); ok && value != "" {
+		outputMode = value
+	}
+	manifest := map[string]any{
+		"ok":          report["ok"],
+		"output_mode": outputMode,
+		"target":      privacySafeNetworkTarget(report["target"]),
+		"capture":     privacySafeNetworkCaptureSummary(report["capture"]),
+	}
+	if targetIndex, ok := report["target_index"]; ok {
+		manifest["target_index"] = targetIndex
+	}
+	for _, key := range []string{"artifact", "har"} {
+		if value, ok := report[key]; ok {
+			manifest[key] = privacySafeNetworkArtifact(value)
+		}
+	}
+	if value, ok := report["artifacts"]; ok {
+		manifest["artifacts"] = privacySafeNetworkArtifactList(value)
+	}
+	return manifest
+}
+
+func privacySafeNetworkTarget(value any) map[string]any {
+	row, ok := value.(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	safe := map[string]any{}
+	for _, key := range []string{"id", "type", "attached"} {
+		if field, ok := row[key]; ok {
+			safe[key] = field
+		}
+	}
+	return safe
+}
+
+func privacySafeNetworkCaptureSummary(value any) map[string]any {
+	capture, ok := value.(map[string]any)
+	if !ok {
+		return map[string]any{"output_mode": "artifact_only"}
+	}
+	safe := map[string]any{}
+	for _, key := range []string{
+		"count", "request_count", "websocket_count", "frame_count", "wait", "limit", "truncated",
+		"include_headers", "include_initiators", "include_timing", "include_post_data", "include_bodies",
+		"body_limit", "include_websockets", "include_websocket_payloads", "websocket_payload_limit",
+		"include_payloads", "payload_limit", "redact", "trigger", "ignore_cache", "artifact_safety",
+		"local_artifact_warning", "started_at", "finished_at", "output_mode",
+	} {
+		if field, ok := capture[key]; ok {
+			safe[key] = field
+		}
+	}
+	if errors, ok := capture["collector_errors"].([]map[string]string); ok {
+		safe["collector_error_count"] = len(errors)
+	} else if errors, ok := capture["collector_errors"].([]map[string]any); ok {
+		safe["collector_error_count"] = len(errors)
+	} else if errors, ok := capture["collector_errors"].([]any); ok {
+		safe["collector_error_count"] = len(errors)
+	}
+	if _, ok := safe["output_mode"]; !ok {
+		safe["output_mode"] = "artifact_only"
+	}
+	return safe
+}
+
+func privacySafeNetworkArtifact(value any) map[string]any {
+	artifact, ok := value.(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	safe := map[string]any{}
+	for _, key := range []string{"type", "path", "bytes", "safety"} {
+		if field, ok := artifact[key]; ok {
+			safe[key] = field
+		}
+	}
+	return safe
+}
+
+func privacySafeNetworkArtifactList(value any) []map[string]any {
+	artifacts, ok := value.([]map[string]any)
+	if !ok {
+		return nil
+	}
+	safe := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		safe = append(safe, privacySafeNetworkArtifact(artifact))
+	}
+	return safe
+}
+
+func networkCaptureCollectionLength(value any) int {
+	switch collection := value.(type) {
+	case []map[string]any:
+		return len(collection)
+	case []any:
+		return len(collection)
+	default:
+		return 0
+	}
 }

@@ -147,14 +147,18 @@ func TestDiagnosticWorkflowsSelectExistingPageByTargetIndex(t *testing.T) {
 					URL string `json:"url"`
 				} `json:"target"`
 				TargetIndex int `json:"target_index"`
-				Workflow    struct {
+				Cleanup     struct {
+					Skipped bool   `json:"skipped"`
+					Reason  string `json:"reason"`
+				} `json:"cleanup"`
+				Workflow struct {
 					RequestedURL string `json:"requested_url"`
 				} `json:"workflow"`
 			}
 			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
 				t.Fatalf("%s output is invalid JSON: %v; output=%s", test.name, err, out.String())
 			}
-			if !report.OK || report.Target.ID != "page-two" || report.TargetIndex != 2 || report.Workflow.RequestedURL != "" || report.Target.URL != "https://example.test/second" {
+			if !report.OK || report.Target.ID != "page-two" || report.TargetIndex != 2 || report.Workflow.RequestedURL != "" || report.Target.URL != "https://example.test/second" || !report.Cleanup.Skipped || report.Cleanup.Reason != "caller_owned" {
 				t.Fatalf("%s report=%+v, want page-two/index 2 no-URL observation", test.name, report)
 			}
 			if navigations := fakePageNavigateCount.Load(); navigations != 0 {

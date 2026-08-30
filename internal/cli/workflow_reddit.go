@@ -216,7 +216,7 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 	}
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum source-native records to collect (1-500)")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Second, "how long to wait for visible Reddit source records")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	return cmd
 }
 

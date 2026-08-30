@@ -28,8 +28,10 @@ type eventStreamOptions struct {
 }
 
 const (
-	eventStreamCallTimeout = 10 * time.Second
-	eventStreamReadTimeout = 500 * time.Millisecond
+	eventStreamCallTimeout              = 10 * time.Second
+	eventStreamReadTimeout              = 500 * time.Millisecond
+	eventStreamLivenessPollInterval     = 15 * time.Second
+	eventStreamLivenessFailureThreshold = 2
 )
 
 func (a *app) newEventsStreamCommand() *cobra.Command {
@@ -37,6 +39,7 @@ func (a *app) newEventsStreamCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stream",
 		Short: "Stream session-scoped CDP events as JSONL",
+		Long:  "Stream session-scoped CDP events as JSONL. The stream checks whether its daemon runtime registration is still current before periodically sending a read-only Runtime.evaluate heartbeat on the already attached exact page session; a definitive runtime replacement retires immediately, while ambiguous state follows the two-strike heartbeat policy.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runEventsStream(cmd, options)
@@ -133,7 +136,12 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 		eventCount++
 		return options.maxEvents > 0 && eventCount >= options.maxEvents, nil
 	}
+	var livenessStop *eventStreamLivenessResult
 	finish := func(reason string, exit int) error {
+		streamMetadata := eventStreamMetadata(target, session.SessionID, options, subscriptions, enabledDomains)
+		if livenessStop != nil {
+			streamMetadata["liveness"] = eventStreamLivenessMetadata(livenessStop)
+		}
 		if err := writer.write(map[string]any{
 			"ok":                     true,
 			"type":                   "stopped",
@@ -141,7 +149,7 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 			"event_count":            eventCount,
 			"foreign_events_dropped": foreignEventsDropped,
 			"truncated":              options.maxEvents > 0 && eventCount >= options.maxEvents,
-			"stream":                 eventStreamMetadata(target, session.SessionID, options, subscriptions, enabledDomains),
+			"stream":                 streamMetadata,
 		}); err != nil {
 			return fmt.Errorf("write event stream stop: %w", err)
 		}
@@ -174,6 +182,8 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 		}
 	}
 
+	registrationCheck := a.eventStreamRuntimeRegistrationCheck(client)
+	livenessCh := pumpEventStreamLivenessWithRegistration(streamCtx, client, session.SessionID, eventStreamLivenessPollInterval, eventStreamLivenessFailureThreshold, registrationCheck)
 	eventCh := pumpEventStream(streamCtx, client)
 	commandCh := readEventStreamCommands(streamCtx, cmd.InOrStdin())
 	var durationCh <-chan time.Time
@@ -191,6 +201,15 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 			return finish(reason, exit)
 		case <-durationCh:
 			return finish("duration", ExitOK)
+		case result, ok := <-livenessCh:
+			if !ok {
+				livenessCh = nil
+				continue
+			}
+			if result.retired {
+				livenessStop = &result
+				return finish("liveness", ExitOK)
+			}
 		case input, ok := <-commandCh:
 			if !ok {
 				commandCh = nil
@@ -297,6 +316,87 @@ func (w eventStreamWriter) write(value any) error {
 type eventStreamEventResult struct {
 	event cdp.Event
 	err   error
+}
+
+type eventStreamLivenessResult struct {
+	retired             bool
+	consecutiveFailures int
+	reason              string
+	source              string
+}
+
+func pumpEventStreamLiveness(ctx context.Context, client browserEventClient, sessionID string, pollInterval time.Duration, failureThreshold int) <-chan eventStreamLivenessResult {
+	return pumpEventStreamLivenessWithRegistration(ctx, client, sessionID, pollInterval, failureThreshold, nil)
+}
+
+func pumpEventStreamLivenessWithRegistration(ctx context.Context, client browserEventClient, sessionID string, pollInterval time.Duration, failureThreshold int, registrationCheck eventStreamRuntimeRegistrationCheck) <-chan eventStreamLivenessResult {
+	results := make(chan eventStreamLivenessResult, 1)
+	go func() {
+		defer close(results)
+		if pollInterval <= 0 {
+			pollInterval = eventStreamLivenessPollInterval
+		}
+		if failureThreshold <= 0 {
+			failureThreshold = eventStreamLivenessFailureThreshold
+		}
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+		consecutiveFailures := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if registrationCheck != nil {
+					checkCtx, cancelCheck := eventStreamCallContext(ctx)
+					status, err := registrationCheck(checkCtx)
+					cancelCheck()
+					if ctx.Err() != nil {
+						return
+					}
+					if err == nil && status == eventStreamRuntimeRegistrationRetired {
+						result := eventStreamLivenessResult{
+							retired: true,
+							reason:  "runtime_retired",
+							source:  "runtime_registration",
+						}
+						select {
+						case results <- result:
+						case <-ctx.Done():
+						}
+						return
+					}
+				}
+				callCtx, cancel := eventStreamCallContext(ctx)
+				err := client.CallSession(callCtx, sessionID, "Runtime.evaluate", map[string]any{
+					"expression":    "void 0",
+					"returnByValue": true,
+				}, nil)
+				cancel()
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					consecutiveFailures++
+					if consecutiveFailures < failureThreshold {
+						continue
+					}
+					result := eventStreamLivenessResult{
+						retired:             true,
+						consecutiveFailures: consecutiveFailures,
+						reason:              "exact_session_unhealthy",
+					}
+					select {
+					case results <- result:
+					case <-ctx.Done():
+					}
+					return
+				}
+				consecutiveFailures = 0
+			}
+		}
+	}()
+	return results
 }
 
 func pumpEventStream(ctx context.Context, client browserEventClient) <-chan eventStreamEventResult {
@@ -671,7 +771,27 @@ func eventStreamMetadata(target cdp.TargetInfo, sessionID string, options eventS
 		"all_events":      subscriptions.all,
 		"subscriptions":   subscriptions.methods(),
 		"enabled_domains": enabledDomains.names(),
+		"liveness":        eventStreamLivenessMetadata(nil),
 	}
+}
+
+func eventStreamLivenessMetadata(stop *eventStreamLivenessResult) map[string]any {
+	metadata := map[string]any{
+		"enabled":           true,
+		"heartbeat":         "Runtime.evaluate",
+		"read_only":         true,
+		"poll_interval":     eventStreamLivenessPollInterval.String(),
+		"failure_threshold": eventStreamLivenessFailureThreshold,
+	}
+	if stop != nil {
+		metadata["state"] = "retired"
+		metadata["reason"] = stop.reason
+		metadata["consecutive_failures"] = stop.consecutiveFailures
+		if strings.TrimSpace(stop.source) != "" {
+			metadata["source"] = stop.source
+		}
+	}
+	return metadata
 }
 
 func eventStreamFailure(err error) *CommandError {

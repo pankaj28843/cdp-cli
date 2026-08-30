@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/artifacts"
 	"github.com/pankaj28843/cdp-cli/internal/config"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 	"github.com/spf13/cobra"
 )
 
@@ -84,7 +84,7 @@ func (a *app) newArtifactsRunManagedCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run-managed -- <command> [args...]",
 		Short: "Run one managed task with latest-run bounded log replacement",
-		Long:  "Run a cdp-managed scheduled task while writing stdout and stderr to an owner-only latest-run log capped at the configured hard size. The target log is bounded before child output opens.",
+		Long:  "Run a cdp-managed scheduled task while writing stdout and stderr to an owner-only latest-run log capped at the configured hard size. The target log is bounded before child output opens, and cancellation terminates the owned child process tree where supported.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.ArgsLenAtDash() < 0 {
@@ -108,11 +108,8 @@ func (a *app) newArtifactsRunManagedCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContext(cmd)
 			defer cancel()
-			child := exec.CommandContext(ctx, args[0], args[1:]...)
 			result, runErr := artifacts.WriteBoundedManagedLog(ctx, store.Dir, logPath, policy.MaxLogSizeBytes, func(writer io.Writer) error {
-				child.Stdout = writer
-				child.Stderr = writer
-				return child.Run()
+				return processgroup.Run(ctx, args[0], args[1:], writer, writer)
 			})
 			data := map[string]any{
 				"ok":      runErr == nil,

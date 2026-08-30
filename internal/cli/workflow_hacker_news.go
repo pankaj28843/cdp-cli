@@ -92,7 +92,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 30, "maximum number of stories to return; use 0 for no limit")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long to wait for Hacker News story rows")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	cmd.AddCommand(a.newWorkflowHackerNewsCollectCommand())
 	return cmd
 }

@@ -54,7 +54,7 @@ func (a *app) newBrowserPreflightCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preflight",
 		Short: "Check and optionally repair the selected browser runtime before long work",
-		Long:  "Check the selected browser runtime mode, report daemon/browser health and tab budget, optionally repair managed headless, optionally seed the managed headless profile, optionally run conservative page cleanup, and optionally open a neutral readiness page. Headed mode remains passive unless an explicit active probe has already been configured.",
+		Long:  "Check the selected browser runtime mode, report daemon/browser health and tab budget, optionally repair managed headless, optionally seed the managed headless profile, optionally run conservative page cleanup, and optionally open a neutral readiness page. A created readiness page reports bounded exact-target cleanup with target-gone evidence; --keep-open-readiness-tab records deliberate retention. Headed mode remains passive unless an explicit active probe has already been configured.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.Reconnect < 0 || opts.ProfileSeedIfOlder < 0 || opts.CleanupIdleFor < 0 || opts.CleanupMax < 0 || opts.CleanupMaxAttempts <= 0 || opts.CleanupConcurrency <= 0 {
@@ -104,7 +104,7 @@ func (a *app) newBrowserPreflightCommand() *cobra.Command {
 	cmd.Flags().IntVar(&opts.CleanupMaxAttempts, "cleanup-max-attempts", opts.CleanupMaxAttempts, "maximum close attempts per cleanup target")
 	cmd.Flags().IntVar(&opts.CleanupConcurrency, "cleanup-concurrency", opts.CleanupConcurrency, "maximum cleanup targets to close concurrently")
 	cmd.Flags().BoolVar(&opts.CleanupWaitGone, "cleanup-wait-gone", opts.CleanupWaitGone, "wait until each cleanup-closed target disappears from target listing")
-	cmd.Flags().BoolVar(&opts.OpenReadiness, "open-readiness", false, "open a neutral page and evaluate document readiness after health is usable")
+	cmd.Flags().BoolVar(&opts.OpenReadiness, "open-readiness", false, "open a neutral page, evaluate readiness, and report bounded exact-target cleanup after health is usable")
 	cmd.Flags().StringVar(&opts.OpenURL, "open-url", opts.OpenURL, "neutral URL used by --open-readiness")
 	cmd.Flags().BoolVar(&opts.KeepOpenReadinessTab, "keep-open-readiness-tab", false, "leave the --open-readiness target open for manual inspection")
 	return cmd
@@ -305,7 +305,11 @@ func (a *app) runBrowserPreflight(ctx context.Context, opts browserPreflightOpti
 		report["readiness"] = readiness
 		if err != nil {
 			report["state"] = "open_readiness_failed"
-			return fail("browser_preflight_open_readiness_failed", "check_failed", fmt.Sprintf("browser preflight open-readiness failed: %v", err), ExitCheckFailed)
+			code, class, exit := "browser_preflight_open_readiness_failed", "check_failed", ExitCheckFailed
+			if cleanup, ok := readiness["cleanup"].(renderedExtractCleanupResult); ok && cleanup.Error != "" {
+				code, class, exit = "browser_preflight_open_readiness_cleanup_failed", "cleanup", ExitInternal
+			}
+			return fail(code, class, fmt.Sprintf("browser preflight open-readiness failed: %v", err), exit)
 		}
 	}
 
@@ -363,50 +367,58 @@ type browserPreflightReadinessState struct {
 	BodyTextLength int    `json:"body_text_length"`
 }
 
-func (a *app) runBrowserPreflightOpenReadiness(ctx context.Context, rawURL string, keepOpen bool) (map[string]any, error) {
+func (a *app) runBrowserPreflightOpenReadiness(ctx context.Context, rawURL string, keepOpen bool) (result map[string]any, retErr error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		rawURL = defaultBrowserPreflightURL
 	}
+	result = map[string]any{"ok": false, "url": rawURL}
 	client, closeClient, err := a.browserCDPClient(ctx)
 	if err != nil {
-		return map[string]any{"ok": false, "url": rawURL, "error": err.Error()}, err
+		result["error"] = err.Error()
+		return result, err
 	}
+	closeClientOnce := idempotentContextCloser(closeClient)
 	targetID, err := a.createWorkflowPageTargetWithKeepOpen(ctx, client, rawURL, "browser-preflight", keepOpen)
 	if err != nil {
-		_ = closeClient(ctx)
-		return map[string]any{"ok": false, "url": rawURL, "error": err.Error()}, err
+		_ = closeClientOnce(context.Background())
+		result["error"] = err.Error()
+		return result, err
 	}
-	target, err := cdp.TargetInfoWithClient(ctx, client, targetID)
+	result["target_id"] = targetID
+	target := cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}
+	cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true, keepOpen: keepOpen}
+	var session *cdp.PageSession
+	defer func() {
+		cleanup := cleanupGuard.cleanup()
+		result["cleanup"] = cleanup
+		result["closed"] = cleanup.Closed
+		if session != nil {
+			_ = session.Close(context.Background())
+		} else {
+			_ = closeClientOnce(context.Background())
+		}
+		retErr = workflowOwnedCleanupError(
+			"browser_preflight_open_readiness",
+			retErr,
+			cleanup,
+			[]string{"cdp pages --json"},
+		)
+		if retErr != nil && result["error"] == nil {
+			result["error"] = retErr.Error()
+		}
+	}()
+	target, err = cdp.TargetInfoWithClient(ctx, client, targetID)
 	if err != nil {
-		_ = closeClient(ctx)
-		return map[string]any{"ok": false, "url": rawURL, "target_id": targetID, "error": err.Error()}, err
+		result["error"] = err.Error()
+		return result, err
 	}
-	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
+	result["target"] = pageRow(target)
+	cleanupGuard.targetID = target.TargetID
+	session, err = cdp.AttachToTargetWithClient(ctx, client, targetID, closeClientOnce)
 	if err != nil {
-		_ = closePageTargetSettled(ctx, client, target, pageCloseOptions{
-			WaitGone:     true,
-			MaxAttempts:  defaultPageCloseMaxAttempts,
-			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
-			PollInterval: defaultPageClosePollInterval,
-			RetryBackoff: defaultPageCloseRetryBackoff,
-		})
-		_ = closeClient(ctx)
-		return map[string]any{"ok": false, "url": rawURL, "target": pageRow(target), "error": err.Error()}, err
-	}
-	defer session.Close(ctx)
-	if !keepOpen {
-		defer func() {
-			closeCtx, cancel := context.WithTimeout(context.Background(), pageCloseDefaultTimeout(a.browserModeName(), defaultPageCloseMaxAttempts))
-			defer cancel()
-			_ = closePageTargetSettled(closeCtx, client, target, pageCloseOptions{
-				WaitGone:     true,
-				MaxAttempts:  defaultPageCloseMaxAttempts,
-				AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
-				PollInterval: defaultPageClosePollInterval,
-				RetryBackoff: defaultPageCloseRetryBackoff,
-			})
-		}()
+		result["error"] = err.Error()
+		return result, err
 	}
 
 	start := time.Now()
@@ -428,7 +440,7 @@ func (a *app) runBrowserPreflightOpenReadiness(ctx context.Context, rawURL strin
 			last = current
 			lastErr = nil
 			if current.ReadyState == "interactive" || current.ReadyState == "complete" {
-				return map[string]any{
+				result = map[string]any{
 					"ok":              true,
 					"url":             rawURL,
 					"target":          pageRow(target),
@@ -436,13 +448,14 @@ func (a *app) runBrowserPreflightOpenReadiness(ctx context.Context, rawURL strin
 					"attempt_count":   attempts,
 					"elapsed_ms":      time.Since(start).Milliseconds(),
 					"readiness_state": current,
-				}, nil
+				}
+				return result, nil
 			}
 		} else {
 			lastErr = err
 		}
 		if !time.Now().Before(deadline) {
-			result := map[string]any{
+			result = map[string]any{
 				"ok":              false,
 				"url":             rawURL,
 				"target":          pageRow(target),
@@ -461,7 +474,7 @@ func (a *app) runBrowserPreflightOpenReadiness(ctx context.Context, rawURL strin
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return map[string]any{
+			result = map[string]any{
 				"ok":              false,
 				"url":             rawURL,
 				"target":          pageRow(target),
@@ -470,7 +483,8 @@ func (a *app) runBrowserPreflightOpenReadiness(ctx context.Context, rawURL strin
 				"elapsed_ms":      time.Since(start).Milliseconds(),
 				"readiness_state": last,
 				"last_error":      ctx.Err().Error(),
-			}, ctx.Err()
+			}
+			return result, ctx.Err()
 		case <-timer.C:
 		}
 	}

@@ -222,19 +222,15 @@ static int cdp_scan_remote_debugging_queue(int pid, int press, int *windows, int
 import "C"
 
 import (
-	"fmt"
-	"os/exec"
+	"context"
 )
 
-func EnableNativeRemoteDebuggingCheckbox(processName string) (bool, error) {
-	output, err := exec.Command("pgrep", "-x", processName).Output()
-	if err != nil && len(output) == 0 {
-		return false, nil
-	}
+func EnableNativeRemoteDebuggingCheckbox(ctx context.Context, processName string) (bool, error) {
+	pids, err := nativeChromeProcessIDs(ctx, processName)
 	if err != nil {
-		return false, fmt.Errorf("find Chrome processes: %w", err)
+		return false, err
 	}
-	for _, pid := range parseChromeProcessIDs(string(output)) {
+	for _, pid := range pids {
 		if C.cdp_click_remote_debugging_checkbox(C.int(pid)) != 0 {
 			return true, nil
 		}
@@ -242,15 +238,11 @@ func EnableNativeRemoteDebuggingCheckbox(processName string) (bool, error) {
 	return false, nil
 }
 
-func ScanNativeRemoteDebuggingApproval(processName string, press bool) (NativeRemoteDebuggingApprovalResult, error) {
-	output, err := exec.Command("pgrep", "-x", processName).Output()
-	if err != nil && len(output) == 0 {
-		return NativeRemoteDebuggingApprovalResult{}, nil
-	}
+func ScanNativeRemoteDebuggingApproval(ctx context.Context, processName string, press bool) (NativeRemoteDebuggingApprovalResult, error) {
+	pids, err := nativeChromeProcessIDs(ctx, processName)
 	if err != nil {
-		return NativeRemoteDebuggingApprovalResult{}, fmt.Errorf("find Chrome processes: %w", err)
+		return NativeRemoteDebuggingApprovalResult{}, err
 	}
-	pids := parseChromeProcessIDs(string(output))
 	result := NativeRemoteDebuggingApprovalResult{}
 	for _, pid := range pids {
 		var windows, prompts, approved C.int

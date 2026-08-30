@@ -58,7 +58,7 @@ func (a *app) newWorkflowFeedsCommand() *cobra.Command {
 		return a.render(ctx, fmt.Sprintf("feeds\t%d", len(feeds)), map[string]any{"ok": true, "workflow": workflow, "page": map[string]any{"target_id": targetID, "final_url": rawURL}, "feeds": feeds})
 	}}
 	cmd.Flags().DurationVar(&wait, "wait-load", 5*time.Second, "how long to wait before discovering feed links")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	return cmd
 }
 

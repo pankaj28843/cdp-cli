@@ -23,6 +23,14 @@ fi
 state_dir="$(mktemp -d)"
 service_pid=""
 service_url=""
+config_path="$state_dir/config.json"
+
+# The provider gate must exercise every provider named by this invocation.
+# Keep the user's policy out of this transient process so a local
+# agents.disabled_providers entry cannot make the requested-provider assertion
+# nondeterministic. Provider auth/templates still come from the normal owner
+# state directory used by cdp.
+printf '%s\n' '{}' >"$config_path"
 
 cleanup() {
   set +e
@@ -52,7 +60,7 @@ env -u CDP_STATE_DIR \
   -u CDP_TRANSCRIPTION_HTTP_ADDRESS \
   -u CDP_TRANSCRIPTION_PROVIDER \
   -u CDP_TRANSCRIPTION_PROVIDERS \
-  "$binary" --browser-mode headed --allow-over-budget \
+  "$binary" --config "$config_path" --browser-mode headed --allow-over-budget \
   transcription serve \
   --address "127.0.0.1:$port" \
   --http-address "" \

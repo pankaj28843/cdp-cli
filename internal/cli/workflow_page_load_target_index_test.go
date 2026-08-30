@@ -123,7 +123,11 @@ func TestPageLoadSelectsExistingPageByTargetIndex(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"target"`
 		TargetIndex int `json:"target_index"`
-		Requests    []struct {
+		Cleanup     struct {
+			Skipped bool   `json:"skipped"`
+			Reason  string `json:"reason"`
+		} `json:"cleanup"`
+		Requests []struct {
 			ID string `json:"id"`
 		} `json:"requests"`
 		Messages []struct {
@@ -137,7 +141,7 @@ func TestPageLoadSelectsExistingPageByTargetIndex(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
 		t.Fatalf("page-load target-index output is invalid JSON: %v; output=%s", err, out.String())
 	}
-	if !report.OK || report.Target.ID != "page-two" || report.TargetIndex != 2 || report.Workflow.Trigger != "observe" || report.Workflow.RequestedURL != "" {
+	if !report.OK || report.Target.ID != "page-two" || report.TargetIndex != 2 || report.Workflow.Trigger != "observe" || report.Workflow.RequestedURL != "" || !report.Cleanup.Skipped || report.Cleanup.Reason != "caller_owned" {
 		t.Fatalf("page-load target-index report = %+v, want page-two/index 2 observe report", report)
 	}
 	if len(report.Requests) == 0 || len(report.Messages) == 0 || !strings.Contains(report.Messages[0].Text, "Synthetic") {

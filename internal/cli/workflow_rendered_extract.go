@@ -444,7 +444,7 @@ func (a *app) newWorkflowRenderedExtractCommand() *cobra.Command {
 	cmd.Flags().IntVar(&minVisibleWords, "min-visible-words", 5, "enabled readiness and post-capture quality minimum for visible words; use 0 to disable")
 	cmd.Flags().IntVar(&minMarkdownWords, "min-markdown-words", 5, "enabled post-capture quality minimum for Markdown words; use 0 to disable")
 	cmd.Flags().IntVar(&minHTMLChars, "min-html-chars", 64, "enabled readiness and post-capture quality minimum for extracted HTML characters; use 0 to disable")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	return cmd
 }
 

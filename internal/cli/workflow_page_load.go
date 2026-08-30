@@ -58,8 +58,9 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "page-load [url]",
 		Short: "Capture console, network, storage, and performance signals around a page load",
+		Long:  "Capture console, network, storage, and performance signals around a page load. URL-only runs own one disposable page and report bounded exact-target cleanup; --target-index runs retain the caller-owned page.",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
 				return err
 			}
@@ -88,20 +89,18 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 					a.connectionRemediationCommands(),
 				)
 			}
-			closeOwned := true
-			defer func() {
-				if closeOwned {
-					_ = closeClient(ctx)
-				}
-			}()
+			closeClientOnce := idempotentContextCloser(closeClient)
+			defer func() { _ = closeClientOnce(context.Background()) }()
 
 			target := cdp.TargetInfo{Type: "page", URL: rawURL}
+			createdPage := false
 			if rawURL != "" && targetIndex == 0 && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 				createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "page-load")
 				if err != nil {
 					return err
 				}
 				target.TargetID = createdID
+				createdPage = true
 			} else {
 				var selected cdp.TargetInfo
 				if targetIndex > 0 {
@@ -115,19 +114,24 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 				target = selected
 			}
 
-			closeOwned = false
-			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+			cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: target.TargetID, owned: createdPage}
+			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClientOnce)
 			if err != nil {
-				closeOwned = true
-				return commandError(
+				cleanup := cleanupGuard.cleanup()
+				primary := commandError(
 					"connection_failed",
 					"connection",
 					fmt.Sprintf("attach target %s: %v", target.TargetID, err),
 					ExitConnection,
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
+				closeRenderedExtractSession(nil, closeClientOnce)
+				return diagnosticWorkflowErrorWithCleanup("page_load", primary, cleanup)
 			}
-			defer session.Close(ctx)
+			defer closeRenderedExtractSession(session, nil)
+			defer func() {
+				retErr = diagnosticWorkflowErrorWithCleanup("page_load", retErr, cleanupGuard.cleanup())
+			}()
 
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, includeSet)
 			if strings.TrimSpace(readyFile) != "" && len(collectorErrors) > 0 {
@@ -187,11 +191,13 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 			report := map[string]any{
 				"ok":            true,
 				"target":        pageRow(target),
+				"cleanup":       cleanupGuard.cleanup(),
 				"requests":      requests,
 				"messages":      messages,
 				"content_state": contentState,
 				"workflow": map[string]any{
 					"name":               "page-load",
+					"created_page":       createdPage,
 					"trigger":            trigger,
 					"requested_url":      rawURL,
 					"frame_id":           frameID,
@@ -212,6 +218,7 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 				},
 			}
 			addWorkflowTargetIndex(report, targetIndex)
+			cleanup := cleanupGuard.cleanup()
 			if includeSet["storage"] {
 				report["storage"] = storage
 			}
@@ -221,17 +228,23 @@ func (a *app) newWorkflowPageLoadCommand() *cobra.Command {
 			if includeSet["navigation"] {
 				report["navigation"] = history
 			}
+			var artifactErr error
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
-					return commandError("internal", "internal", fmt.Sprintf("marshal page-load report: %v", err), ExitInternal, []string{"cdp workflow page-load --json"})
+					artifactErr = commandError("internal", "internal", fmt.Sprintf("marshal page-load report: %v", err), ExitInternal, []string{"cdp workflow page-load --json"})
+				} else {
+					writtenPath, writeErr := writeArtifactFile(outPath, append(b, '\n'))
+					if writeErr != nil {
+						artifactErr = writeErr
+					} else {
+						report["artifact"] = map[string]any{"type": "page-load", "path": writtenPath, "bytes": len(b) + 1}
+						report["artifacts"] = []map[string]any{{"type": "page-load", "path": writtenPath}}
+					}
 				}
-				writtenPath, err := writeArtifactFile(outPath, append(b, '\n'))
-				if err != nil {
-					return err
-				}
-				report["artifact"] = map[string]any{"type": "page-load", "path": writtenPath, "bytes": len(b) + 1}
-				report["artifacts"] = []map[string]any{{"type": "page-load", "path": writtenPath}}
+			}
+			if artifactErr != nil || cleanup.Error != "" {
+				return diagnosticWorkflowErrorWithCleanup("page_load", artifactErr, cleanup)
 			}
 			human := fmt.Sprintf("page-load\t%s\t%d requests\t%d messages", trigger, len(requests), len(messages))
 			return a.render(ctx, human, report)

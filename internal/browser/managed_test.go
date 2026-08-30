@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 )
 
 func TestManagedProfileSeedPolicyDefaultsToCleanManagedProfile(t *testing.T) {
@@ -1112,6 +1113,77 @@ sleep 30
 	if err := process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("managed chrome died when caller context was canceled: %v", err)
 	}
+}
+
+func TestStartManagedChromeTerminatesLaunchDescendantOnReadinessFailure(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("managed launch process-group test is Unix-only")
+	}
+	if processgroup.TerminationMode() != "process_group" {
+		t.Skip("process groups are not available on this platform")
+	}
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	childPIDPath := filepath.Join(t.TempDir(), "launch-child.pid")
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	t.Setenv("CDP_MANAGED_LAUNCH_CHILD_PID_FILE", childPIDPath)
+	script := `#!/usr/bin/env sh
+set -eu
+(
+  trap '' TERM INT
+  while :; do /bin/sleep 1; done
+) &
+child=$!
+printf '%s\n' "$child" > "$CDP_MANAGED_LAUNCH_CHILD_PID_FILE"
+trap '' TERM INT
+while :; do /bin/sleep 1; done
+`
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake chrome: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromePath})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StartManagedChrome error = %v, want readiness timeout", err)
+	}
+
+	childPID := waitForManagedLaunchChildPID(t, childPIDPath)
+	t.Cleanup(func() {
+		if process, findErr := os.FindProcess(childPID); findErr == nil {
+			_ = process.Kill()
+		}
+	})
+	if managedLaunchProcessAlive(childPID) {
+		t.Fatalf("managed launch descendant %d survived readiness-failure cleanup", childPID)
+	}
+}
+
+func waitForManagedLaunchChildPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
+			if parseErr == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("managed launch fixture did not publish child PID")
+	return 0
+}
+
+func managedLaunchProcessAlive(pid int) bool {
+	output, err := exec.Command("/bin/ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return false
+	}
+	state := strings.TrimSpace(string(output))
+	return state != "" && !strings.HasPrefix(state, "Z")
 }
 
 func TestStartManagedChromeBlocksWhenManagedProcessAlreadyLive(t *testing.T) {

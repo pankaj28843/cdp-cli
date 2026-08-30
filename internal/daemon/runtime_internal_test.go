@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +99,149 @@ func TestRuntimeStructuredDaemonKnownErrors(t *testing.T) {
 	_, err = RuntimeClient{Runtime: runtime}.FetchProtocol(ctx)
 	if !errors.As(err, &rpcErr) || rpcErr.Code != "protocol_fetch_failed" || rpcErr.Class != "connection" {
 		t.Fatalf("fetch protocol error = %#v, want structured protocol_fetch_failed connection", err)
+	}
+}
+
+func TestHoldRetiresWhenReplacementRuntimeOwnsMode(t *testing.T) {
+	stateDir := shortInternalStateDir(t)
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- holdWithOptions(
+			ctx,
+			stateDir,
+			"ws://superseded-hold.invalid/devtools/browser/old",
+			"browser_url",
+			20*time.Millisecond,
+			holdOptions{},
+		)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, err := ReadLogsForMode(context.Background(), stateDir, "headless", 20)
+		if err != nil {
+			t.Fatalf("ReadLogsForMode returned error: %v", err)
+		}
+		for _, entry := range entries {
+			if entry.Event == "browser_dial_failed" {
+				goto replacement
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("old daemon hold did not attempt its unreachable endpoint")
+
+replacement:
+	replacementProcess := exec.Command("sleep", "5")
+	if err := replacementProcess.Start(); err != nil {
+		t.Fatalf("start replacement hold process: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = replacementProcess.Process.Kill()
+		_ = replacementProcess.Wait()
+	})
+	replacementPID := replacementProcess.Process.Pid
+	if err := SaveRuntimeForMode(context.Background(), stateDir, "headless", Runtime{
+		PID:            replacementPID,
+		BrowserMode:    "headless",
+		ConnectionMode: "browser_url",
+		StartedAt:      "2026-08-30T04:23:00Z",
+		SocketPath:     RuntimeSocketPathForMode(stateDir, "headless"),
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode replacement returned error: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("superseded daemon hold returned error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("superseded daemon hold continued reconnecting after replacement runtime")
+	}
+
+	runtime, ok, err := LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil {
+		t.Fatalf("LoadRuntimeForMode replacement returned error: %v", err)
+	}
+	if !ok || runtime.PID != replacementPID {
+		t.Fatalf("replacement runtime = %+v, ok=%v; old hold cleanup removed or changed it", runtime, ok)
+	}
+
+	entries, err := ReadLogsForMode(context.Background(), stateDir, "headless", 20)
+	if err != nil {
+		t.Fatalf("ReadLogsForMode final returned error: %v", err)
+	}
+	foundRetirement := false
+	for _, entry := range entries {
+		if entry.Event == "hold_superseded" && entry.PID == os.Getpid() {
+			foundRetirement = true
+			if strings.Contains(entry.Message, "ws://") || strings.Contains(entry.Message, "endpoint") {
+				t.Fatalf("superseded hold log exposed endpoint details: %+v", entry)
+			}
+		}
+	}
+	if !foundRetirement {
+		t.Fatalf("hold logs = %+v, want metadata-only hold_superseded evidence", entries)
+	}
+}
+
+func TestHoldReplacementRuntimeRequiresLiveSameModeDifferentPID(t *testing.T) {
+	stateDir := shortInternalStateDir(t)
+	ctx := context.Background()
+	selfPID := os.Getpid()
+
+	if err := SaveRuntimeForMode(ctx, stateDir, "headless", Runtime{
+		PID:         selfPID + 100000,
+		BrowserMode: "headless",
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode stale runtime returned error: %v", err)
+	}
+	if holdHasReplacementRuntime(ctx, stateDir, "headless", selfPID) {
+		t.Fatal("holdHasReplacementRuntime accepted a stale runtime PID")
+	}
+
+	replacementProcess := exec.Command("sleep", "5")
+	if err := replacementProcess.Start(); err != nil {
+		t.Fatalf("start replacement process: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = replacementProcess.Process.Kill()
+		_ = replacementProcess.Wait()
+	})
+
+	if err := SaveRuntimeForMode(ctx, stateDir, "headless", Runtime{
+		PID:         replacementProcess.Process.Pid,
+		BrowserMode: "headed",
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode mismatched-mode runtime returned error: %v", err)
+	}
+	if holdHasReplacementRuntime(ctx, stateDir, "headless", selfPID) {
+		t.Fatal("holdHasReplacementRuntime accepted a mismatched runtime mode")
+	}
+
+	if err := SaveRuntimeForMode(ctx, stateDir, "headless", Runtime{
+		PID:         selfPID,
+		BrowserMode: "headless",
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode self runtime returned error: %v", err)
+	}
+	if holdHasReplacementRuntime(ctx, stateDir, "headless", selfPID) {
+		t.Fatal("holdHasReplacementRuntime accepted the current hold PID")
+	}
+
+	if err := SaveRuntimeForMode(ctx, stateDir, "headless", Runtime{
+		PID:         replacementProcess.Process.Pid,
+		BrowserMode: "headless",
+	}); err != nil {
+		t.Fatalf("SaveRuntimeForMode replacement runtime returned error: %v", err)
+	}
+	if !holdHasReplacementRuntime(ctx, stateDir, "headless", selfPID) {
+		t.Fatal("holdHasReplacementRuntime rejected a live same-mode replacement")
 	}
 }
 

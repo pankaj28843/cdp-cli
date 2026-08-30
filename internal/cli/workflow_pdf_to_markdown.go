@@ -119,7 +119,10 @@ SHA-256 identities. Meaningful coverage requires at least one page with three
 alphanumeric words and 12 alphanumeric characters, plus five words and 24
 alphanumeric characters across the document. Insufficient coverage fails with
 text_layer_missing and reason ocr_required. Extracted UTF-8 text is capped at
-64 MiB and fails with pdf_text_output_too_large when exceeded.
+64 MiB and fails with pdf_text_output_too_large when exceeded. The owned
+pdftotext process uses bounded diagnostics and process-group cancellation where
+supported; cancellation and failure metadata reports only the process policy
+and truncation state, never extracted text.
 
 Acquire browser-hosted PDFs separately in a headed browser. Create an owned
 target with cdp open, retain its .page.target_id, pass that exact ID to click
@@ -362,17 +365,18 @@ func runPDFTextExtraction(ctx context.Context, toolPath, snapshotPath, displayPa
 	}
 	stdout := &boundedPDFTextBuffer{maxBytes: maxOutputBytes}
 	stderr := &boundedPDFTextBuffer{maxBytes: pdfTextMaxStderrBytes}
-	command := exec.CommandContext(ctx, toolPath, "-layout", "-enc", "UTF-8", "-eol", "unix", snapshotPath, "-")
-	command.Stdout = stdout
-	command.Stderr = stderr
-	runErr := command.Run()
+	runErr := runOwnedCommand(ctx, toolPath, []string{"-layout", "-enc", "UTF-8", "-eol", "unix", snapshotPath, "-"}, stdout, stderr)
 	if ctx.Err() != nil {
-		return nil, commandError(
+		return nil, commandErrorWithData(
 			"pdf_text_extraction_canceled",
 			"timeout",
 			fmt.Sprintf("extract embedded PDF text layer from %s: %v", displayPath, ctx.Err()),
 			ExitTimeout,
 			[]string{"retry with a larger --timeout", "cdp workflow pdf-to-markdown --help"},
+			map[string]any{
+				"canceled":            true,
+				"process_termination": ownedProcessTerminationMode(),
+			},
 		)
 	}
 	if stdout.exceeded {
@@ -382,7 +386,10 @@ func runPDFTextExtraction(ctx context.Context, toolPath, snapshotPath, displayPa
 			fmt.Sprintf("embedded PDF text exceeds the %d-byte extraction limit", maxOutputBytes),
 			ExitCheckFailed,
 			[]string{"use a smaller PDF", "split the PDF before extraction", "cdp workflow pdf-to-markdown --help"},
-			map[string]any{"max_output_bytes": maxOutputBytes},
+			map[string]any{
+				"max_output_bytes":    maxOutputBytes,
+				"process_termination": ownedProcessTerminationMode(),
+			},
 		)
 	}
 	if runErr != nil {
@@ -393,12 +400,18 @@ func runPDFTextExtraction(ctx context.Context, toolPath, snapshotPath, displayPa
 		if len(detail) > 2048 {
 			detail = strings.ToValidUTF8(detail[:2048], "") + "..."
 		}
-		return nil, commandError(
+		return nil, commandErrorWithData(
 			"pdf_text_extraction_failed",
 			"extraction",
 			fmt.Sprintf("extract embedded PDF text layer from %s: %s", displayPath, detail),
 			ExitCheckFailed,
 			[]string{"verify the PDF opens normally", "cdp workflow pdf-to-markdown --help"},
+			map[string]any{
+				"max_output_bytes":    maxOutputBytes,
+				"max_stderr_bytes":    pdfTextMaxStderrBytes,
+				"stderr_truncated":    stderr.exceeded,
+				"process_termination": ownedProcessTerminationMode(),
+			},
 		)
 	}
 	return append([]byte(nil), stdout.buffer.Bytes()...), nil

@@ -15,6 +15,8 @@ export XDG_CONFIG_HOME="$config_dir"
 printf '{}\n' >"$config_path"
 health_state_dir=""
 forced_restart_state_dir=""
+orphan_hold_pid=""
+hold_blackhole_pid=""
 guide_path=""
 guide_path_source=""
 
@@ -28,6 +30,14 @@ cleanup_daemon_state() {
 }
 
 cleanup() {
+  if [[ -n "$orphan_hold_pid" ]]; then
+    kill -TERM "$orphan_hold_pid" >/dev/null 2>&1 || true
+    wait "$orphan_hold_pid" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$hold_blackhole_pid" ]]; then
+    kill -TERM "$hold_blackhole_pid" >/dev/null 2>&1 || true
+    wait "$hold_blackhole_pid" >/dev/null 2>&1 || true
+  fi
   if [[ "$guide_path_source" == "materialized" && -n "$guide_path" ]]; then
     rm -f -- "$guide_path"
   fi
@@ -47,10 +57,12 @@ cleanup() {
 trap cleanup EXIT
 
 "$binary" --help >/tmp/cdp-cli-help.txt
+grep -Fq 'jq process tree' /tmp/cdp-cli-help.txt
 transcription_help="$("$binary" transcription --help)"
 grep -Fq 'local REST, SSE, and realtime WebSocket boundary' <<<"$transcription_help"
+grep -Fq 'Browser-backed provider converters use the same owned process-group boundary' <<<"$transcription_help"
 "$binary" transcription spec | jq -e '.openapi == "3.1.0" and (.paths["/v1/audio/transcriptions"].post != null) and (.paths["/v1/realtime"].get != null)' >/dev/null
-"$binary" schema transcription-server --json | jq -e '.ok == true and .schema.name == "transcription-server" and (.schema.fields | map(.name) | index("providers"))' >/dev/null
+"$binary" schema transcription-server --json | jq -e '.ok == true and .schema.name == "transcription-server" and (.schema.description | contains("owned provider conversion process groups")) and (.schema.fields | map(.name) | index("providers"))' >/dev/null
 source_head="$(git rev-parse HEAD)"
 source_dirty=false
 if test -n "$(git status --porcelain --untracked-files=normal)"; then
@@ -89,24 +101,41 @@ test -s "$guide_path"
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | any(contains("--force-managed") and contains("--stale-lock-after"))) and (.commands.flags[] | select(.name == "force-managed")) and (.commands.flags[] | select(.name == "stale-lock-after"))' >/dev/null
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect"))) and (.commands.examples | any(contains("--force-managed") and contains("--stale-lock-after"))) and (.commands.flags[] | select(.name == "force-managed")) and (.commands.flags[] | select(.name == "stale-lock-after"))' >/dev/null
 "$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(. == "cdp cron install --json"))' >/dev/null
+keepalive_help="$("$binary" daemon keepalive --help)"
+grep -Fq 'superseded hold generations' <<<"$keepalive_help"
+grep -Fq 'transient endpoint failures remain retryable' <<<"$keepalive_help"
 "$binary" describe --command "daemon maintenance" --json | jq -e '.ok == true and .commands.name == "maintenance" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run")) and (.commands.flags[] | select(.name == "profile-seed-strategy")) and (.commands.flags[] | select(.name == "cleanup-close"))' >/dev/null
 "$binary" describe --command "daemon health-check" --json | jq -e '.ok == true and .commands.name == "health-check" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--repair"))) and (.commands.examples | any(contains("--require-healthy"))) and (.commands.flags[] | select(.name == "repair")) and (.commands.flags[] | select(.name == "require-healthy")) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
+health_check_help="$("$binary" daemon health-check --help)"
+grep -Fq 'target-gone' <<<"$health_check_help"
 "$binary" describe --command "daemon logs" --json | jq -e '.ok == true and .commands.name == "logs" and (.commands.examples | any(contains("--tail")))' >/dev/null
 "$binary" describe --command "cron install" --json | jq -e '.ok == true and .commands.name == "install" and (.commands.examples | any(. == "cdp cron install --json")) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run")) and (.commands.flags[] | select(.name == "artifact-retention")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
+cron_help="$("$binary" cron --help)"
+grep -Fq 'Crontab manager output is bounded' <<<"$cron_help"
+grep -Fq 'managed task children use the same owned process-tree boundary' <<<"$cron_help"
+transcription_service_help="$("$binary" transcription service --help)"
+grep -Fq 'Service-manager diagnostics are bounded' <<<"$transcription_service_help"
 "$binary" describe --command "cron run" --json | jq -e '.ok == true and .commands.name == "run" and (.commands.examples | any(contains("headed-daemon-keepalive"))) and (.commands.examples | any(contains("headless-maintenance"))) and (.commands.examples | any(contains("artifact-prune"))) and (.commands.flags[] | select(.name == "display")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
 "$binary" describe --command "artifacts prune" --json | jq -e '.ok == true and .commands.name == "prune" and (.commands.examples | any(contains("--dry-run"))) and (.commands.examples | any(contains("--apply"))) and (.commands.flags[] | select(.name == "older-than")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
 "$binary" describe --command "artifacts run-managed" --json | jq -e '.ok == true and .commands.name == "run-managed" and (.commands.flags[] | select(.name == "task")) and (.commands.flags[] | select(.name == "log")) and (.commands.flags[] | select(.name == "max-log-size"))' >/dev/null
+managed_artifacts_help="$("$binary" artifacts run-managed --help)"
+grep -Fq 'owned child process tree' <<<"$managed_artifacts_help"
 "$binary" describe --command "cron migrate pages-polling" --json | jq -e '.ok == true and .commands.name == "pages-polling" and (.commands.examples | any(contains("migrate pages-polling --json"))) and (.commands.examples | any(contains("--apply"))) and (.commands.flags[] | select(.name == "apply"))' >/dev/null
 "$binary" describe --command "cron heal headed" --json | jq -e '.ok == true and .commands.name == "headed" and (.commands.examples | any(contains("--reconnect 30s")))' >/dev/null
 "$binary" describe --command "doctor" --json | jq -e '.ok == true and .commands.name == "doctor" and (.commands.examples | any(contains("scheduled-tasks")))' >/dev/null
 "$binary" describe --command "browser mode get" --json | jq -e '.ok == true and .commands.name == "get" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
 "$binary" describe --command "browser preflight" --json | jq -e '.ok == true and .commands.name == "preflight" and (.commands.examples | any(contains("--repair"))) and (.commands.examples | any(contains("--cleanup"))) and (.commands.flags[] | select(.name == "profile-seed")) and (.commands.flags[] | select(.name == "cleanup-close")) and (.commands.flags[] | select(.name == "open-readiness"))' >/dev/null
+browser_preflight_help="$("$binary" browser preflight --help)"
+grep -Fq 'target-gone' <<<"$browser_preflight_help"
 "$binary" describe --command "browser profile status" --json | jq -e '.ok == true and .commands.name == "status" and .commands.short == "Show managed headless browser profile status" and (.commands.examples | any(contains("--browser-mode headless")))' >/dev/null
 "$binary" describe --command "browser profile seed" --json | jq -e '.ok == true and .commands.name == "seed" and .commands.short == "Create managed headless browser profile metadata" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--strategy managed"))) and (.commands.examples | any(contains("--strategy copy-default"))) and (.commands.flags[] | select(.name == "strategy"))' >/dev/null
 "$binary" describe --command "connection" --json | jq -e '.ok == true and .commands.name == "connection" and (.commands.examples | any(contains("connection list")))' >/dev/null
 "$binary" describe --command "connection add" --json | jq -e '.ok == true and .commands.name == "add" and (.commands.examples | any(contains("--auto-connect")))' >/dev/null
 "$binary" describe --command "connection select" --json | jq -e '.ok == true and .commands.name == "select" and (.commands.examples | any(contains("connection select")))' >/dev/null
 "$binary" describe --command "connection current" --json | jq -e '.ok == true and .commands.name == "current" and (.commands.examples | any(contains("connection current")))' >/dev/null
+events_stream_help="$("$binary" events stream --help)"
+grep -Fq 'read-only Runtime.evaluate heartbeat' <<<"$events_stream_help"
+grep -Fq 'daemon runtime registration' <<<"$events_stream_help"
 "$binary" describe --command "events stream" --json | jq -e '.ok == true and .commands.name == "stream" and (.commands.examples | any(contains("events stream"))) and (.commands.examples | any(contains("--target-index"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "max-events" and .type == "int"))' >/dev/null
 "$binary" describe --command "events stream" --json | jq -e '(.commands.flags[] | select(.name == "enable").usage | contains("DOM") and contains("Performance"))' >/dev/null
 "$binary" describe --command "events tap" --json | jq -e '.ok == true and .commands.name == "tap" and (.commands.examples | any(contains("--target-index"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "enable").usage | contains("DOM") and contains("Performance"))' >/dev/null
@@ -256,6 +285,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" doctor --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length >= 3)' >/dev/null
 "$binary" doctor --check daemon --state-dir "$state_dir" --json | jq -e '.ok == true and (.checks | length == 1) and .checks[0].name == "daemon"' >/dev/null
 "$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].name == "scheduled-tasks" and .[0].details.source == "crontab -l" and (.[0].details.has_headed_daemon_keepalive | type == "boolean") and (.[0].details.has_headless_daemon_keepalive | type == "boolean") and (.[0].details.has_pages_polling_keepalive | type == "boolean") and (.[0].details.pages_polling_count | type == "number") and (.[0].details.has_ambiguous_page_cleanup | type == "boolean") and (.[0].details.has_unflocked_cdp_task | type == "boolean") and (.[0].details.tasks | type == "array") and (.[0].details.last_run_artifacts | type == "object") and (.[0].details.artifact_policy.max_log_size_bytes == 67108864) and (.[0].details.last_cleanup | type == "object") and (.[0].details.managed_processes.checked | type == "boolean") and (.[0].next_commands | index("cdp cron status --json")) and (.[0].next_commands | index("cdp cron diff --json")) and (.[0].next_commands | index("cdp cron install --json")) and (.[0].next_commands | index("cdp --browser-mode headless daemon maintenance --dry-run --json"))' >/dev/null
+"$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks[0].details.command_output_truncated == false' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities | map(.name) | index("raw_protocol"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "advanced_storage" and .status == "implemented"))' >/dev/null
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.capabilities[] | select(.name == "raw_protocol" and (.verify_commands | index("cdp protocol metadata --json"))))' >/dev/null
@@ -271,7 +301,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
-"$binary" schema events-stream --json | jq -e '.ok == true and .schema.name == "events-stream" and (.schema.description | contains("validated target-domain enablement")) and (.schema.fields | map(.name) | index("event")) and (.schema.fields | map(.name) | index("foreign_events_dropped"))' >/dev/null
+"$binary" schema events-stream --json | jq -e '.ok == true and .schema.name == "events-stream" and (.schema.description | contains("validated target-domain enablement")) and (.schema.fields | map(.name) | index("event")) and (.schema.fields | map(.name) | index("foreign_events_dropped")) and (.schema.fields[] | select(.name == "stream").description | contains("liveness")) and (.schema.fields[] | select(.name == "liveness").description | contains("runtime-registration"))' >/dev/null
 "$binary" schema browser-window-marker --json | jq -e '.ok == true and .schema.name == "browser-window-marker" and (.schema.fields | map(.name) | index("marker"))' >/dev/null
 "$binary" schema window-marker --json | jq -e '.ok == true and .schema.name == "window-marker" and (.schema.fields | map(.name) | index("active_session_count")) and (.schema.fields | map(.name) | index("host_id_present")) and ([.schema.fields[] | select(.name == "host_id")] | length == 0)' >/dev/null
 "$binary" schema webagent-operation --json | jq -e '.ok == true and .schema.name == "webagent-operation" and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("evidence"))' >/dev/null
@@ -283,10 +313,10 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" schema doctor --json | jq -e '.ok == true and .schema.name == "doctor" and (.schema.fields | map(.name) | index("checks"))' >/dev/null
 "$binary" schema doctor-capabilities --json | jq -e '.ok == true and .schema.name == "doctor-capabilities" and (.schema.fields | map(.name) | index("capabilities")) and (.schema.fields | map(.name) | index("bootstrap_path"))' >/dev/null
 "$binary" schema scheduled-tasks --json | jq -e '.ok == true and .schema.name == "scheduled-tasks" and (.schema.fields | map(.name) | index("details")) and (.schema.fields[] | select(.name == "details").description | contains("legacy pages polling")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
-"$binary" schema scheduled-tasks-details --json | jq -e '.ok == true and .schema.name == "scheduled-tasks-details" and (.schema.fields | map(.name) | index("expected_managed_task_ids")) and (.schema.fields | map(.name) | index("tasks")) and (.schema.fields | map(.name) | index("has_managed_process_sweep")) and (.schema.fields | map(.name) | index("has_headless_launch_without_managed_process_sweep")) and (.schema.fields | map(.name) | index("last_run_artifacts")) and (.schema.fields | map(.name) | index("artifact_policy")) and (.schema.fields | map(.name) | index("last_cleanup")) and (.schema.fields | map(.name) | index("managed_processes"))' >/dev/null
+"$binary" schema scheduled-tasks-details --json | jq -e '.ok == true and .schema.name == "scheduled-tasks-details" and (.schema.fields | map(.name) | index("expected_managed_task_ids")) and (.schema.fields | map(.name) | index("tasks")) and (.schema.fields | map(.name) | index("has_managed_process_sweep")) and (.schema.fields | map(.name) | index("has_headless_launch_without_managed_process_sweep")) and (.schema.fields | map(.name) | index("command_output_truncated")) and (.schema.fields | map(.name) | index("last_run_artifacts")) and (.schema.fields | map(.name) | index("artifact_policy")) and (.schema.fields | map(.name) | index("last_cleanup")) and (.schema.fields | map(.name) | index("managed_processes"))' >/dev/null
 "$binary" schema cron --json | jq -e '.ok == true and .schema.name == "cron" and (.schema.fields | map(.name) | index("next_commands")) and (.schema.fields | map(.name) | index("state")) and (.schema.fields | map(.name) | index("health")) and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("profile_seed")) and (.schema.fields | map(.name) | index("artifact_policy")) and (.schema.fields | map(.name) | index("tasks")) and (.schema.fields | map(.name) | index("managed_processes")) and (.schema.fields | map(.name) | index("last_run_artifacts")) and (.schema.fields | map(.name) | index("last_cleanup")) and (.schema.fields | map(.name) | index("dry_run"))' >/dev/null
 "$binary" schema artifacts-prune --json | jq -e '.ok == true and .schema.name == "artifacts-prune" and (.schema.fields | map(.name) | index("policy")) and (.schema.fields | map(.name) | index("items")) and (.schema.fields | map(.name) | index("bytes_reclaimed")) and (.schema.fields | map(.name) | index("failed_count"))' >/dev/null
-"$binary" schema artifacts-run-managed --json | jq -e '.ok == true and .schema.name == "artifacts-run-managed" and (.schema.fields | map(.name) | index("task")) and (.schema.fields | map(.name) | index("log"))' >/dev/null
+"$binary" schema artifacts-run-managed --json | jq -e '.ok == true and .schema.name == "artifacts-run-managed" and (.schema.description | contains("owned process-tree cancellation")) and (.schema.fields | map(.name) | index("task")) and (.schema.fields | map(.name) | index("log")) and (.schema.fields[] | select(.name == "log").description | contains("synchronized hard bound"))' >/dev/null
 "$binary" schema cron-profile-seed --json | jq -e '.ok == true and .schema.name == "cron-profile-seed" and (.schema.fields | map(.name) | index("strategy")) and (.schema.fields | map(.name) | index("if_older_than_seconds")) and (.schema.fields | map(.name) | index("last_seed"))' >/dev/null
 "$binary" schema cron-task --json | jq -e '.ok == true and .schema.name == "cron-task" and (.schema.fields | map(.name) | index("id")) and (.schema.fields | map(.name) | index("requires_managed_process_sweep")) and (.schema.fields | map(.name) | index("managed_process_sweep_installed")) and (.schema.fields | map(.name) | index("status"))' >/dev/null
 "$binary" schema managed-process-reconcile --json | jq -e '.ok == true and .schema.name == "managed-process-reconcile" and (.schema.fields | map(.name) | index("live_count")) and (.schema.fields | map(.name) | index("stale_count")) and (.schema.fields | map(.name) | index("reaped_count")) and (.schema.fields | map(.name) | index("compacted_count")) and (.schema.fields | map(.name) | index("historical_processes")) and (.schema.fields | map(.name) | index("records")) and (.schema.fields | map(.name) | index("signal_failures"))' >/dev/null
@@ -313,7 +343,8 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" schema connection-remove --json | jq -e '.ok == true and .schema.name == "connection-remove" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
 "$binary" schema connection-prune --json | jq -e '.ok == true and .schema.name == "connection-prune" and (.schema.fields | map(.name) | index("removed"))' >/dev/null
 "$binary" schema browser-mode --json | jq -e '.ok == true and .schema.name == "browser-mode" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("browser_mode_source"))' >/dev/null
-"$binary" schema browser-preflight --json | jq -e '.ok == true and .schema.name == "browser-preflight" and (.schema.fields | map(.name) | index("health")) and (.schema.fields | map(.name) | index("resource_preflight")) and (.schema.fields | map(.name) | index("budget")) and (.schema.fields | map(.name) | index("repair_actions")) and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
+"$binary" schema browser-preflight --json | jq -e '.ok == true and .schema.name == "browser-preflight" and (.schema.fields | map(.name) | index("health")) and (.schema.fields | map(.name) | index("resource_preflight")) and (.schema.fields | map(.name) | index("budget")) and (.schema.fields | map(.name) | index("repair_actions")) and (.schema.fields | map(.name) | index("readiness")) and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
+"$binary" schema browser-preflight-readiness --json | jq -e '.ok == true and .schema.name == "browser-preflight-readiness" and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields[] | select(.name == "cleanup" and .type == "workflow_page_cleanup" and (.description | contains("target_gone")) and (.description | contains("keep-open"))))' >/dev/null
 "$binary" schema browser-profile-status --json | jq -e '.ok == true and .schema.name == "browser-profile-status" and (.schema.fields | map(.name) | index("managed_browser")) and (.schema.fields | map(.name) | index("profile_perm")) and (.schema.fields | map(.name) | index("metadata_perm")) and (.schema.fields | map(.name) | index("seed_status_path")) and (.schema.fields | map(.name) | index("last_seed")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema browser-profile-seed --json | jq -e '.ok == true and .schema.name == "browser-profile-seed" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("seed_strategy")) and (.schema.fields | map(.name) | index("managed_browser")) and (.schema.fields | map(.name) | index("maintenance")) and (.schema.fields | map(.name) | index("resource_preflight")) and (.schema.fields | map(.name) | index("seed_status_path")) and (.schema.fields | map(.name) | index("last_seed")) and (.schema.fields | map(.name) | index("default_profile_copied"))' >/dev/null
 "$binary" schema browser-resource-budget --json | jq -e '.ok == true and .schema.name == "browser-resource-budget" and (.schema.fields | map(.name) | index("renderer_process_count")) and (.schema.fields | map(.name) | index("max_renderer_processes")) and (.schema.fields | map(.name) | index("target_resource_attribution"))' >/dev/null
@@ -335,7 +366,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" schema daemon-maintenance --json | jq -e '.ok == true and .schema.name == "daemon-maintenance" and (.schema.fields | map(.name) | index("schema_version")) and (.schema.fields | map(.name) | index("run_id")) and (.schema.fields | map(.name) | index("lock")) and (.schema.fields | map(.name) | index("environment")) and (.schema.fields | map(.name) | index("phases")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("warnings")) and ([.schema.fields[] | select(.name == "resource_preflight" or .name == "managed_process_sweep" or .name == "profile_seed" or .name == "health_check" or .name == "cleanup")] | length == 0) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema daemon-maintenance-options --json | jq -e '.ok == true and .schema.name == "daemon-maintenance-options" and (.schema.fields | map(.name) | index("profile_seed_strategy")) and (.schema.fields | map(.name) | index("profile_seed_if_older_than_seconds")) and (.schema.fields | map(.name) | index("cleanup_close")) and (.schema.fields | map(.name) | index("lock_timeout"))' >/dev/null
 "$binary" schema daemon-maintenance-phase --json | jq -e '.ok == true and .schema.name == "daemon-maintenance-phase" and (.schema.fields | map(.name) | index("name")) and (.schema.fields | map(.name) | index("resource_gated")) and (.schema.fields | map(.name) | index("started_at")) and (.schema.fields | map(.name) | index("result"))' >/dev/null
-"$binary" schema daemon-health-check --json | jq -e '.ok == true and .schema.name == "daemon-health-check" and (.schema.fields | map(.name) | index("status")) and (.schema.fields | map(.name) | index("usable")) and (.schema.fields | map(.name) | index("degraded_reasons")) and (.schema.fields | map(.name) | index("recommended_action")) and (.schema.fields | map(.name) | index("steps")) and (.schema.fields | map(.name) | index("repair")) and (.schema.fields | map(.name) | index("environment")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("failure_count"))' >/dev/null
+"$binary" schema daemon-health-check --json | jq -e '.ok == true and .schema.name == "daemon-health-check" and (.schema.fields | map(.name) | index("status")) and (.schema.fields | map(.name) | index("usable")) and (.schema.fields | map(.name) | index("degraded_reasons")) and (.schema.fields | map(.name) | index("recommended_action")) and (.schema.fields | map(.name) | index("steps")) and (.schema.fields | map(.name) | index("repair")) and (.schema.fields | map(.name) | index("environment")) and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields[] | select(.name == "cleanup" and .type == "workflow_page_cleanup" and (.description | contains("target_gone")) and (.description | contains("recovery")))) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("failure_count"))' >/dev/null
 "$binary" schema daemon-status --json | jq -e '.ok == true and .schema.name == "daemon-status" and (.schema.fields | map(.name) | index("daemon"))' >/dev/null
 "$binary" schema daemon-logs --json | jq -e '.ok == true and .schema.name == "daemon-logs" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("entries"))' >/dev/null
 "$binary" --browser-mode headless --state-dir "$state_dir" daemon maintenance --dry-run --json | jq -e '.ok == true and .schema_version == "cdp-headless-maintenance/v1" and .state == "planned" and .dry_run == true and (.phases | map(.name) | index("managed_process_sweep")) and (.phases | map(.name) | index("daemon_health_check")) and .artifacts.summary' >/dev/null
@@ -461,6 +492,9 @@ CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$bin
 rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
 
 "$binary" schema daemon-health --json | jq -e '.ok == true and .schema.name == "daemon-health" and (.schema.fields | map(.name) | index("health"))' >/dev/null
+"$binary" schema daemon-hold-reconcile --json | jq -e '.ok == true and .schema.name == "daemon-hold-reconcile" and (.schema.fields | map(.name) | index("reclaimed_pids")) and (.schema.fields | map(.name) | index("candidates")) and (.schema.fields | map(.name) | index("safety_checks"))' >/dev/null
+"$binary" schema daemon-keepalive --json | jq -e '.ok == true and .schema.name == "daemon-keepalive" and (.schema.fields | map(.name) | index("daemon_hold_reconciliation"))' >/dev/null
+"$binary" schema browser-health --json | jq -e '.ok == true and .schema.name == "browser-health" and (.schema.fields | map(.name) | index("retired_hold_pids"))' >/dev/null
 "$binary" describe --command "open" --json | jq -e '.ok == true and .commands.name == "open" and (.commands.examples | any(contains("--retry transient"))) and (.commands.examples | any(contains("--task-id"))) and (.commands.examples | any(contains("--reuse"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--budget-summary"))) and (.commands.flags[] | select(.name == "retry")) and (.commands.flags[] | select(.name == "max-attempts")) and (.commands.flags[] | select(.name == "reuse")) and (.commands.flags[] | select(.name == "budget-summary")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "run-id")) and (.commands.flags[] | select(.name == "task-id")) and (.commands.flags[] | select(.name == "root-task-id")) and (.commands.flags[] | select(.name == "parent-task-id")) and (.commands.flags[] | select(.name == "created-by"))' >/dev/null
 "$binary" describe --command "stop-state classify" --json | jq -e '.ok == true and .commands.name == "classify" and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--text")))' >/dev/null
 set +e
@@ -640,6 +674,7 @@ done
 "$binary" describe --command "workflow google-maps-directions" --json | jq -e '.ok == true and .commands.name == "google-maps-directions" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow a11y" --json | jq -e '.ok == true and .commands.name == "a11y" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "workflow responsive-audit" --json | jq -e '.ok == true and .commands.name == "responsive-audit" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" workflow responsive-audit --help | grep -F 'exact-target cleanup' >/dev/null
 "$binary" describe --command "workflow console-errors" --json | jq -e '.ok == true and .commands.name == "console-errors" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "workflow network-failures" --json | jq -e '.ok == true and .commands.name == "network-failures" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 workflow_target_index_guards=(
@@ -670,14 +705,32 @@ done
 "$binary" describe --command "network block" --json | jq -e '.ok == true and .commands.name == "block" and (.commands.examples | any(contains("--pattern") and contains("--duration"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "network mock" --json | jq -e '.ok == true and .commands.name == "mock" and (.commands.examples | any(contains("--rule") and contains("max_matches"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "workflow page-load" --json | jq -e '.ok == true and .commands.name == "page-load" and (.commands.examples | any(contains("--reload"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
+for diagnostic_schema in workflow-verify workflow-perf workflow-a11y workflow-page-load; do
+  "$binary" schema "$diagnostic_schema" --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields[] | select(.name == "cleanup" and .type == "workflow_page_cleanup" and (.description | contains("target_gone")))) and (.schema.description | contains("caller-owned"))' >/dev/null
+done
+"$binary" schema workflow-page-cleanup --json | jq -e '.ok == true and .schema.name == "workflow-page-cleanup" and (.schema.fields | map(.name) | index("target_gone")) and (.schema.fields | map(.name) | index("recovery_command")) and (.schema.description | contains("lease-target-policy-failure")) and (.schema.fields[] | select(.name == "closed").description | contains("confirmed gone"))' >/dev/null
+"$binary" schema lease-target-policy-failure --json | jq -e '.ok == true and .schema.name == "lease-target-policy-failure" and (.schema.fields | map(.name) | index("target_id")) and (.schema.fields | map(.name) | index("policy_error")) and (.schema.fields | map(.name) | index("primary_error")) and (.schema.fields | map(.name) | index("close")) and (.schema.fields | map(.name) | index("recovery_command")) and (.schema.fields[] | select(.name == "close").type == "page_close_report")' >/dev/null
 "$binary" describe --command "workflow rendered-extract" --json | jq -e '.ok == true and .commands.name == "rendered-extract" and (.commands.examples | any(contains("--serp google"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("arxiv.org/pdf/") and contains("--content-extractor auto"))) and (.commands.examples | any(contains("news.ycombinator.com/item") and contains("--content-extractor auto"))) and (.commands.examples | any(contains("--target") and contains("--reload"))) and (.commands.examples | any(contains("--wait 20s") and contains("--settle 2s"))) and (.commands.flags[] | select(.name == "target")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "url-contains")) and (.commands.flags[] | select(.name == "title-contains")) and (.commands.flags[] | select(.name == "reload")) and (.commands.flags[] | select(.name == "settle" and .default == "2s")) and (.commands.flags[] | select(.name == "selector" and (.usage | contains("generic capture/fallback")) and (.usage | contains("Hacker News")))) and (.commands.flags[] | select(.name == "content-extractor" and .default == "auto" and (.usage | contains("native source profiles")))) and (.commands.flags[] | select(.name == "min-visible-words" and (.usage | contains("readiness")) and (.usage | contains("0 to disable")))) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 "$binary" describe --command "workflow pdf-to-markdown" --json | jq -e '.ok == true and .commands.name == "pdf-to-markdown" and (.commands.examples | length > 0) and (.commands.flags[] | select(.name == "out-dir" and ((has("default") | not) or .default == "")))' >/dev/null
+pdf_text_help="$("$binary" workflow pdf-to-markdown --help)"
+grep -Fq 'bounded diagnostics' <<<"$pdf_text_help"
+grep -Fq 'process-group cancellation' <<<"$pdf_text_help"
 "$binary" describe --command "workflow google-translate" --json | jq -e '.ok == true and .commands.name == "google-translate" and (.commands.examples | any(contains("--source"))) and (.commands.examples | any(contains("--file"))) and (.commands.flags[] | select(.name == "mode")) and (.commands.flags[] | select(.name == "wait")) and (.commands.flags[] | select(.name == "chunk-size"))' >/dev/null
+google_translate_help="$("$binary" workflow google-translate --help)"
+grep -Fq 'Poppler diagnostics' <<<"$google_translate_help"
+grep -Fq 'process group' <<<"$google_translate_help"
+grep -Fq 'regular non-empty file' <<<"$google_translate_help"
+"$binary" explain-error pdf_burst_failed --json | jq -e '.ok == true and .error.code == "pdf_burst_failed" and .error.exit_code == 1' >/dev/null
+"$binary" explain-error pdf_burst_invalid_page --json | jq -e '.ok == true and .error.code == "pdf_burst_invalid_page" and .error.exit_code == 1' >/dev/null
 "$binary" describe --command "workflow web-research" --json | jq -e '.ok == true and .commands.name == "web-research" and (.commands.children | map(.name) | index("extract"))' >/dev/null
 "$binary" describe --command "workflow web-research serp" --json | jq -e '.ok == true and .commands.name == "serp" and (.commands.examples | any(contains("--serp google") and contains("cdr:1,cd_min:07/01/2026,cd_max:07/01/2026"))) and (.commands.examples | any(contains("--google-ai auto"))) and (.commands.examples | any(contains("--google-ai mode"))) and (.commands.examples | any(contains("--navigation-delay 30s") and contains("--parallel 1") and contains("--blocked-failure-threshold 1"))) and (.commands.examples | any(contains("--serp all"))) and (.commands.examples | any(contains("--parallel-engines"))) and (.commands.examples | any(contains("--serp duckduckgo"))) and (.commands.examples | any(contains("--fallback-serp google"))) and (.commands.examples | any(contains("--result-pages 3") and contains("--settle 3s"))) and (.commands.examples | any(contains("--fast-fail-blocked"))) and (.commands.examples | any(contains("--progress stderr"))) and (.commands.flags[] | select(.name == "query-file" and (.usage | contains("query<TAB>Google tbs time filter")) and (.usage | contains("# comment rows ignored")))) and (.commands.flags[] | select(.name == "serp" and (.usage | contains("comma-separated")))) and (.commands.flags[] | select(.name == "google-ai" and (.usage | contains("auto")) and (.usage | contains("mode")) and (.usage | contains("off")) and .default == "auto")) and (.commands.flags[] | select(.name == "parallel-engines")) and (.commands.flags[] | select(.name == "fallback-serp" and (.usage | contains("auto")))) and (.commands.flags[] | select(.name == "candidate-out")) and (.commands.flags[] | select(.name == "settle" and .default == "3s")) and (.commands.flags[] | select(.name == "navigation-delay" and .default == "0s" and (.usage | contains("minimum delay")) and (.usage | contains("engine lane")))) and (.commands.flags[] | select(.name == "result-pages")) and (.commands.flags[] | select(.name == "fast-fail-blocked")) and (.commands.flags[] | select(.name == "blocked-failure-threshold")) and (.commands.flags[] | select(.name == "progress"))' >/dev/null
 "$binary" describe --command "workflow web-research extract" --json | jq -e '.ok == true and .commands.name == "extract" and (.commands.examples | any(contains("--parallel 4") and contains("--settle 2s"))) and (.commands.examples | any(contains("--content-extractor auto"))) and (.commands.examples | any(contains("--parallel 10"))) and (.commands.flags[] | select(.name == "url-file")) and (.commands.flags[] | select(.name == "settle" and .default == "2s")) and (.commands.flags[] | select(.name == "selector" and (.usage | contains("generic capture/fallback")) and (.usage | contains("Hacker News")))) and (.commands.flags[] | select(.name == "content-extractor" and .default == "auto" and (.usage | contains("native source profiles")))) and (.commands.flags[] | select(.name == "min-html-chars" and (.usage | contains("quality")) and (.usage | contains("0 to disable"))))' >/dev/null
 "$binary" describe --command "workflow verify" --json | jq -e '.ok == true and .commands.name == "verify" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "workflow perf" --json | jq -e '.ok == true and .commands.name == "perf" and (.commands.examples | any(contains("--trace-max-bytes") and contains("--redact safe"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "trace-max-bytes")) and (.commands.flags[] | select(.name == "redact")) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+lighthouse_help="$("$binary" workflow lighthouse --help)"
+grep -Fq 'bounded' <<<"$lighthouse_help"
+grep -Fq 'process group' <<<"$lighthouse_help"
+grep -Fq 'validated non-empty JSON and HTML' <<<"$lighthouse_help"
 "$binary" describe --command "workflow lighthouse" --json | jq -e '.ok == true and .commands.name == "lighthouse" and (.commands.examples | any(contains("--browser-mode headless") and contains("--redact safe"))) and (.commands.flags[] | select(.name == "redact"))' >/dev/null
 "$binary" describe --command "workflow debug-bundle" --json | jq -e '.ok == true and .commands.name == "debug-bundle" and (.commands.examples | any(contains("--task-id"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--inline-payloads"))) and (.commands.examples | any(contains("--reload=false") and contains("--ignore-cache=false"))) and (.commands.flags[] | select(.name == "redact")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "inline-payloads")) and (.commands.flags[] | select(.name == "reload" and .default == "true")) and (.commands.flags[] | select(.name == "ignore-cache" and .default == "true")) and (.commands.flags[] | select(.name == "run-id")) and (.commands.flags[] | select(.name == "task-id")) and (.commands.flags[] | select(.name == "stage"))' >/dev/null
 "$binary" describe --command "workflow action-capture" --json | jq -e '.ok == true and .commands.name == "action-capture" and (.commands.examples | any(contains("--include network,console,dom,text,a11y,screenshot"))) and (.commands.examples | any(contains("--include-bodies json,text") and contains("--body-url-contains"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "evidence-out-dir" and (.usage | contains("accessibility")) and (.usage | contains("screenshot")) and (.usage | contains("manifest")))) and (.commands.flags[] | select(.name == "include" and (.usage | contains("a11y")) and (.usage | contains("screenshot")))) and (.commands.flags[] | select(.name == "include-bodies" and .default == "none")) and (.commands.flags[] | select(.name == "body-limit")) and (.commands.flags[] | select(.name == "body-url-contains" and (.usage | contains("--include-bodies")))) and (.commands.flags[] | select(.name == "screenshot-full-page")) and (.commands.flags[] | select(.name == "a11y-depth")) and (.commands.flags[] | select(.name == "a11y-limit"))' >/dev/null
@@ -689,7 +742,8 @@ done
 "$binary" schema workflow-console-errors --json | jq -e '.ok == true and .schema.name == "workflow-console-errors" and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
 "$binary" schema workflow-network-failures --json | jq -e '.ok == true and .schema.name == "workflow-network-failures" and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
 "$binary" schema workflow-submit-search --json | jq -e '.ok == true and .schema.name == "workflow-submit-search" and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
-"$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.fields | map(.name) | index("capture")) and (.schema.fields | map(.name) | index("capture.artifact_safety")) and (.schema.fields | map(.name) | index("har")) and (.schema.fields | map(.name) | index("body_artifacts"))' >/dev/null
+"$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.description | contains("artifact-only manifest")) and (.schema.fields | map(.name) | index("output_mode")) and (.schema.fields | map(.name) | index("capture")) and (.schema.fields | map(.name) | index("capture.artifact_safety")) and (.schema.fields | map(.name) | index("har")) and (.schema.fields | map(.name) | index("body_artifacts")) and (.schema.fields | map(.name) | index("body_artifact_count"))' >/dev/null
+"$binary" schema network-websocket --json | jq -e '.ok == true and .schema.name == "network-websocket" and (.schema.description | contains("artifact-only manifest")) and (.schema.fields | map(.name) | index("output_mode"))' >/dev/null
 "$binary" schema network-block --json | jq -e '.ok == true and .schema.name == "network-block" and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields[] | select(.name == "target_index" and .type == "integer")) and (.schema.fields | map(.name) | index("matched_count")) and (.schema.fields | map(.name) | index("cleanup"))' >/dev/null
 "$binary" schema network-mock --json | jq -e '.ok == true and .schema.name == "network-mock" and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields[] | select(.name == "target_index" and .type == "integer")) and (.schema.fields | map(.name) | index("actions")) and (.schema.fields | map(.name) | index("cleanup"))' >/dev/null
 "$binary" schema storage --json | jq -e '.ok == true and .schema.name == "storage" and (.schema.fields | map(.name) | index("storage")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
@@ -748,8 +802,12 @@ done
 "$binary" schema workflow-linkedin-collect --json | jq -e '.ok == true and .schema.name == "workflow-linkedin-collect" and (.schema.fields | map(.name) | index("kind")) and (.schema.fields | map(.name) | index("records")) and (.schema.fields | map(.name) | index("coverage")) and (.schema.fields[] | select(.name == "records").description | contains("activity linkage") and contains("discovery surface")) and (.schema.fields[] | select(.name == "coverage").description | contains("termination evidence")) and (.schema.fields[] | select(.name == "workflow").description | contains("hard 500"))' >/dev/null
 "$binary" schema workflow-hacker-news-collect --json | jq -e '.ok == true and .schema.name == "workflow-hacker-news-collect" and (.schema.fields | map(.name) | index("kind")) and (.schema.fields | map(.name) | index("records")) and (.schema.fields | map(.name) | index("coverage")) and (.schema.fields[] | select(.name == "records").description | contains("story") and contains("comment")) and (.schema.fields[] | select(.name == "coverage").description | contains("termination evidence")) and (.schema.fields[] | select(.name == "workflow").description | contains("hard 500"))' >/dev/null
 "$binary" schema workflow-arxiv-collect --json | jq -e '.ok == true and .schema.name == "workflow-arxiv-collect" and (.schema.fields | map(.name) | index("paper")) and (.schema.fields | map(.name) | index("references")) and (.schema.fields | map(.name) | index("coverage")) and (.schema.fields[] | select(.name == "paper").description | contains("version-pinned")) and (.schema.fields[] | select(.name == "coverage").description | contains("termination evidence")) and (.schema.fields[] | select(.name == "workflow").description | contains("hard 500"))' >/dev/null
-"$binary" schema workflow-pdf-to-markdown --json | jq -e '.ok == true and .schema.name == "workflow-pdf-to-markdown" and (.schema.fields[] | select(.name == "source" and .type == "pdf_source").description | contains("SHA-256")) and (.schema.fields[] | select(.name == "extraction" and .type == "pdf_text_extraction").description | contains("pdftotext") and contains("never OCR")) and (.schema.fields[] | select(.name == "coverage" and .type == "pdf_text_coverage").description | contains("threshold")) and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
-"$binary" schema workflow-google-translate --json | jq -e '.ok == true and .schema.name == "workflow-google-translate" and (.schema.fields | map(.name) | index("input")) and (.schema.fields | map(.name) | index("chunks")) and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields[] | select(.name == "mode").description | contains("image-only scans"))' >/dev/null
+"$binary" schema workflow-pdf-to-markdown --json | jq -e '.ok == true and .schema.name == "workflow-pdf-to-markdown" and (.schema.description | contains("bounded diagnostics")) and (.schema.fields[] | select(.name == "source" and .type == "pdf_source").description | contains("SHA-256")) and (.schema.fields[] | select(.name == "extraction" and .type == "pdf_text_extraction").description | contains("pdftotext") and contains("never OCR") and contains("process-group cancellation")) and (.schema.fields[] | select(.name == "coverage" and .type == "pdf_text_coverage").description | contains("threshold")) and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
+"$binary" explain-error pdf_text_extraction_canceled --json | jq -e '.ok == true and .error.code == "pdf_text_extraction_canceled" and .error.exit_code == 5' >/dev/null
+"$binary" explain-error pdf_text_extraction_failed --json | jq -e '.ok == true and .error.code == "pdf_text_extraction_failed" and .error.exit_code == 1' >/dev/null
+"$binary" explain-error pdf_text_output_too_large --json | jq -e '.ok == true and .error.code == "pdf_text_output_too_large" and .error.exit_code == 1' >/dev/null
+"$binary" schema workflow-google-translate --json | jq -e '.ok == true and .schema.name == "workflow-google-translate" and (.schema.fields | map(.name) | index("input")) and (.schema.fields | map(.name) | index("chunks")) and (.schema.fields | map(.name) | index("pages")) and (.schema.fields[] | select(.name == "cleanup" and .type == "google_translate_cleanup" and (.description | contains("newly discovered")) and (.description | contains("recovery command")))) and (.schema.fields[] | select(.name == "mode").description | contains("image-only scans") and contains("Poppler")) and (.schema.fields[] | select(.name == "pages").description | contains("regular non-empty") and contains("source pages"))' >/dev/null
+"$binary" schema google-translate-cleanup --json | jq -e '.ok == true and .schema.name == "google-translate-cleanup" and (.schema.fields | map(.name) | index("target_ids")) and (.schema.fields | map(.name) | index("reports")) and (.schema.fields | map(.name) | index("recovery_command"))' >/dev/null
 "$binary" schema workflow-reddit-collect --json | jq -e '.ok == true and .schema.name == "workflow-reddit-collect" and (.schema.fields | map(.name) | index("coverage")) and (.schema.fields[] | select(.name == "coverage").description | contains("termination evidence"))' >/dev/null
 "$binary" schema source-collection-coverage --json | jq -e '.ok == true and .schema.name == "source-collection-coverage" and (.schema.fields | map(.name) | index("observed_record_kinds")) and (.schema.fields | map(.name) | index("possibly_missing_record_kinds")) and (.schema.fields | map(.name) | index("continuation")) and (.schema.fields | map(.name) | index("unresolved_controls")) and (.schema.fields | map(.name) | index("termination_evidence"))' >/dev/null
 "$binary" schema workflow-google-maps-directions --json | jq -e '.ok == true and .schema.name == "workflow-google-maps-directions" and (.schema.fields | map(.name) | index("trust")) and (.schema.fields | map(.name) | index("cleanup"))' >/dev/null
@@ -769,7 +827,7 @@ done
 "$binary" schema workflow-web-research-extract --json | jq -e '.ok == true and .schema.name == "workflow-web-research-extract" and (.schema.fields | map(.name) | index("quality")) and (.schema.fields | map(.name) | index("failures")) and (.schema.fields[] | select(.name == "workflow").description | contains("backpressure"))' >/dev/null
 "$binary" schema workflow-verify --json | jq -e '.ok == true and .schema.name == "workflow-verify" and (.schema.fields | map(.name) | index("requests")) and (.schema.fields[] | select(.name == "target_index" and .type == "integer"))' >/dev/null
 "$binary" schema workflow-perf --json | jq -e '.ok == true and .schema.name == "workflow-perf" and (.schema.fields | map(.name) | index("performance")) and (.schema.fields | map(.name) | index("trace")) and (.schema.fields | map(.name) | index("insights")) and (.schema.fields[] | select(.name == "trace").description | contains("artifact-safety")) and (.schema.fields[] | select(.name == "target_index" and .type == "integer"))' >/dev/null
-"$binary" schema workflow-lighthouse --json | jq -e '.ok == true and .schema.name == "workflow-lighthouse" and (.schema.fields | map(.name) | index("artifact_list")) and (.schema.fields | map(.name) | index("artifact_safety"))' >/dev/null
+"$binary" schema workflow-lighthouse --json | jq -e '.ok == true and .schema.name == "workflow-lighthouse" and (.schema.description | contains("bounded") and contains("validated") and contains("cancellation")) and (.schema.fields | map(.name) | index("artifact_list")) and (.schema.fields | map(.name) | index("artifact_safety")) and (.schema.fields[] | select(.name == "ok").description | contains("regular non-empty") and contains("JSON") and contains("HTML")) and (.schema.fields[] | select(.name == "artifact_list").description | contains("Validated") and contains("byte counts"))' >/dev/null
 "$binary" schema workflow-debug-bundle --json | jq -e '.ok == true and .schema.name == "workflow-debug-bundle" and (.schema.fields | map(.name) | index("bundle")) and (.schema.fields | map(.name) | index("artifacts")) and (.schema.fields | map(.name) | index("artifact_list")) and (.schema.fields[] | select(.name == "target_index" and .type == "integer")) and (.schema.fields[] | select(.name == "bundle").description | contains("public-safe")) and (.schema.fields[] | select(.name == "requests").description | contains("--inline-payloads")) and (.schema.fields[] | select(.name == "artifacts").description | contains("local_only"))' >/dev/null
 "$binary" schema workflow-action-capture --json | jq -e '.ok == true and .schema.name == "workflow-action-capture" and (.schema.fields | map(.name) | index("evidence")) and (.schema.fields | map(.name) | index("local_capture_warning")) and (.schema.fields[] | select(.name == "workflow").description | contains("URL substring filter")) and (.schema.fields[] | select(.name == "requests").description | contains("--include-bodies")) and (.schema.fields[] | select(.name == "evidence").description | contains("--evidence-out-dir")) and (.schema.fields[] | select(.name == "evidence").description | contains("accessibility")) and (.schema.fields[] | select(.name == "evidence").description | contains("screenshot")) and (.schema.fields[] | select(.name == "evidence").description | contains("action-window event")) and (.schema.fields[] | select(.name == "evidence").description | contains("manifest")) and (.schema.fields[] | select(.name == "artifacts").description | contains("screenshot evidence")) and (.schema.fields[] | select(.name == "artifacts").description | contains("manifest"))' >/dev/null
 "$binary" schema workflow-submit-search --json | jq -e '.ok == true and .schema.name == "workflow-submit-search" and (.schema.fields | map(.name) | index("fill")) and (.schema.fields | map(.name) | index("press")) and (.schema.fields | map(.name) | index("suggestion")) and (.schema.fields | map(.name) | index("suggestion_click")) and (.schema.fields | map(.name) | index("verification")) and (.schema.fields | map(.name) | index("response_wait")) and (.schema.fields | map(.name) | index("response")) and (.schema.fields | map(.name) | index("before_target")) and (.schema.fields | map(.name) | index("final_target")) and (.schema.fields[] | select(.name == "workflow").description | contains("suggestion_requested")) and (.schema.fields[] | select(.name == "suggestion").description | contains("strictness")) and (.schema.fields[] | select(.name == "verification").description | contains("--wait-load-state")) and (.schema.fields[] | select(.name == "response_wait").description | contains("without headers or bodies"))' >/dev/null
@@ -822,13 +880,18 @@ done
 "$binary" describe --command "screenshot" --json | jq -e '.ok == true and .commands.name == "screenshot" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "console" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 "$binary" describe --command "network" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
-"$binary" describe --command "network capture" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
-"$binary" describe --command "network websocket" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" describe --command "network capture" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--out"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" describe --command "network websocket" --json | jq -e '.ok == true and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--out"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+network_capture_help="$("$binary" network capture --help)"
+grep -Fq 'privacy-safe artifact-only manifest' <<<"$network_capture_help"
+grep -Fq 'Without --out' <<<"$network_capture_help"
+network_websocket_help="$("$binary" network websocket --help)"
+grep -Fq 'privacy-safe artifact-only manifest' <<<"$network_websocket_help"
 "$binary" describe --command "protocol compat" --json | jq -e '.ok == true and .commands.name == "compat" and (.commands.examples | any(contains("--requires")))' >/dev/null
 "$binary" describe --command "memory heap-snapshot" --json | jq -e '.ok == true and .commands.name == "heap-snapshot" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "out"))' >/dev/null
 "$binary" describe --command "memory counters" --json | jq -e '.ok == true and .commands.name == "counters" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "perf summary" --json | jq -e '.ok == true and .commands.name == "summary" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "duration"))' >/dev/null
-"$binary" describe --command "workflow feeds" --json | jq -e '.ok == true and .commands.name == "feeds" and (.commands.examples | any(contains("--wait-load")))' >/dev/null
+"$binary" describe --command "workflow feeds" --json | jq -e '.ok == true and .commands.name == "feeds" and (.commands.examples | any(contains("--wait-load"))) and (.commands.flags[] | select(.name == "keep-open" and (.usage | contains("bounded cleanup")) and (.usage | contains("recovery evidence"))))' >/dev/null
 "$binary" describe --command "workflow responsive-audit" --json | jq -e '.ok == true and .commands.name == "responsive-audit"' >/dev/null
 "$binary" schema protocol-compat --json | jq -e '.ok == true and .schema.name == "protocol-compat"' >/dev/null
 "$binary" schema a11y --json | jq -e '.ok == true and .schema.name == "a11y" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index"))' >/dev/null
@@ -841,7 +904,7 @@ done
 "$binary" schema network-capture --json | jq -e '.ok == true and .schema.name == "network-capture" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("capture.artifact_safety"))' >/dev/null
 "$binary" schema network-websocket --json | jq -e '.ok == true and .schema.name == "network-websocket" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("websockets"))' >/dev/null
 "$binary" schema workflow-feeds --json | jq -e '.ok == true and .schema.name == "workflow-feeds"' >/dev/null
-"$binary" schema workflow-responsive-audit --json | jq -e '.ok == true and .schema.name == "workflow-responsive-audit" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("workflow")) and (.schema.fields | map(.name) | index("results")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
+"$binary" schema workflow-responsive-audit --json | jq -e '.ok == true and .schema.name == "workflow-responsive-audit" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields[] | select(.name == "cleanup" and .type == "workflow_page_cleanup" and (.description | contains("target_gone")))) and (.schema.fields | map(.name) | index("workflow")) and (.schema.fields | map(.name) | index("results")) and (.schema.fields | map(.name) | index("artifacts"))' >/dev/null
 
 mkdir -p "$state_dir/user-data"
 set +e
@@ -1061,6 +1124,120 @@ if [[ "${CDP_E2E_MANAGED_HEADLESS_RECOVERY:-}" == "1" || "${CDP_E2E_MANAGED_HEAD
   managed_metadata="$forced_restart_state_dir/browser/managed-browser.json"
   old_managed_pid="$(jq -r '.chrome_pid' "$managed_metadata")"
   test "$old_managed_pid" -gt 0
+
+  # Exercise the installed repair path against an adopted hold from a
+  # superseded generation. The runtime file is hidden only in this disposable
+  # fixture so the hold can enter its bounded endpoint dial before the current
+  # generation is restored. The blackhole accepts the TCP connection but never
+  # completes a WebSocket handshake, keeping the candidate alive without a
+  # second browser owner.
+  orphan_runtime="$forced_restart_state_dir/headless/daemon.json"
+  orphan_runtime_snapshot="$forced_restart_state_dir/headless/daemon.current.json"
+  orphan_runtime_hidden="$forced_restart_state_dir/headless/daemon.hidden.json"
+  orphan_hold_pid_file="$forced_restart_state_dir/orphan-hold.pid"
+  hold_blackhole_port_file="$forced_restart_state_dir/hold-blackhole.port"
+  hold_blackhole_accepted_file="$forced_restart_state_dir/hold-blackhole.accepted"
+  cp "$orphan_runtime" "$orphan_runtime_snapshot"
+  hold_connection_mode="$(jq -r '.connection_mode // empty' "$orphan_runtime_snapshot")"
+  hold_socket="$(jq -r '.socket_path // empty' "$orphan_runtime_snapshot")"
+  if [[ -z "$hold_socket" ]]; then
+    hold_socket="$forced_restart_state_dir/headless/daemon.sock"
+  fi
+  hold_profile="$(jq -r '.user_data_dir // empty' "$orphan_runtime_snapshot")"
+  hold_managed_profile="$(jq -r '.managed_profile_path // empty' "$orphan_runtime_snapshot")"
+  hold_seed_strategy="$(jq -r '.profile_seed_strategy // empty' "$orphan_runtime_snapshot")"
+  orphan_pages_before="$forced_restart_state_dir/orphan-pages-before.json"
+  orphan_pages_after="$forced_restart_state_dir/orphan-pages-after.json"
+  "$binary" --browser-mode headless pages --state-dir "$forced_restart_state_dir" --json >"$orphan_pages_before"
+  python3 -c 'import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",0)); s.listen(1); f=open(sys.argv[1],"w"); f.write(str(s.getsockname()[1])); f.close(); s.accept(); f=open(sys.argv[2],"w"); f.write("accepted"); f.close(); time.sleep(300)' "$hold_blackhole_port_file" "$hold_blackhole_accepted_file" >/dev/null 2>&1 &
+  hold_blackhole_pid="$!"
+  for _ in $(seq 1 40); do
+    if [[ -s "$hold_blackhole_port_file" ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  test -s "$hold_blackhole_port_file"
+  hold_blackhole_port="$(<"$hold_blackhole_port_file")"
+  mv "$orphan_runtime" "$orphan_runtime_hidden"
+  (
+    CDP_DAEMON_STATE_DIR="$forced_restart_state_dir" \
+    CDP_DAEMON_BROWSER_MODE=headless \
+    CDP_DAEMON_CONNECTION_MODE="$hold_connection_mode" \
+    CDP_DAEMON_SOCKET="$hold_socket" \
+    CDP_DAEMON_HOLD_ENDPOINT="ws://127.0.0.1:${hold_blackhole_port}/devtools/browser/orphan" \
+    CDP_DAEMON_RECONNECT=1h \
+    CDP_DAEMON_USER_DATA_DIR="$hold_profile" \
+    CDP_DAEMON_MANAGED_PROFILE_PATH="$hold_managed_profile" \
+    CDP_DAEMON_PROFILE_SEED_STRATEGY="$hold_seed_strategy" \
+    python3 -c 'import os,sys; os.setsid(); os.execvpe(sys.argv[1],sys.argv[1:],os.environ)' "$binary" daemon hold >/dev/null 2>&1 &
+    printf '%s\n' "$!" >"$orphan_hold_pid_file"
+  )
+  orphan_hold_pid="$(<"$orphan_hold_pid_file")"
+  test "$orphan_hold_pid" -gt 0
+  for _ in $(seq 1 40); do
+    if ! kill -0 "$orphan_hold_pid" >/dev/null 2>&1; then
+      break
+    fi
+    orphan_hold_parent="$(ps -o ppid= -p "$orphan_hold_pid" 2>/dev/null | tr -d ' ' || true)"
+    if [[ "$orphan_hold_parent" == "1" ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  test "$(ps -o ppid= -p "$orphan_hold_pid" 2>/dev/null | tr -d ' ')" = "1"
+  for _ in $(seq 1 40); do
+    if [[ -s "$hold_blackhole_accepted_file" ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  test -s "$hold_blackhole_accepted_file"
+  mv "$orphan_runtime_hidden" "$orphan_runtime"
+  kill -0 "$orphan_hold_pid" >/dev/null 2>&1
+  orphan_keepalive="$forced_restart_state_dir/orphan-keepalive.json"
+  set +e
+  "$binary" --browser-mode headless daemon keepalive --repair --state-dir "$forced_restart_state_dir" --json >"$orphan_keepalive" 2>"$orphan_keepalive.err"
+  orphan_keepalive_code="$?"
+  set -e
+  if [[ "$orphan_keepalive_code" -ne 0 ]]; then
+    jq '{ok, code, message, state, action, health: {daemon_hold_reconciliation: .health.daemon_hold_reconciliation}}' "$orphan_keepalive" >&2 || true
+    sed -n '1,80p' "$orphan_keepalive.err" >&2 || true
+    exit "$orphan_keepalive_code"
+  fi
+  if ! jq -e --argjson orphan_pid "$orphan_hold_pid" '
+    .ok == true and (.state == "healthy" or .state == "reconciled") and
+    (.health.daemon_hold_reconciliation.reclaimed_pids | index($orphan_pid)) and
+    (.health.daemon_hold_reconciliation.candidates | any(.pid == $orphan_pid and .state == "reclaimed" and .generation_state == "superseded"))
+  ' "$orphan_keepalive" >/dev/null; then
+    jq '{ok, state, action, health: {daemon_hold_reconciliation: .health.daemon_hold_reconciliation}}' "$orphan_keepalive" >&2
+    exit 1
+  fi
+  for _ in $(seq 1 40); do
+    if ! kill -0 "$orphan_hold_pid" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "$orphan_hold_pid" >/dev/null 2>&1; then
+    echo "installed orphaned daemon hold was not reclaimed" >&2
+    exit 1
+  fi
+  "$binary" --browser-mode headless pages --state-dir "$forced_restart_state_dir" --json >"$orphan_pages_after"
+  jq -e --arg before "$(jq -c '.pages' "$orphan_pages_before")" '
+    .ok == true and (.pages | tostring) == $before
+  ' "$orphan_pages_after" >/dev/null
+  jq -e --arg daemon_pid "$(jq -r '.pid' "$orphan_runtime_snapshot")" \
+    --arg chrome_pid "$(jq -r '.chrome_pid' "$orphan_runtime_snapshot")" \
+    --arg profile "$(jq -r '.user_data_dir' "$orphan_runtime_snapshot")" \
+    --arg socket "$(jq -r '.socket_path' "$orphan_runtime_snapshot")" '
+    (.pid | tostring) == $daemon_pid and (.chrome_pid | tostring) == $chrome_pid and
+    .user_data_dir == $profile and .socket_path == $socket
+  ' "$orphan_runtime" >/dev/null
+  kill -TERM "$hold_blackhole_pid" >/dev/null 2>&1 || true
+  wait "$hold_blackhole_pid" >/dev/null 2>&1 || true
+  hold_blackhole_pid=""
+
   jq 'del(.ownership_token, .process_start_time)' "$managed_metadata" >"$managed_metadata.corrupt"
   mv "$managed_metadata.corrupt" "$managed_metadata"
   "$binary" --browser-mode headless daemon stop --state-dir "$forced_restart_state_dir" --json \
@@ -1127,6 +1304,25 @@ if [[ "$crash_health_code" -ne 1 ]]; then
   exit 1
 fi
 printf '%s\n' "$crash_health" | jq -e '.ok == false and .code == "headless_daemon_not_running" and .health.crash_capture == "daemon_logs" and .health.recent_log_warnings == 1 and .health.recent_log_errors == 1 and (.health.recent_crashes | length == 2) and .health.recent_crashes[0].type == "browser_connection_ended" and .health.recent_crashes[1].type == "daemon_rpc_listen_failed" and (.health.last_browser_keepalive_error | contains("hold_connection_ended"))' >/dev/null
+
+retired_hold_log_dir="$state_dir/retired-hold-log"
+mkdir -p "$retired_hold_log_dir/headless"
+cat > "$retired_hold_log_dir/headless/daemon.log" <<'JSONL'
+{"time":"2026-06-05T00:00:00Z","level":"warn","event":"hold_connection_ended","message":"failed to get reader: retired generation","pid":101}
+{"time":"2026-06-05T00:00:01Z","level":"info","event":"hold_reclaimed","message":"orphaned daemon hold reclaimed after exact ownership verification","pid":101}
+{"time":"2026-06-05T00:00:02Z","level":"warn","event":"hold_connection_ended","message":"failed to get reader: active generation one","pid":202}
+{"time":"2026-06-05T00:00:03Z","level":"error","event":"browser_dial_failed","message":"active generation two","pid":202}
+JSONL
+set +e
+retired_hold_health="$("$binary" --browser-mode headless daemon health --state-dir "$retired_hold_log_dir" --json 2>/tmp/cdp-cli-retired-hold-health.err)"
+retired_hold_health_code=$?
+set -e
+if [[ "$retired_hold_health_code" -ne 1 ]]; then
+  echo "headless daemon retired-hold health exit code = $retired_hold_health_code, want 1 for degraded runtime" >&2
+  cat /tmp/cdp-cli-retired-hold-health.err >&2
+  exit 1
+fi
+printf '%s\n' "$retired_hold_health" | jq -e '.ok == false and .code == "headless_daemon_not_running" and .health.recent_log_warnings == 1 and .health.recent_log_errors == 1 and (.health.retired_hold_pids | . == [101]) and (.health.recent_crashes | length == 2) and .health.recent_crashes[0].pid == 202 and .health.recent_crashes[1].pid == 202 and (.health.degraded_reasons | index("repeated_connection_churn"))' >/dev/null
 
 set +e
 snapshot_output="$("$binary" snapshot --state-dir "$state_dir" --json 2>/tmp/cdp-cli-snapshot.err)"
