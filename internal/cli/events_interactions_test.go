@@ -36,6 +36,10 @@ func TestEventsInteractionsStreamsSanitizedBindingEventsAndCleansUp(t *testing.T
 	if !ok || observer["event_dequeue"] != "exact_session" || observer["binding_installed"] != true || observer["current_document_installed"] != true || observer["future_documents_installed"] != true {
 		t.Fatalf("ready observer = %#v, want exact-session dequeue and current/future binding setup evidence", records[0]["observer"])
 	}
+	liveness, ok := observer["liveness"].(map[string]any)
+	if !ok || liveness["enabled"] != true || liveness["heartbeat"] != "Runtime.evaluate" || liveness["poll_interval"] != "15s" || liveness["failure_threshold"] != float64(2) || liveness["read_only"] != true {
+		t.Fatalf("ready observer liveness = %#v, want shared read-only two-strike contract", observer["liveness"])
+	}
 	interaction, ok := records[1]["interaction"].(map[string]any)
 	if !ok || interaction["type"] != "click" {
 		t.Fatalf("interaction = %#v, want sanitized click", records[1]["interaction"])

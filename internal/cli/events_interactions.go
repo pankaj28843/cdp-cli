@@ -43,7 +43,7 @@ func (a *app) newEventsInteractionsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "interactions",
 		Short: "Observe sanitized DOM interactions as JSONL",
-		Long:  "Observe the source collaboration bridge for click, scroll, selection-change, and keydown causes that ordinary CDP events do not expose. Concurrent persistent observers dequeue only their exact session without consuming another observer's events. The observer is session-scoped, bounded, and deliberately omits page text, key values, input values, HTML, and raw binding payloads.",
+		Long:  "Observe the source collaboration bridge for click, scroll, selection-change, and keydown causes that ordinary CDP events do not expose. Concurrent persistent observers dequeue only their exact session without consuming another observer's events. The observer checks daemon runtime registration and a read-only exact-session heartbeat, and deliberately omits page text, key values, input values, HTML, and raw binding payloads.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runEventsInteractions(cmd, options)
@@ -171,6 +171,7 @@ func (a *app) runEventsInteractions(cmd *cobra.Command, options interactionObser
 	eventCount := 0
 	foreignEventsDropped := 0
 	ignoredBindingEvents := 0
+	var livenessStop *eventStreamLivenessResult
 	emit := func(event cdp.Event) (bool, error) {
 		if event.SessionID != session.SessionID {
 			foreignEventsDropped++
@@ -208,6 +209,9 @@ func (a *app) runEventsInteractions(cmd *cobra.Command, options interactionObser
 	}
 	finish := func(reason string, exit int) error {
 		cleanup, cleanupFailure := runCleanup()
+		if livenessStop != nil {
+			metadata["liveness"] = eventStreamLivenessMetadata(livenessStop)
+		}
 		stop := map[string]any{
 			"ok":                     true,
 			"type":                   "stopped",
@@ -243,12 +247,23 @@ func (a *app) runEventsInteractions(cmd *cobra.Command, options interactionObser
 		}
 	}
 
+	registrationCheck := a.eventStreamRuntimeRegistrationCheck(client)
+	livenessCh := pumpEventStreamLivenessWithRegistration(streamCtx, client, session.SessionID, eventStreamLivenessPollInterval, eventStreamLivenessFailureThreshold, registrationCheck)
 	eventCh := pumpEventStream(streamCtx, client, session.SessionID)
 	for {
 		select {
 		case <-streamCtx.Done():
 			reason, exit := eventStreamContextStop(streamCtx)
 			return finish(reason, exit)
+		case result, ok := <-livenessCh:
+			if !ok {
+				livenessCh = nil
+				continue
+			}
+			if result.retired {
+				livenessStop = &result
+				return finish("liveness", ExitOK)
+			}
 		case result, ok := <-eventCh:
 			if !ok {
 				if streamCtx.Err() != nil {
@@ -358,6 +373,7 @@ func interactionObserverMetadata(target cdp.TargetInfo, options interactionObser
 		"current_document_installed": true,
 		"future_documents_installed": true,
 		"sanitized_payload":          true,
+		"liveness":                   eventStreamLivenessMetadata(nil),
 	}
 }
 

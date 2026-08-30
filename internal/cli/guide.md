@@ -158,6 +158,11 @@ wait, so an event is not matched twice:
     cdp events interactions --target-index 1 --match click,scroll --duration 30s --max-events 50 --json > tmp/interactions.jsonl
     cdp events tap --target-index 1 --match Page.loadEventFired,Network.loadingFailed --duration 10s --max-events 50 --json
 
+Persistent interaction observers use the same daemon-registration check and
+read-only 15-second, two-strike exact-session heartbeat as event streams. A
+definitive runtime replacement or repeated session failure emits a stopped
+record with metadata-only liveness evidence instead of polling indefinitely.
+
 The stream and tap collectors keep the historical defaults of Page, Network,
 Runtime, and Log. Their --enable flag also accepts other target-scoped CDP
 domains using protocol spelling, for example DOM or Performance:
