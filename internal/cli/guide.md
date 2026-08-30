@@ -51,7 +51,9 @@ publish the 1-based `index`
 accepted by `--target-index`. Ambiguous and not-found selector errors expose
 bounded full and short candidate/available IDs plus page indexes under `.data`,
 so an exact retry remains possible when short IDs collide; they never include
-page URLs or titles. Plain `cdp pages` rows show index, short ID, full ID, URL,
+page URLs or titles. Plain target errors render that same bounded evidence as
+index/short/full-ID recovery rows without changing JSON messages. Plain
+`cdp pages` rows show index, short ID, full ID, URL,
 and quoted title for direct copy/paste. Plain `cdp targets` also includes each
 target's type and URL; raw protocol ID/URL/title/type filters combine and must
 leave one match. Use

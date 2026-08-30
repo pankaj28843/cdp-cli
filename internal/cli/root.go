@@ -669,6 +669,13 @@ func (a *app) renderError(ctx context.Context, err error) error {
 		return output.Render(ctx, a.out, output.Options{JSON: true, JQ: a.opts.jq, Compact: a.opts.compact}, "", env)
 	}
 
-	_, writeErr := fmt.Fprintln(a.err, env.Message)
-	return writeErr
+	if _, writeErr := fmt.Fprintln(a.err, env.Message); writeErr != nil {
+		return writeErr
+	}
+	for _, line := range plainTargetRecoveryLines(cmdErr.Data) {
+		if _, writeErr := fmt.Fprintln(a.err, line); writeErr != nil {
+			return writeErr
+		}
+	}
+	return nil
 }

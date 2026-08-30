@@ -1029,6 +1029,23 @@ for selector_flag in --url-contains --title-contains; do
   ' <<<"$ambiguous_selector_output" >/dev/null
 done
 set +e
+plain_ambiguous_output="$("$binary" eval 'document.title' --url-contains 'protocol-index=' --state-dir "$state_dir/cdp-state" 2>&1)"
+plain_ambiguous_code=$?
+set -e
+if [[ "$plain_ambiguous_code" -ne 2 ]]; then
+  echo "installed plain duplicate-page selector exit code: $plain_ambiguous_code" >&2
+  echo "$plain_ambiguous_output" >&2
+  exit 1
+fi
+grep -Fq 'Candidate targets:' <<<"$plain_ambiguous_output"
+grep -Fq "$protocol_index_target_id" <<<"$plain_ambiguous_output"
+grep -Fq "$duplicate_selection_target_id" <<<"$plain_ambiguous_output"
+if grep -Fq 'cdp-cli demo app' <<<"$plain_ambiguous_output" || grep -Fq 'http://' <<<"$plain_ambiguous_output"; then
+  echo "installed plain target recovery exposed page title or URL" >&2
+  echo "$plain_ambiguous_output" >&2
+  exit 1
+fi
+set +e
 selector_conflict_output="$("$binary" eval 'window.__cdpSelectorConflictExecuted = true' --target "$protocol_index_target_id" --url-contains 'protocol-index=1' --state-dir "$state_dir/cdp-state" --json)"
 selector_conflict_code=$?
 set -e

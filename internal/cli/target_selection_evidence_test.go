@@ -173,6 +173,53 @@ func resolveProtocolTargetError(targets []cdp.TargetInfo, targetID string) error
 	return err
 }
 
+func TestPlainTargetErrorsRenderBoundedExactRecoveryRows(t *testing.T) {
+	targets := make([]cdp.TargetInfo, 0, 12)
+	for i := 0; i < 12; i++ {
+		targets = append(targets, cdp.TargetInfo{
+			TargetID: "PAGE" + string(rune('A'+i)) + "1234567890",
+			Type:     "page",
+			URL:      "https://secret.example/" + string(rune('a'+i)),
+			Title:    "private title " + string(rune('a'+i)),
+		})
+	}
+	tests := map[string]struct {
+		err        error
+		heading    string
+		firstRow   string
+		eleventhID string
+	}{
+		"page ambiguity": {
+			err:        resolvePageTargetError(targets, "page"),
+			heading:    "Candidate targets:",
+			firstRow:   "  [1]\tPAGEA123\tPAGEA1234567890",
+			eleventhID: "PAGEK1234567890",
+		},
+		"protocol miss": {
+			err:        resolveProtocolTargetError(targets, "missing"),
+			heading:    "Available targets:",
+			firstRow:   "  PAGEA123\tPAGEA1234567890",
+			eleventhID: "PAGEK1234567890",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			a := &app{err: &stderr}
+			if err := a.renderError(context.Background(), test.err); err != nil {
+				t.Fatalf("render plain error: %v", err)
+			}
+			got := stderr.String()
+			if !strings.Contains(got, test.heading) || !strings.Contains(got, test.firstRow) {
+				t.Fatalf("plain error = %q, want heading %q and row %q", got, test.heading, test.firstRow)
+			}
+			if strings.Contains(got, test.eleventhID) || strings.Contains(got, "secret.example") || strings.Contains(got, "private title") {
+				t.Fatalf("plain error exceeded bounds or exposed content: %q", got)
+			}
+		})
+	}
+}
+
 func TestTargetNotFoundErrorsIncludeTypeScopedAvailableShortIDs(t *testing.T) {
 	targets := []cdp.TargetInfo{
 		{TargetID: "PAGEAAAA12345678", Type: "page"},

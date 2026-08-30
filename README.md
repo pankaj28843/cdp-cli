@@ -173,6 +173,9 @@ remains possible when eight-character short IDs collide. Existing
 `candidate_short_ids` and `available_short_ids` remain available for concise
 display. Page-only errors pair those IDs with bounded `candidate_indexes` or
 `available_indexes`; generic protocol target errors remain index-free.
+Without `--json`, the same safe evidence is printed as bounded recovery rows:
+page errors show index, short ID, and exact full ID; generic target errors show
+short and full ID. URLs and titles are not copied into those rows.
 URL/title substring selectors also require one unique page; duplicate matches
 return the same bounded candidate evidence instead of selecting the first tab.
 Page commands reject combinations of target ID, URL, title, and index selector

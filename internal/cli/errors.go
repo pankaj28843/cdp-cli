@@ -69,6 +69,60 @@ func commandErrorWithData(code, class, message string, exitCode int, remediation
 	}
 }
 
+func plainTargetRecoveryLines(data any) []string {
+	fields, ok := data.(map[string]any)
+	if !ok {
+		return nil
+	}
+	lines := plainTargetRecoverySection(fields, "candidate_ids", "candidate_short_ids", "candidate_indexes", "Candidate targets:")
+	return append(lines, plainTargetRecoverySection(fields, "available_ids", "available_short_ids", "available_indexes", "Available targets:")...)
+}
+
+func plainTargetRecoverySection(fields map[string]any, idKey, shortIDKey, indexKey, heading string) []string {
+	ids, ok := fields[idKey].([]string)
+	if !ok || len(ids) == 0 {
+		return nil
+	}
+	shortIDs, _ := fields[shortIDKey].([]string)
+	indexes, _ := fields[indexKey].([]int)
+	if len(ids) > 10 {
+		ids = ids[:10]
+	}
+	rows := make([]string, 0, len(ids))
+	for i, id := range ids {
+		if !safePlainTargetID(id) {
+			continue
+		}
+		shortID := shortTargetID(id)
+		if i < len(shortIDs) && safePlainTargetID(shortIDs[i]) {
+			shortID = shortIDs[i]
+		}
+		if i < len(indexes) && indexes[i] > 0 {
+			rows = append(rows, fmt.Sprintf("  [%d]\t%s\t%s", indexes[i], shortID, id))
+		} else {
+			rows = append(rows, fmt.Sprintf("  %s\t%s", shortID, id))
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return append([]string{heading}, rows...)
+}
+
+func safePlainTargetID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		char := value[i]
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func commandErrorSummary(err error) map[string]any {
 	summary := map[string]any{"message": err.Error()}
 	var commandErr *CommandError
