@@ -169,6 +169,63 @@ func TestPageSelectorValidatorRejectsConflictingTextModes(t *testing.T) {
 	}
 }
 
+func TestPageSelectorErrorsIncludeBoundedIndexes(t *testing.T) {
+	targets := make([]cdp.TargetInfo, 0, 13)
+	targets = append(targets, cdp.TargetInfo{TargetID: "WORKERAA12345678", Type: "service_worker"})
+	for i := 0; i < 12; i++ {
+		targets = append(targets, cdp.TargetInfo{
+			TargetID: "PAGE" + string(rune('A'+i)) + "1234567890",
+			Type:     "page",
+		})
+	}
+
+	_, pageAmbiguous := resolvePageTarget(targets, "page", "", "")
+	assertBoundedPageIndexes(t, pageAmbiguous, "candidate_indexes")
+	_, pageMissing := resolvePageTarget(targets, "missing", "", "")
+	assertBoundedPageIndexes(t, pageMissing, "available_indexes")
+
+	_, protocolAmbiguous := resolveProtocolTarget(targets, "page", "", "", "page")
+	assertNoPageIndexes(t, protocolAmbiguous)
+	_, protocolMissing := resolveProtocolTarget(targets, "missing", "", "", "page")
+	assertNoPageIndexes(t, protocolMissing)
+}
+
+func assertBoundedPageIndexes(t *testing.T, err error, field string) {
+	t.Helper()
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) {
+		t.Fatalf("error = %v, want command error", err)
+	}
+	data, ok := commandErr.Data.(map[string]any)
+	indexes, indexesOK := data[field].([]int)
+	if !ok || !indexesOK || len(indexes) != 10 {
+		t.Fatalf("%s data = %#v, want ten bounded page indexes", field, commandErr.Data)
+	}
+	for i, index := range indexes {
+		if index != i+1 {
+			t.Fatalf("%s = %v, want indexes 1-10", field, indexes)
+		}
+	}
+}
+
+func assertNoPageIndexes(t *testing.T, err error) {
+	t.Helper()
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) {
+		t.Fatalf("error = %v, want command error", err)
+	}
+	data, ok := commandErr.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("error data = %#v, want object", commandErr.Data)
+	}
+	if _, exists := data["candidate_indexes"]; exists {
+		t.Fatalf("protocol error leaked page candidate indexes: %#v", data)
+	}
+	if _, exists := data["available_indexes"]; exists {
+		t.Fatalf("protocol error leaked page available indexes: %#v", data)
+	}
+}
+
 func assertAvailableTargetEvidence(t *testing.T, err error, count int, shortIDs []string) {
 	t.Helper()
 	var commandErr *CommandError

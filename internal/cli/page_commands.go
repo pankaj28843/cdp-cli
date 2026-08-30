@@ -284,6 +284,12 @@ func ambiguousTargetEvidence(matches []cdp.TargetInfo) map[string]any {
 	}
 }
 
+func ambiguousPageTargetEvidence(matches, pages []cdp.TargetInfo) map[string]any {
+	data := ambiguousTargetEvidence(matches)
+	data["candidate_indexes"] = boundedPageIndexes(matches, pages)
+	return data
+}
+
 func availableTargetEvidence(targets []cdp.TargetInfo) map[string]any {
 	count, shortIDs, truncated := boundedTargetShortIDs(targets)
 	return map[string]any{
@@ -291,6 +297,30 @@ func availableTargetEvidence(targets []cdp.TargetInfo) map[string]any {
 		"available_short_ids": shortIDs,
 		"available_truncated": truncated,
 	}
+}
+
+func availablePageTargetEvidence(pages []cdp.TargetInfo) map[string]any {
+	data := availableTargetEvidence(pages)
+	data["available_indexes"] = boundedPageIndexes(pages, pages)
+	return data
+}
+
+func boundedPageIndexes(targets, pages []cdp.TargetInfo) []int {
+	const limit = 10
+	if len(targets) > limit {
+		targets = targets[:limit]
+	}
+	indexByID := make(map[string]int, len(pages))
+	for i, page := range pages {
+		indexByID[page.TargetID] = i + 1
+	}
+	indexes := make([]int, 0, len(targets))
+	for _, target := range targets {
+		if index, ok := indexByID[target.TargetID]; ok {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
 }
 
 func boundedTargetShortIDs(targets []cdp.TargetInfo) (int, []string, bool) {
@@ -2229,7 +2259,7 @@ func resolvePageTargetByIndex(targets []cdp.TargetInfo, targetIndex int) (cdp.Ta
 			fmt.Sprintf("page target index %d is out of range; found %d page targets", targetIndex, len(pages)),
 			ExitUsage,
 			[]string{"cdp pages --json"},
-			availableTargetEvidence(pages),
+			availablePageTargetEvidence(pages),
 		)
 	}
 	return pages[targetIndex-1], nil
@@ -2248,7 +2278,7 @@ func onePageTarget(matches, available []cdp.TargetInfo, label string) (cdp.Targe
 			fmt.Sprintf("%s matched %d pages; pass a longer --target", label, len(matches)),
 			ExitUsage,
 			[]string{"cdp pages --json", "cdp snapshot --target <target-id> --json"},
-			ambiguousTargetEvidence(matches),
+			ambiguousPageTargetEvidence(matches, available),
 		)
 	}
 }
@@ -2260,7 +2290,7 @@ func pageTargetNotFound(message string, available []cdp.TargetInfo) error {
 		message,
 		ExitUsage,
 		[]string{"cdp pages --json", "cdp open <url> --json"},
-		availableTargetEvidence(available),
+		availablePageTargetEvidence(available),
 	)
 }
 

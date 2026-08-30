@@ -169,6 +169,8 @@ publish the same `short_id`. `--target` accepts a unique case-insensitive ID
 prefix and rejects ambiguity with bounded metadata-only candidate short IDs.
 Not-found and out-of-range errors similarly return bounded compatible
 `available_short_ids` for an immediate corrected retry.
+Page-only errors pair those IDs with bounded `candidate_indexes` or
+`available_indexes`; generic protocol target errors remain index-free.
 URL/title substring selectors also require one unique page; duplicate matches
 return the same bounded candidate evidence instead of selecting the first tab.
 Page commands reject combinations of target ID, URL, title, and index selector

@@ -275,10 +275,11 @@ if [[ "$target_not_found_code" -ne 2 ]]; then
   echo "$target_not_found_output" >&2
   exit 1
 fi
-jq -e --arg short "$collector_target_short_id" '
+jq -e --arg short "$collector_target_short_id" --argjson index "$collector_target_index" '
   .ok == false and .code == "target_not_found" and
   (.data.available_count >= 1) and
   (.data.available_short_ids | index(($short | ascii_upcase)) != null) and
+  (.data.available_indexes | index($index) != null) and
   (.data.available_truncated | type == "boolean") and
   ((.data | has("url")) | not) and ((.data | has("title")) | not)
 ' <<<"$target_not_found_output" >/dev/null
@@ -994,6 +995,8 @@ duplicate_selection_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$dup
 selection_pages_json="$("$binary" pages --state-dir "$state_dir/cdp-state" --json)"
 protocol_index_short_id="$(jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .short_id' <<<"$selection_pages_json")"
 duplicate_selection_short_id="$(jq -er --arg id "$duplicate_selection_target_id" '.pages[] | select(.id == $id) | .short_id' <<<"$selection_pages_json")"
+protocol_index_candidate_index="$(jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .index' <<<"$selection_pages_json")"
+duplicate_selection_candidate_index="$(jq -er --arg id "$duplicate_selection_target_id" '.pages[] | select(.id == $id) | .index' <<<"$selection_pages_json")"
 for selector_flag in --url-contains --title-contains; do
   selector_value="protocol-index="
   if [[ "$selector_flag" == "--title-contains" ]]; then
@@ -1008,11 +1011,13 @@ for selector_flag in --url-contains --title-contains; do
     echo "$ambiguous_selector_output" >&2
     exit 1
   fi
-  jq -e --arg first "$protocol_index_short_id" --arg second "$duplicate_selection_short_id" '
+  jq -e --arg first "$protocol_index_short_id" --arg second "$duplicate_selection_short_id" --argjson first_index "$protocol_index_candidate_index" --argjson second_index "$duplicate_selection_candidate_index" '
     .ok == false and .code == "ambiguous_target" and
     (.data.candidate_count >= 2) and
     (.data.candidate_short_ids | index($first) != null) and
     (.data.candidate_short_ids | index($second) != null) and
+    (.data.candidate_indexes | index($first_index) != null) and
+    (.data.candidate_indexes | index($second_index) != null) and
     (.data.candidate_truncated | type == "boolean") and
     ((.data | has("url")) | not) and ((.data | has("title")) | not)
   ' <<<"$ambiguous_selector_output" >/dev/null
