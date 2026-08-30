@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -26,17 +27,27 @@ func TestTargetRowsPublishDirectSelectionMetadata(t *testing.T) {
 
 func TestHumanTargetRowsPublishCopyReadySelectors(t *testing.T) {
 	targets := []cdp.TargetInfo{
-		{TargetID: "workerabcdef1234", Type: "worker", Title: "Worker\tTitle"},
+		{TargetID: "workerabcdef1234", Type: "worker", URL: "https://example.test/worker.js", Title: "Worker\tTitle"},
 		{TargetID: "pageabcdef123456", Type: "page", URL: "https://example.test/app", Title: "App\nTitle"},
 	}
 
 	targetLines := targetHumanLines(targetRows(targets))
-	if len(targetLines) != 2 || targetLines[0] != "WORKERAB\tworkerabcdef1234\tworker\t\"Worker\\tTitle\"" {
-		t.Fatalf("target human lines = %q, want short/full/type/quoted-title", targetLines)
+	if len(targetLines) != 2 || targetLines[0] != "WORKERAB\tworkerabcdef1234\tworker\thttps://example.test/worker.js\t\"Worker\\tTitle\"" {
+		t.Fatalf("target human lines = %q, want short/full/type/URL/quoted-title", targetLines)
 	}
 	pageLines := pageHumanLines(pageRows(targets))
 	if len(pageLines) != 1 || pageLines[0] != "[1]\tPAGEABCD\tpageabcdef123456\thttps://example.test/app\t\"App\\nTitle\"" {
 		t.Fatalf("page human lines = %q, want index/short/full/URL/quoted-title", pageLines)
+	}
+}
+
+func TestProtocolTargetFilterHelpDescribesUniqueConjunction(t *testing.T) {
+	cmd := (&app{}).newProtocolExecCommand()
+	for _, name := range []string{"url-contains", "title-contains"} {
+		usage := cmd.Flags().Lookup(name).Usage
+		if strings.Contains(usage, "first matching") || !strings.Contains(usage, "combines") || !strings.Contains(usage, "one target") {
+			t.Fatalf("--%s usage = %q, want unique conjunctive filter contract", name, usage)
+		}
 	}
 }
 

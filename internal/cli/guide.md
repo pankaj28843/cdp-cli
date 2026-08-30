@@ -51,7 +51,9 @@ publish the 1-based `index`
 accepted by `--target-index`. Ambiguous and not-found selector errors expose
 only bounded candidate or available short IDs and page indexes under `.data`,
 never page URLs or titles. Plain `cdp pages` rows show index, short ID, full ID, URL,
-and quoted title for direct copy/paste. Use
+and quoted title for direct copy/paste. Plain `cdp targets` also includes each
+target's type and URL; raw protocol ID/URL/title/type filters combine and must
+leave one match. Use
 --target-index only when page-only ordering is the intended contract. For a
 visible split control whose center point is not the hit target, explicit
 --strategy dom may use measured related pointer-event pseudo-element evidence;

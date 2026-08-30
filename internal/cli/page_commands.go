@@ -237,7 +237,7 @@ func pageRows(targets []cdp.TargetInfo) []map[string]any {
 func targetHumanLines(rows []map[string]any) []string {
 	lines := make([]string, 0, len(rows))
 	for _, target := range rows {
-		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%q", target["short_id"], target["id"], target["type"], target["title"]))
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s\t%q", target["short_id"], target["id"], target["type"], target["url"], target["title"]))
 	}
 	return lines
 }

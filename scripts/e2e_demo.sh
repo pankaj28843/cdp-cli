@@ -264,8 +264,11 @@ collector_pages_human="$("$binary" pages --state-dir "$state_dir/cdp-state")"
 printf -v collector_expected_human '[%s]\t%s\t%s\t%s\t"%s"' "$collector_target_index" "$collector_target_short_id_upper" "$collector_target_id" "$app_url/" "cdp-cli demo app"
 grep -Fqx "$collector_expected_human" <<<"$collector_pages_human"
 collector_targets_human="$("$binary" targets --state-dir "$state_dir/cdp-state")"
-printf -v collector_expected_target_human '%s\t%s\t%s\t"%s"' "$collector_target_short_id_upper" "$collector_target_id" "page" "cdp-cli demo app"
+printf -v collector_expected_target_human '%s\t%s\t%s\t%s\t"%s"' "$collector_target_short_id_upper" "$collector_target_id" "page" "$app_url/" "cdp-cli demo app"
 grep -Fqx "$collector_expected_target_human" <<<"$collector_targets_human"
+protocol_exec_help="$("$binary" protocol exec --help)"
+grep -Fq 'filter targets by URL substring; combines with ID/title/type filters and must leave one target' <<<"$protocol_exec_help"
+grep -Fq 'filter targets by title substring; combines with ID/URL/type filters and must leave one target' <<<"$protocol_exec_help"
 set +e
 target_not_found_output="$("$binary" eval 'document.title' --target definitely-missing --state-dir "$state_dir/cdp-state" --json)"
 target_not_found_code=$?
