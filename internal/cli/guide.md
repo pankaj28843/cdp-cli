@@ -31,6 +31,9 @@ compatibility-only and no JavaScript navigator surface is rewritten. A healthy
 running browser is reused unchanged, so stop it explicitly before changing the
 launch profile. Public JSON reports only whether the profile was applied and
 the effective field names, never its path or values.
+If the owned Chrome launcher exits before CDP readiness, startup fails
+immediately with its exit code and a small escaped stderr prefix instead of
+waiting out the readiness timeout; retries remain bounded.
 
 ## Sense, act, verify
 

@@ -851,6 +851,10 @@ New daemon-hold startup remains process-group-owned until its mode-scoped
 runtime socket is ready; a failed startup terminates and reaps only that
 newly started hold tree before clearing its stale state, while a ready hold is
 detached for continued keepalive.
+Managed headless Chrome startup likewise observes its owned launcher while
+waiting for `DevToolsActivePort`: an early exit is reaped and reported
+immediately with its exit code and a bounded escaped stderr prefix, while the
+existing launch retries remain bounded and a ready browser stays detached.
 Private daemon runtime state also records an opaque process-start identity when
 the host provides one. Stop verifies the PID and that identity before sending
 signals or force-terminating the exact process group; a mismatch is treated as

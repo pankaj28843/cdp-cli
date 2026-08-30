@@ -1053,6 +1053,45 @@ func TestWaitManagedActivePortRejectsInvalidFile(t *testing.T) {
 	}
 }
 
+func TestStartManagedChromeReportsImmediateExitWithBoundedStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell chrome test is unix-only")
+	}
+	stateDir := filepath.Join(t.TempDir(), "state")
+	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
+	script := `#!/usr/bin/env sh
+printf 'synthetic launch failure\nsecond line\tvalue\n' >&2
+i=0
+while [ "$i" -lt 7000 ]; do
+  printf x >&2
+  i=$((i + 1))
+done
+exit 23
+`
+	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake chrome: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir, Chrome: chromePath})
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("StartManagedChrome returned nil error, want immediate-exit diagnostics")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "exit_code=23") || !strings.Contains(message, "synthetic launch failure") {
+		t.Fatalf("StartManagedChrome error = %q, want exit code and stderr marker", message)
+	}
+	if strings.Contains(message, "\n") || !strings.Contains(message, "truncated") || len(message) > 5000 {
+		t.Fatalf("StartManagedChrome error is not bounded and escaped: len=%d error=%q", len(message), message)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("StartManagedChrome immediate exit took %s, want under 1s", elapsed)
+	}
+}
+
 func TestStartManagedChromeOutlivesCallerContext(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell chrome test is unix-only")

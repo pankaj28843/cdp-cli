@@ -34,8 +34,9 @@ const (
 	ProfileSeedStrategyManaged     = "managed"
 	ProfileSeedStrategyCopyDefault = "copy-default"
 
-	managedTerminalRetention = 24 * time.Hour
-	managedTerminalTailCount = 8
+	managedTerminalRetention              = 24 * time.Hour
+	managedTerminalTailCount              = 8
+	managedChromeLaunchDiagnosticMaxBytes = 1024
 )
 
 var managedRegistryProcessLock sync.Mutex
@@ -105,6 +106,11 @@ type ManagedLaunch struct {
 	Endpoint string
 	Command  *exec.Cmd
 	Metadata ManagedMetadata
+}
+
+type managedChromeLaunchWait struct {
+	done chan struct{}
+	err  error
 }
 
 type ManagedStopResult struct {
@@ -2443,7 +2449,8 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 	}
 
 	launchArgs := ManagedLaunchArgs(chromePath, metadata.UserDataDir)
-	launchOptions := processgroup.Options{NewSession: true}
+	launchStderr := &browserHelperOutput{}
+	launchOptions := processgroup.Options{NewSession: true, Stderr: launchStderr}
 	if fingerprint != nil {
 		launchArgs = append(launchArgs, fingerprint.chromeArgs()...)
 		launchOptions.Env = fingerprint.childEnvironment(os.Environ())
@@ -2452,6 +2459,7 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 	if err != nil {
 		return ManagedLaunch{}, fmt.Errorf("start managed chrome: %w", err)
 	}
+	launchWait := waitForManagedChromeLaunch(cmd)
 	metadata.ChromePID = cmd.Process.Pid
 	metadata.ProcessStartTime = now.Format(time.RFC3339)
 	identityCtx, identityCancel := context.WithTimeout(ctx, time.Second)
@@ -2460,41 +2468,124 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 	}
 	identityCancel()
 	if err := SaveManagedMetadata(opts.StateDir, metadata); err != nil {
-		terminateManagedChromeLaunch(cmd)
+		terminateManagedChromeLaunch(cmd, launchWait)
 		return ManagedLaunch{}, err
 	}
 	if err := RegisterManagedProcessLaunchContext(ctx, opts.StateDir, metadata); err != nil {
-		terminateManagedChromeLaunch(cmd)
+		terminateManagedChromeLaunch(cmd, launchWait)
 		return ManagedLaunch{}, err
 	}
 
-	port, path, err := WaitManagedActivePort(ctx, metadata.UserDataDir)
+	port, path, err := waitManagedActivePortOrExit(ctx, metadata.UserDataDir, cmd, launchWait, launchStderr)
 	if err != nil {
-		terminateManagedChromeLaunch(cmd)
+		terminateManagedChromeLaunch(cmd, launchWait)
 		markManagedProcessesStopped(opts.StateDir, []int{metadata.ChromePID}, "launch_failed", err.Error())
 		return ManagedLaunch{}, err
 	}
 	metadata.DebuggingPort = port
 	endpoint := fmt.Sprintf("ws://%s%s", net.JoinHostPort("127.0.0.1", port), path)
 	if err := ValidateLoopbackEndpoint(endpoint); err != nil {
-		terminateManagedChromeLaunch(cmd)
+		terminateManagedChromeLaunch(cmd, launchWait)
 		return ManagedLaunch{}, err
 	}
 	if err := SaveManagedMetadata(opts.StateDir, metadata); err != nil {
-		terminateManagedChromeLaunch(cmd)
+		terminateManagedChromeLaunch(cmd, launchWait)
 		return ManagedLaunch{}, err
 	}
 	if err := RegisterManagedProcessLaunchContext(ctx, opts.StateDir, metadata); err != nil {
-		terminateManagedChromeLaunch(cmd)
+		terminateManagedChromeLaunch(cmd, launchWait)
 		return ManagedLaunch{}, err
 	}
-	processgroup.Detach(cmd)
+	if err := managedChromeLaunchExitError(cmd, launchWait, launchStderr); err != nil {
+		markManagedProcessesStopped(opts.StateDir, []int{metadata.ChromePID}, "launch_failed", err.Error())
+		return ManagedLaunch{}, err
+	}
+	// launchWait already owns Cmd.Wait, which provides the same eventual reaping
+	// as processgroup.Detach while allowing setup to observe an early exit.
 	return ManagedLaunch{Endpoint: endpoint, Command: cmd, Metadata: metadata}, nil
 }
 
-func terminateManagedChromeLaunch(command *exec.Cmd) {
+func waitForManagedChromeLaunch(command *exec.Cmd) *managedChromeLaunchWait {
+	wait := &managedChromeLaunchWait{done: make(chan struct{})}
+	go func() {
+		wait.err = command.Wait()
+		close(wait.done)
+	}()
+	return wait
+}
+
+func terminateManagedChromeLaunch(command *exec.Cmd, wait *managedChromeLaunchWait) {
+	select {
+	case <-wait.done:
+		return
+	default:
+	}
 	processgroup.Terminate(command)
-	_ = command.Wait()
+	<-wait.done
+}
+
+func waitManagedActivePortOrExit(ctx context.Context, userDataDir string, command *exec.Cmd, wait *managedChromeLaunchWait, stderr *browserHelperOutput) (string, string, error) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := managedChromeLaunchExitError(command, wait, stderr); err != nil {
+			return "", "", err
+		}
+		port, path, err := ReadActivePortFile(userDataDir)
+		if err == nil {
+			if err := managedChromeLaunchExitError(command, wait, stderr); err != nil {
+				return "", "", err
+			}
+			return port, path, nil
+		}
+		select {
+		case <-wait.done:
+			return "", "", managedChromeExitedBeforeReadinessError(command, wait, stderr)
+		case <-ctx.Done():
+			return "", "", fmt.Errorf("wait for DevToolsActivePort: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func managedChromeLaunchExitError(command *exec.Cmd, wait *managedChromeLaunchWait, stderr *browserHelperOutput) error {
+	select {
+	case <-wait.done:
+		return managedChromeExitedBeforeReadinessError(command, wait, stderr)
+	default:
+		return nil
+	}
+}
+
+func managedChromeExitedBeforeReadinessError(command *exec.Cmd, wait *managedChromeLaunchWait, stderr *browserHelperOutput) error {
+	exitCode := -1
+	if command != nil && command.ProcessState != nil {
+		exitCode = command.ProcessState.ExitCode()
+	}
+	message := fmt.Sprintf("managed Chrome exited before DevToolsActivePort was ready (exit_code=%d", exitCode)
+	diagnostic, truncated := boundedManagedChromeLaunchDiagnostic(stderr)
+	if diagnostic != "" {
+		message += ", stderr=" + strconv.QuoteToASCII(diagnostic)
+	}
+	if truncated {
+		message += ", stderr_truncated=true"
+	}
+	if wait.err != nil && exitCode < 0 {
+		message += ", wait_error=" + strconv.QuoteToASCII(wait.err.Error())
+	}
+	return errors.New(message + ")")
+}
+
+func boundedManagedChromeLaunchDiagnostic(stderr *browserHelperOutput) (string, bool) {
+	if stderr == nil {
+		return "", false
+	}
+	data := stderr.buffer.Bytes()
+	truncated := stderr.truncated || len(data) > managedChromeLaunchDiagnosticMaxBytes
+	if len(data) > managedChromeLaunchDiagnosticMaxBytes {
+		data = data[:managedChromeLaunchDiagnosticMaxBytes]
+	}
+	return strings.TrimSpace(string(data)), truncated
 }
 
 func prepareManagedProfileForLaunch(stateDir, strategy string, now time.Time) (ManagedMetadata, error) {
