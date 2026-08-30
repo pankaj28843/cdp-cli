@@ -102,6 +102,17 @@ func errorCatalog() []errorInfo {
 			},
 		},
 		{
+			Code:     "invalid_target_index",
+			Class:    "usage",
+			ExitCode: ExitUsage,
+			Message:  "the page target index is invalid",
+			Meaning:  "Page target indexes are 1-based and an explicitly supplied index must be greater than zero.",
+			RemediationCommands: []string{
+				"cdp pages --json",
+				"cdp snapshot --target-index 1 --json",
+			},
+		},
+		{
 			Code:     "ambiguous_target",
 			Class:    "usage",
 			ExitCode: ExitUsage,

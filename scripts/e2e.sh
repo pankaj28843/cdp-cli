@@ -310,6 +310,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" doctor --capabilities --json | jq -e '.ok == true and (.bootstrap_path.validate_commands | index("cdp doctor --check headless-security --json"))' >/dev/null
 "$binary" explain-error not_implemented --json | jq -e '.ok == true and .error.exit_code == 8' >/dev/null
 "$binary" explain-error cdp_command_failed --json | jq -e '.ok == true and .error.code == "cdp_command_failed" and .error.err_class == "protocol" and .error.exit_code == 1' >/dev/null
+"$binary" explain-error invalid_target_index --json | jq -e '.ok == true and .error.code == "invalid_target_index" and .error.err_class == "usage" and .error.exit_code == 2 and (.error.remediation_commands | index("cdp pages --json") != null)' >/dev/null
 "$binary" exit-codes --json | jq -e '.ok == true and (.exit_codes | map(.name) | index("not_implemented"))' >/dev/null
 "$binary" schema error-envelope --json | jq -e '.ok == true and .schema.name == "error-envelope"' >/dev/null
 "$binary" schema events-stream --json | jq -e '.ok == true and .schema.name == "events-stream" and (.schema.description | contains("validated target-domain enablement")) and (.schema.description | contains("exact-session dequeue")) and (.schema.fields | map(.name) | index("event")) and (.schema.fields | map(.name) | index("foreign_events_dropped")) and (.schema.fields[] | select(.name == "stream").description | contains("liveness")) and (.schema.fields[] | select(.name == "liveness").description | contains("runtime-registration"))' >/dev/null

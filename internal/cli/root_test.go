@@ -1599,8 +1599,10 @@ func TestExplainErrorJSON(t *testing.T) {
 	var got struct {
 		OK    bool `json:"ok"`
 		Error struct {
-			Code     string `json:"code"`
-			ExitCode int    `json:"exit_code"`
+			Code                string   `json:"code"`
+			Class               string   `json:"err_class"`
+			ExitCode            int      `json:"exit_code"`
+			RemediationCommands []string `json:"remediation_commands"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
@@ -1608,6 +1610,28 @@ func TestExplainErrorJSON(t *testing.T) {
 	}
 	if !got.OK || got.Error.Code != "not_implemented" || got.Error.ExitCode != cli.ExitNotImplemented {
 		t.Fatalf("explain-error = %+v, want not_implemented metadata", got)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"explain-error", "invalid_target_index", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("invalid target-index explanation exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	got = struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code                string   `json:"code"`
+			Class               string   `json:"err_class"`
+			ExitCode            int      `json:"exit_code"`
+			RemediationCommands []string `json:"remediation_commands"`
+		} `json:"error"`
+	}{}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid target-index explanation is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Error.Code != "invalid_target_index" || got.Error.Class != "usage" || got.Error.ExitCode != cli.ExitUsage || !containsString(got.Error.RemediationCommands, "cdp pages --json") {
+		t.Fatalf("invalid target-index explanation = %+v, want usage/exit-2 page recovery", got)
 	}
 }
 
