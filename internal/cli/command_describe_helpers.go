@@ -704,21 +704,26 @@ func commandExamples(path string) []string {
 		},
 		"cdp protocol metadata": {
 			"cdp protocol metadata --json",
+			"cdp protocol metadata --official --json",
 		},
 		"cdp protocol domains": {
 			"cdp protocol domains --json",
 			"cdp protocol domains --experimental --json",
+			"cdp protocol domains --official --json",
 		},
 		"cdp protocol search": {
 			"cdp protocol search screenshot --json",
 			"cdp protocol search console --kind event --json",
+			"cdp protocol search screenshot --official --json",
 		},
 		"cdp protocol describe": {
 			"cdp protocol describe Page.captureScreenshot --json",
+			"cdp protocol describe Page.captureScreenshot --official --json",
 		},
 		"cdp protocol examples": {
 			"cdp protocol examples Page.captureScreenshot --json",
 			"cdp protocol examples Runtime.evaluate --json",
+			"cdp protocol examples Page.captureScreenshot --official --json",
 		},
 		"cdp protocol exec": {
 			"cdp protocol exec Browser.getVersion --params '{}' --json",
@@ -727,6 +732,7 @@ func commandExamples(path string) []string {
 			"cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains chrome-extension:// --params '{\"expression\":\"Object.keys(globalThis).slice(0,50)\",\"returnByValue\":true}' --json",
 			"cdp protocol exec Page.captureScreenshot --target <target-id> --params '{\"format\":\"png\"}' --save tmp/page.png --json",
 			"cdp protocol exec DOM.getDocument --url-contains localhost --json",
+			"cdp protocol exec Browser.getVersion --validate --official --json",
 		},
 		"cdp workflow verify": {
 			"cdp workflow verify 'https://example.com' --json",

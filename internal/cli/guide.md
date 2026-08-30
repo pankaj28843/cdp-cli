@@ -222,8 +222,12 @@ subscriptions. Use cdp protocol search, cdp protocol examples, and cdp
 protocol exec when a focused CDP escape hatch is more appropriate than a
 high-level wrapper. The daemon remains the browser boundary for both paths.
 Add `--validate` to reject unknown methods, browser/target scope mismatches,
-missing required parameters, and unknown parameters against the live protocol
-before attachment or execution. Omit it for intentionally permissive raw CDP.
+missing required parameters, and unknown parameters against the selected
+protocol before attachment or execution. Protocol discovery follows the live
+browser by default; add `--official` for browser-free online discovery from the
+official browser+JavaScript tip-of-tree schema. `protocol exec --validate
+--official` uses that schema for validation, while execution still requires the
+daemon. Omit `--validate` for intentionally permissive raw CDP.
 For target-scoped raw execution, `--target-index N` selects the 1-based page
 target order used by `cdp pages`; it is mutually exclusive with
 `--target`, `--url-contains`, `--title-contains`, and

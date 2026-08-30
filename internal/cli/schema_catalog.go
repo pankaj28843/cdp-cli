@@ -2878,7 +2878,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
-			Description: "Summarized CDP protocol metadata.",
+			Description: "Summarized CDP protocol metadata from the selected live or official source.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol metadata was fetched."},
 				{Name: "protocol", Type: "protocol_summary", Required: true, Description: "Version, domain count, and compact domain summaries."},
@@ -2886,33 +2886,36 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"protocol-domains": {
 			Name:        "protocol-domains",
-			Description: "Compact list of CDP domains.",
+			Description: "Compact list of CDP domains from the selected live or official source.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol domains were fetched."},
 				{Name: "domain_count", Type: "number", Required: true, Description: "Number of protocol domains returned."},
 				{Name: "domains", Type: "array<domain_summary>", Required: true, Description: "Compact domain summaries."},
+				{Name: "source", Type: "string", Required: true, Description: "Selected live endpoint or official browser+JavaScript source URLs."},
 			},
 		},
 		"protocol-search": {
 			Name:        "protocol-search",
-			Description: "Search results across live CDP domains, commands, events, and types.",
+			Description: "Search results across selected live or official CDP domains, commands, events, and types.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol search completed."},
 				{Name: "query", Type: "string", Required: true, Description: "Search query."},
 				{Name: "matches", Type: "array<protocol_match>", Required: true, Description: "Matching protocol entities."},
+				{Name: "source", Type: "string", Required: true, Description: "Selected live endpoint or official browser+JavaScript source URLs."},
 			},
 		},
 		"protocol-describe": {
 			Name:        "protocol-describe",
-			Description: "A live CDP domain, command, event, or type schema.",
+			Description: "A CDP domain, command, event, or type schema from the selected live or official source.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the entity was found."},
 				{Name: "entity", Type: "protocol_entity", Required: true, Description: "Entity metadata and raw protocol schema."},
+				{Name: "source", Type: "string", Required: true, Description: "Selected live endpoint or official browser+JavaScript source URLs."},
 			},
 		},
 		"protocol-exec": {
 			Name:        "protocol-exec",
-			Description: "Raw CDP method execution result with browser or exact target selection, including a page-only 1-based target index and optional pre-execution live-schema validation.",
+			Description: "Raw CDP method execution result with browser or exact target selection, including a page-only 1-based target index and optional pre-execution selected-schema validation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the CDP method completed."},
 				{Name: "scope", Type: "string", Required: true, Description: "Either browser or target."},
@@ -2934,7 +2937,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "source", Type: "string", Required: true, Description: "Protocol source endpoint."},
 			},
 		},
-		"protocol-compat":      {Name: "protocol-compat", Description: "Live CDP compatibility report for required protocol paths.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when compatibility metadata was generated."}, {Name: "protocol_version", Type: "object", Required: true, Description: "Live protocol version metadata."}, {Name: "schema_source", Type: "string", Required: true, Description: "Protocol schema source used for checks."}, {Name: "required", Type: "array<protocol_compat_check>", Required: true, Description: "Requested protocol paths and availability."}}},
+		"protocol-compat":      {Name: "protocol-compat", Description: "Compatibility report for required paths in the selected live or official CDP schema.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when compatibility metadata was generated."}, {Name: "protocol_version", Type: "object", Required: true, Description: "Selected protocol version metadata."}, {Name: "schema_source", Type: "string", Required: true, Description: "Protocol schema source used for checks."}, {Name: "required", Type: "array<protocol_compat_check>", Required: true, Description: "Requested protocol paths and availability."}}},
 		"a11y":                 {Name: "a11y", Description: "Accessibility tree query result for a selected page; accepts a mutually exclusive 1-based page --target-index selector.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when accessibility data was collected."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."}, {Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."}, {Name: "nodes", Type: "array<a11y_node>", Required: false, Description: "Accessibility nodes."}, {Name: "node", Type: "object", Required: false, Description: "Accessibility information for the selected CSS node when using a11y node."}, {Name: "truncated", Type: "boolean", Required: false, Description: "True when output was bounded."}}},
 		"a11y-snapshot":        {Name: "a11y-snapshot", Description: "Bounded YAML-like ARIA snapshot generated from Chrome accessibility tree nodes; accepts a mutually exclusive 1-based page --target-index selector.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when snapshot generation completed."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."}, {Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."}, {Name: "snapshot", Type: "a11y_snapshot", Required: true, Description: "Selector scope label, line_count, lines, text, truncation, depth, limit, include_ignored flag, and source metadata."}, {Name: "lines", Type: "array<string>", Required: true, Description: "ARIA snapshot lines duplicated for jq-friendly inspection."}, {Name: "text", Type: "string", Required: true, Description: "Newline-terminated ARIA snapshot text suitable for local assertion templates."}, {Name: "truncated", Type: "boolean", Required: true, Description: "True when --limit bounded the generated snapshot."}}},
 		"emulation":            {Name: "emulation", Description: "Target emulation result.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when emulation command completed."}, {Name: "target", Type: "page", Required: false, Description: "Selected page target metadata."}, {Name: "emulation", Type: "object", Required: true, Description: "Applied emulation metadata and cleanup command."}}},

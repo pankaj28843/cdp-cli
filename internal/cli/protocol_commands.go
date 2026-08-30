@@ -12,6 +12,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var fetchOfficialProtocol = cdp.FetchOfficialProtocol
+
 func (a *app) newCDPCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "protocol",
@@ -25,6 +27,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 	cmd.AddCommand(a.newProtocolExamplesCommand())
 	cmd.AddCommand(a.newProtocolCompatCommand())
 	cmd.AddCommand(a.newProtocolExecCommand())
+	cmd.PersistentFlags().BoolVar(&a.opts.protocolOfficial, "official", false, "use the official browser+JavaScript tip-of-tree schema for discovery and --validate; requires network, not a browser daemon")
 	return cmd
 }
 
@@ -351,7 +354,11 @@ func (a *app) newProtocolCompatCommand() *cobra.Command {
 			}
 			checks = append(checks, check)
 		}
-		return a.render(ctx, fmt.Sprintf("compat\t%d checks", len(checks)), map[string]any{"ok": true, "protocol_version": protocol.Version, "schema_source": protocol.Source, "required": checks, "warnings": []string{"Live browser protocol can differ from static tot documentation"}})
+		warning := "Live browser protocol can differ from static tip-of-tree documentation"
+		if a.opts.protocolOfficial {
+			warning = "Official tip-of-tree protocol can differ from the selected live Chrome version"
+		}
+		return a.render(ctx, fmt.Sprintf("compat\t%d checks", len(checks)), map[string]any{"ok": true, "protocol_version": protocol.Version, "schema_source": protocol.Source, "required": checks, "warnings": []string{warning}})
 	}}
 	cmd.Flags().StringVar(&requires, "requires", "", "comma-separated Domain.method or Domain.event paths to check")
 	cmd.Flags().StringVar(&workflow, "workflow", "", "known workflow requirement set: debug-bundle, responsive-audit, network, console, storage")
@@ -448,6 +455,15 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 			}
 			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "") {
 				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, --title-contains, or --target-type", ExitUsage, []string{"cdp pages --json"})
+			}
+			if a.opts.protocolOfficial && !validate {
+				return commandError(
+					"official_protocol_requires_validation",
+					"usage",
+					"--official selects validation metadata only for protocol exec; add --validate or remove --official",
+					ExitUsage,
+					[]string{"cdp protocol exec " + args[0] + " --validate --official --json", "cdp protocol describe " + args[0] + " --official --json"},
+				)
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -567,7 +583,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "filter targets by title substring; combines with ID/URL/type filters and must leave one target")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index for target-scoped execution")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
-	cmd.Flags().BoolVar(&validate, "validate", false, "validate method, browser/target scope, and params against live protocol metadata before executing")
+	cmd.Flags().BoolVar(&validate, "validate", false, "validate method, browser/target scope, and params against selected protocol metadata before executing")
 	return cmd
 }
 
@@ -743,6 +759,19 @@ func saveProtocolExecArtifact(path string, result json.RawMessage) (map[string]a
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
+	if a.opts.protocolOfficial {
+		protocol, err := fetchOfficialProtocol(ctx)
+		if err != nil {
+			return cdp.Protocol{}, commandError(
+				"official_protocol_fetch_failed",
+				"connection",
+				fmt.Sprintf("fetch official protocol metadata: %v", err),
+				ExitConnection,
+				[]string{"cdp --timeout 30s protocol domains --official --json", "cdp protocol domains --json"},
+			)
+		}
+		return protocol, nil
+	}
 	client, err := a.daemonRuntimeClient(ctx)
 	if err != nil {
 		return cdp.Protocol{}, commandError(

@@ -151,6 +151,7 @@ cdp transcription serve --default-provider chatgpt-web --providers chatgpt-web,c
 cdp transcription spec > openapi.json
 cdp schema webagent-operation --json
 cdp protocol search screenshot --json
+cdp protocol describe Page.captureScreenshot --official --json
 cdp protocol examples Page.captureScreenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
@@ -159,9 +160,17 @@ cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains c
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
 ```
 
+Protocol discovery uses the selected live Chrome schema by default. Add
+`--official` to `metadata`, `domains`, `search`, `describe`, `examples`, or
+`compat` for browser-free online discovery from the official browser and
+JavaScript tip-of-tree schemas; output preserves both source URLs. The official
+source requires network access and can differ from the selected live Chrome.
+
 Add `--validate` to check the method, browser/target scope, required parameters,
-and unknown parameters against the live browser protocol before attachment or
-execution. Omit it to preserve the forward-compatible raw CDP escape hatch.
+and unknown parameters against the selected protocol before attachment or
+execution. `protocol exec --validate --official` validates against the official
+schema, but execution still runs through the daemon. Omit `--validate` to
+preserve the forward-compatible raw CDP escape hatch.
 
 For target-scoped raw execution, `--target-index N` selects the 1-based page
 order shown by `cdp pages`. That page-only order is deterministic ascending

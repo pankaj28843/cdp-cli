@@ -52,6 +52,7 @@ type options struct {
 	maxRendererProcesses int
 	noHeadlessRepair     bool
 	fingerprintProfile   string
+	protocolOfficial     bool
 }
 
 type app struct {
