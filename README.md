@@ -175,7 +175,8 @@ display. Page-only errors pair those IDs with bounded `candidate_indexes` or
 `available_indexes`; generic protocol target errors remain index-free.
 Without `--json`, the same safe evidence is printed as bounded recovery rows:
 page errors show index, short ID, and exact full ID; generic target errors show
-short and full ID. URLs and titles are not copied into those rows.
+short and full ID. A count-only omission row makes a truncated ten-target list
+explicit. URLs and titles are not copied into those rows.
 Plain errors also print up to ten terminal-safe `Next steps:` from the same
 effective remediation policy exposed by JSON; multiline, control-bearing, and
 oversized entries are omitted.

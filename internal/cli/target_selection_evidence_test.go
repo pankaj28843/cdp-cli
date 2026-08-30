@@ -213,6 +213,9 @@ func TestPlainTargetErrorsRenderBoundedExactRecoveryRows(t *testing.T) {
 			if !strings.Contains(got, test.heading) || !strings.Contains(got, test.firstRow) {
 				t.Fatalf("plain error = %q, want heading %q and row %q", got, test.heading, test.firstRow)
 			}
+			if !strings.Contains(got, "  ... 2 more targets omitted\n") {
+				t.Fatalf("plain error = %q, want bounded omission summary", got)
+			}
 			if strings.Contains(got, test.eleventhID) || strings.Contains(got, "secret.example") || strings.Contains(got, "private title") {
 				t.Fatalf("plain error exceeded bounds or exposed content: %q", got)
 			}

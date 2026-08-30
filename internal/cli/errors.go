@@ -76,11 +76,11 @@ func plainTargetRecoveryLines(data any) []string {
 	if !ok {
 		return nil
 	}
-	lines := plainTargetRecoverySection(fields, "candidate_ids", "candidate_short_ids", "candidate_indexes", "Candidate targets:")
-	return append(lines, plainTargetRecoverySection(fields, "available_ids", "available_short_ids", "available_indexes", "Available targets:")...)
+	lines := plainTargetRecoverySection(fields, "candidate_ids", "candidate_short_ids", "candidate_indexes", "candidate_count", "candidate_truncated", "Candidate targets:")
+	return append(lines, plainTargetRecoverySection(fields, "available_ids", "available_short_ids", "available_indexes", "available_count", "available_truncated", "Available targets:")...)
 }
 
-func plainTargetRecoverySection(fields map[string]any, idKey, shortIDKey, indexKey, heading string) []string {
+func plainTargetRecoverySection(fields map[string]any, idKey, shortIDKey, indexKey, countKey, truncatedKey, heading string) []string {
 	ids, ok := fields[idKey].([]string)
 	if !ok || len(ids) == 0 {
 		return nil
@@ -107,6 +107,11 @@ func plainTargetRecoverySection(fields map[string]any, idKey, shortIDKey, indexK
 	}
 	if len(rows) == 0 {
 		return nil
+	}
+	if truncated, ok := fields[truncatedKey].(bool); ok && truncated && len(rows) == len(ids) {
+		if count, ok := fields[countKey].(int); ok && count > len(ids) {
+			rows = append(rows, fmt.Sprintf("  ... %d more targets omitted", count-len(ids)))
+		}
 	}
 	return append([]string{heading}, rows...)
 }

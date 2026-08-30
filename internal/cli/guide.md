@@ -207,6 +207,10 @@ and JQ retain the structured `remediation_commands` array. Preserve page
 artifacts as paths; do not put screenshots, page text, cookies, headers,
 tokens, or traces into shared logs or committed fixtures.
 
+Plain target-selection errors list at most ten safe target IDs and append a
+count-only `... N more targets omitted` row when the compatible set was larger.
+Use the following discovery next step to inspect the complete current list.
+
 ## Observation and raw CDP
 
 Use cdp events stream for bounded JSONL observation with isolated event
