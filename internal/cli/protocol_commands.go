@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -586,6 +587,9 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 
 				result, err := session.Exec(ctx, args[0], rawParams)
 				if err != nil {
+					if protocolErr := protocolCommandError(args[0], "target", target.TargetID, err); protocolErr != nil {
+						return protocolErr
+					}
 					return commandError(
 						"connection_failed",
 						"connection",
@@ -627,6 +631,9 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 
 			result, err := cdp.ExecWithClient(ctx, client, args[0], rawParams)
 			if err != nil {
+				if protocolErr := protocolCommandError(args[0], "browser", "", err); protocolErr != nil {
+					return protocolErr
+				}
 				return commandError(
 					"connection_failed",
 					"connection",
@@ -662,6 +669,36 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
 	cmd.Flags().BoolVar(&validate, "validate", false, "validate method, browser/target scope, and params against selected protocol metadata before executing")
 	return cmd
+}
+
+func protocolCommandError(method, scope, targetID string, err error) error {
+	var protocolErr *cdp.ProtocolError
+	if !errors.As(err, &protocolErr) {
+		return nil
+	}
+	if strings.TrimSpace(protocolErr.Method) != "" {
+		method = protocolErr.Method
+	}
+	data := map[string]any{
+		"scope":            scope,
+		"method":           method,
+		"protocol_code":    protocolErr.Code,
+		"protocol_message": protocolErr.Message,
+	}
+	if targetID != "" {
+		data["target_id"] = targetID
+	}
+	return commandErrorWithData(
+		"cdp_command_failed",
+		"protocol",
+		fmt.Sprintf("Chrome rejected %s: %s (%d)", method, protocolErr.Message, protocolErr.Code),
+		ExitCheckFailed,
+		[]string{
+			"cdp protocol describe " + method + " --json",
+			"cdp protocol examples " + method + " --json",
+		},
+		data,
+	)
 }
 
 func (a *app) attachProtocolTargetSession(ctx context.Context, targetID, urlContains, titleContains, targetType string) (*cdp.PageSession, cdp.TargetInfo, error) {

@@ -45,6 +45,17 @@ func errorCatalog() []errorInfo {
 			},
 		},
 		{
+			Code:     "cdp_command_failed",
+			Class:    "protocol",
+			ExitCode: ExitCheckFailed,
+			Message:  "Chrome rejected a DevTools Protocol command",
+			Meaning:  "The browser connection worked, but Chrome rejected the requested CDP method or parameters.",
+			RemediationCommands: []string{
+				"cdp protocol describe <method> --json",
+				"cdp protocol examples <method> --json",
+			},
+		},
+		{
 			Code:     "permission_pending",
 			Class:    "permission",
 			ExitCode: ExitPermission,

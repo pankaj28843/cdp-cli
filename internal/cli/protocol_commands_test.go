@@ -317,6 +317,63 @@ func TestProtocolExecJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExecClassifiesChromeRejection(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		args   []string
+		target string
+	}{
+		{name: "browser", method: "Browser.notReal"},
+		{name: "target", method: "Runtime.notReal", args: []string{"--target", "page-1"}, target: "page-1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newFakeCDPServer(t, []map[string]any{
+				{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+			})
+			defer server.Close()
+			startFakeDaemon(t, server, "browser_url")
+
+			args := append([]string{"protocol", "exec", test.method}, test.args...)
+			args = append(args, "--params", "{}", "--json")
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitCheckFailed {
+				t.Fatalf("protocol exec exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+			}
+
+			var got struct {
+				OK                  bool     `json:"ok"`
+				Code                string   `json:"code"`
+				Class               string   `json:"err_class"`
+				RemediationCommands []string `json:"remediation_commands"`
+				Data                struct {
+					Scope           string `json:"scope"`
+					TargetID        string `json:"target_id"`
+					Method          string `json:"method"`
+					ProtocolCode    int    `json:"protocol_code"`
+					ProtocolMessage string `json:"protocol_message"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("decode protocol rejection: %v; output=%s", err, out.String())
+			}
+			if got.OK || got.Code != "cdp_command_failed" || got.Class != "protocol" {
+				t.Fatalf("protocol rejection envelope = %+v", got)
+			}
+			if got.Data.Method != test.method || got.Data.ProtocolCode != -32601 || got.Data.ProtocolMessage != "method not found" || got.Data.Scope != test.name || got.Data.TargetID != test.target {
+				t.Fatalf("protocol rejection data = %+v, want method/code/message/scope/target", got.Data)
+			}
+			for _, remediation := range got.RemediationCommands {
+				if strings.Contains(remediation, "doctor") || strings.Contains(remediation, "daemon") {
+					t.Fatalf("protocol rejection remediation %q treats Chrome rejection as connectivity failure", remediation)
+				}
+			}
+		})
+	}
+}
+
 func TestProtocolExecTargetScopedJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},

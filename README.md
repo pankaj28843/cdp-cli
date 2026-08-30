@@ -174,6 +174,12 @@ execution. `protocol exec --validate --official` validates against the official
 schema, but execution still runs through the daemon. Omit `--validate` to
 preserve the forward-compatible raw CDP escape hatch.
 
+When Chrome rejects a raw command, JSON output uses
+`code: "cdp_command_failed"`, `err_class: "protocol"`, and exit 1 while
+preserving the method plus Chrome's numeric code and message under `data`.
+This is a command/parameter problem, not a daemon connectivity failure; use the
+reported `protocol describe` and `protocol examples` remediation commands.
+
 For target-scoped raw execution, `--target-index N` selects the 1-based page
 order shown by `cdp pages`. That page-only order is deterministic ascending
 full target ID, independent of Chrome's response order. The index cannot be

@@ -115,9 +115,12 @@ type RPCResponse struct {
 }
 
 type RPCError struct {
-	Code    string `json:"code,omitempty"`
-	Class   string `json:"class,omitempty"`
-	Message string `json:"message"`
+	Code            string `json:"code,omitempty"`
+	Class           string `json:"class,omitempty"`
+	Message         string `json:"message"`
+	ProtocolCode    *int   `json:"protocol_code,omitempty"`
+	ProtocolMethod  string `json:"protocol_method,omitempty"`
+	ProtocolMessage string `json:"protocol_message,omitempty"`
 }
 
 func (e *RPCError) Error() string {
@@ -1158,6 +1161,13 @@ func errorFromRPCResponse(resp RPCResponse) error {
 		if strings.TrimSpace(rpcErr.Message) == "" {
 			rpcErr.Message = resp.Error
 		}
+		if rpcErr.ProtocolCode != nil {
+			return &cdp.ProtocolError{
+				Method:  rpcErr.ProtocolMethod,
+				Code:    *rpcErr.ProtocolCode,
+				Message: rpcErr.ProtocolMessage,
+			}
+		}
 		if err := rpcContextError(rpcErr.Code, rpcErr.Class, rpcErr.Error()); err != nil {
 			return err
 		}
@@ -1674,6 +1684,15 @@ func rpcErrorResponseForError(code, class string, err error) RPCResponse {
 	}
 	if errors.Is(err, context.Canceled) {
 		return rpcErrorResponse("canceled", "canceled", context.Canceled.Error())
+	}
+	var protocolErr *cdp.ProtocolError
+	if errors.As(err, &protocolErr) {
+		protocolCode := protocolErr.Code
+		response := rpcErrorResponse("cdp_command_failed", "protocol", protocolErr.Error())
+		response.ErrorEnvelope.ProtocolCode = &protocolCode
+		response.ErrorEnvelope.ProtocolMethod = protocolErr.Method
+		response.ErrorEnvelope.ProtocolMessage = protocolErr.Message
+		return response
 	}
 	return rpcErrorResponse(code, class, err.Error())
 }

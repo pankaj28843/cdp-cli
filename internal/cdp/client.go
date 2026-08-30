@@ -56,9 +56,19 @@ type Event struct {
 	Params    json.RawMessage `json:"params,omitempty"`
 }
 
-type cdpError struct {
+// ProtocolError is a command rejection returned by Chrome's DevTools Protocol.
+// It is distinct from transport failures: Chrome was reached and answered.
+type ProtocolError struct {
+	Method  string `json:"-"`
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+func (e *ProtocolError) Error() string {
+	if e == nil {
+		return "cdp command failed"
+	}
+	return fmt.Sprintf("cdp %s failed: %s (%d)", e.Method, e.Message, e.Code)
 }
 
 type response struct {
@@ -67,7 +77,7 @@ type response struct {
 	Method    string          `json:"method,omitempty"`
 	Params    json.RawMessage `json:"params,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
-	Error     *cdpError       `json:"error,omitempty"`
+	Error     *ProtocolError  `json:"error,omitempty"`
 }
 
 type pendingResponse struct {
@@ -217,7 +227,8 @@ func (c *Client) CallSession(ctx context.Context, sessionID, method string, para
 	}
 	resp := pending.resp
 	if resp.Error != nil {
-		return fmt.Errorf("cdp %s failed: %s (%d)", method, resp.Error.Message, resp.Error.Code)
+		resp.Error.Method = method
+		return resp.Error
 	}
 	if result == nil {
 		return nil
