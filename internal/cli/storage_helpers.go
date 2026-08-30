@@ -222,8 +222,8 @@ func (a *app) attachStoragePageSession(ctx context.Context, cmd *cobra.Command, 
 
 func addStorageTargetFlags(cmd *cobra.Command, targetID, urlContains, titleContains *string) {
 	cmd.Flags().StringVar(targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	addInputTargetIndexFlag(cmd)
 }
 

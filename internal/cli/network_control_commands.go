@@ -113,8 +113,8 @@ func (a *app) newNetworkBlockCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&patterns, "pattern", nil, "explicit CDP URL pattern to block; repeat for multiple patterns")
 	cmd.Flags().DurationVar(&duration, "duration", 10*time.Second, "positive bounded blocking window")
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based existing page target index; workers do not consume indexes")
 	return cmd
 }
@@ -200,8 +200,8 @@ func (a *app) newNetworkMockCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&rawRules, "rule", nil, "bounded JSON mock rule; repeat for multiple rules")
 	cmd.Flags().DurationVar(&duration, "duration", 10*time.Second, "positive bounded mocking window")
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based existing page target index; workers do not consume indexes")
 	return cmd
 }

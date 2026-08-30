@@ -810,8 +810,8 @@ func (a *app) newFormValuesCommand() *cobra.Command {
 		return a.render(ctx, fmt.Sprintf("form\t%d controls", result.Count), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().BoolVar(&includeHidden, "include-hidden", false, "include hidden form controls such as UI-library measurement clones")
 	addInputTargetIndexFlag(cmd)
 	return cmd
@@ -846,8 +846,8 @@ func (a *app) newFormGetCommand() *cobra.Command {
 		return a.render(ctx, result.Control.Value, report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	addInputTargetIndexFlag(cmd)
 	return cmd
 }
@@ -913,8 +913,8 @@ func (a *app) newAssertValueCommand() *cobra.Command {
 		return a.runAssertValueCommand(cmd, args[0], args[1], mode, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
@@ -938,8 +938,8 @@ func (a *app) newAssertTextCommand() *cobra.Command {
 		return a.runAssertTextCommand(cmd, query, expected, mode, locatorOpts, len(args) == 2, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "contains", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
@@ -1224,8 +1224,8 @@ func (a *app) newAssertURLCommand() *cobra.Command {
 		return a.runAssertPageCommand(cmd, "url", args[0], mode, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "contains", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	return cmd
@@ -1238,8 +1238,8 @@ func (a *app) newAssertTitleCommand() *cobra.Command {
 		return a.runAssertPageCommand(cmd, "title", args[0], mode, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "contains", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	return cmd
@@ -1348,8 +1348,8 @@ func (a *app) newAssertCountCommand() *cobra.Command {
 		return a.runAssertCountCommand(cmd, args[0], expected, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -1366,8 +1366,8 @@ func (a *app) newAssertAttributeCommand() *cobra.Command {
 		return a.runAssertAttributeCommand(cmd, args[0], args[1], args[2], mode, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
@@ -1386,8 +1386,8 @@ func (a *app) newAssertClassCommand() *cobra.Command {
 		return a.runAssertClassCommand(cmd, args[0], className, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -1401,8 +1401,8 @@ func (a *app) newAssertFocusedCommand() *cobra.Command {
 		return a.runAssertFocusedCommand(cmd, args[0], locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -1420,8 +1420,8 @@ func (a *app) newAssertCSSCommand() *cobra.Command {
 		return a.runAssertCSSCommand(cmd, args[0], property, args[2], mode, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
@@ -1440,8 +1440,8 @@ func (a *app) newAssertRoleCommand() *cobra.Command {
 		return a.runAssertAccessibleCommand(cmd, "role", args[0], expected, mode, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
@@ -1460,8 +1460,8 @@ func (a *app) newAssertNameCommand() *cobra.Command {
 		return a.runAssertAccessibleCommand(cmd, "name", args[0], expected, mode, locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&mode, "mode", "exact", "match mode: exact, contains, or regex")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
@@ -1481,8 +1481,8 @@ func (a *app) newAssertAriaSnapshotCommand() *cobra.Command {
 		return a.runAssertAriaSnapshotCommand(cmd, expected, mode, targetID, urlContains, titleContains, selector, depth, limit, includeIgnored, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector that names the intended snapshot scope")
 	cmd.Flags().IntVar(&depth, "depth", 4, "maximum accessibility tree depth to include")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum snapshot lines to return")
@@ -2543,8 +2543,8 @@ func (a *app) newAssertVisibleCommand() *cobra.Command {
 		return a.runAssertVisibilityCommand(cmd, args[0], "visible", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2558,8 +2558,8 @@ func (a *app) newAssertAttachedCommand() *cobra.Command {
 		return a.runAssertAttachmentCommand(cmd, args[0], "attached", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2573,8 +2573,8 @@ func (a *app) newAssertDetachedCommand() *cobra.Command {
 		return a.runAssertAttachmentCommand(cmd, args[0], "detached", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2588,8 +2588,8 @@ func (a *app) newAssertHiddenCommand() *cobra.Command {
 		return a.runAssertVisibilityCommand(cmd, args[0], "hidden", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2603,8 +2603,8 @@ func (a *app) newAssertInViewportCommand() *cobra.Command {
 		return a.runAssertViewportCommand(cmd, args[0], locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2618,8 +2618,8 @@ func (a *app) newAssertEnabledCommand() *cobra.Command {
 		return a.runAssertEnabledCommand(cmd, args[0], "enabled", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2633,8 +2633,8 @@ func (a *app) newAssertDisabledCommand() *cobra.Command {
 		return a.runAssertEnabledCommand(cmd, args[0], "disabled", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2648,8 +2648,8 @@ func (a *app) newAssertEditableCommand() *cobra.Command {
 		return a.runAssertEditableCommand(cmd, args[0], "editable", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2663,8 +2663,8 @@ func (a *app) newAssertReadonlyCommand() *cobra.Command {
 		return a.runAssertEditableCommand(cmd, args[0], "readonly", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2678,8 +2678,8 @@ func (a *app) newAssertCheckedCommand() *cobra.Command {
 		return a.runAssertCheckedCommand(cmd, args[0], "checked", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2693,8 +2693,8 @@ func (a *app) newAssertUncheckedCommand() *cobra.Command {
 		return a.runAssertCheckedCommand(cmd, args[0], "unchecked", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd
@@ -2708,8 +2708,8 @@ func (a *app) newAssertIndeterminateCommand() *cobra.Command {
 		return a.runAssertCheckedCommand(cmd, args[0], "indeterminate", locatorOpts, targetID, urlContains, titleContains, poll)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().DurationVar(&poll, "poll", 250*time.Millisecond, "poll interval while retrying the assertion")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	return cmd

@@ -132,8 +132,8 @@ state=pattern values, for example:
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix to inspect when text/title/url are not supplied")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "inspect the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "inspect the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "inspect the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "inspect the unique page whose title contains this text")
 	cmd.Flags().StringVar(&textInput, "text", "", "page text to classify without attaching to a browser")
 	cmd.Flags().StringVar(&titleInput, "title", "", "page title to classify without attaching to a browser")
 	cmd.Flags().StringVar(&urlInput, "url", "", "page URL to classify without attaching to a browser")

@@ -980,6 +980,36 @@ fi
 require_artifact "$state_dir/protocol-shot.png"
 protocol_index_open_output="$("$binary" open "$app_url?protocol-index=1" --new-tab --run-id demo-run --task-id protocol-index --root-task-id protocol-index --state-dir "$state_dir/cdp-state" --json)"
 protocol_index_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$protocol_index_open_output")"
+duplicate_selection_open_output="$("$binary" open "$app_url?protocol-index=2" --new-tab --run-id demo-run --task-id duplicate-selection --root-task-id duplicate-selection --state-dir "$state_dir/cdp-state" --json)"
+duplicate_selection_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$duplicate_selection_open_output")"
+selection_pages_json="$("$binary" pages --state-dir "$state_dir/cdp-state" --json)"
+protocol_index_short_id="$(jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .short_id' <<<"$selection_pages_json")"
+duplicate_selection_short_id="$(jq -er --arg id "$duplicate_selection_target_id" '.pages[] | select(.id == $id) | .short_id' <<<"$selection_pages_json")"
+for selector_flag in --url-contains --title-contains; do
+  selector_value="protocol-index="
+  if [[ "$selector_flag" == "--title-contains" ]]; then
+    selector_value="cdp-cli demo app"
+  fi
+  set +e
+  ambiguous_selector_output="$("$binary" eval 'document.title' "$selector_flag" "$selector_value" --state-dir "$state_dir/cdp-state" --json)"
+  ambiguous_selector_code=$?
+  set -e
+  if [[ "$ambiguous_selector_code" -ne 2 ]]; then
+    echo "installed duplicate-page selector exit code ($selector_flag): $ambiguous_selector_code" >&2
+    echo "$ambiguous_selector_output" >&2
+    exit 1
+  fi
+  jq -e --arg first "$protocol_index_short_id" --arg second "$duplicate_selection_short_id" '
+    .ok == false and .code == "ambiguous_target" and
+    (.data.candidate_count >= 2) and
+    (.data.candidate_short_ids | index($first) != null) and
+    (.data.candidate_short_ids | index($second) != null) and
+    (.data.candidate_truncated | type == "boolean") and
+    ((.data | has("url")) | not) and ((.data | has("title")) | not)
+  ' <<<"$ambiguous_selector_output" >/dev/null
+done
+"$binary" page close --target "$duplicate_selection_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .target_gone == true' >/dev/null
 protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .index')"
 test "$protocol_index" -gt 0
 diagnostic_page_count_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"

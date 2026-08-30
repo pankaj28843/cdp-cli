@@ -308,8 +308,8 @@ func (a *app) newWorkflowActionCaptureCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&include, "include", "network,websocket,console,dom,text", "comma-separated collectors: network,websocket,console,dom,text,a11y,screenshot,all")
 	cmd.Flags().StringVar(&action, "action", "", "action shorthand: click:<selector>, type:<text>, insert-text:<text>, or press:<key>")

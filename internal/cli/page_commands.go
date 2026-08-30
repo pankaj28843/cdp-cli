@@ -394,8 +394,8 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "select the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "select the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "select the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "select the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
@@ -444,8 +444,8 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
 	return cmd
@@ -520,8 +520,8 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
@@ -620,8 +620,8 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&waitGone, "wait-gone", true, "wait until target listing no longer contains the page")
 	cmd.Flags().IntVar(&maxAttempts, "max-attempts", defaultPageCloseMaxAttempts, "maximum close attempts before reporting failure")
@@ -1561,8 +1561,8 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
@@ -2162,20 +2162,28 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 		return onePageTarget(matches, pages, fmt.Sprintf("target %q", targetID))
 	}
 	if urlContains != "" {
+		matches := make([]cdp.TargetInfo, 0)
 		for _, page := range pages {
 			if strings.Contains(strings.ToLower(page.URL), strings.ToLower(urlContains)) {
-				return page, nil
+				matches = append(matches, page)
 			}
 		}
-		return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page URL contains %q", urlContains), pages)
+		if len(matches) == 0 {
+			return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page URL contains %q", urlContains), pages)
+		}
+		return onePageTarget(matches, pages, fmt.Sprintf("page URL containing %q", urlContains))
 	}
 	if titleContains != "" {
+		matches := make([]cdp.TargetInfo, 0)
 		for _, page := range pages {
 			if strings.Contains(strings.ToLower(page.Title), strings.ToLower(titleContains)) {
-				return page, nil
+				matches = append(matches, page)
 			}
 		}
-		return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page title contains %q", titleContains), pages)
+		if len(matches) == 0 {
+			return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page title contains %q", titleContains), pages)
+		}
+		return onePageTarget(matches, pages, fmt.Sprintf("page title containing %q", titleContains))
 	}
 	return onePageTarget(pages, pages, "default page")
 }

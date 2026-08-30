@@ -509,8 +509,8 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&rawURL, "url", "", "open this URL before collecting the debug bundle")
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes and this cannot be combined with --url, --target, --url-contains, or --title-contains")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "optional directory for debug bundle artifacts")
 	cmd.Flags().DurationVar(&since, "since", 5*time.Second, "how long to collect evidence after navigation/attach")

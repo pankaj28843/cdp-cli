@@ -43,9 +43,10 @@ changed.
     cdp click Save --strategy auto --wait-text Saved --json
     cdp snapshot --selector body --limit 50 --json
 
-Prefer stable semantic locators and exact target IDs, unique ID prefixes, or URL filters. `cdp pages --json` publishes the full `id` plus a copy-ready
-uppercase eight-character `short_id`; target prefixes are case-insensitive and
-must identify exactly one target. Page rows also publish the 1-based `index`
+Prefer stable semantic locators and exact target IDs, unique ID prefixes, or
+URL/title filters. Every page selector must identify exactly one target. `cdp
+pages --json` publishes the full `id` plus a copy-ready uppercase eight-character
+`short_id`; target prefixes are case-insensitive. Page rows also publish the 1-based `index`
 accepted by `--target-index`. Ambiguous and not-found selector errors expose
 only bounded candidate or available short IDs and counts under `.data`, never
 page URLs or titles. Use

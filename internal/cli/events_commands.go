@@ -88,8 +88,8 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 		return a.render(ctx, fmt.Sprintf("events\t%d", len(events)), map[string]any{"ok": true, "target": pageRow(target), "events": events, "tap": map[string]any{"duration": durationString(duration), "max_events": maxEvents, "target_index": targetIndex, "truncated": maxEvents > 0 && len(events) >= maxEvents, "session_bound": true, "foreign_events_dropped": foreignEventsDropped, "ready_file": readyFile}})
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&enable, "enable", "page,network,runtime,log", "comma-separated CDP target domains to enable (for example page,network,runtime,log,DOM,Performance)")
 	cmd.Flags().StringVar(&match, "match", "", "comma-separated event method names to keep")

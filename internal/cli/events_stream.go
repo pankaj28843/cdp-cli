@@ -46,8 +46,8 @@ func (a *app) newEventsStreamCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&options.urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&options.titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&options.urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&options.titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&options.targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&options.enable, "enable", "page,network,runtime,log", "comma-separated CDP target domains to enable (for example page,network,runtime,log,DOM,Performance)")
 	cmd.Flags().StringVar(&options.match, "match", "", "comma-separated event method names to keep")
