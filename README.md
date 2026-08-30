@@ -165,6 +165,8 @@ Protocol discovery uses the selected live Chrome schema by default. Add
 `compat` for browser-free online discovery from the official browser and
 JavaScript tip-of-tree schemas; output preserves both source URLs. The official
 source requires network access and can differ from the selected live Chrome.
+Without `--json`, `protocol describe` prints a compact actionable signature
+with description, flags, typed required/optional parameters, and returns.
 
 Add `--validate` to check the method, browser/target scope, required parameters,
 and unknown parameters against the selected protocol before attachment or

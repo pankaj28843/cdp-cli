@@ -227,7 +227,8 @@ protocol before attachment or execution. Protocol discovery follows the live
 browser by default; add `--official` for browser-free online discovery from the
 official browser+JavaScript tip-of-tree schema. `protocol exec --validate
 --official` uses that schema for validation, while execution still requires the
-daemon. Omit `--validate` for intentionally permissive raw CDP.
+daemon. Plain `protocol describe` includes an actionable typed parameter and
+return signature. Omit `--validate` for intentionally permissive raw CDP.
 For target-scoped raw execution, `--target-index N` selects the 1-based page
 target order used by `cdp pages`; it is mutually exclusive with
 `--target`, `--url-contains`, `--title-contains`, and

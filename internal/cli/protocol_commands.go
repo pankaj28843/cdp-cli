@@ -166,7 +166,7 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 					[]string{"cdp protocol search <query> --json", "cdp protocol domains --json"},
 				)
 			}
-			human := fmt.Sprintf("%s\t%s", desc.Kind, desc.Path)
+			human := formatProtocolDescription(desc)
 			return a.render(ctx, human, map[string]any{
 				"ok":     true,
 				"entity": desc,
@@ -174,6 +174,83 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+type protocolDescriptionField struct {
+	Name        string                     `json:"name"`
+	Type        string                     `json:"type"`
+	Ref         string                     `json:"$ref"`
+	Description string                     `json:"description"`
+	Optional    bool                       `json:"optional"`
+	Items       *protocolDescriptionField  `json:"items"`
+	Parameters  []protocolDescriptionField `json:"parameters"`
+	Returns     []protocolDescriptionField `json:"returns"`
+}
+
+func formatProtocolDescription(desc cdp.EntityDescription) string {
+	lines := []string{fmt.Sprintf("%s\t%s", desc.Kind, desc.Path)}
+	if description := strings.Join(strings.Fields(desc.Description), " "); description != "" {
+		lines = append(lines, description)
+	}
+	flags := make([]string, 0, 2)
+	if desc.Experimental {
+		flags = append(flags, "experimental")
+	}
+	if desc.Deprecated {
+		flags = append(flags, "deprecated")
+	}
+	if len(flags) > 0 {
+		lines = append(lines, "Flags: "+strings.Join(flags, ", "))
+	}
+
+	var schema protocolDescriptionField
+	if len(desc.Schema) == 0 || json.Unmarshal(desc.Schema, &schema) != nil {
+		return strings.Join(lines, "\n")
+	}
+	if desc.Kind == "type" && (schema.Type != "" || schema.Ref != "") {
+		lines = append(lines, "", "Type: "+formatProtocolDescriptionType(schema))
+	}
+	lines = appendProtocolDescriptionFields(lines, "Parameters:", schema.Parameters, true)
+	lines = appendProtocolDescriptionFields(lines, "Returns:", schema.Returns, false)
+	return strings.Join(lines, "\n")
+}
+
+func appendProtocolDescriptionFields(lines []string, heading string, fields []protocolDescriptionField, labelOptionality bool) []string {
+	if len(fields) == 0 {
+		return lines
+	}
+	lines = append(lines, "", heading)
+	for _, field := range fields {
+		line := fmt.Sprintf("  %s: %s", field.Name, formatProtocolDescriptionType(field))
+		if labelOptionality {
+			if field.Optional {
+				line += " (optional)"
+			} else {
+				line += " (required)"
+			}
+		}
+		lines = append(lines, line)
+		if description := strings.Join(strings.Fields(field.Description), " "); description != "" {
+			lines = append(lines, "    "+description)
+		}
+	}
+	return lines
+}
+
+func formatProtocolDescriptionType(field protocolDescriptionField) string {
+	if field.Type == "array" {
+		if field.Items == nil {
+			return "array"
+		}
+		return "array<" + formatProtocolDescriptionType(*field.Items) + ">"
+	}
+	if field.Type != "" {
+		return field.Type
+	}
+	if field.Ref != "" {
+		return field.Ref
+	}
+	return "object"
 }
 
 func (a *app) newProtocolExamplesCommand() *cobra.Command {
