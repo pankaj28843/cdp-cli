@@ -1158,7 +1158,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Open page targets from the selected browser connection.",
 			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when page targets were listed."},
-				{Name: "pages", Type: "array<page>", Required: true, Description: "Page rows with full id, uppercase eight-character short_id, type, title, url, and attachment state."},
+				{Name: "pages", Type: "array<page>", Required: true, Description: "Page rows with full id, uppercase eight-character short_id, 1-based page-only index in listed order, type, title, url, and attachment state."},
 				{Name: "budget", Type: "browser_resource_budget", Required: true, Description: "Safe tab/window budget summary computed from target metadata."},
 			}, false),
 		},
@@ -1167,7 +1167,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Browser targets from the selected browser connection.",
 			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when targets were listed."},
-				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with id, type, title, url, and attachment state."},
+				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with full id, uppercase eight-character short_id, type, title, url, and attachment state."},
 			}, false),
 		},
 		"open": {

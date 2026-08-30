@@ -648,12 +648,13 @@ func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titl
 			protocolTargetRemediation(targetType),
 		)
 	}
-	return cdp.TargetInfo{}, commandError(
+	return cdp.TargetInfo{}, commandErrorWithData(
 		"ambiguous_target",
 		"usage",
 		fmt.Sprintf("%s matched %d targets; pass a longer --target or add --url-contains/--title-contains", label, len(matches)),
 		ExitUsage,
 		protocolTargetRemediation(targetType),
+		ambiguousTargetEvidence(matches),
 	)
 }
 

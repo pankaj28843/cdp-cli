@@ -234,9 +234,9 @@ jq -e '.ok == false and .code == "invalid_browser_mode" and (.message | contains
 "$binary" daemon logs --state-dir "$state_dir/cdp-state" --tail 20 --json \
   | jq -e '.ok == true and (.entries[] | select(.event == "rpc_listening"))' >/dev/null
 "$binary" targets --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.targets | type == "array")' >/dev/null
+  | jq -e '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.targets | type == "array") and all(.targets[]; .short_id | type == "string" and length > 0 and length <= 8 and . == ascii_upcase)' >/dev/null
 "$binary" pages --state-dir "$state_dir/cdp-state" --json \
-  | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url and (.short_id | type == "string" and length > 0 and length <= 8 and . == ascii_upcase)))' >/dev/null
+  | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url and (.index | type == "number" and . > 0) and (.short_id | type == "string" and length > 0 and length <= 8 and . == ascii_upcase)))' >/dev/null
 "$binary" pages --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
 set +e
@@ -964,7 +964,7 @@ fi
 require_artifact "$state_dir/protocol-shot.png"
 protocol_index_open_output="$("$binary" open "$app_url?protocol-index=1" --new-tab --run-id demo-run --task-id protocol-index --root-task-id protocol-index --state-dir "$state_dir/cdp-state" --json)"
 protocol_index_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$protocol_index_open_output")"
-protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .index')"
 test "$protocol_index" -gt 0
 diagnostic_page_count_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
 diagnostic_verify_index_report="$state_dir/workflow-verify-target-index.json"

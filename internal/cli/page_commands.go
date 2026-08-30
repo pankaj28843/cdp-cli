@@ -156,6 +156,7 @@ func targetRows(targets []cdp.TargetInfo) []map[string]any {
 	for _, target := range targets {
 		rows = append(rows, map[string]any{
 			"id":                 target.TargetID,
+			"short_id":           shortTargetID(target.TargetID),
 			"type":               target.Type,
 			"title":              target.Title,
 			"url":                target.URL,
@@ -228,11 +229,15 @@ func firstNonEmpty(values ...string) string {
 
 func pageRows(targets []cdp.TargetInfo) []map[string]any {
 	pages := make([]map[string]any, 0, len(targets))
+	index := 0
 	for _, target := range targets {
 		if target.Type != "page" {
 			continue
 		}
-		pages = append(pages, pageRow(target))
+		index++
+		row := pageRow(target)
+		row["index"] = index
+		pages = append(pages, row)
 	}
 	return pages
 }
@@ -260,6 +265,23 @@ func shortTargetID(targetID string) string {
 func targetIDMatchesPrefix(targetID, prefix string) bool {
 	prefix = strings.TrimSpace(prefix)
 	return prefix != "" && strings.HasPrefix(strings.ToUpper(targetID), strings.ToUpper(prefix))
+}
+
+func ambiguousTargetEvidence(matches []cdp.TargetInfo) map[string]any {
+	const limit = 10
+	count := len(matches)
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	shortIDs := make([]string, 0, len(matches))
+	for _, target := range matches {
+		shortIDs = append(shortIDs, shortTargetID(target.TargetID))
+	}
+	return map[string]any{
+		"candidate_count":     count,
+		"candidate_short_ids": shortIDs,
+		"candidate_truncated": count > limit,
+	}
 }
 
 func (a *app) newPageCommand() *cobra.Command {
@@ -2173,12 +2195,13 @@ func onePageTarget(matches []cdp.TargetInfo, label string) (cdp.TargetInfo, erro
 	case 1:
 		return matches[0], nil
 	default:
-		return cdp.TargetInfo{}, commandError(
+		return cdp.TargetInfo{}, commandErrorWithData(
 			"ambiguous_target",
 			"usage",
 			fmt.Sprintf("%s matched %d pages; pass a longer --target", label, len(matches)),
 			ExitUsage,
 			[]string{"cdp pages --json", "cdp snapshot --target <target-id> --json"},
+			ambiguousTargetEvidence(matches),
 		)
 	}
 }
