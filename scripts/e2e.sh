@@ -339,7 +339,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" schema headless-security --json | jq -e '.ok == true and .schema.name == "headless-security" and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("details")) and (.schema.fields | map(.name) | index("next_commands"))' >/dev/null
 "$binary" schema version --json | jq -e '.ok == true and .schema.name == "version" and (.schema.fields | map(.name) | index("version"))' >/dev/null
 "$binary" schema guide --json | jq -e '.ok == true and .schema.name == "guide" and (.schema.fields | map(.name) | index("schema_version")) and (.schema.fields | map(.name) | index("content")) and (.schema.fields | map(.name) | index("path"))' >/dev/null
-"$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages")) and (.schema.fields | map(.name) | index("budget")) and (.schema.fields | map(.name) | index("retry_policy")) and (.schema.fields | map(.name) | index("attempt_count"))' >/dev/null
+"$binary" schema pages --json | jq -e '.ok == true and .schema.name == "pages" and (.schema.fields | map(.name) | index("pages")) and (.schema.fields[] | select(.name == "index_order" and .required == true and (.description | contains("target_id_ascending")) and (.description | contains("renumber")))) and (.schema.fields | map(.name) | index("budget")) and (.schema.fields | map(.name) | index("retry_policy")) and (.schema.fields | map(.name) | index("attempt_count"))' >/dev/null
 "$binary" schema targets --json | jq -e '.ok == true and .schema.name == "targets" and (.schema.fields | map(.name) | index("targets")) and (.schema.fields | map(.name) | index("retry_policy")) and (.schema.fields | map(.name) | index("attempt_count"))' >/dev/null
 "$binary" schema open --json | jq -e '.ok == true and .schema.name == "open" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields | map(.name) | index("page")) and (.schema.fields | map(.name) | index("created")) and (.schema.fields | map(.name) | index("reused")) and (.schema.fields | map(.name) | index("reuse")) and (.schema.fields | map(.name) | index("tab_budget")) and (.schema.fields | map(.name) | index("attempts")) and (.schema.fields | map(.name) | index("retry_policy")) and (.schema.fields | map(.name) | index("run_id")) and (.schema.fields | map(.name) | index("task_id")) and (.schema.fields | map(.name) | index("target_task_ids"))' >/dev/null
 "$binary" schema stop-state-classify --json | jq -e '.ok == true and .schema.name == "stop-state-classify" and (.schema.description | contains("target-index")) and (.schema.fields | map(.name) | index("target")) and (.schema.fields | map(.name) | index("target_index")) and (.schema.fields[] | select(.name == "input").description | contains("text byte count"))' >/dev/null
@@ -1082,7 +1082,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
     live_pages_code=$?
     set -e
     if [[ "$live_pages_code" -eq 0 ]]; then
-      printf '%s\n' "$live_pages_output" | jq -e '.ok == true and (.pages | type == "array")' >/dev/null
+      printf '%s\n' "$live_pages_output" | jq -e '.ok == true and .index_order == "target_id_ascending" and (.pages | type == "array") and ([.pages[].id] == ([.pages[].id] | sort))' >/dev/null
     else
       printf '%s\n' "$live_pages_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
@@ -1116,7 +1116,7 @@ elif [[ -n "${CDP_E2E_BROWSER_URL:-}" ]]; then
   "$binary" daemon start --browser-url "$CDP_E2E_BROWSER_URL" --state-dir "$state_dir/live-browser" --json \
     | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
   "$binary" pages --state-dir "$state_dir/live-browser" --json \
-    | jq -e '.ok == true and (.pages | type == "array")' >/dev/null
+    | jq -e '.ok == true and .index_order == "target_id_ascending" and (.pages | type == "array") and ([.pages[].id] == ([.pages[].id] | sort))' >/dev/null
   "$binary" daemon stop --state-dir "$state_dir/live-browser" --json >/dev/null
 fi
 

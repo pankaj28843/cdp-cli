@@ -126,8 +126,9 @@ func TestPagesJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK    bool `json:"ok"`
-		Pages []struct {
+		OK         bool   `json:"ok"`
+		IndexOrder string `json:"index_order"`
+		Pages      []struct {
 			ID       string `json:"id"`
 			Type     string `json:"type"`
 			Title    string `json:"title"`
@@ -138,7 +139,7 @@ func TestPagesJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("pages output is invalid JSON: %v", err)
 	}
-	if !got.OK || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" || got.Pages[0].Type != "page" {
+	if !got.OK || got.IndexOrder != "target_id_ascending" || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" || got.Pages[0].Type != "page" {
 		t.Fatalf("pages output = %+v, want one page target", got)
 	}
 }

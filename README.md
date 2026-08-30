@@ -165,6 +165,9 @@ full target ID, independent of Chrome's response order. The index cannot be
 combined with `--target`, `--url-contains`, `--title-contains`, or
 `--target-type`; omit it for
 browser-scoped execution or use the other selectors for non-page targets.
+Opening or closing a page can still renumber the set; prefer an exact/short ID
+or unique URL/title selector for durable follow-up. Pages JSON reports the
+policy as `index_order: "target_id_ascending"`.
 Page JSON includes the full `id` and an uppercase eight-character `short_id`;
 it also includes the current 1-based page-only `index`. Generic target rows
 publish the same `short_id`. `--target` accepts a unique case-insensitive ID

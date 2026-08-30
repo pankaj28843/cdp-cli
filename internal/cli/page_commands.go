@@ -27,6 +27,7 @@ const (
 	defaultPageClosePollInterval       = 100 * time.Millisecond
 	defaultPageCloseRetryBackoff       = 200 * time.Millisecond
 	defaultPageCleanupCloseConcurrency = 4
+	pageIndexOrder                     = "target_id_ascending"
 )
 
 func (a *app) newTargetsCommand() *cobra.Command {
@@ -98,7 +99,7 @@ func (a *app) newPagesCommand() *cobra.Command {
 				pages = limitRows(pages, limit)
 				return commandRetryResult{
 					Human: strings.Join(pageHumanLines(pages), "\n"),
-					Data:  map[string]any{"ok": true, "pages": pages, "budget": budget},
+					Data:  map[string]any{"ok": true, "pages": pages, "index_order": pageIndexOrder, "budget": budget},
 				}, nil
 			})
 			if err != nil {
