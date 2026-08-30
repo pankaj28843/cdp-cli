@@ -441,7 +441,11 @@ func (a *app) stopHeadlessForProfileSeed(ctx context.Context, stateDir string, m
 }
 
 func (a *app) healHeadlessAfterProfileSeed(ctx context.Context, stateDir string, maintenance *profileSeedMaintenance) error {
-	launch, err := browser.StartManagedChrome(ctx, browser.ManagedOptions{StateDir: stateDir})
+	managedOptions, err := a.managedChromeOptions(stateDir, "")
+	if err != nil {
+		return err
+	}
+	launch, err := browser.StartManagedChrome(ctx, managedOptions)
 	if err != nil {
 		return err
 	}

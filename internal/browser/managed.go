@@ -67,33 +67,38 @@ type ManagedOptions struct {
 	Chrome              string
 	ProfileSeedStrategy string
 	ProfileRefreshAfter time.Duration
+	FingerprintProfile  string
 	Now                 func() time.Time
 }
 
 type ManagedMetadata struct {
-	BrowserMode          string `json:"browser_mode"`
-	ChromePID            int    `json:"chrome_pid,omitempty"`
-	StartedAt            string `json:"started_at,omitempty"`
-	UserDataDir          string `json:"user_data_dir"`
-	DebuggingPort        string `json:"debugging_port,omitempty"`
-	ProfileSeedStrategy  string `json:"profile_seed_strategy"`
-	LastSeededAt         string `json:"last_seeded_at,omitempty"`
-	DefaultProfileCopied bool   `json:"default_profile_copied,omitempty"`
-	CopiedFileCount      int    `json:"copied_file_count,omitempty"`
-	OwnedMarker          string `json:"ownership_token,omitempty"`
-	ProcessStartTime     string `json:"process_start_time,omitempty"`
+	BrowserMode               string   `json:"browser_mode"`
+	ChromePID                 int      `json:"chrome_pid,omitempty"`
+	StartedAt                 string   `json:"started_at,omitempty"`
+	UserDataDir               string   `json:"user_data_dir"`
+	DebuggingPort             string   `json:"debugging_port,omitempty"`
+	ProfileSeedStrategy       string   `json:"profile_seed_strategy"`
+	LastSeededAt              string   `json:"last_seeded_at,omitempty"`
+	DefaultProfileCopied      bool     `json:"default_profile_copied,omitempty"`
+	CopiedFileCount           int      `json:"copied_file_count,omitempty"`
+	FingerprintProfileApplied bool     `json:"fingerprint_profile_applied,omitempty"`
+	FingerprintProfileFields  []string `json:"fingerprint_profile_fields,omitempty"`
+	OwnedMarker               string   `json:"ownership_token,omitempty"`
+	ProcessStartTime          string   `json:"process_start_time,omitempty"`
 }
 
 type ManagedStatus struct {
-	BrowserMode          string `json:"browser_mode"`
-	ChromePID            int    `json:"chrome_pid,omitempty"`
-	StartedAt            string `json:"started_at,omitempty"`
-	UserDataDir          string `json:"user_data_dir"`
-	DebuggingPort        string `json:"debugging_port,omitempty"`
-	ProfileSeedStrategy  string `json:"profile_seed_strategy"`
-	LastSeededAt         string `json:"last_seeded_at,omitempty"`
-	DefaultProfileCopied bool   `json:"default_profile_copied,omitempty"`
-	CopiedFileCount      int    `json:"copied_file_count,omitempty"`
+	BrowserMode               string   `json:"browser_mode"`
+	ChromePID                 int      `json:"chrome_pid,omitempty"`
+	StartedAt                 string   `json:"started_at,omitempty"`
+	UserDataDir               string   `json:"user_data_dir"`
+	DebuggingPort             string   `json:"debugging_port,omitempty"`
+	ProfileSeedStrategy       string   `json:"profile_seed_strategy"`
+	LastSeededAt              string   `json:"last_seeded_at,omitempty"`
+	DefaultProfileCopied      bool     `json:"default_profile_copied,omitempty"`
+	CopiedFileCount           int      `json:"copied_file_count,omitempty"`
+	FingerprintProfileApplied bool     `json:"fingerprint_profile_applied"`
+	FingerprintProfileFields  []string `json:"fingerprint_profile_fields,omitempty"`
 }
 
 type ManagedLaunch struct {
@@ -1052,15 +1057,17 @@ func canceledManagedOwnershipEvidence(evidence ManagedOwnershipEvidence, err err
 
 func ManagedMetadataStatus(metadata ManagedMetadata) ManagedStatus {
 	return ManagedStatus{
-		BrowserMode:          metadata.BrowserMode,
-		ChromePID:            metadata.ChromePID,
-		StartedAt:            metadata.StartedAt,
-		UserDataDir:          metadata.UserDataDir,
-		DebuggingPort:        metadata.DebuggingPort,
-		ProfileSeedStrategy:  metadata.ProfileSeedStrategy,
-		LastSeededAt:         metadata.LastSeededAt,
-		DefaultProfileCopied: metadata.DefaultProfileCopied,
-		CopiedFileCount:      metadata.CopiedFileCount,
+		BrowserMode:               metadata.BrowserMode,
+		ChromePID:                 metadata.ChromePID,
+		StartedAt:                 metadata.StartedAt,
+		UserDataDir:               metadata.UserDataDir,
+		DebuggingPort:             metadata.DebuggingPort,
+		ProfileSeedStrategy:       metadata.ProfileSeedStrategy,
+		LastSeededAt:              metadata.LastSeededAt,
+		DefaultProfileCopied:      metadata.DefaultProfileCopied,
+		CopiedFileCount:           metadata.CopiedFileCount,
+		FingerprintProfileApplied: metadata.FingerprintProfileApplied,
+		FingerprintProfileFields:  append([]string(nil), metadata.FingerprintProfileFields...),
 	}
 }
 
@@ -2394,6 +2401,14 @@ func signalProcess(ctx context.Context, pid int) error {
 }
 
 func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch, error) {
+	var fingerprint *managedFingerprintProfile
+	if strings.TrimSpace(opts.FingerprintProfile) != "" {
+		var err error
+		fingerprint, err = loadManagedFingerprintProfile(opts.FingerprintProfile)
+		if err != nil {
+			return ManagedLaunch{}, fmt.Errorf("load managed fingerprint profile: %w", err)
+		}
+	}
 	reconcile, err := ReconcileManagedProcesses(ctx, opts.StateDir, ManagedProcessReconcileOptions{ReapExtras: true})
 	if err != nil {
 		return ManagedLaunch{}, err
@@ -2414,6 +2429,11 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 		return ManagedLaunch{}, err
 	}
 	metadata.StartedAt = now.Format(time.RFC3339)
+	metadata.FingerprintProfileApplied = fingerprint != nil
+	metadata.FingerprintProfileFields = nil
+	if fingerprint != nil {
+		metadata.FingerprintProfileFields = []string{"language", "timezone", "user_agent", "viewport"}
+	}
 	metadata.OwnedMarker, err = randomToken()
 	if err != nil {
 		return ManagedLaunch{}, err
@@ -2422,7 +2442,13 @@ func StartManagedChrome(ctx context.Context, opts ManagedOptions) (ManagedLaunch
 		return ManagedLaunch{}, fmt.Errorf("remove stale managed active port file: %w", err)
 	}
 
-	cmd, err := processgroup.StartWithOptions(chromePath, ManagedLaunchArgs(chromePath, metadata.UserDataDir)[1:], processgroup.Options{NewSession: true})
+	launchArgs := ManagedLaunchArgs(chromePath, metadata.UserDataDir)
+	launchOptions := processgroup.Options{NewSession: true}
+	if fingerprint != nil {
+		launchArgs = append(launchArgs, fingerprint.chromeArgs()...)
+		launchOptions.Env = fingerprint.childEnvironment(os.Environ())
+	}
+	cmd, err := processgroup.StartWithOptions(chromePath, launchArgs[1:], launchOptions)
 	if err != nil {
 		return ManagedLaunch{}, fmt.Errorf("start managed chrome: %w", err)
 	}

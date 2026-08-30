@@ -51,6 +51,7 @@ type options struct {
 	maxTabs              int
 	maxRendererProcesses int
 	noHeadlessRepair     bool
+	fingerprintProfile   string
 }
 
 type app struct {

@@ -131,8 +131,30 @@ if [[ -z "$app_url" ]]; then
 fi
 
 managed_stop_verification_state="$state_dir/stop-check"
-"$binary" --browser-mode headless daemon keepalive --repair --force --chrome-command "$chrome" --state-dir "$managed_stop_verification_state" --json \
-  | jq -e '.ok == true and (.state == "started" or .state == "repaired" or .state == "healthy")' >/dev/null
+managed_fingerprint_profile="$state_dir/synthetic-fingerprint.json"
+cat >"$managed_fingerprint_profile" <<'JSON'
+{
+  "userAgent": "SyntheticCdpManaged/1.0",
+  "platform": "SyntheticPlatform",
+  "vendor": "SyntheticVendor",
+  "language": "da-DK",
+  "timezone": "Europe/Copenhagen",
+  "viewport": {"width": 1280, "height": 800}
+}
+JSON
+chmod 600 "$managed_fingerprint_profile"
+"$binary" --browser-mode headless --fingerprint-profile "$managed_fingerprint_profile" daemon keepalive --repair --force --chrome-command "$chrome" --state-dir "$managed_stop_verification_state" --json \
+  | jq -e '.ok == true and (.state == "started" or .state == "repaired" or .state == "healthy") and .chrome.managed_browser.fingerprint_profile_applied == true and (.chrome.managed_browser.fingerprint_profile_fields == ["language","timezone","user_agent","viewport"]) and ([.. | strings | select(contains("SyntheticCdpManaged/1.0"))] | length == 0) and ([.. | strings | select(contains("synthetic-fingerprint.json"))] | length == 0)' >/dev/null
+managed_fingerprint_eval="$("$binary" --browser-mode headless eval '(() => ({userAgent:navigator.userAgent,width:window.innerWidth,height:window.innerHeight,language:navigator.language,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,webdriverOwn:Object.prototype.hasOwnProperty.call(navigator,"webdriver"),platformNative:Object.getOwnPropertyDescriptor(Navigator.prototype,"platform").get.toString().includes("[native code]"),vendorNative:Object.getOwnPropertyDescriptor(Navigator.prototype,"vendor").get.toString().includes("[native code]"),chromeType:typeof window.chrome}))()' --state-dir "$managed_stop_verification_state" --json)"
+if ! jq -e '.ok == true and .result.value.userAgent == "SyntheticCdpManaged/1.0" and .result.value.width == 1280 and .result.value.height > 600 and .result.value.language == "da-DK" and .result.value.timezone == "Europe/Copenhagen" and .result.value.webdriverOwn == false and .result.value.platformNative == true and .result.value.vendorNative == true and .result.value.chromeType == "object"' >/dev/null <<<"$managed_fingerprint_eval"; then
+  printf 'managed fingerprint live assertion failed:\n%s\n' "$managed_fingerprint_eval" >&2
+  exit 1
+fi
+printf '{' >"$state_dir/invalid-fingerprint.json"
+"$binary" --browser-mode headless --fingerprint-profile "$state_dir/invalid-fingerprint.json" daemon keepalive --repair --chrome-command "$chrome" --state-dir "$managed_stop_verification_state" --json \
+  | jq -e '.ok == true and .state == "healthy"' >/dev/null
+"$binary" --browser-mode headless eval 'navigator.userAgent' --state-dir "$managed_stop_verification_state" --json \
+  | jq -e '.ok == true and .result.value == "SyntheticCdpManaged/1.0"' >/dev/null
 managed_stop_verification_output="$("$binary" --browser-mode headless daemon stop --state-dir "$managed_stop_verification_state" --json)"
 jq -e '
   .ok == true and

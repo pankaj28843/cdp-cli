@@ -116,6 +116,7 @@ func commandExamples(path string) []string {
 			"CDP_MACOS_SELF_HEAL_APPROVAL=1 cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --macos-self-heal-approval --reconnect 30s --json",
 			"cdp --browser-mode headed daemon keepalive --auto-connect --repair --json | jq '{state,environment}'",
 			"cdp --browser-mode headless daemon keepalive --repair --reconnect 30s --json",
+			"cdp --browser-mode headless --fingerprint-profile <profile.json> daemon keepalive --repair --force --json",
 			"cdp --browser-mode headless daemon keepalive --repair --force --json",
 			"cdp cron install --json",
 			"cdp daemon keepalive --browser-url <browser-url> --json",

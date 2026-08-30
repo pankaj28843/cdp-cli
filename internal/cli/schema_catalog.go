@@ -3046,6 +3046,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "last_seeded_at", Type: "string", Required: false, Description: "Managed profile seed timestamp when recorded."},
 				{Name: "default_profile_copied", Type: "boolean", Required: false, Description: "True when managed metadata records an explicit copy-default snapshot."},
 				{Name: "copied_file_count", Type: "number", Required: false, Description: "Number of profile filesystem entries copied during copy-default seeding."},
+				{Name: "fingerprint_profile_applied", Type: "boolean", Required: true, Description: "True when this managed Chrome launch used a validated fingerprint profile."},
+				{Name: "fingerprint_profile_fields", Type: "array<string>", Required: false, Description: "Metadata-only effective field names; profile path and values are never included."},
 			},
 		},
 		"error-envelope": {

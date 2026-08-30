@@ -729,6 +729,28 @@ an explicit `copy-default` seed fresh on an age-gated cadence. When headless is
 already running, explicit `copy-default` can stop the headless daemon, reseed,
 and start headless again; headless is disposable managed agent infrastructure.
 
+New managed launches may also use an owner-only source-compatible fingerprint
+profile through `browser.headless.fingerprint_profile` or the overriding
+`--fingerprint-profile <path>` flag. The bounded JSON profile requires
+`userAgent`, `platform`, `vendor`, `language`, `timezone`, and viewport width
+and height. cdp applies only user agent, window size, Chrome's launch-time
+language flags, and the Chrome child's timezone; platform/vendor remain
+compatibility fields and no
+JavaScript or native navigator surface is rewritten. Paths and values stay out
+of public status. A healthy running browser is never retrofitted: explicitly
+stop it before launching with a changed profile.
+
+```json
+{
+  "userAgent": "SyntheticDesktop/1.0",
+  "platform": "SyntheticPlatform",
+  "vendor": "SyntheticVendor",
+  "language": "en-US",
+  "timezone": "UTC",
+  "viewport": {"width": 1280, "height": 800}
+}
+```
+
 ```bash
 cdp browser mode get --json
 CDP_BROWSER_MODE=headless cdp browser mode get --json
@@ -738,6 +760,7 @@ cdp --browser-mode headless browser profile seed --strategy copy-default --if-ol
 cdp --browser-mode headless browser profile status --json
 cdp --browser-mode headless daemon keepalive --repair --json
 cdp --browser-mode headless daemon keepalive --repair --force --json
+cdp --browser-mode headless --fingerprint-profile <profile.json> daemon keepalive --repair --json
 cdp --browser-mode headless daemon maintenance --json
 cdp doctor --check headless-security --json
 ```

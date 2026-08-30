@@ -1918,6 +1918,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd.Flags().StringVar(&display, "display", os.Getenv("DISPLAY"), "DISPLAY value to use when launching Chrome for auto-connect")
 	cmd.Flags().StringVar(&chromeCommand, "chrome-command", defaultChromeCommand(), "Chrome command to launch for auto-connect repair; empty disables launch")
 	cmd.Flags().StringArrayVar(&chromeArgs, "chrome-args", nil, "extra Chrome argument; repeat for multiple arguments")
+	cmd.Flags().StringVar(&a.opts.fingerprintProfile, "fingerprint-profile", "", "source-compatible JSON profile applied only when launching managed headless Chrome; overrides browser.headless.fingerprint_profile")
 	cmd.Flags().BoolVar(&repair, "repair", false, "human-managed repair mode: remove stale runtime state and restart the daemon when safe")
 	cmd.Flags().BoolVar(&force, "force", false, "for --browser-mode headless repair, clear stale managed runtime state before relaunching")
 	cmd.Flags().BoolVar(&managedProcessSweep, "managed-process-sweep", false, "run managed headless process reconciliation before launch-capable repair work; lifecycle enforcement is expanded by cdp cron resilience")
@@ -2223,14 +2224,12 @@ func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chr
 		status.ManagedBrowser = &managedStatus
 		return &managedKeepAlive{Endpoint: launch.Endpoint, Metadata: launch.Metadata, ManagedBrowser: &managedStatus}, status, nil
 	}
-	seedStrategy := ""
-	if cfg, cfgErr := config.Load(a.opts.config); cfgErr != nil {
+	managedOptions, cfgErr := a.managedChromeOptions(stateDir, chromeCommand)
+	if cfgErr != nil {
 		return nil, status, cfgErr
-	} else {
-		seedStrategy = cfg.Browser.Headless.ProfileSeedStrategy
 	}
 	status.MaxAttempts = managedChromeLaunchMaxAttempts
-	launch, err := startManagedChromeWithRetries(ctx, stateDir, browser.ManagedOptions{StateDir: stateDir, Chrome: chromeCommand, ProfileSeedStrategy: seedStrategy}, &status, browser.StartManagedChrome, managedChromeLaunchMaxAttempts, managedChromeLaunchAttemptTimeout)
+	launch, err := startManagedChromeWithRetries(ctx, stateDir, managedOptions, &status, browser.StartManagedChrome, managedChromeLaunchMaxAttempts, managedChromeLaunchAttemptTimeout)
 	if err != nil {
 		return nil, status, fmt.Errorf("managed Chrome launch failed after %d bounded attempt(s): %w", status.Attempts, err)
 	}
@@ -2238,6 +2237,23 @@ func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chr
 	status.Launched = true
 	status.ManagedBrowser = &managedStatus
 	return &managedKeepAlive{Endpoint: launch.Endpoint, Metadata: launch.Metadata, ManagedBrowser: &managedStatus}, status, nil
+}
+
+func (a *app) managedChromeOptions(stateDir, chromeCommand string) (browser.ManagedOptions, error) {
+	cfg, err := config.Load(a.opts.config)
+	if err != nil {
+		return browser.ManagedOptions{}, err
+	}
+	fingerprintProfile := strings.TrimSpace(a.opts.fingerprintProfile)
+	if fingerprintProfile == "" {
+		fingerprintProfile = cfg.Browser.Headless.FingerprintProfile
+	}
+	return browser.ManagedOptions{
+		StateDir:            stateDir,
+		Chrome:              chromeCommand,
+		ProfileSeedStrategy: cfg.Browser.Headless.ProfileSeedStrategy,
+		FingerprintProfile:  fingerprintProfile,
+	}, nil
 }
 
 func startManagedChromeWithRetries(

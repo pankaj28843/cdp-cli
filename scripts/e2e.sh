@@ -88,19 +88,21 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" describe --jq '.globals | index("--max-renderer-processes")' >/dev/null
 "$binary" describe --command "version" --json | jq -e '.ok == true and .commands.name == "version" and (.commands.examples | any(contains("version --json")))' >/dev/null
 "$binary" describe --command "guide" --json | jq -e '.ok == true and .commands.name == "guide" and (.commands.examples | any(contains("guide --path"))) and (.commands.flags[] | select(.name == "path"))' >/dev/null
-"$binary" guide --json | jq -e '.ok == true and .schema_version == "guide/v1" and .mode == "content" and (.bytes > 0) and (.content | contains("# cdp-cli Agent Guide"))' >/dev/null
+"$binary" guide --json | jq -e '.ok == true and .schema_version == "guide/v1" and .mode == "content" and (.bytes > 0) and (.content | contains("# cdp-cli Agent Guide")) and (.content | contains("--fingerprint-profile"))' >/dev/null
 guide_path_json="$("$binary" guide --path --json)"
 guide_path="$(jq -r 'if .ok == true and .mode == "path" then .path else empty end' <<<"$guide_path_json")"
 guide_path_source="$(jq -r '.source' <<<"$guide_path_json")"
 test -n "$guide_path"
 test -s "$guide_path"
+grep -Fq -- '--fingerprint-profile' "$guide_path"
 "$binary" describe --command "targets" --json | jq -e '.ok == true and .commands.name == "targets" and (.commands.flags[] | select(.name == "retry" and .type == "string")) and (.commands.flags[] | select(.name == "max-attempts"))' >/dev/null
 "$binary" describe --command "pages" --json | jq -e '.ok == true and .commands.name == "pages" and (.commands.flags[] | select(.name == "title-contains" and .type == "string")) and (.commands.flags[] | select(.name == "retry" and .type == "string")) and (.commands.flags[] | select(.name == "max-attempts"))' >/dev/null
 "$binary" describe --command "daemon start" --json | jq -e '.ok == true and .commands.name == "start" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon status" --json | jq -e '.ok == true and .commands.name == "status" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "daemon stop" --json | jq -e '.ok == true and .commands.name == "stop" and (.commands.examples | any(contains("--force-managed") and contains("--stale-lock-after"))) and (.commands.flags[] | select(.name == "force-managed")) and (.commands.flags[] | select(.name == "stale-lock-after"))' >/dev/null
 "$binary" describe --command "daemon restart" --json | jq -e '.ok == true and .commands.name == "restart" and (.commands.examples | any(contains("--autoConnect"))) and (.commands.examples | any(contains("--force-managed") and contains("--stale-lock-after"))) and (.commands.flags[] | select(.name == "force-managed")) and (.commands.flags[] | select(.name == "stale-lock-after"))' >/dev/null
-"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(. == "cdp cron install --json"))' >/dev/null
+"$binary" describe --command "daemon keepalive" --json | jq -e '.ok == true and .commands.name == "keepalive" and (.commands.examples | any(contains("--browser-mode headed"))) and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--fingerprint-profile"))) and (.commands.examples | any(. == "cdp cron install --json")) and (.commands.flags[] | select(.name == "fingerprint-profile"))' >/dev/null
+"$binary" schema managed-browser --json | jq -e '.ok == true and (.schema.fields[] | select(.name == "fingerprint_profile_applied" and .required == true)) and (.schema.fields[] | select(.name == "fingerprint_profile_fields"))' >/dev/null
 keepalive_help="$("$binary" daemon keepalive --help)"
 grep -Fq 'superseded hold generations' <<<"$keepalive_help"
 grep -Fq 'transient endpoint failures remain retryable' <<<"$keepalive_help"

@@ -23,6 +23,15 @@ Use --browser-mode headed for an existing user-approved Chrome session and
 commands go through the daemon; do not open a separate page WebSocket or ask a
 human to approve a headed prompt during an unattended run.
 
+For a new managed headless launch, `daemon keepalive` accepts a bounded
+source-compatible profile through `--fingerprint-profile <path>` (or private
+config key `browser.headless.fingerprint_profile`). It applies only user agent,
+window size, language, and the child Chrome timezone; platform/vendor are
+compatibility-only and no JavaScript navigator surface is rewritten. A healthy
+running browser is reused unchanged, so stop it explicitly before changing the
+launch profile. Public JSON reports only whether the profile was applied and
+the effective field names, never its path or values.
+
 ## Sense, act, verify
 
 Sense the page before acting, choose the narrowest command, then sense again to
