@@ -13,6 +13,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var newTab bool
 	var reuse bool
 	var budgetSummary bool
@@ -21,16 +22,25 @@ func (a *app) newOpenCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "open <url>",
 		Short: "Open a URL in a new tab or navigate a selected page",
-		Args:  cobra.ExactArgs(1),
+		Long:  "Open a URL in a new tab by default, or navigate one existing page with mutually exclusive target, URL, title, or page-index selection. Use --new-tab=false for strict existing-target navigation; --reuse may create a new tab only when its non-index filter finds no match.",
+		Example: "  cdp open https://example.com --new-tab=false --target-index 2 --json\n" +
+			"  cdp open https://example.com --reuse --target-index 2 --budget-summary --json",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
 			rawURL := strings.TrimSpace(args[0])
+			if targetIndex > 0 && newTab && !reuse {
+				return commandError("invalid_target_selector", "usage", "--target-index requires --new-tab=false unless --reuse is enabled", ExitUsage, []string{"cdp open https://example.com --new-tab=false --target-index 2 --json", "cdp open https://example.com --reuse --target-index 2 --json"})
+			}
 			if reuse && !newTab {
 				return commandError("usage", "usage", "--reuse cannot be combined with --new-tab=false; use --new-tab=false for strict existing-target navigation", ExitUsage, []string{"cdp open https://example.com --reuse --url-contains example.com --json", "cdp open https://example.com --new-tab=false --target <target-id> --json"})
 			}
-			if reuse && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
+			if reuse && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" && targetIndex == 0 {
 				return commandError("usage", "usage", "--reuse requires --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp open https://example.com --reuse --url-contains example.com --json"})
 			}
 			ownership, err := normalizeTargetOwnership(ownershipFlags, "cdp")
@@ -65,10 +75,10 @@ func (a *app) newOpenCommand() *cobra.Command {
 				target := cdp.TargetInfo{Type: "page", URL: rawURL}
 				created := true
 				reused := false
-				reuseReport := openReuseReport(reuse, targetID, urlContains, titleContains)
+				reuseReport := openReuseReport(reuse, targetID, urlContains, titleContains, targetIndex)
 				if reuse {
-					selected, err := a.resolvePageTargetWithClient(attemptCtx, client, targetID, urlContains, titleContains)
-					if err != nil && !(strings.TrimSpace(targetID) == "" && commandErrorHasCode(err, "target_not_found")) {
+					selected, err := resolveOpenTarget(attemptCtx, a, client, targetID, urlContains, titleContains, targetIndex)
+					if err != nil && !(targetIndex == 0 && strings.TrimSpace(targetID) == "" && commandErrorHasCode(err, "target_not_found")) {
 						return commandRetryResult{}, err
 					}
 					if err == nil {
@@ -100,7 +110,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 					}
 				}
 				if !reused {
-					if reuse || newTab || (targetID == "" && urlContains == "" && titleContains == "") {
+					if reuse || newTab || (targetID == "" && urlContains == "" && titleContains == "" && targetIndex == 0) {
 						createdID, err := a.createPageTargetWithOwnership(attemptCtx, client, rawURL, ownership)
 						if err != nil {
 							if createdID != "" {
@@ -111,7 +121,7 @@ func (a *app) newOpenCommand() *cobra.Command {
 						}
 						target.TargetID = createdID
 					} else {
-						selected, err := a.resolvePageTargetWithClient(attemptCtx, client, targetID, urlContains, titleContains)
+						selected, err := resolveOpenTarget(attemptCtx, a, client, targetID, urlContains, titleContains, targetIndex)
 						if err != nil {
 							return commandRetryResult{}, err
 						}
@@ -157,13 +167,17 @@ func (a *app) newOpenCommand() *cobra.Command {
 					"reused":  reused,
 					"page":    page,
 				}
+				if targetIndex > 0 {
+					data["target_index"] = targetIndex
+				}
 				if reuse {
 					data["reuse"] = reuseReport
 				}
 				if budgetSummary {
 					data["tab_budget"] = openTabBudgetSummary(openTabBudgetSummaryOptions{
-						Policy:        openPolicyName(reuse, newTab, targetID, urlContains, titleContains),
-						ReuseTarget:   openReuseTargetLabel(targetID, urlContains, titleContains),
+						Policy:        openPolicyName(reuse, newTab, targetID, urlContains, titleContains, targetIndex),
+						ReuseTarget:   openReuseTargetLabel(targetID, urlContains, titleContains, targetIndex),
+						TargetIndex:   targetIndex,
 						TargetID:      target.TargetID,
 						Created:       created,
 						Reused:        reused,
@@ -193,9 +207,17 @@ func (a *app) newOpenCommand() *cobra.Command {
 	cmd.Flags().StringVar(&targetID, "target", "", "navigate a page target by exact id or unique prefix when --new-tab=false")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "navigate the first page whose URL contains this text when --new-tab=false")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "navigate the first page whose title contains this text when --new-tab=false")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "navigate the 1-based existing page target index; workers do not consume indexes")
 	addTargetOwnershipFlags(cmd, &ownershipFlags, true)
 	addCommandRetryFlags(cmd, &retryOpts)
 	return cmd
+}
+
+func resolveOpenTarget(ctx context.Context, a *app, client cdp.CommandClient, targetID, urlContains, titleContains string, targetIndex int) (cdp.TargetInfo, error) {
+	if targetIndex > 0 {
+		return a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+	}
+	return a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
 }
 
 func navigateExistingPageTarget(ctx context.Context, client cdp.CommandClient, target cdp.TargetInfo, rawURL string) (string, error) {
@@ -242,15 +264,18 @@ func commandErrorHasCode(err error, code string) bool {
 	return got == code
 }
 
-func openReuseReport(reuse bool, targetID, urlContains, titleContains string) map[string]any {
+func openReuseReport(reuse bool, targetID, urlContains, titleContains string, targetIndex int) map[string]any {
 	report := map[string]any{
 		"requested":        reuse,
-		"policy":           openPolicyName(reuse, true, targetID, urlContains, titleContains),
+		"policy":           openPolicyName(reuse, true, targetID, urlContains, titleContains, targetIndex),
 		"target":           strings.TrimSpace(targetID),
 		"url_contains":     strings.TrimSpace(urlContains),
 		"title_contains":   strings.TrimSpace(titleContains),
 		"matched":          false,
 		"fallback_created": false,
+	}
+	if targetIndex > 0 {
+		report["target_index"] = targetIndex
 	}
 	return report
 }
@@ -258,6 +283,7 @@ func openReuseReport(reuse bool, targetID, urlContains, titleContains string) ma
 type openTabBudgetSummaryOptions struct {
 	Policy        string
 	ReuseTarget   string
+	TargetIndex   int
 	TargetID      string
 	Created       bool
 	Reused        bool
@@ -278,6 +304,9 @@ func openTabBudgetSummary(opts openTabBudgetSummaryOptions) map[string]any {
 		"cleanup_status":      opts.CleanupStatus,
 		"cleanup_commands":    openCleanupCommands(opts.TargetID, opts.Ownership),
 	}
+	if opts.TargetIndex > 0 {
+		summary["target_index"] = opts.TargetIndex
+	}
 	if opts.Before != nil {
 		summary["before"] = *opts.Before
 		summary["max_tabs"] = opts.Before.MaxTabs
@@ -289,9 +318,11 @@ func openTabBudgetSummary(opts openTabBudgetSummaryOptions) map[string]any {
 	return summary
 }
 
-func openPolicyName(reuse, newTab bool, targetID, urlContains, titleContains string) string {
+func openPolicyName(reuse, newTab bool, targetID, urlContains, titleContains string, targetIndex int) string {
 	if reuse {
 		switch {
+		case targetIndex > 0:
+			return "reuse_target_index"
 		case strings.TrimSpace(targetID) != "":
 			return "reuse_target"
 		case strings.TrimSpace(urlContains) != "":
@@ -302,14 +333,19 @@ func openPolicyName(reuse, newTab bool, targetID, urlContains, titleContains str
 			return "reuse"
 		}
 	}
+	if targetIndex > 0 {
+		return "strict_target_index"
+	}
 	if !newTab || strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "" {
 		return "strict_existing"
 	}
 	return "new"
 }
 
-func openReuseTargetLabel(targetID, urlContains, titleContains string) string {
+func openReuseTargetLabel(targetID, urlContains, titleContains string, targetIndex int) string {
 	switch {
+	case targetIndex > 0:
+		return fmt.Sprintf("index:%d", targetIndex)
 	case strings.TrimSpace(targetID) != "":
 		return strings.TrimSpace(targetID)
 	case strings.TrimSpace(urlContains) != "":

@@ -69,6 +69,21 @@ func commandErrorWithData(code, class, message string, exitCode int, remediation
 	}
 }
 
+func commandErrorSummary(err error) map[string]any {
+	summary := map[string]any{"message": err.Error()}
+	var commandErr *CommandError
+	if errors.As(err, &commandErr) {
+		summary["code"] = commandErr.Code
+		summary["err_class"] = commandErr.Class
+		summary["exit_code"] = commandErr.ExitCode
+		summary["remediation_commands"] = commandErr.RemediationCommands
+		if commandErr.Data != nil {
+			summary["data"] = commandErr.Data
+		}
+	}
+	return summary
+}
+
 func notImplemented(command string) error {
 	return commandError(
 		"not_implemented",

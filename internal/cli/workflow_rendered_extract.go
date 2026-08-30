@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html"
 	"net/url"
@@ -303,18 +302,7 @@ func (g *renderedExtractCleanupGuard) cleanup() renderedExtractCleanupResult {
 }
 
 func renderedExtractErrorSummary(err error) map[string]any {
-	summary := map[string]any{"message": err.Error()}
-	var commandErr *CommandError
-	if errors.As(err, &commandErr) {
-		summary["code"] = commandErr.Code
-		summary["err_class"] = commandErr.Class
-		summary["exit_code"] = commandErr.ExitCode
-		summary["remediation_commands"] = commandErr.RemediationCommands
-		if commandErr.Data != nil {
-			summary["data"] = commandErr.Data
-		}
-	}
-	return summary
+	return commandErrorSummary(err)
 }
 
 func closeRenderedExtractSession(session *cdp.PageSession, closeClient func(context.Context) error) {

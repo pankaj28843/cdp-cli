@@ -88,6 +88,22 @@ func fakeWebSocketEndpoint(t *testing.T, rawURL string) string {
 	return u.String()
 }
 
+func fakeLifecycleEvents(t *testing.T, server *httptest.Server) []string {
+	t.Helper()
+	resp, err := http.Get(server.URL + "/test/lifecycle")
+	if err != nil {
+		t.Fatalf("get fake lifecycle events: %v", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Events []string `json:"events"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode fake lifecycle events: %v", err)
+	}
+	return result.Events
+}
+
 func startFakeDaemon(t *testing.T, server *httptest.Server, connectionMode string) string {
 	t.Helper()
 	stateDir := shortCLIStateDir(t)
@@ -158,6 +174,13 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	var xProfileRecordCalls sync.Map
 	var scrolledSelectors sync.Map
 	var navigatedURLs sync.Map
+	var lifecycleMu sync.Mutex
+	var lifecycleEvents []string
+	recordLifecycle := func(event string) {
+		lifecycleMu.Lock()
+		lifecycleEvents = append(lifecycleEvents, event)
+		lifecycleMu.Unlock()
+	}
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		if server == nil {
 			http.Error(w, "test server was not initialized", http.StatusInternalServerError)
@@ -201,6 +224,12 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				},
 			},
 		})
+	})
+	mux.HandleFunc("/test/lifecycle", func(w http.ResponseWriter, r *http.Request) {
+		lifecycleMu.Lock()
+		events := append([]string(nil), lifecycleEvents...)
+		lifecycleMu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
 	})
 	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
@@ -318,6 +347,11 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["result"] = map[string]any{"sessionId": "session-" + params.TargetID}
 				}
 			} else if req.Method == "Target.detachFromTarget" {
+				var params struct {
+					SessionID string `json:"sessionId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				recordLifecycle("detach:" + params.SessionID)
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Target.activateTarget" {
 				resp["result"] = map[string]any{}
@@ -326,6 +360,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					TargetID string `json:"targetId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
+				recordLifecycle("close:" + params.TargetID)
 				if fakeAnyTargetBool(targetInfos, "fakeCloseTargetError") {
 					resp["error"] = map[string]any{"code": -32000, "message": "synthetic target close failure"}
 				} else if params.TargetID != "" {

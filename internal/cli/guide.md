@@ -50,6 +50,14 @@ positional selector, and invalid or out-of-range values fail before mutation:
     cdp page reload --target-index 2 --json
     cdp page activate --target-index 2 --json
 
+Top-level `open` uses the same selector when navigating an existing page. Use
+`--new-tab=false` for strict indexed navigation, or combine the index with
+`--reuse` to reuse that exact page. An indexed `open` never silently falls
+back to another page or creates a new tab when the explicit page is missing:
+
+    cdp open https://example.com --new-tab=false --target-index 2 --json
+    cdp open https://example.com --reuse --target-index 2 --budget-summary --json
+
 Ordinary screenshots use the same page-only selector. The selected target is
 reported as `.target` and `.target_index`, while image bytes remain a local
 artifact path. With `--navigate`, an indexed screenshot navigates that existing
@@ -58,6 +66,13 @@ creates a new tab:
 
     cdp screenshot --target-index 2 --out tmp/page.png --json
     cdp screenshot --target-index 2 --navigate 'https://example.com' --wait 2s --out tmp/page.png --json
+
+`screenshot render` creates a workflow-owned page for a local HTML artifact.
+It settles exact-target cleanup before releasing the attached session and adds
+metadata-only `.cleanup` evidence to JSON. A cleanup failure is typed and
+retains the primary render or artifact error under `.data.primary_error`:
+
+    cdp screenshot render ./diagram.html --out tmp/diagram.png --wait-for 'window.__rendered' --json
 
 Page-bound storage commands use the same mutually exclusive, 1-based page
 selector. This includes Web Storage, cookies, IndexedDB, Cache Storage, and

@@ -634,8 +634,11 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "render <html-file>",
 		Short: "Render a local HTML file to a PNG screenshot",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Long:  "Render a local HTML file in a workflow-owned page and write a PNG artifact. The created page is closed with bounded target-gone confirmation before its attached session is released; JSON reports metadata-only cleanup evidence.",
+		Example: "  cdp screenshot render ./diagram.html --out tmp/diagram.png --wait-for 'window.__rendered' --json\n" +
+			"  cdp screenshot render ./diagram.html --out tmp/diagram.png --serve --crop --json",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			outPath = strings.TrimSpace(outPath)
 			if outPath == "" {
 				return commandError("missing_output_path", "usage", "screenshot render requires --out <path>", ExitUsage, []string{"cdp screenshot render ./diagram.html --out tmp/diagram.png --json"})
@@ -671,13 +674,29 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer cdp.CloseTargetWithClient(context.Background(), client, targetID)
 			target := cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}
+			cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true}
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, func(context.Context) error { return nil })
 			if err != nil {
-				return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				primary := commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				cleanup := cleanupGuard.cleanup()
+				if cleanup.Error != "" {
+					return screenshotRenderCleanupError(targetID, primary, cleanup)
+				}
+				return primary
 			}
-			defer session.Close(ctx)
+			defer closeRenderedExtractSession(session, nil)
+			cleanupFinalized := false
+			defer func() {
+				if cleanupFinalized {
+					return
+				}
+				cleanupFinalized = true
+				cleanup := cleanupGuard.cleanup()
+				if cleanup.Error != "" {
+					retErr = screenshotRenderCleanupError(targetID, retErr, cleanup)
+				}
+			}()
 			params := map[string]any{"width": width, "height": height, "deviceScaleFactor": dpr, "mobile": false}
 			if err := execSessionJSON(ctx, session, "Emulation.setDeviceMetricsOverride", params, nil); err != nil {
 				return commandError("connection_failed", "connection", fmt.Sprintf("emulate viewport: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setDeviceMetricsOverride --json"})
@@ -719,7 +738,12 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 			if cropMeta != nil {
 				screenshot["crop"] = cropMeta
 			}
-			return a.render(ctx, fmt.Sprintf("%s\t%d bytes", writtenPath, len(data)), map[string]any{"ok": true, "target": pageRow(target), "render": map[string]any{"source": htmlPath, "url": rawURL, "served": serve, "viewport": params, "wait": durationString(wait), "wait_for": waitFor}, "screenshot": screenshot, "artifacts": []map[string]any{{"type": "screenshot", "path": writtenPath}}})
+			cleanup := cleanupGuard.cleanup()
+			cleanupFinalized = true
+			if cleanup.Error != "" {
+				return screenshotRenderCleanupError(targetID, nil, cleanup)
+			}
+			return a.render(ctx, fmt.Sprintf("%s\t%d bytes", writtenPath, len(data)), map[string]any{"ok": true, "target": pageRow(target), "render": map[string]any{"source": htmlPath, "url": rawURL, "served": serve, "viewport": params, "wait": durationString(wait), "wait_for": waitFor}, "screenshot": screenshot, "cleanup": cleanup, "artifacts": []map[string]any{{"type": "screenshot", "path": writtenPath}}})
 		},
 	}
 	cmd.Flags().StringVar(&outPath, "out", "", "required path to write the rendered PNG")
@@ -732,6 +756,17 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&crop, "crop", false, "auto-crop white transparent margins from the PNG")
 	cmd.Flags().IntVar(&cropPadding, "crop-padding", 10, "padding in pixels to keep around --crop content")
 	return cmd
+}
+
+func screenshotRenderCleanupError(targetID string, primary error, cleanup renderedExtractCleanupResult) error {
+	data := map[string]any{"cleanup": cleanup}
+	message := fmt.Sprintf("close screenshot render target %s: %s", targetID, cleanup.Error)
+	if primary != nil {
+		data["primary_error"] = commandErrorSummary(primary)
+		message = fmt.Sprintf("%s; cleanup failed: %s", primary.Error(), cleanup.Error)
+	}
+	remediation := []string{cleanup.RecoveryCommand, "cdp pages --json"}
+	return commandErrorWithData("screenshot_render_cleanup_failed", "internal", message, ExitInternal, remediation, data)
 }
 
 func serveLocalHTML(ctx context.Context, htmlPath string) (string, func(context.Context) error, error) {
