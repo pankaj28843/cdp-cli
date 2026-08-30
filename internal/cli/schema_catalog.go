@@ -2632,10 +2632,16 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-rendered-extract-cleanup": {
 			Name:        "workflow-rendered-extract-cleanup",
-			Description: "Ownership-aware exact-target cleanup result used by rendered extraction on every exit.",
+			Description: "Ownership-aware exact-target cleanup result used by rendered extraction, Google Maps, and YouTube workflows on every exit; closed is true only after target-gone confirmation.",
 			Fields: []schemaField{
 				{Name: "attempted", Type: "boolean", Required: true, Description: "True when cleanup attempted to close a workflow-created target."},
-				{Name: "closed", Type: "boolean", Required: true, Description: "True only when the exact workflow-created target closed successfully."},
+				{Name: "closed", Type: "boolean", Required: true, Description: "True only when the exact workflow-created target is confirmed gone."},
+				{Name: "target_gone", Type: "boolean", Required: true, Description: "True when Target.getTargets no longer contains the exact workflow-created target."},
+				{Name: "attempt_count", Type: "number", Required: false, Description: "Number of bounded close attempts made."},
+				{Name: "max_attempts", Type: "number", Required: false, Description: "Configured maximum close attempts."},
+				{Name: "elapsed_ms", Type: "number", Required: false, Description: "Total bounded cleanup elapsed time in milliseconds."},
+				{Name: "timed_out", Type: "boolean", Required: false, Description: "True when the bounded cleanup wait exhausted its context."},
+				{Name: "retry_policy", Type: "string", Required: false, Description: "Settled cleanup policy, currently target_gone."},
 				{Name: "skipped", Type: "boolean", Required: false, Description: "True for caller-owned targets or explicit --keep-open workflows."},
 				{Name: "reason", Type: "string", Required: false, Description: "Structured skip reason such as caller_owned or keep_open."},
 				{Name: "target_id", Type: "string", Required: false, Description: "Exact target whose ownership and cleanup were evaluated."},

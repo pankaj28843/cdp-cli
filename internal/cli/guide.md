@@ -516,6 +516,12 @@ Cleanup is bounded and restricted to the exact page each command created;
 A failed collection remains the primary error even if cleanup also reports a
 problem, while successful source-collection JSON reports its cleanup outcome.
 
+Rendered extraction, Google Maps directions, and YouTube cookie workflows use
+the same exact-target cleanup guard. Their cleanup result reports bounded
+attempt and `target_gone` evidence, and `closed` is true only after the target
+has disappeared from target listing. Cleanup runs before attached-session
+release on fallback exits; caller-owned rendered-extract pages remain retained.
+
 Provider workflows must report capability and authentication uncertainty
 explicitly. Do not capture or replay credentials outside the repository's
 documented owner-only provider contracts. CAPTCHA solving, token replay, and

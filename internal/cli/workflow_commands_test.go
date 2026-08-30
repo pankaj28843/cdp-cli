@@ -2093,6 +2093,107 @@ func TestWorkflowRenderedExtractFailureCleansOnlyCreatedTarget(t *testing.T) {
 	}
 }
 
+func TestWorkflowRenderedExtractCleanupWaitsForTargetGone(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":             "delayed-close-sentinel",
+		"type":                 "page",
+		"title":                "Sentinel",
+		"url":                  "https://example.test/sentinel",
+		"fakeCloseTargetDelay": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", "https://example.test/delayed-cleanup",
+		"--out-dir", t.TempDir(), "--wait", "0", "--settle", "0",
+		"--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("delayed cleanup exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		Workflow struct {
+			Closed  bool `json:"closed"`
+			Cleanup struct {
+				Closed       bool  `json:"closed"`
+				TargetGone   bool  `json:"target_gone"`
+				AttemptCount int   `json:"attempt_count"`
+				MaxAttempts  int   `json:"max_attempts"`
+				ElapsedMS    int64 `json:"elapsed_ms"`
+			} `json:"cleanup"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode delayed cleanup output: %v", err)
+	}
+	if !got.Workflow.Closed || !got.Workflow.Cleanup.Closed || !got.Workflow.Cleanup.TargetGone || got.Workflow.Cleanup.AttemptCount < 1 || got.Workflow.Cleanup.MaxAttempts < got.Workflow.Cleanup.AttemptCount || got.Workflow.Cleanup.ElapsedMS < 0 {
+		t.Fatalf("delayed cleanup evidence = %+v", got.Workflow)
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("delayed cleanup left owned target: page count=%d, want baseline 1", count)
+	}
+}
+
+func TestWorkflowRenderedExtractKeepOpenRetainsCreatedTarget(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", "https://example.test/keep-open",
+		"--out-dir", t.TempDir(), "--wait", "0", "--settle", "0", "--keep-open",
+		"--min-visible-words", "1", "--min-markdown-words", "1", "--min-html-chars", "1", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("keep-open exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		Workflow struct {
+			Closed  bool `json:"closed"`
+			Cleanup struct {
+				Skipped bool   `json:"skipped"`
+				Reason  string `json:"reason"`
+			} `json:"cleanup"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode keep-open output: %v", err)
+	}
+	if got.Workflow.Closed || !got.Workflow.Cleanup.Skipped || got.Workflow.Cleanup.Reason != "keep_open" {
+		t.Fatalf("keep-open cleanup = %+v", got.Workflow)
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("keep-open page count=%d, want one created page", count)
+	}
+}
+
+func TestWorkflowRenderedExtractKeepOpenAttachFailureRetainsCreatedTarget(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":                  "attach-failure-sentinel",
+		"type":                      "page",
+		"title":                     "Sentinel",
+		"url":                       "https://example.test/sentinel",
+		"fakeAttachErrorForCreated": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "rendered-extract", "https://example.test/attach-failure",
+		"--out-dir", t.TempDir(), "--wait", "0", "--settle", "0", "--keep-open", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitConnection {
+		t.Fatalf("keep-open attach failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitConnection, out.String(), errOut.String())
+	}
+	if count := fakePagesCount(t); count != 2 {
+		t.Fatalf("keep-open attach failure page count=%d, want baseline plus retained created page", count)
+	}
+}
+
 func TestWorkflowRenderedExtractCloseFailurePreservesPrimaryError(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{
 		"targetId":             "close-failure-sentinel",

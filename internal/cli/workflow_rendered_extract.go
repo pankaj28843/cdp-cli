@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
@@ -202,6 +203,7 @@ type renderedExtractReusablePage struct {
 	CloseClient func(context.Context) error
 	Session     *cdp.PageSession
 	TargetID    string
+	KeepOpen    bool
 }
 
 type renderedExtractNavigateFunc func(context.Context, string) (string, error)
@@ -216,10 +218,17 @@ func dispatchRenderedExtractNavigation(ctx context.Context, url string, beforeNa
 }
 
 const renderedExtractCleanupTimeout = 5 * time.Second
+const renderedExtractCleanupAttemptWait = time.Second
 
 type renderedExtractCleanupResult struct {
 	Attempted       bool     `json:"attempted"`
 	Closed          bool     `json:"closed"`
+	TargetGone      bool     `json:"target_gone"`
+	AttemptCount    int      `json:"attempt_count,omitempty"`
+	MaxAttempts     int      `json:"max_attempts,omitempty"`
+	ElapsedMS       int64    `json:"elapsed_ms,omitempty"`
+	TimedOut        bool     `json:"timed_out,omitempty"`
+	RetryPolicy     string   `json:"retry_policy,omitempty"`
 	Skipped         bool     `json:"skipped,omitempty"`
 	Reason          string   `json:"reason,omitempty"`
 	TargetID        string   `json:"target_id,omitempty"`
@@ -234,7 +243,7 @@ type renderedExtractCleanupGuard struct {
 	targetID string
 	owned    bool
 	keepOpen bool
-	done     bool
+	once     sync.Once
 	result   renderedExtractCleanupResult
 }
 
@@ -242,38 +251,54 @@ func (g *renderedExtractCleanupGuard) cleanup() renderedExtractCleanupResult {
 	if g == nil {
 		return renderedExtractCleanupResult{Skipped: true, Reason: "not_registered"}
 	}
-	if g.done {
-		return g.result
-	}
-	g.done = true
-	g.result = renderedExtractCleanupResult{TargetID: strings.TrimSpace(g.targetID)}
-	switch {
-	case !g.owned:
-		g.result.Skipped = true
-		g.result.Reason = "caller_owned"
-		return g.result
-	case g.keepOpen:
-		g.result.Skipped = true
-		g.result.Reason = "keep_open"
-		return g.result
-	case g.client == nil || strings.TrimSpace(g.targetID) == "":
-		g.result.Attempted = true
-		g.result.Error = "created target cleanup is missing its client or target id"
-		g.result.Errors = []string{g.result.Error}
-		return g.result
-	}
+	g.once.Do(func() {
+		g.result = renderedExtractCleanupResult{TargetID: strings.TrimSpace(g.targetID)}
+		switch {
+		case !g.owned:
+			g.result.Skipped = true
+			g.result.Reason = "caller_owned"
+			return
+		case g.keepOpen:
+			g.result.Skipped = true
+			g.result.Reason = "keep_open"
+			return
+		case g.client == nil || strings.TrimSpace(g.targetID) == "":
+			g.result.Attempted = true
+			g.result.Error = "created target cleanup is missing its client or target id"
+			g.result.Errors = []string{g.result.Error}
+			return
+		}
 
-	g.result.Attempted = true
-	g.result.Timeout = durationString(renderedExtractCleanupTimeout)
-	g.result.RecoveryCommand = fmt.Sprintf("cdp page cleanup --target %s --force --close --json", g.targetID)
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), renderedExtractCleanupTimeout)
-	defer cancel()
-	if err := cdp.CloseTargetWithClient(cleanupCtx, g.client, g.targetID); err != nil {
-		g.result.Error = err.Error()
-		g.result.Errors = []string{err.Error()}
-		return g.result
-	}
-	g.result.Closed = true
+		g.result.Attempted = true
+		g.result.Timeout = durationString(renderedExtractCleanupTimeout)
+		g.result.RecoveryCommand = fmt.Sprintf("cdp page cleanup --target %s --force --close --json", g.targetID)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), renderedExtractCleanupTimeout)
+		defer cancel()
+		report := closePageTargetSettled(cleanupCtx, g.client, cdp.TargetInfo{
+			TargetID: g.targetID,
+			Type:     "page",
+		}, pageCloseOptions{
+			WaitGone:     true,
+			MaxAttempts:  defaultPageCloseMaxAttempts,
+			AttemptWait:  renderedExtractCleanupAttemptWait,
+			PollInterval: defaultPageClosePollInterval,
+			RetryBackoff: defaultPageCloseRetryBackoff,
+		})
+		g.result.Closed = report.TargetGone
+		g.result.TargetGone = report.TargetGone
+		g.result.AttemptCount = report.AttemptCount
+		g.result.MaxAttempts = report.MaxAttempts
+		g.result.ElapsedMS = report.ElapsedMS
+		g.result.TimedOut = report.TimedOut
+		g.result.RetryPolicy = report.RetryPolicy
+		if !report.TargetGone {
+			g.result.Error = report.LastError
+			if g.result.Error == "" {
+				g.result.Error = fmt.Sprintf("target %s close did not settle", g.targetID)
+			}
+			g.result.Errors = []string{g.result.Error}
+		}
+	})
 	return g.result
 }
 
@@ -316,7 +341,7 @@ func (a *app) openRenderedExtractReusablePage(ctx context.Context, rawURL, workf
 	}
 	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 	if err != nil {
-		cleanup := (&renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true}).cleanup()
+		cleanup := (&renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true, keepOpen: keepOpen}).cleanup()
 		closeRenderedExtractSession(nil, closeClient)
 		if cleanup.Error != "" {
 			return nil, commandErrorWithData(
@@ -333,14 +358,14 @@ func (a *app) openRenderedExtractReusablePage(ctx context.Context, rawURL, workf
 		}
 		return nil, commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 	}
-	return &renderedExtractReusablePage{Client: client, CloseClient: closeClient, Session: session, TargetID: targetID}, nil
+	return &renderedExtractReusablePage{Client: client, CloseClient: closeClient, Session: session, TargetID: targetID, KeepOpen: keepOpen}, nil
 }
 
 func (p *renderedExtractReusablePage) Close(_ context.Context) (bool, string) {
 	if p == nil {
 		return false, ""
 	}
-	cleanup := (&renderedExtractCleanupGuard{client: p.Client, targetID: p.TargetID, owned: true}).cleanup()
+	cleanup := (&renderedExtractCleanupGuard{client: p.Client, targetID: p.TargetID, owned: true, keepOpen: p.KeepOpen}).cleanup()
 	closeRenderedExtractSession(p.Session, p.CloseClient)
 	return cleanup.Closed, cleanup.Error
 }

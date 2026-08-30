@@ -230,6 +230,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["sessionId"] = req.SessionID
 			}
 			if req.Method == "Target.getTargets" {
+				fakeReleaseDelayedCloseTargets(&targetInfos)
 				if fakeAnyTargetBool(targetInfos, "fakeListTargetsErrorOnce") && listTargetsErrors.Add(1) == 1 {
 					resp["error"] = map[string]any{"code": -32000, "message": "target list race: target closed"}
 				} else {
@@ -307,7 +308,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					TargetID string `json:"targetId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
-				if fakeTargetBool(targetInfos, params.TargetID, "fakeAttachErrorOnce") {
+				if fakeTargetBool(targetInfos, params.TargetID, "fakeAttachErrorOnce") || (strings.HasPrefix(params.TargetID, "created-page") && fakeAnyTargetBool(targetInfos, "fakeAttachErrorForCreated")) {
 					if _, loaded := attachTargetErrors.LoadOrStore(params.TargetID, true); !loaded {
 						resp["error"] = map[string]any{"code": -32000, "message": "attach race: target closed"}
 					} else {
@@ -328,14 +329,23 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				if fakeAnyTargetBool(targetInfos, "fakeCloseTargetError") {
 					resp["error"] = map[string]any{"code": -32000, "message": "synthetic target close failure"}
 				} else if params.TargetID != "" {
-					filtered := targetInfos[:0]
-					for _, target := range targetInfos {
-						if target["targetId"] == params.TargetID {
-							continue
+					if fakeAnyTargetBool(targetInfos, "fakeCloseTargetDelay") {
+						for _, target := range targetInfos {
+							if target["targetId"] == params.TargetID {
+								target["fakeCloseTargetPending"] = true
+								target["fakeCloseTargetPolls"] = 0
+							}
 						}
-						filtered = append(filtered, target)
+					} else {
+						filtered := targetInfos[:0]
+						for _, target := range targetInfos {
+							if target["targetId"] == params.TargetID {
+								continue
+							}
+							filtered = append(filtered, target)
+						}
+						targetInfos = filtered
 					}
-					targetInfos = filtered
 					resp["result"] = map[string]any{"success": true}
 				} else {
 					resp["result"] = map[string]any{"success": true}
@@ -1231,6 +1241,25 @@ func fakeAnyTargetBool(targetInfos []map[string]any, key string) bool {
 		}
 	}
 	return false
+}
+
+func fakeReleaseDelayedCloseTargets(targetInfos *[]map[string]any) {
+	if targetInfos == nil {
+		return
+	}
+	filtered := (*targetInfos)[:0]
+	for _, target := range *targetInfos {
+		pending, _ := target["fakeCloseTargetPending"].(bool)
+		if pending {
+			polls, _ := target["fakeCloseTargetPolls"].(int)
+			if polls >= 1 {
+				continue
+			}
+			target["fakeCloseTargetPolls"] = polls + 1
+		}
+		filtered = append(filtered, target)
+	}
+	*targetInfos = filtered
 }
 
 func fakeAnyTargetString(targetInfos []map[string]any, key string) string {

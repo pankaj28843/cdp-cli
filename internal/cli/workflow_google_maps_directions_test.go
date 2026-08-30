@@ -64,6 +64,42 @@ func TestWorkflowGoogleMapsDirectionsJSONClosesExactOwnedTarget(t *testing.T) {
 	}
 }
 
+func TestWorkflowGoogleMapsDirectionsCleanupWaitsForTargetGone(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":             "delayed-close-sentinel",
+		"type":                 "page",
+		"title":                "Sentinel",
+		"url":                  "https://example.test/sentinel",
+		"fakeCloseTargetDelay": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "google-maps-directions", "Hvidegaard Møn", "Møn Is", "--wait", "0", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("delayed Google Maps cleanup exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var got struct {
+		Cleanup struct {
+			Closed       bool `json:"closed"`
+			TargetGone   bool `json:"target_gone"`
+			AttemptCount int  `json:"attempt_count"`
+		} `json:"cleanup"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode delayed Google Maps cleanup: %v", err)
+	}
+	if !got.Cleanup.Closed || !got.Cleanup.TargetGone || got.Cleanup.AttemptCount < 1 {
+		t.Fatalf("delayed Google Maps cleanup=%+v", got.Cleanup)
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("delayed Google Maps cleanup page count=%d, want baseline 1", count)
+	}
+}
+
 func TestWorkflowGoogleMapsDirectionsCleanupFailureIsNotSuccess(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{{
 		"targetId": "sentinel-page", "type": "page", "title": "Sentinel", "url": "https://example.test/keep", "attached": false,

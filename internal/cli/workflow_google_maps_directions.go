@@ -458,7 +458,6 @@ func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 				return err
 			}
 			cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true}
-			defer cleanupGuard.cleanup()
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 			if err != nil {
 				cleanup := cleanupGuard.cleanup()
@@ -466,6 +465,7 @@ func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 				return commandErrorWithData("connection_failed", "connection", fmt.Sprintf("attach Google Maps target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"}, map[string]any{"cleanup": cleanup})
 			}
 			defer closeRenderedExtractSession(session, nil)
+			defer cleanupGuard.cleanup()
 
 			extraction, routes, attempts, elapsed, collectErr := collectGoogleMapsDirections(ctx, session, wait)
 			originTitle, destinationTitle := googleMapsTitleEndpointLabels(extraction.Title)
