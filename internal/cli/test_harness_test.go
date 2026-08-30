@@ -293,10 +293,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					if strings.Contains(lowerURL, "no-results") {
 						createdTarget["fakeNoResults"] = true
 					}
-					if strings.Contains(lowerURL, "attach-error") {
+					if strings.Contains(lowerURL, "attach-error") || strings.Contains(lowerURL, "attach_error") {
 						createdTarget["fakeAttachErrorOnce"] = true
 					}
-					if strings.Contains(lowerURL, "evaluate-error") {
+					if strings.Contains(lowerURL, "evaluate-error") || strings.Contains(lowerURL, "evaluate_error") {
 						createdTarget["fakeRuntimeEvaluateErrorOnce"] = true
 					}
 					targetInfos = append(targetInfos, createdTarget)
@@ -4324,6 +4324,21 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 	}
 	if strings.Contains(req.Expression, "querySelectorAll") {
+		targetID := strings.TrimPrefix(sessionID, "session-")
+		if fakeTargetBool(targetInfos, targetID, "fakeNoResults") {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":      "https://example.test/feed",
+						"title":    "Example Feed",
+						"selector": "article",
+						"count":    0,
+						"items":    []map[string]any{},
+					},
+				},
+			}
+		}
 		if strings.Contains(req.Expression, `"empty"`) {
 			return map[string]any{
 				"result": map[string]any{

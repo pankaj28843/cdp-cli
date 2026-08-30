@@ -55,23 +55,15 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 				_ = closeClient(ctx)
 				return err
 			}
-			closed := false
-			closePage := func() string {
-				if keepOpen || closed {
-					return ""
-				}
-				closed = true
-				if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
-					return err.Error()
-				}
-				return ""
-			}
-			defer closePage()
+			closeWorkflowPage := a.workflowPageCloser(client, targetID, request.URL, keepOpen)
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 			if err != nil {
+				_, _ = closeWorkflowPage()
+				_ = closeClient(ctx)
 				return commandError("connection_failed", "connection", fmt.Sprintf("attach Reddit target: %v", err), ExitConnection, []string{"cdp pages --json"})
 			}
 			defer session.Close(ctx)
+			defer func() { _, _ = closeWorkflowPage() }()
 			if _, err := session.Navigate(ctx, request.URL); err != nil {
 				return commandError("reddit_navigation_failed", "connection", err.Error(), ExitConnection, []string{"cdp workflow reddit collect " + request.URL + " --json"})
 			}
@@ -140,7 +132,7 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 					}
 					profileStalled = len(records) < limit
 				}
-				closeError := closePage()
+				closed, closeError := closeWorkflowPage()
 				partialReason := "currently_visible_only"
 				if profileStalled {
 					partialReason = "pagination_stalled"
@@ -164,7 +156,7 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 					continuation = "discussion_" + expansionStatus
 				}
 				coverage := dynamicSourceCoverage(observed, missing, expansionStatus, partialReason, continuation, "", expansionStatus != "exhausted" && expansionStatus != "ceiling")
-				workflow := map[string]any{"name": "reddit-collect", "count": len(records), "limit": limit, "status": expansionStatus, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}
+				workflow := map[string]any{"name": "reddit-collect", "count": len(records), "limit": limit, "status": expansionStatus, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closed, "close_error": closeError}
 				return a.render(ctx, redditCollectionMarkdown(request.URL, request.Kind, records, nil, workflow, coverage), map[string]any{"ok": true, "request": request, "kind": request.Kind, "records": records, "coverage": coverage, "workflow": workflow})
 			}
 			deadline := time.Now().Add(wait)
@@ -212,13 +204,13 @@ func (a *app) newWorkflowRedditCollectionCommand(use, short string, expected red
 				}
 			}
 			collected := traversal.Threads()
-			closeError := closePage()
+			closed, closeError := closeWorkflowPage()
 			missing := []string(nil)
 			if status != "exhausted" {
 				missing = []string{"listing_thread"}
 			}
 			coverage := dynamicSourceCoverage([]string{"listing_thread"}, missing, status, partialReason, "listing_cursor", lastCursor, lastCursor != "")
-			workflow := map[string]any{"name": "reddit-collect", "count": len(collected), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": 0, "last_cursor": lastCursor, "created_page": true, "closed": closeError == "", "close_error": closeError}
+			workflow := map[string]any{"name": "reddit-collect", "count": len(collected), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": 0, "last_cursor": lastCursor, "created_page": true, "closed": closed, "close_error": closeError}
 			return a.render(ctx, redditCollectionMarkdown(request.URL, request.Kind, nil, collected, workflow, coverage), map[string]any{"ok": true, "request": request, "kind": request.Kind, "threads": collected, "next_cursor": lastCursor, "coverage": coverage, "workflow": workflow})
 		},
 	}

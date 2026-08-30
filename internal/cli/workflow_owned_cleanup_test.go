@@ -91,3 +91,50 @@ func TestWorkflowOwnedErrorPreservesKeepOpen(t *testing.T) {
 		t.Fatalf("keep-open error page count=%d, want one retained workflow page", pages)
 	}
 }
+
+func TestWorkflowOwnedPagesCloseOnCommandTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "feeds",
+			args: []string{"--timeout", "500ms", "workflow", "feeds", "https://example.test/timeout", "--wait-load", "5s", "--json"},
+		},
+		{
+			name: "visible posts",
+			args: []string{"--timeout", "500ms", "workflow", "visible-posts", "https://example.test/no-results", "--wait", "5s", "--json"},
+		},
+		{
+			name: "hacker news",
+			args: []string{"--timeout", "500ms", "workflow", "hacker-news", "https://news.ycombinator.com/no-results", "--wait", "5s", "--json"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newFakeCDPServer(t, nil)
+			defer server.Close()
+			startFakeDaemon(t, server, "browser_url")
+
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), test.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitTimeout {
+				t.Fatalf("exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+			}
+			var envelope struct {
+				OK   bool   `json:"ok"`
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+				t.Fatalf("timeout output is invalid JSON: %v; output=%s", err, out.String())
+			}
+			if envelope.OK || envelope.Code != "timeout" {
+				t.Fatalf("timeout envelope=%+v", envelope)
+			}
+			if pages := fakePagesCount(t); pages != 0 {
+				t.Fatalf("workflow timeout page count=%d, want baseline", pages)
+			}
+		})
+	}
+}

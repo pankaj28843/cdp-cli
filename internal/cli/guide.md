@@ -507,11 +507,14 @@ targets after verification. Use cdp page cleanup --json for a dry-run and a
 narrow, explicit filter before any close operation. Check daemon health and
 resource budgets before parallel work.
 
-The URL-owned `workflow feeds`, `workflow visible-posts`, and the main
-`workflow hacker-news` collectors settle their disposable page on success and
-error exits. Their cleanup is bounded and restricted to the page they created;
-`--keep-open` is the explicit debugging lease that retains it. A failed
-collection remains the primary error even if cleanup also reports a problem.
+URL-owned collectors settle their disposable page on success and error exits:
+`workflow feeds`, `workflow visible-posts`, the main `workflow hacker-news`
+workflow, `workflow hacker-news collect`, `workflow reddit collect/posts`,
+`workflow x collect`, `workflow linkedin collect`, and `workflow arxiv collect`.
+Cleanup is bounded and restricted to the exact page each command created;
+`--keep-open` is the explicit debugging lease for the workflows that expose it.
+A failed collection remains the primary error even if cleanup also reports a
+problem, while successful source-collection JSON reports its cleanup outcome.
 
 Provider workflows must report capability and authentication uncertainty
 explicitly. Do not capture or replay credentials outside the repository's

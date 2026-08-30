@@ -34,25 +34,15 @@ func (a *app) newWorkflowLinkedInCommand() *cobra.Command {
 			_ = closeClient(ctx)
 			return err
 		}
-		closed := false
-		closePage := func() string {
-			if closed {
-				return ""
-			}
-			closed = true
-			if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
-				return err.Error()
-			}
-			return ""
-		}
-		defer closePage()
+		closeWorkflowPage := a.workflowPageCloser(client, targetID, request.URL, false)
 		session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 		if err != nil {
-			_ = cdp.CloseTargetWithClient(ctx, client, targetID)
+			_, _ = closeWorkflowPage()
 			_ = closeClient(ctx)
 			return commandError("connection_failed", "connection", fmt.Sprintf("attach LinkedIn target: %v", err), ExitConnection, nil)
 		}
 		defer session.Close(ctx)
+		defer func() { _, _ = closeWorkflowPage() }()
 		if _, err := session.Navigate(ctx, request.URL); err != nil {
 			return commandError("linkedin_navigation_failed", "connection", err.Error(), ExitConnection, nil)
 		}
@@ -99,7 +89,7 @@ func (a *app) newWorkflowLinkedInCommand() *cobra.Command {
 				reason = "requested_limit_without_exhaustion_proof"
 			}
 		}
-		closeError := closePage()
+		closed, closeError := closeWorkflowPage()
 		if closeError != "" {
 			return commandError("linkedin_cleanup_failed", "cleanup", closeError, ExitCheckFailed, nil)
 		}
@@ -109,7 +99,7 @@ func (a *app) newWorkflowLinkedInCommand() *cobra.Command {
 			continuation = "discussion_" + status
 		}
 		coverage := dynamicSourceCoverage(observed, missing, status, reason, continuation, "", status != "exhausted" && status != "ceiling")
-		workflow := map[string]any{"name": "linkedin-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": reason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}
+		workflow := map[string]any{"name": "linkedin-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": reason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closed, "close_error": closeError}
 		return a.render(ctx, linkedInCollectionMarkdown(final.URL, final.Kind, records, workflow, coverage), map[string]any{"ok": true, "request": final, "kind": final.Kind, "records": records, "coverage": coverage, "workflow": workflow})
 	}}
 	collect.Flags().IntVar(&limit, "limit", 100, "maximum source-native records to collect (1-500)")
