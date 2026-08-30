@@ -160,8 +160,10 @@ cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format
 ```
 
 For target-scoped raw execution, `--target-index N` selects the 1-based page
-order shown by `cdp pages`. It cannot be combined with `--target`,
-`--url-contains`, `--title-contains`, or `--target-type`; omit it for
+order shown by `cdp pages`. That page-only order is deterministic ascending
+full target ID, independent of Chrome's response order. The index cannot be
+combined with `--target`, `--url-contains`, `--title-contains`, or
+`--target-type`; omit it for
 browser-scoped execution or use the other selectors for non-page targets.
 Page JSON includes the full `id` and an uppercase eight-character `short_id`;
 it also includes the current 1-based page-only `index`. Generic target rows

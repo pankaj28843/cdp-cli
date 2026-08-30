@@ -98,7 +98,7 @@ func TestDialogCommandsSelectIndexedPageAndPreserveOutput(t *testing.T) {
 	for _, command := range commands {
 		t.Run(command.name, func(t *testing.T) {
 			server := newFakeCDPServer(t, []map[string]any{
-				{"targetId": "page-one", "type": "page", "title": "First", "url": "https://example.test/first"},
+				{"targetId": "baseline-page", "type": "page", "title": "First", "url": "https://example.test/first"},
 				{"targetId": "worker-between", "type": "worker", "title": "Worker", "url": "https://example.test/worker"},
 				{"targetId": "dialog-page", "type": "page", "title": "Dialog", "url": "https://example.test/dialog"},
 			})

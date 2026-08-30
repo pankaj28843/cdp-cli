@@ -128,7 +128,7 @@ func TestWaitObserversSelectPageByTargetIndex(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			targets := []map[string]any{
-				{"targetId": "page-one", "type": "page", "title": "First", "url": "https://example.test/first"},
+				{"targetId": "baseline-page", "type": "page", "title": "First", "url": "https://example.test/first"},
 				{"targetId": "worker-between", "type": "worker", "title": "Worker", "url": "https://example.test/worker"},
 				{"targetId": test.targetID, "type": "page", "title": "Second", "url": "https://example.test/second"},
 			}

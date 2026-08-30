@@ -220,17 +220,26 @@ func firstNonEmpty(values ...string) string {
 }
 
 func pageRows(targets []cdp.TargetInfo) []map[string]any {
-	pages := make([]map[string]any, 0, len(targets))
-	index := 0
-	for _, target := range targets {
-		if target.Type != "page" {
-			continue
-		}
-		index++
+	ordered := orderedPageTargets(targets)
+	pages := make([]map[string]any, 0, len(ordered))
+	for index, target := range ordered {
 		row := pageRow(target)
-		row["index"] = index
+		row["index"] = index + 1
 		pages = append(pages, row)
 	}
+	return pages
+}
+
+func orderedPageTargets(targets []cdp.TargetInfo) []cdp.TargetInfo {
+	pages := make([]cdp.TargetInfo, 0, len(targets))
+	for _, target := range targets {
+		if target.Type == "page" {
+			pages = append(pages, target)
+		}
+	}
+	sort.SliceStable(pages, func(i, j int) bool {
+		return pages[i].TargetID < pages[j].TargetID
+	})
 	return pages
 }
 
@@ -2189,12 +2198,7 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 	if err := validatePageTargetSelectorValues(targetID, urlContains, titleContains); err != nil {
 		return cdp.TargetInfo{}, err
 	}
-	var pages []cdp.TargetInfo
-	for _, target := range targets {
-		if target.Type == "page" {
-			pages = append(pages, target)
-		}
-	}
+	pages := orderedPageTargets(targets)
 	if targetID != "" {
 		var matches []cdp.TargetInfo
 		for _, page := range pages {
@@ -2232,12 +2236,7 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 }
 
 func resolvePageTargetByIndex(targets []cdp.TargetInfo, targetIndex int) (cdp.TargetInfo, error) {
-	pages := make([]cdp.TargetInfo, 0, len(targets))
-	for _, target := range targets {
-		if target.Type == "page" {
-			pages = append(pages, target)
-		}
-	}
+	pages := orderedPageTargets(targets)
 	if targetIndex <= 0 {
 		return cdp.TargetInfo{}, commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
 	}

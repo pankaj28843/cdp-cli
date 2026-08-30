@@ -47,8 +47,9 @@ Prefer stable semantic locators and exact target IDs, unique ID prefixes, or
 URL/title filters. Pass exactly one selector mode; it must identify exactly one
 target. `cdp pages --json` publishes the full `id` plus a copy-ready uppercase
 eight-character `short_id`; target prefixes are case-insensitive. Page rows also
-publish the 1-based `index`
-accepted by `--target-index`. Ambiguous and not-found selector errors expose
+publish the 1-based `index` accepted by `--target-index`. That page-only order
+is ascending full target ID, so Chrome response permutations do not remap an
+unchanged page set. Ambiguous and not-found selector errors expose
 bounded full and short candidate/available IDs plus page indexes under `.data`,
 so an exact retry remains possible when short IDs collide; they never include
 page URLs or titles. Plain target errors render that same bounded evidence as
