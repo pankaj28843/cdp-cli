@@ -193,6 +193,12 @@ func (c *rpcLeaseClient) ReadEvent(context.Context) (cdp.Event, error) {
 	return cdp.Event{}, errors.New("synthetic event unavailable")
 }
 
+func (c *rpcLeaseClient) DrainSessionEvents(string) []cdp.Event { return nil }
+
+func (c *rpcLeaseClient) ReadSessionEvent(context.Context, string) (cdp.Event, error) {
+	return cdp.Event{}, errors.New("synthetic session event unavailable")
+}
+
 func (c *rpcLeaseClient) closeCalls() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

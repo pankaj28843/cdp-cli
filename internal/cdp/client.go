@@ -88,7 +88,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		writeGate:    make(chan struct{}, 1),
 		pending:      map[int64]chan pendingResponse{},
 		readCancel:   cancel,
-		eventNotify:  make(chan struct{}, 1),
+		eventNotify:  make(chan struct{}),
 		handlers:     map[string]map[uint64]EventHandler{},
 		terminalWait: make(chan struct{}),
 	}
@@ -347,29 +347,72 @@ func (c *Client) DrainEvents() []Event {
 	return events
 }
 
+func (c *Client) DrainSessionEvents(sessionID string) []Event {
+	c.eventMu.Lock()
+	defer c.eventMu.Unlock()
+	if len(c.eventBuf) == 0 {
+		return nil
+	}
+	matched := make([]Event, 0)
+	retained := make([]Event, 0, len(c.eventBuf))
+	for _, event := range c.eventBuf {
+		if event.SessionID == sessionID {
+			matched = append(matched, event)
+			continue
+		}
+		retained = append(retained, event)
+	}
+	c.eventBuf = retained
+	return matched
+}
+
 func (c *Client) ReadEvent(ctx context.Context) (Event, error) {
+	return c.readEvent(ctx, "", false)
+}
+
+func (c *Client) ReadSessionEvent(ctx context.Context, sessionID string) (Event, error) {
+	return c.readEvent(ctx, sessionID, true)
+}
+
+func (c *Client) readEvent(ctx context.Context, sessionID string, exactSession bool) (Event, error) {
 	for {
-		if event, ok := c.popEvent(); ok {
+		event, ok, notify := c.popEventOrWait(sessionID, exactSession)
+		if ok {
 			return event, nil
 		}
 		select {
 		case <-ctx.Done():
 			return Event{}, ctx.Err()
-		case <-c.eventNotify:
+		case <-notify:
 		}
 	}
 }
 
-func (c *Client) popEvent() (Event, bool) {
+func (c *Client) popEventOrWait(sessionID string, exactSession bool) (Event, bool, <-chan struct{}) {
 	c.eventMu.Lock()
 	defer c.eventMu.Unlock()
-	if len(c.eventBuf) == 0 {
-		return Event{}, false
+	if c.eventNotify == nil {
+		c.eventNotify = make(chan struct{})
 	}
-	event := c.eventBuf[0]
-	copy(c.eventBuf, c.eventBuf[1:])
+	index := -1
+	if !exactSession && len(c.eventBuf) > 0 {
+		index = 0
+	} else if exactSession {
+		for i, event := range c.eventBuf {
+			if event.SessionID == sessionID {
+				index = i
+				break
+			}
+		}
+	}
+	if index < 0 {
+		return Event{}, false, c.eventNotify
+	}
+	event := c.eventBuf[index]
+	copy(c.eventBuf[index:], c.eventBuf[index+1:])
+	c.eventBuf[len(c.eventBuf)-1] = Event{}
 	c.eventBuf = c.eventBuf[:len(c.eventBuf)-1]
-	return event, true
+	return event, true, nil
 }
 
 func (c *Client) bufferEvent(event Event) {
@@ -378,14 +421,15 @@ func (c *Client) bufferEvent(event Event) {
 	}
 	c.eventMu.Lock()
 	defer c.eventMu.Unlock()
+	if c.eventNotify == nil {
+		c.eventNotify = make(chan struct{})
+	}
 	c.eventBuf = append(c.eventBuf, event)
 	if len(c.eventBuf) > maxBufferedEvents {
 		c.eventBuf = c.eventBuf[len(c.eventBuf)-maxBufferedEvents:]
 	}
-	select {
-	case c.eventNotify <- struct{}{}:
-	default:
-	}
+	close(c.eventNotify)
+	c.eventNotify = make(chan struct{})
 }
 
 func (r response) event() (Event, bool) {

@@ -39,7 +39,7 @@ func (a *app) newEventsStreamCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stream",
 		Short: "Stream session-scoped CDP events as JSONL",
-		Long:  "Stream session-scoped CDP events as JSONL. The stream checks whether its daemon runtime registration is still current before periodically sending a read-only Runtime.evaluate heartbeat on the already attached exact page session; a definitive runtime replacement retires immediately, while ambiguous state follows the two-strike heartbeat policy.",
+		Long:  "Stream session-scoped CDP events as JSONL. Concurrent persistent observers dequeue only their exact session without consuming another observer's events. The stream checks whether its daemon runtime registration is still current before periodically sending a read-only Runtime.evaluate heartbeat on the already attached exact page session; a definitive runtime replacement retires immediately, while ambiguous state follows the two-strike heartbeat policy.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runEventsStream(cmd, options)
@@ -164,7 +164,7 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 	}
 
 	drainCtx, cancelDrain := eventStreamCallContext(streamCtx)
-	initialEvents, err := client.DrainEvents(drainCtx)
+	initialEvents, err := client.DrainSessionEvents(drainCtx, session.SessionID)
 	cancelDrain()
 	if err != nil {
 		return finishFailure(fmt.Errorf("drain initial events: %w", err))
@@ -181,7 +181,7 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 
 	registrationCheck := a.eventStreamRuntimeRegistrationCheck(client)
 	livenessCh := pumpEventStreamLivenessWithRegistration(streamCtx, client, session.SessionID, eventStreamLivenessPollInterval, eventStreamLivenessFailureThreshold, registrationCheck)
-	eventCh := pumpEventStream(streamCtx, client)
+	eventCh := pumpEventStream(streamCtx, client, session.SessionID)
 	commandCh := readEventStreamCommands(streamCtx, cmd.InOrStdin())
 	var durationCh <-chan time.Time
 	var durationTimer *time.Timer
@@ -396,13 +396,13 @@ func pumpEventStreamLivenessWithRegistration(ctx context.Context, client browser
 	return results
 }
 
-func pumpEventStream(ctx context.Context, client browserEventClient) <-chan eventStreamEventResult {
+func pumpEventStream(ctx context.Context, client browserEventClient, sessionID string) <-chan eventStreamEventResult {
 	results := make(chan eventStreamEventResult, 1)
 	go func() {
 		defer close(results)
 		for {
 			readCtx, cancelRead := context.WithTimeout(ctx, eventStreamReadTimeout)
-			event, err := client.ReadEvent(readCtx)
+			event, err := client.ReadSessionEvent(readCtx, sessionID)
 			cancelRead()
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				continue
@@ -763,6 +763,7 @@ func eventStreamMetadata(target cdp.TargetInfo, sessionID string, options eventS
 		"duration":        durationString(options.duration),
 		"max_events":      options.maxEvents,
 		"session_bound":   sessionID != "",
+		"event_dequeue":   "exact_session",
 		"target_index":    options.targetIndex,
 		"target_id":       target.TargetID,
 		"all_events":      subscriptions.all,

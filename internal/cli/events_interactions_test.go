@@ -33,8 +33,8 @@ func TestEventsInteractionsStreamsSanitizedBindingEventsAndCleansUp(t *testing.T
 		t.Fatalf("interaction records = %v, want ready/interaction/stopped", recordTypes(records))
 	}
 	observer, ok := records[0]["observer"].(map[string]any)
-	if !ok || observer["binding_installed"] != true || observer["current_document_installed"] != true || observer["future_documents_installed"] != true {
-		t.Fatalf("ready observer = %#v, want current/future binding setup evidence", records[0]["observer"])
+	if !ok || observer["event_dequeue"] != "exact_session" || observer["binding_installed"] != true || observer["current_document_installed"] != true || observer["future_documents_installed"] != true {
+		t.Fatalf("ready observer = %#v, want exact-session dequeue and current/future binding setup evidence", records[0]["observer"])
 	}
 	interaction, ok := records[1]["interaction"].(map[string]any)
 	if !ok || interaction["type"] != "click" {
@@ -101,8 +101,8 @@ func TestEventsInteractionsDropsArbitraryBindingPayloads(t *testing.T) {
 		t.Fatalf("stopped ignored_binding_events = %#v, want rejected payload evidence", stopped["ignored_binding_events"])
 	}
 	foreign, ok := stopped["foreign_events_dropped"].(float64)
-	if !ok || foreign < 1 {
-		t.Fatalf("stopped foreign_events_dropped = %#v, want exact-session filtering evidence", stopped["foreign_events_dropped"])
+	if !ok || foreign != 0 {
+		t.Fatalf("stopped foreign_events_dropped = %#v, want exact-session dequeue with no foreign event", stopped["foreign_events_dropped"])
 	}
 }
 

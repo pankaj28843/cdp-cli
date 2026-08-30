@@ -53,6 +53,15 @@ func (f *eventStreamLivenessFakeClient) ReadEvent(ctx context.Context) (cdp.Even
 	return cdp.Event{}, ctx.Err()
 }
 
+func (f *eventStreamLivenessFakeClient) DrainSessionEvents(context.Context, string) ([]cdp.Event, error) {
+	return nil, nil
+}
+
+func (f *eventStreamLivenessFakeClient) ReadSessionEvent(ctx context.Context, _ string) (cdp.Event, error) {
+	<-ctx.Done()
+	return cdp.Event{}, ctx.Err()
+}
+
 func (f *eventStreamLivenessFakeClient) snapshot() (int, eventStreamLivenessCall) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

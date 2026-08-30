@@ -28,6 +28,8 @@ const RuntimeLogFileName = "daemon.log"
 const (
 	RPCMethodDrainEvents          = "Daemon.drainEvents"
 	RPCMethodReadEvent            = "Daemon.readEvent"
+	RPCMethodDrainSessionEvents   = "Daemon.drainSessionEvents"
+	RPCMethodReadSessionEvent     = "Daemon.readSessionEvent"
 	RPCMethodFetchProtocol        = "Daemon.fetchProtocol"
 	RPCMethodBeginInvocationLease = "Daemon.beginInvocationLease"
 	RPCMethodRenewInvocationLease = "Daemon.renewInvocationLease"
@@ -1012,6 +1014,41 @@ func (c RuntimeClient) ReadEvent(ctx context.Context) (cdp.Event, error) {
 	return event, nil
 }
 
+func (c RuntimeClient) DrainSessionEvents(ctx context.Context, sessionID string) ([]cdp.Event, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	raw, err := CallRuntime(ctx, c.Runtime, sessionID, RPCMethodDrainSessionEvents, nil)
+	if err != nil {
+		return nil, err
+	}
+	var events []cdp.Event
+	if len(raw) == 0 {
+		return events, nil
+	}
+	if err := json.Unmarshal(raw, &events); err != nil {
+		return nil, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodDrainSessionEvents, err)
+	}
+	return events, nil
+}
+
+func (c RuntimeClient) ReadSessionEvent(ctx context.Context, sessionID string) (cdp.Event, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return cdp.Event{}, fmt.Errorf("session id is required")
+	}
+	raw, err := CallRuntime(ctx, c.Runtime, sessionID, RPCMethodReadSessionEvent, nil)
+	if err != nil {
+		return cdp.Event{}, err
+	}
+	var event cdp.Event
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return cdp.Event{}, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodReadSessionEvent, err)
+	}
+	return event, nil
+}
+
 func (c RuntimeClient) FetchProtocol(ctx context.Context) (cdp.Protocol, error) {
 	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodFetchProtocol, nil)
 	if err != nil {
@@ -1326,6 +1363,8 @@ type runtimeRPCClient interface {
 	Endpoint() string
 	DrainEvents() []cdp.Event
 	ReadEvent(context.Context) (cdp.Event, error)
+	DrainSessionEvents(string) []cdp.Event
+	ReadSessionEvent(context.Context, string) (cdp.Event, error)
 }
 
 func handleRPC(ctx context.Context, conn net.Conn, client runtimeRPCClient, opts holdOptions, leases *LeaseManager, marker *windowMarkerController) {
@@ -1470,6 +1509,27 @@ func handleRPC(ctx context.Context, conn net.Conn, client runtimeRPCClient, opts
 		event, err := client.ReadEvent(callCtx)
 		if err != nil {
 			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("rpc_read_event_failed", "connection", err))
+			return
+		}
+		writeRPCResult(responseCtx, conn, event)
+		return
+	case RPCMethodDrainSessionEvents:
+		sessionID := strings.TrimSpace(req.SessionID)
+		if sessionID == "" {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("session_id_required", "usage", "session id is required"))
+			return
+		}
+		writeRPCResult(responseCtx, conn, client.DrainSessionEvents(sessionID))
+		return
+	case RPCMethodReadSessionEvent:
+		sessionID := strings.TrimSpace(req.SessionID)
+		if sessionID == "" {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("session_id_required", "usage", "session id is required"))
+			return
+		}
+		event, err := client.ReadSessionEvent(callCtx, sessionID)
+		if err != nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("rpc_read_session_event_failed", "connection", err))
 			return
 		}
 		writeRPCResult(responseCtx, conn, event)

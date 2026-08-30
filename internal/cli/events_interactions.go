@@ -43,7 +43,7 @@ func (a *app) newEventsInteractionsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "interactions",
 		Short: "Observe sanitized DOM interactions as JSONL",
-		Long:  "Observe the source collaboration bridge for click, scroll, selection-change, and keydown causes that ordinary CDP events do not expose. The observer is session-scoped, bounded, and deliberately omits page text, key values, input values, HTML, and raw binding payloads.",
+		Long:  "Observe the source collaboration bridge for click, scroll, selection-change, and keydown causes that ordinary CDP events do not expose. Concurrent persistent observers dequeue only their exact session without consuming another observer's events. The observer is session-scoped, bounded, and deliberately omits page text, key values, input values, HTML, and raw binding payloads.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runEventsInteractions(cmd, options)
@@ -111,7 +111,7 @@ func (a *app) runEventsInteractions(cmd *cobra.Command, options interactionObser
 	if err := enableEventDomain(setupCtx, client, session.SessionID, "page"); err != nil {
 		return commandError("observer_enable_failed", "connection", fmt.Sprintf("enable Page for target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 	}
-	if _, err := client.DrainEvents(setupCtx); err != nil {
+	if _, err := client.DrainSessionEvents(setupCtx, session.SessionID); err != nil {
 		return commandError("observer_drain_failed", "connection", fmt.Sprintf("drain setup events for target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp doctor --json"})
 	}
 
@@ -143,7 +143,7 @@ func (a *app) runEventsInteractions(cmd *cobra.Command, options interactionObser
 	if len(evaluationResult.ExceptionDetails) > 0 && string(evaluationResult.ExceptionDetails) != "null" {
 		return commandError("observer_current_document_failed", "check_failed", fmt.Sprintf("install interaction listener in target %s returned an execution exception", target.TargetID), ExitCheckFailed, []string{"cdp pages --json", "cdp doctor --json"})
 	}
-	initialEvents, err := client.DrainEvents(setupCtx)
+	initialEvents, err := client.DrainSessionEvents(setupCtx, session.SessionID)
 	if err != nil {
 		return commandError("observer_drain_failed", "connection", fmt.Sprintf("drain interaction setup events for target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp doctor --json"})
 	}
@@ -243,7 +243,7 @@ func (a *app) runEventsInteractions(cmd *cobra.Command, options interactionObser
 		}
 	}
 
-	eventCh := pumpEventStream(streamCtx, client)
+	eventCh := pumpEventStream(streamCtx, client, session.SessionID)
 	for {
 		select {
 		case <-streamCtx.Done():
@@ -348,6 +348,7 @@ func interactionObserverMetadata(target cdp.TargetInfo, options interactionObser
 	return map[string]any{
 		"schema_version":             interactionObserverSchemaVersion,
 		"session_bound":              true,
+		"event_dequeue":              "exact_session",
 		"target_id":                  target.TargetID,
 		"target_index":               options.targetIndex,
 		"match":                      selected,

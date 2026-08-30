@@ -1608,6 +1608,8 @@ type browserEventClient interface {
 	cdp.CommandClient
 	DrainEvents(context.Context) ([]cdp.Event, error)
 	ReadEvent(context.Context) (cdp.Event, error)
+	DrainSessionEvents(context.Context, string) ([]cdp.Event, error)
+	ReadSessionEvent(context.Context, string) (cdp.Event, error)
 }
 
 func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(context.Context) error, error) {

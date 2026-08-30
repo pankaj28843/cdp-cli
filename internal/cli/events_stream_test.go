@@ -50,8 +50,8 @@ func TestEventsStreamIsSessionScopedBoundedAndIndexAddressable(t *testing.T) {
 		t.Fatalf("ready target = %#v, want stream-page", records[0]["target"])
 	}
 	streamMetadata, ok := records[0]["stream"].(map[string]any)
-	if !ok || streamMetadata["session_bound"] != true || streamMetadata["target_index"] != float64(2) {
-		t.Fatalf("ready stream metadata = %#v, want session-bound index 2", records[0]["stream"])
+	if !ok || streamMetadata["session_bound"] != true || streamMetadata["event_dequeue"] != "exact_session" || streamMetadata["target_index"] != float64(2) {
+		t.Fatalf("ready stream metadata = %#v, want exact-session dequeue and index 2", records[0]["stream"])
 	}
 	liveness, ok := streamMetadata["liveness"].(map[string]any)
 	if !ok || liveness["enabled"] != true || liveness["heartbeat"] != "Runtime.evaluate" || liveness["poll_interval"] != "15s" || liveness["failure_threshold"] != float64(2) || liveness["read_only"] != true {
@@ -61,8 +61,8 @@ func TestEventsStreamIsSessionScopedBoundedAndIndexAddressable(t *testing.T) {
 	if !ok || event["sessionId"] != "session-stream-page" || event["method"] != "Runtime.consoleAPICalled" {
 		t.Fatalf("stream event = %#v, want attached session runtime event", records[1]["event"])
 	}
-	if dropped, ok := records[2]["foreign_events_dropped"].(float64); !ok || dropped < 1 {
-		t.Fatalf("stream stopped record = %#v, want at least one foreign event dropped", records[2])
+	if dropped, ok := records[2]["foreign_events_dropped"].(float64); !ok || dropped != 0 {
+		t.Fatalf("stream stopped record = %#v, want exact-session dequeue with no foreign event", records[2])
 	}
 	if records[2]["reason"] == "" {
 		t.Fatalf("stopped record has no reason: %#v", records[2])
