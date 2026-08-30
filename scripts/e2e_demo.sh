@@ -257,6 +257,22 @@ jq -e '.ok == false and .code == "timeout" and .err_class == "timeout"' <<<"$eva
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
 collector_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' | head -n 1)"
 collector_target_short_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .short_id | ascii_downcase' | head -n 1)"
+set +e
+target_not_found_output="$("$binary" eval 'document.title' --target definitely-missing --state-dir "$state_dir/cdp-state" --json)"
+target_not_found_code=$?
+set -e
+if [[ "$target_not_found_code" -ne 2 ]]; then
+  echo "installed target-not-found exit code: $target_not_found_code" >&2
+  echo "$target_not_found_output" >&2
+  exit 1
+fi
+jq -e --arg short "$collector_target_short_id" '
+  .ok == false and .code == "target_not_found" and
+  (.data.available_count >= 1) and
+  (.data.available_short_ids | index(($short | ascii_upcase)) != null) and
+  (.data.available_truncated | type == "boolean") and
+  ((.data | has("url")) | not) and ((.data | has("title")) | not)
+' <<<"$target_not_found_output" >/dev/null
 collector_ready_root="$state_dir/collector-ready"
 collector_ready_file="$collector_ready_root/console.ready.json"
 collector_output="$state_dir/collector-console.json"

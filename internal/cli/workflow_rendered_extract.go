@@ -493,10 +493,12 @@ func (a *app) resolveUniqueRenderedExtractTarget(ctx context.Context, client cdp
 		return resolvePageTarget(targets, targetID, "", "")
 	}
 	matches := make([]cdp.TargetInfo, 0)
+	pages := make([]cdp.TargetInfo, 0)
 	for _, target := range targets {
 		if target.Type != "page" {
 			continue
 		}
+		pages = append(pages, target)
 		if urlContains != "" && strings.Contains(strings.ToLower(target.URL), strings.ToLower(urlContains)) {
 			matches = append(matches, target)
 		}
@@ -508,7 +510,7 @@ func (a *app) resolveUniqueRenderedExtractTarget(ctx context.Context, client cdp
 	if titleContains != "" {
 		label = fmt.Sprintf("page title containing %q", titleContains)
 	}
-	return onePageTarget(matches, label)
+	return onePageTarget(matches, pages, label)
 }
 
 func (a *app) runRenderedExtractWorkflow(cmd *cobra.Command, options renderedExtractOptions) (result renderedExtractResult, retErr error) {

@@ -57,3 +57,41 @@ func assertAmbiguousTargetEvidence(t *testing.T, err error) {
 		t.Fatalf("ambiguous target data = %#v, want count 12 and ten bounded IDs", data)
 	}
 }
+
+func TestTargetNotFoundErrorsIncludeTypeScopedAvailableShortIDs(t *testing.T) {
+	targets := []cdp.TargetInfo{
+		{TargetID: "PAGEAAAA12345678", Type: "page"},
+		{TargetID: "PAGEBBBB12345678", Type: "page"},
+		{TargetID: "WORKERAA12345678", Type: "service_worker"},
+	}
+
+	_, pageErr := resolvePageTarget(targets, "missing", "", "")
+	assertAvailableTargetEvidence(t, pageErr, 2, []string{"PAGEAAAA", "PAGEBBBB"})
+
+	_, protocolErr := resolveProtocolTarget(targets, "missing", "", "", "service_worker")
+	assertAvailableTargetEvidence(t, protocolErr, 1, []string{"WORKERAA"})
+
+	_, indexErr := resolvePageTargetByIndex(targets, 3)
+	assertAvailableTargetEvidence(t, indexErr, 2, []string{"PAGEAAAA", "PAGEBBBB"})
+}
+
+func assertAvailableTargetEvidence(t *testing.T, err error, count int, shortIDs []string) {
+	t.Helper()
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) || commandErr.Code != "target_not_found" {
+		t.Fatalf("error = %v, want target_not_found", err)
+	}
+	data, ok := commandErr.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("target-not-found data = %#v, want object", commandErr.Data)
+	}
+	gotIDs, ok := data["available_short_ids"].([]string)
+	if data["available_count"] != count || data["available_truncated"] != false || !ok || len(gotIDs) != len(shortIDs) {
+		t.Fatalf("target-not-found data = %#v, want count %d and IDs %v", data, count, shortIDs)
+	}
+	for i := range shortIDs {
+		if gotIDs[i] != shortIDs[i] {
+			t.Fatalf("available short IDs = %v, want %v", gotIDs, shortIDs)
+		}
+	}
+}

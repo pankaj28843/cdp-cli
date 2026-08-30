@@ -268,20 +268,34 @@ func targetIDMatchesPrefix(targetID, prefix string) bool {
 }
 
 func ambiguousTargetEvidence(matches []cdp.TargetInfo) map[string]any {
-	const limit = 10
-	count := len(matches)
-	if len(matches) > limit {
-		matches = matches[:limit]
-	}
-	shortIDs := make([]string, 0, len(matches))
-	for _, target := range matches {
-		shortIDs = append(shortIDs, shortTargetID(target.TargetID))
-	}
+	count, shortIDs, truncated := boundedTargetShortIDs(matches)
 	return map[string]any{
 		"candidate_count":     count,
 		"candidate_short_ids": shortIDs,
-		"candidate_truncated": count > limit,
+		"candidate_truncated": truncated,
 	}
+}
+
+func availableTargetEvidence(targets []cdp.TargetInfo) map[string]any {
+	count, shortIDs, truncated := boundedTargetShortIDs(targets)
+	return map[string]any{
+		"available_count":     count,
+		"available_short_ids": shortIDs,
+		"available_truncated": truncated,
+	}
+}
+
+func boundedTargetShortIDs(targets []cdp.TargetInfo) (int, []string, bool) {
+	const limit = 10
+	count := len(targets)
+	if len(targets) > limit {
+		targets = targets[:limit]
+	}
+	shortIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		shortIDs = append(shortIDs, shortTargetID(target.TargetID))
+	}
+	return count, shortIDs, count > limit
 }
 
 func (a *app) newPageCommand() *cobra.Command {
@@ -2145,7 +2159,7 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 				matches = append(matches, page)
 			}
 		}
-		return onePageTarget(matches, fmt.Sprintf("target %q", targetID))
+		return onePageTarget(matches, pages, fmt.Sprintf("target %q", targetID))
 	}
 	if urlContains != "" {
 		for _, page := range pages {
@@ -2153,7 +2167,7 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 				return page, nil
 			}
 		}
-		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page URL contains %q", urlContains))
+		return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page URL contains %q", urlContains), pages)
 	}
 	if titleContains != "" {
 		for _, page := range pages {
@@ -2161,9 +2175,9 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 				return page, nil
 			}
 		}
-		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page title contains %q", titleContains))
+		return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page title contains %q", titleContains), pages)
 	}
-	return onePageTarget(pages, "default page")
+	return onePageTarget(pages, pages, "default page")
 }
 
 func resolvePageTargetByIndex(targets []cdp.TargetInfo, targetIndex int) (cdp.TargetInfo, error) {
@@ -2177,21 +2191,22 @@ func resolvePageTargetByIndex(targets []cdp.TargetInfo, targetIndex int) (cdp.Ta
 		return cdp.TargetInfo{}, commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
 	}
 	if targetIndex > len(pages) {
-		return cdp.TargetInfo{}, commandError(
+		return cdp.TargetInfo{}, commandErrorWithData(
 			"target_not_found",
 			"usage",
 			fmt.Sprintf("page target index %d is out of range; found %d page targets", targetIndex, len(pages)),
 			ExitUsage,
 			[]string{"cdp pages --json"},
+			availableTargetEvidence(pages),
 		)
 	}
 	return pages[targetIndex-1], nil
 }
 
-func onePageTarget(matches []cdp.TargetInfo, label string) (cdp.TargetInfo, error) {
+func onePageTarget(matches, available []cdp.TargetInfo, label string) (cdp.TargetInfo, error) {
 	switch len(matches) {
 	case 0:
-		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no %s matched", label))
+		return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no %s matched", label), available)
 	case 1:
 		return matches[0], nil
 	default:
@@ -2204,6 +2219,17 @@ func onePageTarget(matches []cdp.TargetInfo, label string) (cdp.TargetInfo, erro
 			ambiguousTargetEvidence(matches),
 		)
 	}
+}
+
+func pageTargetNotFound(message string, available []cdp.TargetInfo) error {
+	return commandErrorWithData(
+		"target_not_found",
+		"usage",
+		message,
+		ExitUsage,
+		[]string{"cdp pages --json", "cdp open <url> --json"},
+		availableTargetEvidence(available),
+	)
 }
 
 func targetNotFound(message string) error {

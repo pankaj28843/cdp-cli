@@ -608,10 +608,12 @@ func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titl
 	titleContains = strings.TrimSpace(titleContains)
 	targetType = strings.TrimSpace(targetType)
 	matches := make([]cdp.TargetInfo, 0, len(targets))
+	available := make([]cdp.TargetInfo, 0, len(targets))
 	for _, target := range targets {
 		if targetType != "" && target.Type != targetType {
 			continue
 		}
+		available = append(available, target)
 		if targetID != "" && !targetIDMatchesPrefix(target.TargetID, targetID) {
 			continue
 		}
@@ -640,12 +642,13 @@ func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titl
 		label += fmt.Sprintf(" with title containing %q", titleContains)
 	}
 	if len(matches) == 0 {
-		return cdp.TargetInfo{}, commandError(
+		return cdp.TargetInfo{}, commandErrorWithData(
 			"target_not_found",
 			"usage",
 			"no "+label+" matched",
 			ExitUsage,
 			protocolTargetRemediation(targetType),
+			availableTargetEvidence(available),
 		)
 	}
 	return cdp.TargetInfo{}, commandErrorWithData(

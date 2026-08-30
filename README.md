@@ -167,6 +167,8 @@ Page JSON includes the full `id` and an uppercase eight-character `short_id`;
 it also includes the current 1-based page-only `index`. Generic target rows
 publish the same `short_id`. `--target` accepts a unique case-insensitive ID
 prefix and rejects ambiguity with bounded metadata-only candidate short IDs.
+Not-found and out-of-range errors similarly return bounded compatible
+`available_short_ids` for an immediate corrected retry.
 
 The direct emulation family uses the same page-only selector: `viewport`,
 `clear`, `media`, `color-scheme`, `user-agent`, `geolocation`, `timezone`,
