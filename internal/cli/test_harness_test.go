@@ -201,7 +201,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					"domain":      "Page",
 					"description": "Page domain",
 					"commands": []map[string]any{
-						{"name": "navigate"},
+						{"name": "navigate", "parameters": []map[string]any{{"name": "url", "type": "string"}}},
 						{"name": "captureScreenshot", "description": "Capture page pixels", "parameters": []map[string]any{
 							{"name": "format", "type": "string", "optional": true},
 							{"name": "quality", "type": "integer", "optional": true},

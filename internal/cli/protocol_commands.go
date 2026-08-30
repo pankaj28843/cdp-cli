@@ -465,7 +465,17 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
 			}
-			if targetIndex > 0 || targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "" {
+			targetScoped := targetIndex > 0 || targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != ""
+			if validate {
+				scope := "browser"
+				if targetScoped {
+					scope = "target"
+				}
+				if err := a.validateProtocolExecParams(ctx, args[0], rawParams, scope); err != nil {
+					return err
+				}
+			}
+			if targetScoped {
 				var session *cdp.PageSession
 				var target cdp.TargetInfo
 				var err error
@@ -557,7 +567,7 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "filter targets by title substring; combines with ID/URL/type filters and must leave one target")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index for target-scoped execution")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
-	cmd.Flags().BoolVar(&validate, "validate", false, "validate params against live protocol metadata before executing")
+	cmd.Flags().BoolVar(&validate, "validate", false, "validate method, browser/target scope, and params against live protocol metadata before executing")
 	return cmd
 }
 

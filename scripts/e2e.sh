@@ -364,7 +364,7 @@ grep -q -- '--output-dir string' <<<"$chatgpt_attachment_help"
 "$binary" schema managed-browser --json | jq -e '.ok == true and .schema.name == "managed-browser" and (.schema.fields | map(.name) | index("user_data_dir")) and (.schema.fields | map(.name) | index("profile_seed_strategy"))' >/dev/null
 "$binary" schema managed-stop --json | jq -e '.ok == true and .schema.name == "managed-stop" and (.schema.fields | map(.name) | index("remaining_pids")) and (.schema.fields | map(.name) | index("safety_checks"))' >/dev/null
 "$binary" schema connection-resolve --json | jq -e '.ok == true and .schema.name == "connection-resolve" and (.schema.fields | map(.name) | index("source")) and (.schema.fields | map(.name) | index("browser_mode")) and (.schema.fields | map(.name) | index("browser_mode_source"))' >/dev/null
-"$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.description | contains("1-based target index")) and (.schema.fields | map(.name) | index("scope")) and (.schema.fields | map(.name) | index("artifact")) and (.schema.fields[] | select(.name == "target" and .type == "target" and (.description | contains("target-index"))))' >/dev/null
+"$binary" schema protocol-exec --json | jq -e '.ok == true and .schema.name == "protocol-exec" and (.schema.description | contains("1-based target index")) and (.schema.description | contains("pre-execution live-schema validation")) and (.schema.fields | map(.name) | index("scope")) and (.schema.fields | map(.name) | index("artifact")) and (.schema.fields[] | select(.name == "target" and .type == "target" and (.description | contains("target-index"))))' >/dev/null
 "$binary" schema protocol-examples --json | jq -e '.ok == true and .schema.name == "protocol-examples" and (.schema.fields[] | select(.name == "examples").description | contains("required/optional param names"))' >/dev/null
 "$binary" schema protocol-metadata --json | jq -e '.ok == true and .schema.name == "protocol-metadata"' >/dev/null
 "$binary" schema protocol-domains --json | jq -e '.ok == true and .schema.name == "protocol-domains"' >/dev/null
@@ -677,7 +677,7 @@ for storage_guard in "${storage_guard_commands[@]}"; do
   printf '%s\n' "$storage_guard_output" | jq -e '.ok == false and .code == "invalid_target_index"' >/dev/null
 done
 "$binary" describe --command "page close" --json | jq -e '.ok == true and .commands.name == "close" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
-"$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--target-type service_worker"))) and (.commands.flags[] | select(.name == "target-type" and .type == "string")) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
+"$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.examples | any(contains("--target"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--target-type service_worker"))) and (.commands.flags[] | select(.name == "target-type" and .type == "string")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "validate" and (.usage | contains("method")) and (.usage | contains("scope")) and (.usage | contains("params"))))' >/dev/null
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow hacker-news" --json | jq -e '.ok == true and .commands.name == "hacker-news" and (.commands.examples | length > 0)' >/dev/null
@@ -1060,7 +1060,7 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_examples_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured" or .code == "unknown_protocol_entity")' >/dev/null
     fi
     set +e
-    live_exec_output="$("$binary" --timeout 5s protocol exec Browser.getVersion --params '{}' --json 2>/tmp/cdp-cli-live-exec.err)"
+    live_exec_output="$("$binary" --timeout 5s protocol exec Browser.getVersion --params '{}' --validate --json 2>/tmp/cdp-cli-live-exec.err)"
     live_exec_code=$?
     set -e
     if [[ "$live_exec_code" -eq 0 ]]; then

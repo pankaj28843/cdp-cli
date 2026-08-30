@@ -159,6 +159,10 @@ cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains c
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
 ```
 
+Add `--validate` to check the method, browser/target scope, required parameters,
+and unknown parameters against the live browser protocol before attachment or
+execution. Omit it to preserve the forward-compatible raw CDP escape hatch.
+
 For target-scoped raw execution, `--target-index N` selects the 1-based page
 order shown by `cdp pages`. That page-only order is deterministic ascending
 full target ID, independent of Chrome's response order. The index cannot be

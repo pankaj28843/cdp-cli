@@ -221,6 +221,9 @@ Use cdp events stream for bounded JSONL observation with isolated event
 subscriptions. Use cdp protocol search, cdp protocol examples, and cdp
 protocol exec when a focused CDP escape hatch is more appropriate than a
 high-level wrapper. The daemon remains the browser boundary for both paths.
+Add `--validate` to reject unknown methods, browser/target scope mismatches,
+missing required parameters, and unknown parameters against the live protocol
+before attachment or execution. Omit it for intentionally permissive raw CDP.
 For target-scoped raw execution, `--target-index N` selects the 1-based page
 target order used by `cdp pages`; it is mutually exclusive with
 `--target`, `--url-contains`, `--title-contains`, and
