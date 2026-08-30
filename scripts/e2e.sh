@@ -79,13 +79,13 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
 "$binary" version --json --compact | jq -e --arg head "$source_head" '.verified == true and .commit == $head and .provenance == "managed"' >/dev/null
 "$binary" version | grep -q 'managed build; commit '
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
-"$binary" describe --jq '.globals | index("--json")' >/dev/null
-"$binary" describe --jq '.globals | index("--compact")' >/dev/null
-"$binary" describe --jq '.globals | index("--connection")' >/dev/null
-"$binary" describe --jq '.globals | index("--browser-mode")' >/dev/null
-"$binary" describe --jq '.globals | index("--browserMode")' >/dev/null
-"$binary" describe --jq '.globals | index("--max-tabs")' >/dev/null
-"$binary" describe --jq '.globals | index("--max-renderer-processes")' >/dev/null
+"$binary" describe --jq '.globals | index("--json") != null' >/dev/null
+"$binary" describe --jq '.globals | index("--compact") != null' >/dev/null
+"$binary" describe --jq '.globals | index("--connection") != null' >/dev/null
+"$binary" describe --jq '.globals | index("--browser-mode") != null' >/dev/null
+"$binary" describe --jq '.globals | index("--browserMode") != null' >/dev/null
+"$binary" describe --jq '.globals | index("--max-tabs") != null' >/dev/null
+"$binary" describe --jq '.globals | index("--max-renderer-processes") != null' >/dev/null
 "$binary" describe --command "version" --json | jq -e '.ok == true and .commands.name == "version" and (.commands.examples | any(contains("version --json")))' >/dev/null
 "$binary" describe --command "guide" --json | jq -e '.ok == true and .commands.name == "guide" and (.commands.examples | any(contains("guide --path"))) and (.commands.flags[] | select(.name == "path"))' >/dev/null
 "$binary" guide --json | jq -e '.ok == true and .schema_version == "guide/v1" and .mode == "content" and (.bytes > 0) and (.content | contains("# cdp-cli Agent Guide")) and (.content | contains("--fingerprint-profile"))' >/dev/null

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type commandInfo struct {
@@ -105,34 +107,27 @@ func (a *app) newDescribeCommand() *cobra.Command {
 			data := map[string]any{
 				"ok":       true,
 				"commands": describeCommand(target),
-				"globals": []string{
-					"--json",
-					"--compact",
-					"--jq",
-					"--debug",
-					"--timeout",
-					"--profile",
-					"--config",
-					"--browser-url",
-					"--browserUrl",
-					"--auto-connect",
-					"--autoConnect",
-					"--channel",
-					"--user-data-dir",
-					"--state-dir",
-					"--browser-mode",
-					"--browserMode",
-					"--active-browser-probe",
-					"--connection",
-					"--allow-over-budget",
-					"--max-tabs",
-				},
+				"globals":  visiblePersistentFlagNames(a.root),
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)
 		},
 	}
 	cmd.Flags().StringVar(&commandPath, "command", "", "describe one command path, such as 'daemon status'")
 	return cmd
+}
+
+func visiblePersistentFlagNames(root *cobra.Command) []string {
+	names := []string{}
+	if root == nil {
+		return names
+	}
+	root.PersistentFlags().VisitAll(func(flag *pflag.Flag) {
+		if !flag.Hidden {
+			names = append(names, "--"+flag.Name)
+		}
+	})
+	sort.Strings(names)
+	return names
 }
 
 func (a *app) newDoctorCommand() *cobra.Command {

@@ -7,13 +7,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/config"
+	"github.com/spf13/pflag"
 )
 
 func TestResolveBrowserModeRootPrecedence(t *testing.T) {
@@ -162,8 +165,19 @@ func TestDescribeIncludesBrowserModeMetadata(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("describe output is invalid JSON: %v", err)
 	}
-	if !containsTestString(got.Globals, "--browser-mode") || !containsTestString(got.Globals, "--browserMode") || !containsTestString(got.Globals, "--max-tabs") {
+	if !containsTestString(got.Globals, "--browser-mode") || !containsTestString(got.Globals, "--browserMode") || !containsTestString(got.Globals, "--max-tabs") || !containsTestString(got.Globals, "--max-renderer-processes") {
 		t.Fatalf("globals = %+v, want browser mode and budget flags", got.Globals)
+	}
+	root := (&app{}).newRoot()
+	wantGlobals := make([]string, 0, root.PersistentFlags().NFlag())
+	root.PersistentFlags().VisitAll(func(flag *pflag.Flag) {
+		if !flag.Hidden {
+			wantGlobals = append(wantGlobals, "--"+flag.Name)
+		}
+	})
+	sort.Strings(wantGlobals)
+	if !reflect.DeepEqual(got.Globals, wantGlobals) {
+		t.Fatalf("globals = %+v, want exact visible persistent flags %+v", got.Globals, wantGlobals)
 	}
 
 	out.Reset()
