@@ -217,6 +217,8 @@ type windowMarkerController struct {
 	statePath     string
 	config        WindowMarkerConfig
 	active        bool
+	setupContext  context.Context
+	cancelSetup   context.CancelFunc
 	unsubAttached func()
 	unsubDetached func()
 	sessions      map[string]windowMarkerSession
@@ -260,6 +262,7 @@ func (m *windowMarkerController) Enable(ctx context.Context, name string) (Windo
 	if err != nil {
 		return m.Status(), err
 	}
+	m.cancelInFlightSetup()
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	deactivateErr := m.deactivateLocked(ctx)
@@ -280,6 +283,7 @@ func (m *windowMarkerController) Enable(ctx context.Context, name string) (Windo
 }
 
 func (m *windowMarkerController) Disable(ctx context.Context) (WindowMarkerStatus, error) {
+	m.cancelInFlightSetup()
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	deactivateErr := m.deactivateLocked(ctx)
@@ -330,7 +334,10 @@ func (m *windowMarkerController) activateLocked(ctx context.Context) error {
 		m.mu.Unlock()
 		return nil
 	}
+	setupContext, cancelSetup := context.WithCancel(context.WithoutCancel(ctx))
 	m.active = true
+	m.setupContext = setupContext
+	m.cancelSetup = cancelSetup
 	m.mu.Unlock()
 
 	attached := m.client.SubscribeEvent("Target.attachedToTarget", m.handleAttached)
@@ -348,9 +355,12 @@ func (m *windowMarkerController) activateLocked(ctx context.Context) error {
 		detached()
 		m.mu.Lock()
 		m.active = false
+		m.setupContext = nil
+		m.cancelSetup = nil
 		m.unsubAttached = nil
 		m.unsubDetached = nil
 		m.mu.Unlock()
+		cancelSetup()
 		return fmt.Errorf("enable window marker target supervision: %w", err)
 	}
 	return nil
@@ -363,6 +373,9 @@ func (m *windowMarkerController) deactivateLocked(ctx context.Context) error {
 		return nil
 	}
 	m.active = false
+	cancelSetup := m.cancelSetup
+	m.setupContext = nil
+	m.cancelSetup = nil
 	unsubAttached := m.unsubAttached
 	unsubDetached := m.unsubDetached
 	m.unsubAttached = nil
@@ -374,6 +387,9 @@ func (m *windowMarkerController) deactivateLocked(ctx context.Context) error {
 	}
 	m.sessions = map[string]windowMarkerSession{}
 	m.mu.Unlock()
+	if cancelSetup != nil {
+		cancelSetup()
+	}
 	var firstErr error
 	for _, session := range sessions {
 		removeCtx, cancel := context.WithTimeout(ctx, windowMarkerSetupTimeout)
@@ -429,8 +445,9 @@ func (m *windowMarkerController) handleAttached(event cdp.Event) bool {
 		return true
 	}
 	m.sessions[params.SessionID] = windowMarkerSession{TargetID: params.TargetInfo.TargetID, SessionID: params.SessionID}
+	setupContext := m.setupContext
 	m.mu.Unlock()
-	go m.setupSession(params.SessionID, params.TargetInfo.TargetID)
+	go m.setupSession(setupContext, params.SessionID, params.TargetInfo.TargetID)
 	return true
 }
 
@@ -446,10 +463,10 @@ func (m *windowMarkerController) handleDetached(event cdp.Event) bool {
 	return true
 }
 
-func (m *windowMarkerController) setupSession(sessionID, targetID string) {
+func (m *windowMarkerController) setupSession(lifecycle context.Context, sessionID, targetID string) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), windowMarkerSetupTimeout)
+	ctx, cancel := context.WithTimeout(lifecycle, windowMarkerSetupTimeout)
 	defer cancel()
 	m.mu.Lock()
 	if !m.active || !m.config.Enabled {
@@ -486,14 +503,26 @@ func (m *windowMarkerController) setupSession(sessionID, targetID string) {
 	}
 	if err != nil {
 		m.mu.Lock()
-		m.setupFailures++
+		if ctx.Err() != context.Canceled {
+			m.setupFailures++
+		}
 		m.mu.Unlock()
 		return
 	}
 }
 
 func (m *windowMarkerController) close(ctx context.Context) error {
+	m.cancelInFlightSetup()
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	return m.deactivateLocked(ctx)
+}
+
+func (m *windowMarkerController) cancelInFlightSetup() {
+	m.mu.Lock()
+	cancel := m.cancelSetup
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }

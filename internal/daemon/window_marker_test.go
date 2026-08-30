@@ -73,11 +73,12 @@ type markerCall struct {
 }
 
 type fakeWindowMarkerTransport struct {
-	mu       sync.Mutex
-	handlers map[string]cdp.EventHandler
-	calls    []markerCall
-	failures map[string]int
-	callHook func(string)
+	mu              sync.Mutex
+	handlers        map[string]cdp.EventHandler
+	calls           []markerCall
+	failures        map[string]int
+	callHook        func(string)
+	sessionCallHook func(context.Context, string) error
 }
 
 func (f *fakeWindowMarkerTransport) Call(_ context.Context, method string, params any, _ any) error {
@@ -91,7 +92,7 @@ func (f *fakeWindowMarkerTransport) Call(_ context.Context, method string, param
 	return nil
 }
 
-func (f *fakeWindowMarkerTransport) CallSession(_ context.Context, sessionID, method string, params any, result any) error {
+func (f *fakeWindowMarkerTransport) CallSession(ctx context.Context, sessionID, method string, params any, result any) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, markerCall{method: method, sessionID: sessionID, params: params})
 	if f.failures != nil && f.failures[method] > 0 {
@@ -99,12 +100,62 @@ func (f *fakeWindowMarkerTransport) CallSession(_ context.Context, sessionID, me
 		f.mu.Unlock()
 		return errors.New("synthetic marker session failure")
 	}
+	hook := f.sessionCallHook
 	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, method); err != nil {
+			return err
+		}
+	}
 	if method == "Page.addScriptToEvaluateOnNewDocument" && result != nil {
 		encoded, _ := json.Marshal(map[string]string{"identifier": "script-" + sessionID})
 		_ = json.Unmarshal(encoded, result)
 	}
 	return nil
+}
+
+func TestWindowMarkerDisableCancelsInFlightSetup(t *testing.T) {
+	setupStarted := make(chan struct{})
+	var startedOnce sync.Once
+	transport := &fakeWindowMarkerTransport{
+		sessionCallHook: func(ctx context.Context, method string) error {
+			if method != "Page.enable" {
+				return nil
+			}
+			startedOnce.Do(func() { close(setupStarted) })
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	controller := newWindowMarkerController(t.TempDir(), "headed", transport)
+	if _, err := controller.Enable(context.Background(), "agent"); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if !transport.emit("Target.attachedToTarget", map[string]any{
+		"sessionId":  "session-blocked",
+		"targetInfo": map[string]any{"targetId": "page-blocked", "type": "page"},
+	}) {
+		t.Fatal("page attach was not consumed")
+	}
+	select {
+	case <-setupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("marker setup did not start")
+	}
+
+	disabled := make(chan error, 1)
+	go func() {
+		_, err := controller.Disable(context.Background())
+		disabled <- err
+	}()
+	select {
+	case err := <-disabled:
+		if err != nil {
+			t.Fatalf("Disable: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Disable waited for detached marker setup timeout")
+	}
 }
 
 func (f *fakeWindowMarkerTransport) SubscribeEvent(method string, handler cdp.EventHandler) func() {
