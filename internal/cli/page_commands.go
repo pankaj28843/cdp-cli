@@ -1947,6 +1947,19 @@ func validatePageTargetIndexSelector(cmd *cobra.Command, targetID, urlContains, 
 	if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "") {
 		return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
 	}
+	return validatePageTargetSelectorValues(targetID, urlContains, titleContains)
+}
+
+func validatePageTargetSelectorValues(targetID, urlContains, titleContains string) error {
+	selectors := 0
+	for _, selector := range []string{targetID, urlContains, titleContains} {
+		if strings.TrimSpace(selector) != "" {
+			selectors++
+		}
+	}
+	if selectors > 1 {
+		return commandError("invalid_target_selector", "usage", "pass only one of --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+	}
 	return nil
 }
 
@@ -2146,6 +2159,9 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 	targetID = strings.TrimSpace(targetID)
 	urlContains = strings.TrimSpace(urlContains)
 	titleContains = strings.TrimSpace(titleContains)
+	if err := validatePageTargetSelectorValues(targetID, urlContains, titleContains); err != nil {
+		return cdp.TargetInfo{}, err
+	}
 	var pages []cdp.TargetInfo
 	for _, target := range targets {
 		if target.Type == "page" {

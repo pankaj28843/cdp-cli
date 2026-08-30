@@ -171,6 +171,8 @@ Not-found and out-of-range errors similarly return bounded compatible
 `available_short_ids` for an immediate corrected retry.
 URL/title substring selectors also require one unique page; duplicate matches
 return the same bounded candidate evidence instead of selecting the first tab.
+Page commands reject combinations of target ID, URL, title, and index selector
+modes instead of silently prioritizing one; raw protocol filters remain conjunctive.
 
 The direct emulation family uses the same page-only selector: `viewport`,
 `clear`, `media`, `color-scheme`, `user-agent`, `geolocation`, `timezone`,

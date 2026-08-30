@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/spf13/cobra"
 )
 
 func TestTargetRowsPublishDirectSelectionMetadata(t *testing.T) {
@@ -101,6 +102,52 @@ func TestPageURLAndTitleSelectorsRejectAmbiguousMatches(t *testing.T) {
 			shortIDs, idsOK := data["candidate_short_ids"].([]string)
 			if !ok || !idsOK || data["candidate_count"] != 2 || data["candidate_truncated"] != false || len(shortIDs) != 2 || shortIDs[0] != "PAGEAAAA" || shortIDs[1] != "PAGEBBBB" {
 				t.Fatalf("ambiguous target data = %#v, want ordered page short IDs", commandErr.Data)
+			}
+		})
+	}
+}
+
+func TestPageSelectorsRejectConflictingModes(t *testing.T) {
+	targets := []cdp.TargetInfo{
+		{TargetID: "PAGEAAAA12345678", Type: "page", URL: "https://example.test/app", Title: "App dashboard"},
+	}
+
+	for name, resolve := range map[string]func() error{
+		"target and URL": func() error {
+			_, err := resolvePageTarget(targets, "pageaaaa", "ignored.example", "")
+			return err
+		},
+		"URL and title": func() error {
+			_, err := resolvePageTarget(targets, "", "example.test", "ignored title")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var commandErr *CommandError
+			if err := resolve(); !errors.As(err, &commandErr) || commandErr.Code != "invalid_target_selector" {
+				t.Fatalf("error = %v, want invalid_target_selector", err)
+			}
+		})
+	}
+
+	selected, err := resolveProtocolTarget(targets, "pageaaaa", "example.test", "dashboard", "page")
+	if err != nil || selected.TargetID != targets[0].TargetID {
+		t.Fatalf("protocol conjunctive selection = (%+v, %v), want original target", selected, err)
+	}
+}
+
+func TestPageSelectorValidatorRejectsConflictingTextModes(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().Int("target-index", 0, "")
+	for name, selectors := range map[string][3]string{
+		"target and URL": {"page-one", "example.test", ""},
+		"URL and title":  {"", "example.test", "dashboard"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var commandErr *CommandError
+			err := validatePageTargetIndexSelector(cmd, selectors[0], selectors[1], selectors[2], 0)
+			if !errors.As(err, &commandErr) || commandErr.Code != "invalid_target_selector" {
+				t.Fatalf("error = %v, want invalid_target_selector", err)
 			}
 		})
 	}

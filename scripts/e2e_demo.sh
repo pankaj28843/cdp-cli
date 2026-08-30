@@ -1008,6 +1008,18 @@ for selector_flag in --url-contains --title-contains; do
     ((.data | has("url")) | not) and ((.data | has("title")) | not)
   ' <<<"$ambiguous_selector_output" >/dev/null
 done
+set +e
+selector_conflict_output="$("$binary" eval 'window.__cdpSelectorConflictExecuted = true' --target "$protocol_index_target_id" --url-contains 'protocol-index=1' --state-dir "$state_dir/cdp-state" --json)"
+selector_conflict_code=$?
+set -e
+if [[ "$selector_conflict_code" -ne 2 ]]; then
+  echo "installed selector-conflict exit code: $selector_conflict_code" >&2
+  echo "$selector_conflict_output" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "invalid_target_selector" and (.message | contains("only one"))' <<<"$selector_conflict_output" >/dev/null
+"$binary" eval 'window.__cdpSelectorConflictExecuted === undefined' --target "$protocol_index_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .result.value == true' >/dev/null
 "$binary" page close --target "$duplicate_selection_target_id" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .target_gone == true' >/dev/null
 protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .index')"
