@@ -360,15 +360,12 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 		Short: "Select the default page target for subsequent commands",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
-				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-			}
 			targetID := ""
 			if len(args) == 1 {
 				targetID = args[0]
 			}
-			if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || urlContains != "" || titleContains != "") {
-				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with a target id, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
 			}
 			if targetIndex == 0 && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 				return commandError(
@@ -449,11 +446,8 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 		Short: "Reload a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
-				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-			}
-			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
-				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -499,11 +493,8 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 		Short: short,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
-				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-			}
-			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
-				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
@@ -580,11 +571,8 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 		Short: "Close a page target and wait until it is gone",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
-				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-			}
-			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
-				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
 			}
 			if maxAttempts <= 0 {
 				return commandError("invalid_argument", "usage", "--max-attempts must be positive", ExitUsage, []string{"cdp page close --target <target-id> --max-attempts 3 --json"})
@@ -1552,11 +1540,8 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 		Short: short,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
-				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-			}
-			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "") {
-				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()

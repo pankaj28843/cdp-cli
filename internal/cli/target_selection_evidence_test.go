@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -47,6 +50,49 @@ func TestProtocolTargetFilterHelpDescribesUniqueConjunction(t *testing.T) {
 		usage := cmd.Flags().Lookup(name).Usage
 		if strings.Contains(usage, "first matching") || !strings.Contains(usage, "combines") || !strings.Contains(usage, "one target") {
 			t.Fatalf("--%s usage = %q, want unique conjunctive filter contract", name, usage)
+		}
+	}
+}
+
+func TestCustomCommandsRejectTextSelectorConflictsBeforeConnection(t *testing.T) {
+	commands := map[string][]string{
+		"events stream":       {"events", "stream", "--target", "page-one", "--url-contains", "example.test", "--json"},
+		"events tap":          {"events", "tap", "--target", "page-one", "--url-contains", "example.test", "--json"},
+		"events interactions": {"events", "interactions", "--target", "page-one", "--url-contains", "example.test", "--json"},
+		"click":               {"click", "main", "--target", "page-one", "--url-contains", "example.test", "--json"},
+		"page select":         {"page", "select", "page-one", "--url-contains", "example.test", "--json"},
+		"page reload":         {"page", "reload", "--target", "page-one", "--url-contains", "example.test", "--json"},
+		"page back":           {"page", "back", "--target", "page-one", "--url-contains", "example.test", "--json"},
+		"page activate":       {"page", "activate", "--target", "page-one", "--url-contains", "example.test", "--json"},
+		"page close":          {"page", "close", "--target", "page-one", "--url-contains", "example.test", "--json"},
+	}
+	for name, args := range commands {
+		t.Run(name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			args = append([]string{"--state-dir", t.TempDir(), "--browser-mode", "headed"}, args...)
+			code := Execute(context.Background(), args, &out, &errOut, BuildInfo{})
+			var result map[string]any
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatalf("decode output: %v; stdout=%s stderr=%s", err, out.String(), errOut.String())
+			}
+			if code != ExitUsage || result["code"] != "invalid_target_selector" {
+				t.Fatalf("exit=%d result=%#v, want preflight invalid_target_selector", code, result)
+			}
+		})
+	}
+}
+
+func TestPopupAndDownloadSelectorHelpRequiresUniquePage(t *testing.T) {
+	commands := map[string]*cobra.Command{
+		"popup":    (&app{}).newWaitPopupCommand(),
+		"download": (&app{}).newWaitDownloadCommand(),
+	}
+	for commandName, cmd := range commands {
+		for _, flagName := range []string{"url-contains", "title-contains"} {
+			usage := cmd.Flags().Lookup(flagName).Usage
+			if strings.Contains(usage, "first") || !strings.Contains(usage, "unique") {
+				t.Fatalf("%s --%s usage = %q, want unique page", commandName, flagName, usage)
+			}
 		}
 	}
 }

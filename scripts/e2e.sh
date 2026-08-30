@@ -146,6 +146,14 @@ grep -Fq 'daemon runtime registration' <<<"$events_stream_help"
 "$binary" schema events-tap --json | jq -e '.ok == true and .schema.name == "events-tap" and (.schema.description | contains("target-index")) and (.schema.fields[] | select(.name == "tap").description | contains("target_index"))' >/dev/null
 "$binary" describe --command "events interactions" --json | jq -e '.ok == true and .commands.name == "interactions" and (.commands.examples | any(contains("--match click,scroll"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "match")) and (.commands.flags[] | select(.name == "ready-file"))' >/dev/null
 "$binary" schema events-interactions --json | jq -e '.ok == true and .schema.name == "events-interactions" and (.schema.fields | map(.name) | index("interaction")) and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields[] | select(.name == "interaction").description | contains("key values"))' >/dev/null
+"$binary" describe --command "wait popup" --json | jq -e '[(.commands.flags[] | select(.name == "url-contains" or .name == "title-contains") | .usage | contains("unique"))] | length == 2 and all' >/dev/null
+"$binary" describe --command "wait download" --json | jq -e '[(.commands.flags[] | select(.name == "url-contains" or .name == "title-contains") | .usage | contains("unique"))] | length == 2 and all' >/dev/null
+set +e
+selector_conflict_output="$("$binary" events stream --target page-one --url-contains example.test --state-dir "$state_dir" --browser-mode headed --json)"
+selector_conflict_code=$?
+set -e
+test "$selector_conflict_code" -eq 2
+jq -e '.ok == false and .code == "invalid_target_selector"' <<<"$selector_conflict_output" >/dev/null
 event_wait_file="$state_dir/events-wait.jsonl"
 cat >"$event_wait_file" <<'JSON_EVENT_WAIT'
 {"ok":true,"type":"ready"}

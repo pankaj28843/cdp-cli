@@ -67,14 +67,11 @@ func (a *app) runEventsInteractions(cmd *cobra.Command, options interactionObser
 	if a.opts.jq != "" {
 		return commandError("jq_unsupported", "usage", "--jq cannot filter a multi-record JSONL stream; filter records downstream", ExitUsage, []string{"cdp events interactions --json | jq -c 'select(.type == \"interaction\")'"})
 	}
-	if options.duration < 0 || options.maxEvents < 0 || options.targetIndex < 0 {
-		return commandError("usage", "usage", "--duration, --max-events, and --target-index must be non-negative", ExitUsage, []string{"cdp events interactions --duration 30s --max-events 50 --json"})
+	if options.duration < 0 || options.maxEvents < 0 {
+		return commandError("usage", "usage", "--duration and --max-events must be non-negative", ExitUsage, []string{"cdp events interactions --duration 30s --max-events 50 --json"})
 	}
-	if cmd.Flags().Changed("target-index") && options.targetIndex == 0 {
-		return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-	}
-	if options.targetIndex > 0 && (strings.TrimSpace(options.targetID) != "" || strings.TrimSpace(options.urlContains) != "" || strings.TrimSpace(options.titleContains) != "") {
-		return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+	if err := validatePageTargetIndexSelector(cmd, options.targetID, options.urlContains, options.titleContains, options.targetIndex); err != nil {
+		return err
 	}
 	kinds, err := parseInteractionKinds(options.match)
 	if err != nil {

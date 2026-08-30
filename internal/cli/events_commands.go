@@ -29,11 +29,8 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 		if duration < 0 || maxEvents < 0 {
 			return commandError("usage", "usage", "--duration and --max-events must be non-negative", ExitUsage, []string{"cdp events tap --duration 10s --max-events 50 --json"})
 		}
-		if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
-			return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-		}
-		if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "") {
-			return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
 		}
 		enabledDomains, err := parseEventDomains(enable)
 		if err != nil {

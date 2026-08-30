@@ -120,8 +120,8 @@ func (a *app) newWaitPopupCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "opener page target id or unique prefix")
-	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first opener page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first opener page whose title contains this text")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the unique opener page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique opener page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based opener page target index")
 	cmd.Flags().StringVar(&matchURL, "match-url", "", "substring that the popup URL must contain")
 	cmd.Flags().StringVar(&matchTitle, "match-title", "", "substring that the popup title must contain")

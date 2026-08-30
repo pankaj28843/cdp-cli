@@ -197,11 +197,8 @@ func (a *app) newClickCommand() *cobra.Command {
 		Short: "Click the first matching element by CSS selector or strict locator",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
-				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
-			}
-			if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "") {
-				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
 			}
 			strategy = strings.ToLower(strings.TrimSpace(strategy))
 			if strategy == "" {

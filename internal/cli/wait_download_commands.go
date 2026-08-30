@@ -153,8 +153,8 @@ func (a *app) newWaitDownloadCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix used as the triggering page context")
-	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first triggering page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first triggering page whose title contains this text")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the unique triggering page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique triggering page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based triggering page target index")
 	cmd.Flags().StringVar(&matchURL, "match-url", "", "substring that the download URL must contain")
 	cmd.Flags().StringVar(&filenameContains, "filename-contains", "", "substring that the suggested filename must contain")
