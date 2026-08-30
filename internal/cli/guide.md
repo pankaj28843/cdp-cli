@@ -49,8 +49,9 @@ target. `cdp pages --json` publishes the full `id` plus a copy-ready uppercase
 eight-character `short_id`; target prefixes are case-insensitive. Page rows also
 publish the 1-based `index`
 accepted by `--target-index`. Ambiguous and not-found selector errors expose
-only bounded candidate or available short IDs and page indexes under `.data`,
-never page URLs or titles. Plain `cdp pages` rows show index, short ID, full ID, URL,
+bounded full and short candidate/available IDs plus page indexes under `.data`,
+so an exact retry remains possible when short IDs collide; they never include
+page URLs or titles. Plain `cdp pages` rows show index, short ID, full ID, URL,
 and quoted title for direct copy/paste. Plain `cdp targets` also includes each
 target's type and URL; raw protocol ID/URL/title/type filters combine and must
 leave one match. Use

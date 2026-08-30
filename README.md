@@ -167,9 +167,11 @@ Page JSON includes the full `id` and an uppercase eight-character `short_id`;
 it also includes the current 1-based page-only `index`. Generic target rows
 publish the same `short_id`. `--target` accepts a unique case-insensitive ID
 prefix and rejects ambiguity with bounded metadata-only candidate short IDs.
-Not-found and out-of-range errors similarly return bounded compatible
-`available_short_ids` for an immediate corrected retry.
-Page-only errors pair those IDs with bounded `candidate_indexes` or
+Ambiguity errors also return bounded exact `candidate_ids`, and not-found or
+out-of-range errors return bounded exact `available_ids`, so a corrected retry
+remains possible when eight-character short IDs collide. Existing
+`candidate_short_ids` and `available_short_ids` remain available for concise
+display. Page-only errors pair those IDs with bounded `candidate_indexes` or
 `available_indexes`; generic protocol target errors remain index-free.
 URL/title substring selectors also require one unique page; duplicate matches
 return the same bounded candidate evidence instead of selecting the first tab.

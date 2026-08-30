@@ -278,9 +278,10 @@ if [[ "$target_not_found_code" -ne 2 ]]; then
   echo "$target_not_found_output" >&2
   exit 1
 fi
-jq -e --arg short "$collector_target_short_id" --argjson index "$collector_target_index" '
+jq -e --arg target "$collector_target_id" --arg short "$collector_target_short_id" --argjson index "$collector_target_index" '
   .ok == false and .code == "target_not_found" and
   (.data.available_count >= 1) and
+  (.data.available_ids | index($target) != null) and
   (.data.available_short_ids | index(($short | ascii_upcase)) != null) and
   (.data.available_indexes | index($index) != null) and
   (.data.available_truncated | type == "boolean") and
@@ -1014,9 +1015,11 @@ for selector_flag in --url-contains --title-contains; do
     echo "$ambiguous_selector_output" >&2
     exit 1
   fi
-  jq -e --arg first "$protocol_index_short_id" --arg second "$duplicate_selection_short_id" --argjson first_index "$protocol_index_candidate_index" --argjson second_index "$duplicate_selection_candidate_index" '
+  jq -e --arg first_id "$protocol_index_target_id" --arg second_id "$duplicate_selection_target_id" --arg first "$protocol_index_short_id" --arg second "$duplicate_selection_short_id" --argjson first_index "$protocol_index_candidate_index" --argjson second_index "$duplicate_selection_candidate_index" '
     .ok == false and .code == "ambiguous_target" and
     (.data.candidate_count >= 2) and
+    (.data.candidate_ids | index($first_id) != null) and
+    (.data.candidate_ids | index($second_id) != null) and
     (.data.candidate_short_ids | index($first) != null) and
     (.data.candidate_short_ids | index($second) != null) and
     (.data.candidate_indexes | index($first_index) != null) and

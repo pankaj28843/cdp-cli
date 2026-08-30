@@ -127,9 +127,50 @@ func assertAmbiguousTargetEvidence(t *testing.T, err error) {
 		t.Fatalf("ambiguous target data = %#v, want object", commandErr.Data)
 	}
 	shortIDs, ok := data["candidate_short_ids"].([]string)
-	if data["candidate_count"] != 12 || data["candidate_truncated"] != true || !ok || len(shortIDs) != 10 {
+	ids, idsOK := data["candidate_ids"].([]string)
+	if data["candidate_count"] != 12 || data["candidate_truncated"] != true || !ok || !idsOK || len(shortIDs) != 10 || len(ids) != 10 {
 		t.Fatalf("ambiguous target data = %#v, want count 12 and ten bounded IDs", data)
 	}
+}
+
+func TestTargetErrorEvidenceIncludesExactIDsWhenShortIDsCollide(t *testing.T) {
+	targets := []cdp.TargetInfo{
+		{TargetID: "ABCDEF1211111111", Type: "page"},
+		{TargetID: "ABCDEF1222222222", Type: "page"},
+	}
+	want := []string{"ABCDEF1211111111", "ABCDEF1222222222"}
+	tests := map[string]struct {
+		err   error
+		field string
+	}{
+		"page ambiguity":     {resolvePageTargetError(targets, "abcdef12"), "candidate_ids"},
+		"protocol ambiguity": {resolveProtocolTargetError(targets, "abcdef12"), "candidate_ids"},
+		"page miss":          {resolvePageTargetError(targets, "missing"), "available_ids"},
+		"protocol miss":      {resolveProtocolTargetError(targets, "missing"), "available_ids"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			var commandErr *CommandError
+			if !errors.As(test.err, &commandErr) {
+				t.Fatalf("error = %v, want command error", test.err)
+			}
+			data, ok := commandErr.Data.(map[string]any)
+			ids, idsOK := data[test.field].([]string)
+			if !ok || !idsOK || len(ids) != len(want) || ids[0] != want[0] || ids[1] != want[1] {
+				t.Fatalf("%s data = %#v, want exact IDs %v", test.field, commandErr.Data, want)
+			}
+		})
+	}
+}
+
+func resolvePageTargetError(targets []cdp.TargetInfo, targetID string) error {
+	_, err := resolvePageTarget(targets, targetID, "", "")
+	return err
+}
+
+func resolveProtocolTargetError(targets []cdp.TargetInfo, targetID string) error {
+	_, err := resolveProtocolTarget(targets, targetID, "", "", "page")
+	return err
 }
 
 func TestTargetNotFoundErrorsIncludeTypeScopedAvailableShortIDs(t *testing.T) {
@@ -294,12 +335,16 @@ func assertAvailableTargetEvidence(t *testing.T, err error, count int, shortIDs 
 		t.Fatalf("target-not-found data = %#v, want object", commandErr.Data)
 	}
 	gotIDs, ok := data["available_short_ids"].([]string)
-	if data["available_count"] != count || data["available_truncated"] != false || !ok || len(gotIDs) != len(shortIDs) {
+	fullIDs, fullIDsOK := data["available_ids"].([]string)
+	if data["available_count"] != count || data["available_truncated"] != false || !ok || !fullIDsOK || len(gotIDs) != len(shortIDs) || len(fullIDs) != len(shortIDs) {
 		t.Fatalf("target-not-found data = %#v, want count %d and IDs %v", data, count, shortIDs)
 	}
 	for i := range shortIDs {
 		if gotIDs[i] != shortIDs[i] {
 			t.Fatalf("available short IDs = %v, want %v", gotIDs, shortIDs)
+		}
+		if !strings.HasPrefix(strings.ToUpper(fullIDs[i]), shortIDs[i]) {
+			t.Fatalf("available full IDs = %v, want IDs aligned with %v", fullIDs, shortIDs)
 		}
 	}
 }

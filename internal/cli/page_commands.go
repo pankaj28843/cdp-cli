@@ -276,9 +276,10 @@ func targetIDMatchesPrefix(targetID, prefix string) bool {
 }
 
 func ambiguousTargetEvidence(matches []cdp.TargetInfo) map[string]any {
-	count, shortIDs, truncated := boundedTargetShortIDs(matches)
+	count, shortIDs, ids, truncated := boundedTargetIDs(matches)
 	return map[string]any{
 		"candidate_count":     count,
+		"candidate_ids":       ids,
 		"candidate_short_ids": shortIDs,
 		"candidate_truncated": truncated,
 	}
@@ -291,9 +292,10 @@ func ambiguousPageTargetEvidence(matches, pages []cdp.TargetInfo) map[string]any
 }
 
 func availableTargetEvidence(targets []cdp.TargetInfo) map[string]any {
-	count, shortIDs, truncated := boundedTargetShortIDs(targets)
+	count, shortIDs, ids, truncated := boundedTargetIDs(targets)
 	return map[string]any{
 		"available_count":     count,
+		"available_ids":       ids,
 		"available_short_ids": shortIDs,
 		"available_truncated": truncated,
 	}
@@ -323,17 +325,19 @@ func boundedPageIndexes(targets, pages []cdp.TargetInfo) []int {
 	return indexes
 }
 
-func boundedTargetShortIDs(targets []cdp.TargetInfo) (int, []string, bool) {
+func boundedTargetIDs(targets []cdp.TargetInfo) (int, []string, []string, bool) {
 	const limit = 10
 	count := len(targets)
 	if len(targets) > limit {
 		targets = targets[:limit]
 	}
 	shortIDs := make([]string, 0, len(targets))
+	ids := make([]string, 0, len(targets))
 	for _, target := range targets {
 		shortIDs = append(shortIDs, shortTargetID(target.TargetID))
+		ids = append(ids, target.TargetID)
 	}
-	return count, shortIDs, count > limit
+	return count, shortIDs, ids, count > limit
 }
 
 func (a *app) newPageCommand() *cobra.Command {
