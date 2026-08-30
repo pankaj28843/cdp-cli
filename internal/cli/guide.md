@@ -201,9 +201,11 @@ before writing durable orchestration:
     cdp click Submit --json | jq '{ok,action,click,actionability}'
 
 Errors have stable codes, classes, messages, and remediation commands. Read
-the exact failed check and state before retrying. Preserve page artifacts as
-paths; do not put screenshots, page text, cookies, headers, tokens, or traces
-into shared logs or committed fixtures.
+the exact failed check and state before retrying. Plain errors append up to ten
+terminal-safe `Next steps:` from the same effective remediation policy; JSON
+and JQ retain the structured `remediation_commands` array. Preserve page
+artifacts as paths; do not put screenshots, page text, cookies, headers,
+tokens, or traces into shared logs or committed fixtures.
 
 ## Observation and raw CDP
 

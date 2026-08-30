@@ -176,6 +176,9 @@ display. Page-only errors pair those IDs with bounded `candidate_indexes` or
 Without `--json`, the same safe evidence is printed as bounded recovery rows:
 page errors show index, short ID, and exact full ID; generic target errors show
 short and full ID. URLs and titles are not copied into those rows.
+Plain errors also print up to ten terminal-safe `Next steps:` from the same
+effective remediation policy exposed by JSON; multiline, control-bearing, and
+oversized entries are omitted.
 URL/title substring selectors also require one unique page; duplicate matches
 return the same bounded candidate evidence instead of selecting the first tab.
 Page commands reject combinations of target ID, URL, title, and index selector

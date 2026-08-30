@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -119,6 +121,37 @@ func safePlainTargetID(value string) bool {
 			continue
 		}
 		return false
+	}
+	return true
+}
+
+func plainErrorNextStepLines(steps []string) []string {
+	const maxSteps = 10
+	rows := make([]string, 0, min(len(steps), maxSteps))
+	for _, step := range steps {
+		if len(rows) == maxSteps {
+			break
+		}
+		if !safePlainErrorNextStep(step) {
+			continue
+		}
+		rows = append(rows, "  "+step)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return append([]string{"Next steps:"}, rows...)
+}
+
+func safePlainErrorNextStep(value string) bool {
+	const maxBytes = 1024
+	if value == "" || len(value) > maxBytes || !utf8.ValidString(value) {
+		return false
+	}
+	for _, char := range value {
+		if unicode.IsControl(char) || unicode.In(char, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return false
+		}
 	}
 	return true
 }

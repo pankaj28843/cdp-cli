@@ -677,5 +677,10 @@ func (a *app) renderError(ctx context.Context, err error) error {
 			return writeErr
 		}
 	}
+	for _, line := range plainErrorNextStepLines(env.RemediationCommands) {
+		if _, writeErr := fmt.Fprintln(a.err, line); writeErr != nil {
+			return writeErr
+		}
+	}
 	return nil
 }
