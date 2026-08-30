@@ -236,7 +236,7 @@ jq -e '.ok == false and .code == "invalid_browser_mode" and (.message | contains
 "$binary" targets --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.targets | type == "array")' >/dev/null
 "$binary" pages --state-dir "$state_dir/cdp-state" --json \
-  | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
+  | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url and (.short_id | type == "string" and length > 0 and length <= 8 and . == ascii_upcase)))' >/dev/null
 "$binary" pages --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
 set +e
@@ -256,11 +256,12 @@ jq -e '.ok == false and .code == "timeout" and .err_class == "timeout"' <<<"$eva
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
 collector_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' | head -n 1)"
+collector_target_short_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .short_id | ascii_downcase' | head -n 1)"
 collector_ready_root="$state_dir/collector-ready"
 collector_ready_file="$collector_ready_root/console.ready.json"
 collector_output="$state_dir/collector-console.json"
 mkdir -m 700 "$collector_ready_root"
-"$binary" console --target "$collector_target_id" --wait 3s --ready-file "$collector_ready_file" --state-dir "$state_dir/cdp-state" --json >"$collector_output" &
+"$binary" console --target "$collector_target_short_id" --wait 3s --ready-file "$collector_ready_file" --state-dir "$state_dir/cdp-state" --json >"$collector_output" &
 collector_pid=$!
 for _ in {1..100}; do
   [[ -s "$collector_ready_file" ]] && break
@@ -272,7 +273,7 @@ for _ in {1..100}; do
   sleep 0.05
 done
 jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and .collector_pid > 0 and .ready_monotonic_ns > 0 and (.enabled_domains | sort == ["Log","Runtime"]) and (has("url") | not) and (has("headers") | not) and (has("cookies") | not)' "$collector_ready_file" >/dev/null
-"$binary" eval "window.setTimeout(() => { throw new Error('ready-collector-exception') }, 0); true" --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json >/dev/null
+"$binary" eval "window.setTimeout(() => { throw new Error('ready-collector-exception') }, 0); true" --target "$collector_target_short_id" --state-dir "$state_dir/cdp-state" --json >/dev/null
 wait "$collector_pid"
 jq -e '.ok == true and (.messages[] | select(.type == "exception" and (.text | contains("ready-collector-exception"))))' "$collector_output" >/dev/null
 if [[ -e "$collector_ready_file" ]]; then

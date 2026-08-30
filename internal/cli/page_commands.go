@@ -240,11 +240,26 @@ func pageRows(targets []cdp.TargetInfo) []map[string]any {
 func pageRow(target cdp.TargetInfo) map[string]any {
 	return map[string]any{
 		"id":       target.TargetID,
+		"short_id": shortTargetID(target.TargetID),
 		"type":     target.Type,
 		"title":    target.Title,
 		"url":      target.URL,
 		"attached": target.Attached,
 	}
+}
+
+func shortTargetID(targetID string) string {
+	const shortLength = 8
+	targetID = strings.ToUpper(strings.TrimSpace(targetID))
+	if len(targetID) > shortLength {
+		return targetID[:shortLength]
+	}
+	return targetID
+}
+
+func targetIDMatchesPrefix(targetID, prefix string) bool {
+	prefix = strings.TrimSpace(prefix)
+	return prefix != "" && strings.HasPrefix(strings.ToUpper(targetID), strings.ToUpper(prefix))
 }
 
 func (a *app) newPageCommand() *cobra.Command {
@@ -750,6 +765,13 @@ func (a *app) runPageCleanup(ctx context.Context, opts pageCleanupRunOptions) (s
 			a.connectionRemediationCommands(),
 		)
 	}
+	if strings.TrimSpace(opts.ForceTarget) != "" {
+		target, err := resolvePageTarget(targets, opts.ForceTarget, "", "")
+		if err != nil {
+			return "", nil, err
+		}
+		opts.ForceTarget = target.TargetID
+	}
 	store, err := a.stateStore()
 	if err != nil {
 		return "", nil, err
@@ -931,7 +953,7 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 		}
 		key := pageCleanupKey(opts.BrowserMode, opts.Connection, target.TargetID)
 		record, hasRecord := opts.Records[key]
-		if forceTarget != "" && target.TargetID != forceTarget && !strings.HasPrefix(target.TargetID, forceTarget) {
+		if forceTarget != "" && !targetIDMatchesPrefix(target.TargetID, forceTarget) {
 			continue
 		}
 		if opts.OwnershipFilter.isSet() {
@@ -2097,7 +2119,7 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 	if targetID != "" {
 		var matches []cdp.TargetInfo
 		for _, page := range pages {
-			if page.TargetID == targetID || strings.HasPrefix(page.TargetID, targetID) {
+			if targetIDMatchesPrefix(page.TargetID, targetID) {
 				matches = append(matches, page)
 			}
 		}

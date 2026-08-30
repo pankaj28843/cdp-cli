@@ -612,7 +612,7 @@ func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titl
 		if targetType != "" && target.Type != targetType {
 			continue
 		}
-		if targetID != "" && target.TargetID != targetID && !strings.HasPrefix(target.TargetID, targetID) {
+		if targetID != "" && !targetIDMatchesPrefix(target.TargetID, targetID) {
 			continue
 		}
 		if urlContains != "" && !strings.Contains(strings.ToLower(target.URL), strings.ToLower(urlContains)) {

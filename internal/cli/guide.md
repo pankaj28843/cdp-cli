@@ -43,7 +43,9 @@ changed.
     cdp click Save --strategy auto --wait-text Saved --json
     cdp snapshot --selector body --limit 50 --json
 
-Prefer stable semantic locators and exact target IDs or URL filters. Use
+Prefer stable semantic locators and exact target IDs, unique ID prefixes, or URL filters. `cdp pages --json` publishes the full `id` plus a copy-ready
+uppercase eight-character `short_id`; target prefixes are case-insensitive and
+must identify exactly one target. Use
 --target-index only when page-only ordering is the intended contract. For a
 visible split control whose center point is not the hit target, explicit
 --strategy dom may use measured related pointer-event pseudo-element evidence;
