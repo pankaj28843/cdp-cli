@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -87,6 +86,11 @@ func ExecuteWithInput(ctx context.Context, args []string, in io.Reader, out, err
 	cmd.SetOut(out)
 	cmd.SetErr(err)
 
+	if syntaxErr := cobraFindUsageError(cmd, args); syntaxErr != nil {
+		_ = a.renderError(ctx, syntaxErr)
+		return exitCode(syntaxErr)
+	}
+
 	if runErr := cmd.ExecuteContext(ctx); runErr != nil {
 		var rendered *renderedResultExit
 		if errors.As(runErr, &rendered) {
@@ -105,10 +109,6 @@ func (a *app) newRoot() *cobra.Command {
 		Short:         "Agent-oriented Chrome DevTools Protocol CLI",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Args:          cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			return flag.ErrHelp
-		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if a.opts.maxTabs < 0 || a.opts.maxRendererProcesses < 0 {
 				return commandError("invalid_resource_budget", "usage", "--max-tabs and --max-renderer-processes must be non-negative", ExitUsage, []string{"cdp --max-tabs 25 --max-renderer-processes 12 pages --json"})
@@ -242,6 +242,19 @@ func (a *app) newRoot() *cobra.Command {
 	installCobraUsageHandlers(root)
 
 	return root
+}
+
+func cobraFindUsageError(root *cobra.Command, args []string) error {
+	command, commandArgs, err := root.Find(args)
+	if err == nil {
+		return nil
+	}
+	if command != nil {
+		if parseErr := command.ParseFlags(commandArgs); parseErr != nil {
+			return cobraUsageError(parseErr)
+		}
+	}
+	return cobraUsageError(err)
 }
 
 func installCobraUsageHandlers(root *cobra.Command) {

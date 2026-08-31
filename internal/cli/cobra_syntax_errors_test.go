@@ -108,3 +108,23 @@ func TestCobraSyntaxClassifierDoesNotRelabelRunErrors(t *testing.T) {
 		t.Fatalf("internal error unexpectedly became CommandError: %+v", commandErr)
 	}
 }
+
+func TestRootWithoutCommandStillPrintsHelpBeforePreflight(t *testing.T) {
+	var out, errOut bytes.Buffer
+	a := &app{out: &out, err: &errOut}
+	root := a.newRoot()
+	a.opts.maxTabs = -1
+	root.SetArgs([]string{})
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("root ExecuteContext error = %v, want help success", err)
+	}
+	if !strings.Contains(out.String(), "Usage:\n  cdp [command]") {
+		t.Fatalf("root help = %q, want command usage", out.String())
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("root help stderr = %q, want empty", errOut.String())
+	}
+}
