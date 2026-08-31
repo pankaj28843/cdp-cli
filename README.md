@@ -155,6 +155,7 @@ cdp protocol describe Page.captureScreenshot --official --json
 cdp protocol examples Page.captureScreenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
+cdp protocol exec Runtime.evaluate --target-id <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
 cdp protocol exec Runtime.evaluate '{"expression":"document.title","returnByValue":true}' --target-index 2 --json
 cdp protocol exec Runtime.evaluate --target-index 2 --params '{"expression":"document.title","returnByValue":true}' --json
 cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains chrome-extension:// --params '{"expression":"Object.keys(globalThis).slice(0,50)","returnByValue":true}' --json
@@ -171,6 +172,11 @@ The shorter source-compatible one-shot form may omit `protocol exec` entirely:
 `cdp Domain.method [JSON_PARAMS]`. It is only a routing alias; execution still
 uses the daemon-backed protocol path and accepts the same target, validation,
 output, and artifact flags.
+
+For one-shot target selection, `--target-id` is an explicit source-compatible
+alias for cdp-cli's `--target`, and `--url` aliases `--url-contains`. Supply only
+one spelling of either alias pair. cdp-cli keeps `--target-index` explicit and
+does not infer an index from a numeric `--target` value.
 
 Protocol discovery uses the selected live Chrome schema by default. Add
 `--official` to `metadata`, `domains`, `search`, `describe`, `examples`, or

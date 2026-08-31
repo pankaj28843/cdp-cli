@@ -537,11 +537,29 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec " + args[0] + " --params '{}' --json"},
 				)
 			}
+			if cmd.Flags().Changed("target") && cmd.Flags().Changed("target-id") {
+				return commandError(
+					"invalid_target_selector",
+					"usage",
+					"--target and --target-id are aliases; supply only one",
+					ExitUsage,
+					[]string{"cdp protocol exec Runtime.evaluate --target-id <target-id> --json"},
+				)
+			}
+			if cmd.Flags().Changed("url-contains") && cmd.Flags().Changed("url") {
+				return commandError(
+					"invalid_target_selector",
+					"usage",
+					"--url and --url-contains are aliases; supply only one",
+					ExitUsage,
+					[]string{"cdp protocol exec Runtime.evaluate --url <url-substring> --json"},
+				)
+			}
 			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
 				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
 			}
 			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "") {
-				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, --title-contains, or --target-type", ExitUsage, []string{"cdp pages --json"})
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --target-id, --url, --url-contains, --title-contains, or --target-type", ExitUsage, []string{"cdp pages --json"})
 			}
 			if a.opts.protocolOfficial && !validate {
 				return commandError(
@@ -685,8 +703,10 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&params, "params", "{}", "JSON params object for the CDP method")
 	cmd.Flags().StringVar(&targetID, "target", "", "target id or unique prefix for target-scoped execution")
+	cmd.Flags().StringVar(&targetID, "target-id", "", "source-compatible alias for --target")
 	cmd.Flags().StringVar(&targetType, "target-type", "", "target type to include when selecting a target, such as page or service_worker")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "filter targets by URL substring; combines with ID/title/type filters and must leave one target")
+	cmd.Flags().StringVar(&urlContains, "url", "", "source-compatible alias for --url-contains")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "filter targets by title substring; combines with ID/URL/type filters and must leave one target")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index for target-scoped execution")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")

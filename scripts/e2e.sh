@@ -685,8 +685,9 @@ done
 "$binary" describe --command "page close" --json | jq -e '.ok == true and .commands.name == "close" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "protocol" --json | jq -e '.ok == true and .commands.name == "protocol" and (.commands.flags[] | select(.name == "official" and (.usage | contains("browser daemon"))))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.use | contains("[JSON_PARAMS]")) and (.commands.examples | any(contains("--target"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--target-type service_worker"))) and (.commands.flags[] | select(.name == "target-type" and .type == "string")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "validate" and (.usage | contains("method")) and (.usage | contains("scope")) and (.usage | contains("params"))))' >/dev/null
+"$binary" describe --command "protocol exec" --json | jq -e '[(.commands.flags[] | select(.name == "target-id" or .name == "url") | .type)] | sort == ["string", "string"]' >/dev/null
 set +e
-bare_protocol_shape_output="$("$binary" Runtime.evaluate '[]' --json 2>/dev/null)"
+bare_protocol_shape_output="$("$binary" --target-id ignored-target Runtime.evaluate '[]' --json 2>/dev/null)"
 bare_protocol_shape_code=$?
 set -e
 test "$bare_protocol_shape_code" -eq 2
