@@ -12,6 +12,7 @@ func TestCommandExamplesHighRiskPaths(t *testing.T) {
 	}{
 		{path: "cdp version", want: []string{"version --json"}},
 		{path: "cdp guide", want: []string{"guide --path", "guide --json"}},
+		{path: "cdp help", want: []string{"help Page", "help Page.navigate", "--official"}},
 		{path: "cdp daemon start", want: []string{"--auto-connect"}},
 		{path: "cdp daemon stop", want: []string{"--force-managed", "--stale-lock-after"}},
 		{path: "cdp daemon restart", want: []string{"--autoConnect", "--force-managed", "--stale-lock-after"}},

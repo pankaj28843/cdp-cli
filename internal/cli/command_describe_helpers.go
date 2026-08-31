@@ -67,6 +67,12 @@ func commandExamples(path string) []string {
 			"cdp guide --path",
 			"cdp guide --json --jq '.path // .content'",
 		},
+		"cdp help": {
+			"cdp help",
+			"cdp help Page",
+			"cdp help Page.navigate",
+			"cdp help Page.navigate --official --json",
+		},
 		"cdp describe": {
 			"cdp describe --json",
 			"cdp describe --command 'daemon status' --json",

@@ -2894,6 +2894,20 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "source", Type: "string", Required: true, Description: "Selected live endpoint or official browser+JavaScript source URLs."},
 			},
 		},
+		"protocol-help": {
+			Name:        "protocol-help",
+			Description: "Source-compatible CDP protocol discovery by domain or Domain.entity, with live or official schema provenance.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol help was rendered."},
+				{Name: "mode", Type: "string", Required: true, Description: "domains for the full schema summary, domain for a domain's commands/events, or entity for one command, event, or type."},
+				{Name: "query", Type: "string", Required: false, Description: "Domain or Domain.entity query when one was supplied."},
+				{Name: "domains", Type: "array<domain_summary>", Required: false, Description: "Domain summaries for mode=domains."},
+				{Name: "entity", Type: "protocol_entity", Required: false, Description: "Selected domain or protocol entity metadata and schema."},
+				{Name: "commands", Type: "array<object>", Required: false, Description: "Raw command schemas for mode=domain."},
+				{Name: "events", Type: "array<object>", Required: false, Description: "Raw event schemas for mode=domain."},
+				{Name: "source", Type: "string", Required: true, Description: "Selected live daemon or official browser+JavaScript schema source."},
+			},
+		},
 		"protocol-search": {
 			Name:        "protocol-search",
 			Description: "Search results across selected live or official CDP domains, commands, events, and types.",

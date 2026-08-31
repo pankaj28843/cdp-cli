@@ -92,6 +92,11 @@ test "$("$binary" -V)" = "$version_plain"
 "$binary" describe --jq '.globals | index("--max-renderer-processes") != null' >/dev/null
 "$binary" describe --command "version" --json | jq -e '.ok == true and .commands.name == "version" and (.commands.examples | any(contains("version --json")))' >/dev/null
 "$binary" describe --command "guide" --json | jq -e '.ok == true and .commands.name == "guide" and (.commands.examples | any(contains("guide --path"))) and (.commands.flags[] | select(.name == "path"))' >/dev/null
+"$binary" describe --command "help" --json | jq -e '.ok == true and .commands.name == "help" and (.commands.examples | any(contains("help Page.navigate"))) and (.commands.flags[] | select(.name == "official" and (.usage | contains("browser daemon"))))' >/dev/null
+"$binary" schema protocol-help --json | jq -e '.ok == true and .schema.name == "protocol-help" and (.schema.fields | map(.name) | index("mode")) and (.schema.fields | map(.name) | index("entity")) and (.schema.fields | map(.name) | index("source"))' >/dev/null
+static_help="$("$binary" --state-dir "$state_dir" help)"
+grep -Fq 'Usage:' <<<"$static_help"
+grep -Fq 'Discover CDP domains, commands, events, and signatures' <<<"$static_help"
 "$binary" guide --json | jq -e '.ok == true and .schema_version == "guide/v1" and .mode == "content" and (.bytes > 0) and (.content | contains("# cdp-cli Agent Guide")) and (.content | contains("--fingerprint-profile"))' >/dev/null
 guide_path_json="$("$binary" guide --path --json)"
 guide_path="$(jq -r 'if .ok == true and .mode == "path" then .path else empty end' <<<"$guide_path_json")"
@@ -687,6 +692,7 @@ done
 "$binary" describe --command "page close" --json | jq -e '.ok == true and .commands.name == "close" and (.commands.examples | any(contains("--target 2"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "target" and (.usage | contains("numeric"))))' >/dev/null
 "$binary" describe --command "page close" --json | jq -e '[(.commands.flags[] | select(.name == "target-id" or .name == "url") | .type)] | sort == ["string", "string"]' >/dev/null
 "$binary" describe --command "protocol" --json | jq -e '.ok == true and .commands.name == "protocol" and (.commands.flags[] | select(.name == "official" and (.usage | contains("browser daemon"))))' >/dev/null
+"$binary" describe --command "help" --json | jq -e '.ok == true and .commands.name == "help" and (.commands.examples | any(contains("help Page")))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.use | contains("[JSON_PARAMS]")) and (.commands.examples | any(contains("--target"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--target-type service_worker"))) and (.commands.flags[] | select(.name == "target-type" and .type == "string")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "validate" and (.usage | contains("method")) and (.usage | contains("scope")) and (.usage | contains("params"))))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '[(.commands.flags[] | select(.name == "target-id" or .name == "url") | .type)] | sort == ["string", "string"]' >/dev/null
 set +e
