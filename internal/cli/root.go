@@ -81,6 +81,7 @@ func ExecuteWithInput(ctx context.Context, args []string, in io.Reader, out, err
 	}
 
 	cmd := a.newRoot()
+	args = rewriteBareProtocolArgs(cmd, args)
 	cmd.SetArgs(args)
 	cmd.SetIn(in)
 	cmd.SetOut(out)
@@ -101,6 +102,89 @@ func ExecuteWithInput(ctx context.Context, args []string, in io.Reader, out, err
 	}
 
 	return ExitOK
+}
+
+// rewriteBareProtocolArgs adapts chrome-agent's bare one-shot form
+// (Domain.method [JSON_PARAMS]) to the daemon-backed protocol command. The
+// protocol command remains the sole execution path; this only adds a routing
+// alias at the root and preserves recognized global/protocol flags wherever
+// callers placed them.
+func rewriteBareProtocolArgs(root *cobra.Command, args []string) []string {
+	if !bareProtocolMethodAt(root, args) {
+		return args
+	}
+	routed := make([]string, 0, len(args)+2)
+	routed = append(routed, "protocol", "exec")
+	routed = append(routed, args...)
+	return routed
+}
+
+func bareProtocolMethodAt(root *cobra.Command, args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	execCommand, _, err := root.Find([]string{"protocol", "exec"})
+	if err != nil || execCommand == nil {
+		return false
+	}
+	protocolCommand, _, _ := root.Find([]string{"protocol"})
+	for index := 0; index < len(args); {
+		arg := args[index]
+		if arg == "--" || arg == "-h" || arg == "--help" || arg == "-V" || arg == "--version" {
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			return looksLikeProtocolMethod(arg)
+		}
+
+		name := strings.TrimPrefix(strings.SplitN(arg, "=", 2)[0], "--")
+		flag := root.PersistentFlags().Lookup(name)
+		if flag == nil {
+			flag = execCommand.Flags().Lookup(name)
+		}
+		if flag == nil && protocolCommand != nil {
+			flag = protocolCommand.PersistentFlags().Lookup(name)
+		}
+		if flag == nil {
+			flag = execCommand.InheritedFlags().Lookup(name)
+		}
+		if flag == nil {
+			return false
+		}
+		index++
+		if strings.Contains(arg, "=") || flag.NoOptDefVal != "" {
+			continue
+		}
+		if index >= len(args) {
+			return false
+		}
+		index++
+	}
+	return false
+}
+
+func looksLikeProtocolMethod(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	for index, char := range parts[0] {
+		if index == 0 {
+			if char < 'A' || char > 'Z' {
+				return false
+			}
+			continue
+		}
+		if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	for _, char := range parts[1] {
+		if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *app) newRoot() *cobra.Command {
@@ -125,7 +209,9 @@ func (a *app) newRoot() *cobra.Command {
 		Long: "cdp is a shell-first Chrome DevTools Protocol CLI for coding agents.\n\n" +
 			"The project is being built around a long-running local attach daemon, compact\n" +
 			"JSON output, jq-friendly filtering, high-level browser debugging workflows, and\n" +
-			"cleanup routines such as `cdp page cleanup --json` for cron-safe tab hygiene.",
+			"cleanup routines such as `cdp page cleanup --json` for cron-safe tab hygiene.\n\n" +
+			"For source-compatible one-shot calls, `cdp Domain.method [JSON_PARAMS]` is\n" +
+			"routed through the daemon-backed `protocol exec` command.",
 	}
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {

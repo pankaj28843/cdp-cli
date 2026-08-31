@@ -159,12 +159,18 @@ cdp protocol exec Runtime.evaluate '{"expression":"document.title","returnByValu
 cdp protocol exec Runtime.evaluate --target-index 2 --params '{"expression":"document.title","returnByValue":true}' --json
 cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains chrome-extension:// --params '{"expression":"Object.keys(globalThis).slice(0,50)","returnByValue":true}' --json
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
+cdp Runtime.evaluate '{"expression":"document.title","returnByValue":true}' --target-index 2 --json
 ```
 
 For compatibility with chrome-agent one-shot commands, protocol exec also
 accepts one optional positional JSON object after Domain.method. The canonical
 --params flag and the positional form are mutually exclusive; both use the
 same local valid-JSON/object-shape checks before browser setup.
+
+The shorter source-compatible one-shot form may omit `protocol exec` entirely:
+`cdp Domain.method [JSON_PARAMS]`. It is only a routing alias; execution still
+uses the daemon-backed protocol path and accepts the same target, validation,
+output, and artifact flags.
 
 Protocol discovery uses the selected live Chrome schema by default. Add
 `--official` to `metadata`, `domains`, `search`, `describe`, `examples`, or

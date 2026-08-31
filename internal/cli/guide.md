@@ -252,6 +252,12 @@ same valid-JSON/object-shape checks before any browser or target setup:
 
     cdp protocol exec Runtime.evaluate '{"expression":"document.title","returnByValue":true}' --target-index 2 --json
 
+The source-compatible root shorthand is also available. It routes
+`cdp Domain.method [JSON_PARAMS]` through the same daemon-backed protocol exec
+path, so target selectors and validation flags remain available:
+
+    cdp Runtime.evaluate '{"expression":"document.title","returnByValue":true}' --target-index 2 --json
+
 `cdp page close --target-index N` uses the same page-only order for a bounded
 disposable-tab close. It is mutually exclusive with `--target`,
 `--url-contains`, and `--title-contains` on the close command:

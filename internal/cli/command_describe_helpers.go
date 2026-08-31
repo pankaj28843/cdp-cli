@@ -54,6 +54,7 @@ func commandExamples(path string) []string {
 		"cdp": {
 			"cdp doctor --json",
 			"cdp describe --json | jq '.commands.children | map(.name)'",
+			"cdp Runtime.evaluate '{\"expression\":\"document.title\",\"returnByValue\":true}' --target-index 2 --json",
 		},
 		"cdp version": {
 			"cdp version --json",

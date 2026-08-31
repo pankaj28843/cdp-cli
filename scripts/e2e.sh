@@ -82,6 +82,7 @@ grep -q 'managed build; commit ' <<<"$version_plain"
 test "$("$binary" --version)" = "$version_plain"
 test "$("$binary" -V)" = "$version_plain"
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
+"$binary" describe --json | jq -e '.ok == true and (.commands.examples | any(contains("cdp Runtime.evaluate")))' >/dev/null
 "$binary" describe --jq '.globals | index("--json") != null' >/dev/null
 "$binary" describe --jq '.globals | index("--compact") != null' >/dev/null
 "$binary" describe --jq '.globals | index("--connection") != null' >/dev/null
@@ -684,6 +685,12 @@ done
 "$binary" describe --command "page close" --json | jq -e '.ok == true and .commands.name == "close" and (.commands.examples | any(contains("--target-index 2"))) and (.commands.flags[] | select(.name == "target-index" and .type == "int"))' >/dev/null
 "$binary" describe --command "protocol" --json | jq -e '.ok == true and .commands.name == "protocol" and (.commands.flags[] | select(.name == "official" and (.usage | contains("browser daemon"))))' >/dev/null
 "$binary" describe --command "protocol exec" --json | jq -e '.ok == true and .commands.name == "exec" and (.commands.use | contains("[JSON_PARAMS]")) and (.commands.examples | any(contains("--target"))) and (.commands.examples | any(contains("--target-index 2"))) and (.commands.examples | any(contains("--target-type service_worker"))) and (.commands.flags[] | select(.name == "target-type" and .type == "string")) and (.commands.flags[] | select(.name == "target-index" and .type == "int")) and (.commands.flags[] | select(.name == "validate" and (.usage | contains("method")) and (.usage | contains("scope")) and (.usage | contains("params"))))' >/dev/null
+set +e
+bare_protocol_shape_output="$("$binary" Runtime.evaluate '[]' --json 2>/dev/null)"
+bare_protocol_shape_code=$?
+set -e
+test "$bare_protocol_shape_code" -eq 2
+printf '%s\n' "$bare_protocol_shape_output" | jq -e '.ok == false and .code == "invalid_json" and (.message | contains("JSON object"))' >/dev/null
 "$binary" describe --command "protocol examples" --json | jq -e '.ok == true and .commands.name == "examples" and (.commands.examples | any(contains("Page.captureScreenshot")))' >/dev/null
 "$binary" describe --command "workflow visible-posts" --json | jq -e '.ok == true and .commands.name == "visible-posts" and (.commands.examples | length > 0)' >/dev/null
 "$binary" describe --command "workflow hacker-news" --json | jq -e '.ok == true and .commands.name == "hacker-news" and (.commands.examples | length > 0)' >/dev/null
@@ -1082,6 +1089,15 @@ if [[ "${CDP_E2E_AUTO_CONNECT:-}" == "1" || "${CDP_E2E_AUTO_CONNECT:-}" == "true
       printf '%s\n' "$live_positional_exec_output" | jq -e '.ok == true and .method == "Browser.getVersion"' >/dev/null
     else
       printf '%s\n' "$live_positional_exec_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
+    fi
+    set +e
+    live_root_exec_output="$("$binary" --timeout 5s Browser.getVersion '{}' --json 2>/tmp/cdp-cli-live-root-exec.err)"
+    live_root_exec_code=$?
+    set -e
+    if [[ "$live_root_exec_code" -eq 0 ]]; then
+      printf '%s\n' "$live_root_exec_output" | jq -e '.ok == true and .method == "Browser.getVersion"' >/dev/null
+    else
+      printf '%s\n' "$live_root_exec_output" | jq -e '.ok == false and (.code == "connection_failed" or .code == "connection_not_configured")' >/dev/null
     fi
     set +e
     live_targets_output="$("$binary" --timeout 5s targets --json 2>/tmp/cdp-cli-live-targets.err)"
