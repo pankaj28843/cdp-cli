@@ -268,6 +268,12 @@ values: `cdp --target 2 Runtime.evaluate ...` selects page index 2, while
 `--target-id 2` forces ID-prefix matching. Direct `protocol exec --target`
 keeps its established ID/prefix meaning.
 
+The source-compatible `--target-id` and `--url` aliases also apply to the
+daemon-backed persistent attach equivalents `events stream` and `events
+interactions`, and to `page close` (the target-aware stop equivalent). Use
+only one spelling from each pair; `page close` keeps its existing settled
+close behavior and the event commands keep exact-session filtering.
+
 `cdp page close --target-index N` uses the same page-only order for a bounded
 disposable-tab close. It is mutually exclusive with `--target`,
 `--url-contains`, and `--title-contains` on the close command:

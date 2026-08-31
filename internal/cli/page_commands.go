@@ -660,7 +660,9 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&targetID, "target-id", "", "source-compatible alias for --target")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&urlContains, "url", "", "source-compatible alias for --url-contains")
 	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&waitGone, "wait-gone", true, "wait until target listing no longer contains the page")
@@ -1980,6 +1982,12 @@ func (a *app) resolvePageTargetWithClientIndex(ctx context.Context, client cdp.C
 }
 
 func validatePageTargetIndexSelector(cmd *cobra.Command, targetID, urlContains, titleContains string, targetIndex int) error {
+	if cmd.Flags().Changed("target") && cmd.Flags().Changed("target-id") {
+		return commandError("invalid_target_selector", "usage", "--target and --target-id are aliases; supply only one", ExitUsage, []string{"cdp pages --json"})
+	}
+	if cmd.Flags().Changed("url-contains") && cmd.Flags().Changed("url") {
+		return commandError("invalid_target_selector", "usage", "--url and --url-contains are aliases; supply only one", ExitUsage, []string{"cdp pages --json"})
+	}
 	if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
 		return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
 	}

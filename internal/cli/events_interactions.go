@@ -50,7 +50,9 @@ func (a *app) newEventsInteractionsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&options.targetID, "target-id", "", "source-compatible alias for --target")
 	cmd.Flags().StringVar(&options.urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&options.urlContains, "url", "", "source-compatible alias for --url-contains")
 	cmd.Flags().StringVar(&options.titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().IntVar(&options.targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&options.match, "match", "", "comma-separated interaction kinds: click,scroll,selectionchange,keydown")

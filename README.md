@@ -183,6 +183,12 @@ all-digit `--target` is interpreted as a 1-based page index, while
 `--target-id` forces ID-prefix matching. Direct `protocol exec --target` keeps
 its established ID/prefix meaning.
 
+The same `--target-id` and `--url` aliases are available on the daemon-backed
+persistent attach equivalents `events stream` and `events interactions`, and
+on `page close` for the source target-aware stop flow. Supply only one spelling
+from either alias pair; the existing exact-session filtering and settled close
+behavior are unchanged.
+
 Protocol discovery uses the selected live Chrome schema by default. Add
 `--official` to `metadata`, `domains`, `search`, `describe`, `examples`, or
 `compat` for browser-free online discovery from the official browser and
