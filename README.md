@@ -358,7 +358,10 @@ The index is mutually exclusive with `--target`, `--url-contains`, and
 wait-mode events. Invalid selectors fail before page attachment or dialog
 mutation, and the report includes `target_index` when an index is supplied.
 The command's `--wait` mode is session-safe; a detached `wait dialog` followed
-by a new action command cannot assume ownership of the pending dialog.
+by a new action command cannot assume ownership of the pending dialog. Both
+wait entry points release their attached session with an independent bounded
+cleanup context after success, failure, cancellation, or timeout; they never
+close the caller-owned page.
 
 Read-only inspection commands use the same page-only selector: `frames`,
 `locator find`, `dom query`, `css inspect`, `layout overflow`, and

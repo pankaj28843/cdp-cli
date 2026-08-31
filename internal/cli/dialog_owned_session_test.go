@@ -199,4 +199,7 @@ func TestDialogOwnedWaitTimesOutWithStructuredEvidence(t *testing.T) {
 	if result.OK || result.Code != "timeout" || result.Data.Wait.Kind != "dialog" || result.Data.Wait.Matched {
 		t.Fatalf("dialog --wait timeout=%#v, want structured timeout evidence", result)
 	}
+	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-one") {
+		t.Fatalf("dialog --wait timeout lifecycle = %v, want exact session detach", events)
+	}
 }

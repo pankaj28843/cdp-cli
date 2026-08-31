@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	dialogWaitKind    = "dialog"
-	dialogWaitCDPName = "Page.javascriptDialogOpening"
+	dialogWaitKind           = "dialog"
+	dialogWaitCDPName        = "Page.javascriptDialogOpening"
+	dialogWaitCleanupTimeout = 5 * time.Second
 )
 
 type dialogWaitCriteria struct {
@@ -93,7 +94,7 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeDialogWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForDialogEvent(ctx, client, session.SessionID, opts.Criteria)
@@ -123,6 +124,15 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 	cmd.Flags().StringVar(&promptText, "prompt-text", "", "prompt text to send when --action accept handles a prompt dialog")
 	cmd.Flags().StringVar(&redact, "redact", "safe", "redaction preset for returned dialog URL: safe or none")
 	return cmd
+}
+
+func closeDialogWaitSession(session *cdp.PageSession) {
+	if session == nil {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), dialogWaitCleanupTimeout)
+	defer cancel()
+	_ = session.Close(cleanupCtx)
 }
 
 func normalizeDialogWaitOptions(opts *dialogWaitOptions) error {

@@ -605,6 +605,9 @@ func TestWaitDialogTimeoutJSON(t *testing.T) {
 	if !containsString(got.RemediationCommands, "cdp dialog dismiss --wait --json") {
 		t.Fatalf("wait dialog remediation commands = %+v, want dialog dismiss command", got.RemediationCommands)
 	}
+	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
+		t.Fatalf("wait dialog timeout lifecycle = %v, want exact session detach", events)
+	}
 }
 
 func TestWaitDialogInvalidOptionsJSON(t *testing.T) {
