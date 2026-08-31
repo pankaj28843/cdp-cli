@@ -665,13 +665,43 @@ func (a *app) runDaemonMaintenanceKeepalive(ctx context.Context, storeDir string
 		"managed_process_sweep_requested": false,
 	}
 	if status.State == "running" && runtimeHealthy {
+		if opts.Repair {
+			holdReconcile, reconcileErr := daemon.ReconcileOrphanedDaemonHolds(ctx, storeDir, "headless", true)
+			if reconcileErr != nil {
+				return "", nil, commandError(
+					"daemon_hold_reconciliation_failed",
+					"connection",
+					fmt.Sprintf("reconcile orphaned headless daemon holds: %v", reconcileErr),
+					ExitConnection,
+					[]string{"cdp --browser-mode headless daemon logs --tail 50 --json", "cdp --browser-mode headless daemon maintenance --repair --json"},
+				)
+			}
+			runtimeCheck["daemon_hold_reconciliation"] = holdReconcile
+			if len(holdReconcile.SignalFailures) > 0 {
+				return "", nil, commandErrorWithData(
+					"daemon_hold_reconciliation_failed",
+					"connection",
+					"one or more verified orphaned daemon holds could not be reclaimed",
+					ExitConnection,
+					[]string{"cdp --browser-mode headless daemon logs --tail 50 --json", "cdp --browser-mode headless daemon maintenance --repair --json"},
+					map[string]any{"browser_mode": "headless", "health": runtimeCheck, "daemon": status},
+				)
+			}
+			if len(holdReconcile.ReclaimedPIDs) > 0 {
+				status.Health = a.browserHealthSnapshot(ctx, status, false)
+			}
+		}
+		action := "none"
+		if holdReconcile, ok := runtimeCheck["daemon_hold_reconciliation"].(daemon.DaemonHoldReconcileResult); ok && len(holdReconcile.ReclaimedPIDs) > 0 {
+			action = "reconciled"
+		}
 		data := map[string]any{
 			"ok":                 true,
 			"browser_mode":       "headless",
 			"connection":         connectionName,
 			"mode":               mode,
 			"state":              "healthy",
-			"action":             "none",
+			"action":             action,
 			"locked":             false,
 			"daemon":             status,
 			"probe":              probeResult,
@@ -699,7 +729,7 @@ func (a *app) runDaemonMaintenanceKeepalive(ctx context.Context, storeDir string
 		}
 		return fmt.Sprintf("keepalive\t%s\tskipped", connectionName), data, nil
 	}
-	return a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, false, opts.StaleLockAfter, status, probeResult, runtimeCheck)
+	return a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, false, opts.Repair, opts.StaleLockAfter, status, probeResult, runtimeCheck)
 }
 
 func writeMaintenanceSummary(ctx context.Context, ops daemonMaintenanceOperations, path string, report *daemonMaintenanceReport) error {

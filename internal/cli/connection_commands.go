@@ -514,7 +514,8 @@ func (a *app) connectionFromManagedRuntime(ctx context.Context, stateDir, browse
 	if err != nil || !ok {
 		return state.Connection{}, false, err
 	}
-	if !daemon.RuntimeRunning(runtime) || !a.runtimeOverridesSelectedConnection(runtime) {
+	processCheck := daemon.CheckRuntimeProcess(ctx, runtime)
+	if !processCheck.Running || !a.runtimeOverridesSelectedConnection(runtime) {
 		return state.Connection{}, false, nil
 	}
 	browserURL := ""
@@ -535,8 +536,11 @@ func (a *app) connectionFromManagedRuntime(ctx context.Context, stateDir, browse
 
 func (a *app) connectionFromRunningManagedRuntime(ctx context.Context, stateDir, browserMode string) (state.Connection, bool, error) {
 	runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
-	if err != nil || !ok || !daemon.RuntimeRunning(runtime) || runtime.ConnectionMode != "browser_url" {
+	if err != nil || !ok {
 		return state.Connection{}, false, err
+	}
+	if !daemon.CheckRuntimeProcess(ctx, runtime).Running || runtime.ConnectionMode != "browser_url" {
+		return state.Connection{}, false, nil
 	}
 	browserURL := ""
 	if strings.TrimSpace(runtime.Endpoint) != "" {

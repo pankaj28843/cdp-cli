@@ -44,6 +44,7 @@ var fakeDelayedWaitEvalAttempts atomic.Int64
 var fakeSemanticDriftActionabilityAttempts atomic.Int64
 var fakeSemanticReplacementDescribeAttempts atomic.Int64
 var fakeTargetCreateCount atomic.Int64
+var fakePageNavigateCount atomic.Int64
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
@@ -85,6 +86,39 @@ func fakeWebSocketEndpoint(t *testing.T, rawURL string) string {
 	u.Scheme = "ws"
 	u.Path = "/devtools/browser/test"
 	return u.String()
+}
+
+func fakeLifecycleEvents(t *testing.T, server *httptest.Server) []string {
+	t.Helper()
+	resp, err := http.Get(server.URL + "/test/lifecycle")
+	if err != nil {
+		t.Fatalf("get fake lifecycle events: %v", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Events []string `json:"events"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode fake lifecycle events: %v", err)
+	}
+	return result.Events
+}
+
+func requireFakeLifecycleEvent(t *testing.T, server *httptest.Server, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		events := fakeLifecycleEvents(t, server)
+		for _, event := range events {
+			if event == want {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fake lifecycle events = %v, want %q", events, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func startFakeDaemon(t *testing.T, server *httptest.Server, connectionMode string) string {
@@ -157,6 +191,13 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 	var xProfileRecordCalls sync.Map
 	var scrolledSelectors sync.Map
 	var navigatedURLs sync.Map
+	var lifecycleMu sync.Mutex
+	var lifecycleEvents []string
+	recordLifecycle := func(event string) {
+		lifecycleMu.Lock()
+		lifecycleEvents = append(lifecycleEvents, event)
+		lifecycleMu.Unlock()
+	}
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
 		if server == nil {
 			http.Error(w, "test server was not initialized", http.StatusInternalServerError)
@@ -177,7 +218,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					"domain":      "Page",
 					"description": "Page domain",
 					"commands": []map[string]any{
-						{"name": "navigate"},
+						{"name": "navigate", "parameters": []map[string]any{{"name": "url", "type": "string"}}},
 						{"name": "captureScreenshot", "description": "Capture page pixels", "parameters": []map[string]any{
 							{"name": "format", "type": "string", "optional": true},
 							{"name": "quality", "type": "integer", "optional": true},
@@ -201,6 +242,12 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			},
 		})
 	})
+	mux.HandleFunc("/test/lifecycle", func(w http.ResponseWriter, r *http.Request) {
+		lifecycleMu.Lock()
+		events := append([]string(nil), lifecycleEvents...)
+		lifecycleMu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
+	})
 	mux.HandleFunc("/devtools/browser/test", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -209,6 +256,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 		defer conn.Close(websocket.StatusNormalClosure, "done")
 
 		blockedSessions := map[string]bool{}
+		dialogEnabledSessions := map[string]bool{}
+		bindingNames := map[string]string{}
 		for {
 			var req struct {
 				ID        int64           `json:"id"`
@@ -227,6 +276,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["sessionId"] = req.SessionID
 			}
 			if req.Method == "Target.getTargets" {
+				fakeReleaseDelayedCloseTargets(&targetInfos)
 				if fakeAnyTargetBool(targetInfos, "fakeListTargetsErrorOnce") && listTargetsErrors.Add(1) == 1 {
 					resp["error"] = map[string]any{"code": -32000, "message": "target list race: target closed"}
 				} else {
@@ -279,13 +329,27 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						URL string `json:"url"`
 					}
 					_ = json.Unmarshal(req.Params, &params)
-					targetInfos = append(targetInfos, map[string]any{
+					createdTarget := map[string]any{
 						"targetId": targetID,
 						"type":     "page",
 						"title":    "Created",
 						"url":      params.URL,
 						"attached": false,
-					})
+					}
+					lowerURL := strings.ToLower(params.URL)
+					if strings.Contains(lowerURL, "no-results") {
+						createdTarget["fakeNoResults"] = true
+					}
+					if strings.Contains(lowerURL, "attach-error") || strings.Contains(lowerURL, "attach_error") {
+						createdTarget["fakeAttachErrorOnce"] = true
+					}
+					if strings.Contains(lowerURL, "evaluate-error") || strings.Contains(lowerURL, "evaluate_error") {
+						createdTarget["fakeRuntimeEvaluateErrorOnce"] = true
+					}
+					if fakeAnyTargetBool(targetInfos, "fakeRuntimeEvaluateErrorForCreated") {
+						createdTarget["fakeRuntimeEvaluateErrorOnce"] = true
+					}
+					targetInfos = append(targetInfos, createdTarget)
 					resp["result"] = map[string]any{"targetId": targetID}
 				}
 			} else if req.Method == "Target.attachToTarget" {
@@ -293,7 +357,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					TargetID string `json:"targetId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
-				if fakeTargetBool(targetInfos, params.TargetID, "fakeAttachErrorOnce") {
+				if fakeTargetBool(targetInfos, params.TargetID, "fakeAttachErrorOnce") || (strings.HasPrefix(params.TargetID, "created-page") && fakeAnyTargetBool(targetInfos, "fakeAttachErrorForCreated")) {
 					if _, loaded := attachTargetErrors.LoadOrStore(params.TargetID, true); !loaded {
 						resp["error"] = map[string]any{"code": -32000, "message": "attach race: target closed"}
 					} else {
@@ -303,6 +367,11 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					resp["result"] = map[string]any{"sessionId": "session-" + params.TargetID}
 				}
 			} else if req.Method == "Target.detachFromTarget" {
+				var params struct {
+					SessionID string `json:"sessionId"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				recordLifecycle("detach:" + params.SessionID)
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Target.activateTarget" {
 				resp["result"] = map[string]any{}
@@ -311,17 +380,27 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					TargetID string `json:"targetId"`
 				}
 				_ = json.Unmarshal(req.Params, &params)
+				recordLifecycle("close:" + params.TargetID)
 				if fakeAnyTargetBool(targetInfos, "fakeCloseTargetError") {
 					resp["error"] = map[string]any{"code": -32000, "message": "synthetic target close failure"}
 				} else if params.TargetID != "" {
-					filtered := targetInfos[:0]
-					for _, target := range targetInfos {
-						if target["targetId"] == params.TargetID {
-							continue
+					if fakeAnyTargetBool(targetInfos, "fakeCloseTargetDelay") {
+						for _, target := range targetInfos {
+							if target["targetId"] == params.TargetID {
+								target["fakeCloseTargetPending"] = true
+								target["fakeCloseTargetPolls"] = 0
+							}
 						}
-						filtered = append(filtered, target)
+					} else {
+						filtered := targetInfos[:0]
+						for _, target := range targetInfos {
+							if target["targetId"] == params.TargetID {
+								continue
+							}
+							filtered = append(filtered, target)
+						}
+						targetInfos = filtered
 					}
-					targetInfos = filtered
 					resp["result"] = map[string]any{"success": true}
 				} else {
 					resp["result"] = map[string]any{"success": true}
@@ -376,6 +455,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 			} else if req.Method == "Browser.resetPermissions" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.navigate" {
+				fakePageNavigateCount.Add(1)
 				var params struct {
 					URL string `json:"url"`
 				}
@@ -388,6 +468,7 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{"frameId": "frame-1"}
 			} else if req.Method == "Page.enable" {
 				resp["result"] = map[string]any{}
+				dialogEnabledSessions[req.SessionID] = true
 				if strings.Contains(req.SessionID, "dialog") {
 					events = append(events, map[string]any{
 						"sessionId": req.SessionID,
@@ -420,7 +501,17 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				}
 			} else if req.Method == "Page.disable" {
 				resp["result"] = map[string]any{}
+				delete(dialogEnabledSessions, req.SessionID)
 			} else if req.Method == "Page.handleJavaScriptDialog" {
+				targetID := strings.TrimPrefix(req.SessionID, "session-")
+				if fakeTargetBool(targetInfos, targetID, "requireDialogSession") && !dialogEnabledSessions[req.SessionID] {
+					resp["error"] = map[string]any{"code": -32000, "message": "No dialog is showing"}
+				} else {
+					resp["result"] = map[string]any{}
+				}
+			} else if req.Method == "Page.addScriptToEvaluateOnNewDocument" {
+				resp["result"] = map[string]any{"identifier": "interaction-script-1"}
+			} else if req.Method == "Page.removeScriptToEvaluateOnNewDocument" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Page.reload" {
 				resp["result"] = map[string]any{}
@@ -434,6 +525,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					},
 				}
 			} else if req.Method == "Page.navigateToHistoryEntry" {
+				resp["result"] = map[string]any{}
+			} else if req.Method == "DOM.enable" || req.Method == "DOM.disable" || req.Method == "Performance.enable" || req.Method == "Performance.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "DOM.getDocument" {
 				resp["result"] = map[string]any{"root": map[string]any{"nodeId": 1}}
@@ -713,6 +806,15 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Runtime.enable" {
 				resp["result"] = map[string]any{}
+				if strings.Contains(req.SessionID, "stream-page") {
+					events = append(events, map[string]any{
+						"sessionId": "session-foreign-stream-target",
+						"method":    "Runtime.consoleAPICalled",
+						"params": map[string]any{
+							"args": []map[string]any{{"type": "string", "value": "foreign-stream-event"}},
+						},
+					})
+				}
 				events = append(events, map[string]any{
 					"sessionId": req.SessionID,
 					"method":    "Runtime.consoleAPICalled",
@@ -751,6 +853,16 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						},
 					},
 				})
+			} else if req.Method == "Runtime.addBinding" {
+				var params struct {
+					Name string `json:"name"`
+				}
+				_ = json.Unmarshal(req.Params, &params)
+				bindingNames[req.SessionID] = params.Name
+				resp["result"] = map[string]any{}
+			} else if req.Method == "Runtime.removeBinding" {
+				delete(bindingNames, req.SessionID)
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Log.disable" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Log.enable" {
@@ -778,6 +890,10 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						{"name": "DomContentLoaded", "value": 124.5},
 					},
 				}
+			} else if req.Method == "Memory.getDOMCounters" {
+				resp["result"] = map[string]any{"documents": 3, "nodes": 42, "jsEventListeners": 5}
+			} else if req.Method == "HeapProfiler.enable" {
+				resp["result"] = map[string]any{}
 			} else if req.Method == "Tracing.start" {
 				resp["result"] = map[string]any{}
 			} else if req.Method == "Tracing.end" {
@@ -829,6 +945,8 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 						state = "hidden"
 					}
 					resp["result"] = map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"visibilityState": state, "hidden": hidden, "prerendering": false}}}
+				} else if targetID := strings.TrimPrefix(req.SessionID, "session-"); fakeTargetBool(targetInfos, targetID, "fakeRuntimeEvaluateErrorAlways") {
+					resp["error"] = map[string]any{"code": -32000, "message": "synthetic exact-session heartbeat failure"}
 				} else if targetID := strings.TrimPrefix(req.SessionID, "session-"); fakeTargetBool(targetInfos, targetID, "fakeRuntimeEvaluateErrorOnce") {
 					if _, loaded := runtimeEvaluateErrors.LoadOrStore(targetID, true); !loaded {
 						resp["error"] = map[string]any{"code": -32000, "message": "execution context was destroyed"}
@@ -843,6 +961,33 @@ func newFakeCDPServer(t *testing.T, targets []map[string]any) *httptest.Server {
 					}
 				} else {
 					resp["result"] = fakeRuntimeEvaluateResult(req.Params, req.SessionID, blockedSessions[req.SessionID], &scrolledSelectors, &renderedExtractReadinessCalls, &redditUserRecordCalls, &xProfileRecordCalls, &navigatedURLs, targetInfos)
+					if bindingName := bindingNames[req.SessionID]; bindingName != "" && strings.Contains(string(req.Params), "targetMetadata") {
+						payloads := []string{`{"type":"click","x":12,"y":34,"button":0,"detail":1,"target":{"tag":"button","editable":false}}`}
+						targetID := strings.TrimPrefix(req.SessionID, "session-")
+						if fakeTargetBool(targetInfos, targetID, "fakeInteractionForeignPayload") {
+							events = append(events, map[string]any{
+								"sessionId": "session-foreign-interaction-target",
+								"method":    "Runtime.bindingCalled",
+								"params": map[string]any{
+									"name":    bindingName,
+									"payload": payloads[0],
+								},
+							})
+						}
+						if fakeTargetBool(targetInfos, targetID, "fakeInteractionUnsafePayload") {
+							payloads = append([]string{`{"type":"click","x":1,"y":2,"button":0,"detail":1,"text":"synthetic-secret"}`}, payloads...)
+						}
+						for _, payload := range payloads {
+							events = append(events, map[string]any{
+								"sessionId": req.SessionID,
+								"method":    "Runtime.bindingCalled",
+								"params": map[string]any{
+									"name":    bindingName,
+									"payload": payload,
+								},
+							})
+						}
+					}
 					events = append(events, syntheticNetworkEventsForClick(req.SessionID, req.Params, targetInfos)...)
 					events = append(events, syntheticPopupEventsForClick(&targetInfos, req.SessionID, req.Params)...)
 					events = append(events, syntheticDownloadEventsForClick(req.SessionID, req.Params, targetInfos)...)
@@ -1153,6 +1298,25 @@ func fakeAnyTargetBool(targetInfos []map[string]any, key string) bool {
 		}
 	}
 	return false
+}
+
+func fakeReleaseDelayedCloseTargets(targetInfos *[]map[string]any) {
+	if targetInfos == nil {
+		return
+	}
+	filtered := (*targetInfos)[:0]
+	for _, target := range *targetInfos {
+		pending, _ := target["fakeCloseTargetPending"].(bool)
+		if pending {
+			polls, _ := target["fakeCloseTargetPolls"].(int)
+			if polls >= 1 {
+				continue
+			}
+			target["fakeCloseTargetPolls"] = polls + 1
+		}
+		filtered = append(filtered, target)
+	}
+	*targetInfos = filtered
 }
 
 func fakeAnyTargetString(targetInfos []map[string]any, key string) string {
@@ -2669,6 +2833,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 	if strings.Contains(req.Expression, "__cdp_cli_actionability__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")
 		action := expressionStringArg(req.Expression, "const action = ")
+		strategy := expressionStringArg(req.Expression, "const strategy = ")
 		if selector == "" {
 			selector = "main"
 		}
@@ -2689,6 +2854,8 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		inViewport := true
 		rect := map[string]any{"x": 10, "y": 20, "width": 600, "height": 200}
 		point := map[string]any{"x": 310, "y": 120, "hit_tag": tag, "hit_id": "", "hit_role": role, "target_matches": true}
+		domDispatchSafe := true
+		pseudoElements := map[string]any{}
 		if selector == "button#submit" {
 			tag = "button"
 			elementType = "submit"
@@ -2729,6 +2896,31 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			receivesEvents = false
 			rect = map[string]any{"x": 10, "y": 20, "width": 300, "height": 40}
 			point = map[string]any{"x": 160, "y": 40, "hit_tag": "div", "hit_id": "overlay", "hit_role": "", "target_matches": false}
+		}
+		if selector == "button#split-control" {
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Split control"
+			receivesEvents = false
+			rect = map[string]any{"x": 10, "y": 20, "width": 200, "height": 40}
+			point = map[string]any{"x": 110, "y": 40, "hit_tag": "body", "hit_id": "", "hit_role": "", "target_matches": false}
+			pseudoElements["after"] = map[string]any{
+				"present":        true,
+				"pointer_events": "auto",
+				"hit_matches":    true,
+				"rect":           map[string]any{"x": 170, "y": 20, "width": 40, "height": 40},
+			}
+		}
+		if selector == "button#occluded" {
+			tag = "button"
+			elementType = "button"
+			role = "button"
+			name = "Occluded control"
+			receivesEvents = false
+			domDispatchSafe = false
+			rect = map[string]any{"x": 10, "y": 20, "width": 200, "height": 40}
+			point = map[string]any{"x": 110, "y": 40, "hit_tag": "div", "hit_id": "overlay", "hit_role": "", "target_matches": false}
 		}
 		if selector == "div#drag-target" || selector == "#drag-target" {
 			tag = "div"
@@ -2891,6 +3083,9 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			supportsEditing = false
 		}
 		required := []string{"attached", "visible", "stable", "receives_events", "enabled"}
+		if action == "click" && strategy == "dom" {
+			required = []string{"attached", "visible", "stable", "dom_dispatch_safe", "enabled"}
+		}
 		switch action {
 		case "press":
 			required = []string{"attached"}
@@ -2921,21 +3116,23 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			return out
 		}
 		checks := map[string]any{
-			"attached":        check("attached", count > 0, map[bool]string{true: "", false: "selector matched no elements"}[count > 0]),
-			"visible":         check("visible", visible, map[bool]string{true: "", false: "element has empty box or hidden state"}[visible]),
-			"stable":          check("stable", stable, map[bool]string{true: "", false: "bounding box changed across animation frames"}[stable]),
-			"receives_events": check("receives_events", receivesEvents, map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]),
-			"enabled":         check("enabled", enabled, map[bool]string{true: "", false: "element is disabled"}[enabled]),
-			"editable":        check("editable", editable, map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]),
-			"in_viewport":     map[string]any{"required": false, "passed": inViewport, "skipped": true},
+			"attached":          check("attached", count > 0, map[bool]string{true: "", false: "selector matched no elements"}[count > 0]),
+			"visible":           check("visible", visible, map[bool]string{true: "", false: "element has empty box or hidden state"}[visible]),
+			"stable":            check("stable", stable, map[bool]string{true: "", false: "bounding box changed across animation frames"}[stable]),
+			"receives_events":   check("receives_events", receivesEvents, map[bool]string{true: "", false: "center point is not the hit target"}[receivesEvents]),
+			"dom_dispatch_safe": check("dom_dispatch_safe", domDispatchSafe, map[bool]string{true: "", false: "DOM click fallback is not safe for this hit path"}[domDispatchSafe]),
+			"enabled":           check("enabled", enabled, map[bool]string{true: "", false: "element is disabled"}[enabled]),
+			"editable":          check("editable", editable, map[bool]string{true: "", false: "element is disabled, read-only, or does not support editing"}[editable]),
+			"in_viewport":       map[string]any{"required": false, "passed": inViewport, "skipped": true},
 		}
 		passedByName := map[string]bool{
-			"attached":        count > 0,
-			"visible":         visible,
-			"stable":          stable,
-			"receives_events": receivesEvents,
-			"enabled":         enabled,
-			"editable":        editable,
+			"attached":          count > 0,
+			"visible":           visible,
+			"stable":            stable,
+			"receives_events":   receivesEvents,
+			"dom_dispatch_safe": domDispatchSafe,
+			"enabled":           enabled,
+			"editable":          editable,
 		}
 		actionable := true
 		for _, checkName := range required {
@@ -2947,6 +3144,7 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		} else if strings.HasPrefix(selector, tag+"#") {
 			targetElementID = strings.TrimPrefix(selector, tag+"#")
 		}
+		point["pseudo_elements"] = pseudoElements
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -3091,6 +3289,29 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			value["error"] = map[string]any{"name": "InvalidTargetError", "message": "target element is not input[type=file]"}
 		}
 		return map[string]any{"result": map[string]any{"type": "object", "value": value}}
+	}
+	if strings.Contains(req.Expression, "focused: document.activeElement === el") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "input#q"
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{
+			"selector": selector,
+			"focused":  true,
+			"tag":      "input",
+		}}}
+	}
+	if strings.Contains(req.Expression, "cleared:true") {
+		selector := expressionStringArg(req.Expression, "const selector = ")
+		if selector == "" {
+			selector = "input#q"
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{
+			"selector": selector,
+			"cleared":  true,
+			"previous": "before",
+			"value":    "",
+		}}}
 	}
 	if strings.Contains(req.Expression, "__cdp_cli_select__") {
 		selector := expressionStringArg(req.Expression, "const selector = ")
@@ -3506,6 +3727,21 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	if strings.Contains(req.Expression, `el.getAttribute("aria-label")`) {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"selector": "button",
+					"found":    true,
+					"role":     "button",
+					"name":     "Save changes",
+					"disabled": false,
+					"ignored":  false,
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_layout_overflow__") {
 		return map[string]any{
 			"result": map[string]any{
@@ -3773,7 +4009,17 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	targetID := strings.TrimPrefix(sessionID, "session-")
+	if strings.Contains(req.Expression, `link[rel~="alternate"]`) && fakeTargetBool(targetInfos, targetID, "fakeNoResults") {
+		return map[string]any{"result": map[string]any{"type": "object", "value": []map[string]string{}}}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_hn_frontpage__") {
+		if fakeTargetBool(targetInfos, targetID, "fakeNoResults") {
+			return map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{
+				"url": "https://news.ycombinator.com/", "title": "Hacker News", "count": 0,
+				"stories": []map[string]any{}, "organization": map[string]string{"page_kind": "table-based link aggregator front page"},
+			}}}
+		}
 		return map[string]any{
 			"result": map[string]any{
 				"type": "object",
@@ -3887,6 +4133,221 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 			},
 		}
 	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_list__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "list",
+					"available": true,
+					"count":     1,
+					"databases": []map[string]any{{
+						"name":    "cdp-demo-db",
+						"version": 1,
+						"stores":  []map[string]any{{"name": "settings", "count": 2}},
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_get__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "get",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"key":       "feature",
+					"value":     map[string]any{"enabled": true},
+					"count":     1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_put__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "put",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"key":       "feature",
+					"value":     map[string]any{"enabled": true},
+					"created":   true,
+					"count":     1,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_delete__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "delete",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"key":       "feature",
+					"deleted":   true,
+					"count":     0,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_indexeddb_clear__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "clear",
+					"available": true,
+					"found":     true,
+					"database":  "cdp-demo-db",
+					"store":     "settings",
+					"cleared":   2,
+					"count":     0,
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_list__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":           "https://example.test/app",
+					"origin":        "https://example.test",
+					"operation":     "list",
+					"available":     true,
+					"found":         true,
+					"request_count": 1,
+					"cache_names":   []string{"app-cache"},
+					"caches": []map[string]any{{
+						"name": "app-cache", "count": 1,
+						"requests": []map[string]any{{"url": "https://example.test/api", "method": "GET"}},
+					}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_get__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":         "https://example.test/app",
+					"origin":      "https://example.test",
+					"operation":   "get",
+					"available":   true,
+					"found":       true,
+					"cache":       "app-cache",
+					"request_url": "https://example.test/api",
+					"response":    map[string]any{"status": 200, "content_type": "application/json"},
+					"body":        map[string]any{"text": `{"ok":true}`, "bytes": 11, "omitted": false},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_put__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":         "https://example.test/app",
+					"origin":      "https://example.test",
+					"operation":   "put",
+					"available":   true,
+					"found":       true,
+					"cache":       "app-cache",
+					"request_url": "https://example.test/api",
+					"created":     true,
+					"body":        map[string]any{"bytes": 11},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_delete__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":         "https://example.test/app",
+					"origin":      "https://example.test",
+					"operation":   "delete",
+					"available":   true,
+					"found":       true,
+					"deleted":     true,
+					"cache":       "app-cache",
+					"request_url": "https://example.test/api",
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_cache_storage_clear__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":       "https://example.test/app",
+					"origin":    "https://example.test",
+					"operation": "clear",
+					"available": true,
+					"found":     true,
+					"cache":     "app-cache",
+					"cleared":   []string{"app-cache"},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_service_workers_list__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":           "https://example.test/app",
+					"origin":        "https://example.test",
+					"operation":     "list",
+					"available":     true,
+					"count":         1,
+					"registrations": []map[string]any{{"scope_url": "https://example.test/"}},
+				},
+			},
+		}
+	}
+	if strings.Contains(req.Expression, "__cdp_cli_service_workers_unregister__") {
+		return map[string]any{
+			"result": map[string]any{
+				"type": "object",
+				"value": map[string]any{
+					"url":          "https://example.test/app",
+					"origin":       "https://example.test",
+					"operation":    "unregister",
+					"available":    true,
+					"found":        true,
+					"count":        1,
+					"unregistered": []map[string]any{{"scope_url": "https://example.test/", "result": true}},
+				},
+			},
+		}
+	}
 	if strings.Contains(req.Expression, "__cdp_cli_storage_get__") {
 		return map[string]any{
 			"result": map[string]any{
@@ -3949,6 +4410,21 @@ func fakeRuntimeEvaluateResult(params json.RawMessage, sessionID string, serpBlo
 		}
 	}
 	if strings.Contains(req.Expression, "querySelectorAll") {
+		targetID := strings.TrimPrefix(sessionID, "session-")
+		if fakeTargetBool(targetInfos, targetID, "fakeNoResults") {
+			return map[string]any{
+				"result": map[string]any{
+					"type": "object",
+					"value": map[string]any{
+						"url":      "https://example.test/feed",
+						"title":    "Example Feed",
+						"selector": "article",
+						"count":    0,
+						"items":    []map[string]any{},
+					},
+				},
+			}
+		}
 		if strings.Contains(req.Expression, `"empty"`) {
 			return map[string]any{
 				"result": map[string]any{

@@ -28,21 +28,15 @@ func (a *app) newWorkflowFeedsCommand() *cobra.Command {
 			_ = closeClient(ctx)
 			return err
 		}
-		closeWorkflowPage := func() (bool, string) {
-			if keepOpen {
-				return false, ""
-			}
-			if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
-				return false, err.Error()
-			}
-			return true, ""
-		}
+		closeWorkflowPage := a.workflowPageCloser(client, targetID, rawURL, keepOpen)
 		session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 		if err != nil {
+			_, _ = closeWorkflowPage()
 			_ = closeClient(ctx)
 			return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 		}
 		defer session.Close(ctx)
+		defer func() { _, _ = closeWorkflowPage() }()
 		if wait > 0 {
 			timer := time.NewTimer(wait)
 			select {
@@ -64,7 +58,7 @@ func (a *app) newWorkflowFeedsCommand() *cobra.Command {
 		return a.render(ctx, fmt.Sprintf("feeds\t%d", len(feeds)), map[string]any{"ok": true, "workflow": workflow, "page": map[string]any{"target_id": targetID, "final_url": rawURL}, "feeds": feeds})
 	}}
 	cmd.Flags().DurationVar(&wait, "wait-load", 5*time.Second, "how long to wait before discovering feed links")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	return cmd
 }
 

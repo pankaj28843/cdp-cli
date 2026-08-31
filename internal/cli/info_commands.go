@@ -2,11 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type commandInfo struct {
@@ -44,10 +46,13 @@ func (a *app) newVersionCommand() *cobra.Command {
 			defer cancel()
 
 			build := normalizedBuildInfo(a.build)
-			human := fmt.Sprintf("cdp %s (%s build; commit %s; date %s; source %s)", build.Version, build.Provenance, build.Commit, build.Date, build.SourceState)
-			return a.render(ctx, human, build)
+			return a.render(ctx, buildVersionText(build), build)
 		},
 	}
+}
+
+func buildVersionText(build BuildInfo) string {
+	return fmt.Sprintf("cdp %s (%s build; commit %s; date %s; source %s)", build.Version, build.Provenance, build.Commit, build.Date, build.SourceState)
 }
 
 var (
@@ -105,34 +110,27 @@ func (a *app) newDescribeCommand() *cobra.Command {
 			data := map[string]any{
 				"ok":       true,
 				"commands": describeCommand(target),
-				"globals": []string{
-					"--json",
-					"--compact",
-					"--jq",
-					"--debug",
-					"--timeout",
-					"--profile",
-					"--config",
-					"--browser-url",
-					"--browserUrl",
-					"--auto-connect",
-					"--autoConnect",
-					"--channel",
-					"--user-data-dir",
-					"--state-dir",
-					"--browser-mode",
-					"--browserMode",
-					"--active-browser-probe",
-					"--connection",
-					"--allow-over-budget",
-					"--max-tabs",
-				},
+				"globals":  visiblePersistentFlagNames(a.root),
 			}
 			return a.render(ctx, "Use --json to print the command tree.", data)
 		},
 	}
 	cmd.Flags().StringVar(&commandPath, "command", "", "describe one command path, such as 'daemon status'")
 	return cmd
+}
+
+func visiblePersistentFlagNames(root *cobra.Command) []string {
+	names := []string{}
+	if root == nil {
+		return names
+	}
+	root.PersistentFlags().VisitAll(func(flag *pflag.Flag) {
+		if !flag.Hidden {
+			names = append(names, "--"+flag.Name)
+		}
+	})
+	sort.Strings(names)
+	return names
 }
 
 func (a *app) newDoctorCommand() *cobra.Command {
@@ -400,9 +398,15 @@ type crontabSummary struct {
 }
 
 func (a *app) scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
-	output, err := exec.CommandContext(ctx, crontabBinary(), "-l").CombinedOutput()
+	output, err := readUserCrontab(ctx)
 	available := !isCrontabMissing(err)
-	summary := summarizeCrontab(string(output))
+	outputTruncated := errors.Is(err, errExternalProcessOutputTooLarge)
+	parsedOutput := output
+	if outputTruncated {
+		// A partial crontab is not a trustworthy basis for task classification.
+		parsedOutput = ""
+	}
+	summary := summarizeCrontab(parsedOutput)
 	check := scheduledTasksStatusForSummary(available, err, summary)
 	details, _ := check["details"].(map[string]any)
 	if details == nil {
@@ -414,6 +418,7 @@ func (a *app) scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
 	}
 	details["last_run_artifacts"] = cronLastRunArtifacts(store.Dir)
 	details["last_cleanup"] = loadArtifactRetentionSummary(store.Dir)
+	details["command_output_truncated"] = outputTruncated
 	policyOpts := defaultCronRenderOptions()
 	if cfg, cfgErr := config.Load(a.opts.config); cfgErr == nil {
 		if cfg.Artifacts.Retention > 0 {
@@ -426,14 +431,14 @@ func (a *app) scheduledTasksDoctorCheck(ctx context.Context) map[string]any {
 	}
 	details["artifact_policy"] = cronArtifactPolicy(policyOpts)
 	effectiveTasks := managedCronTasks(policyOpts)
-	effectiveStatuses := cronTaskStatuses(extractCronManagedBlock(string(output)).Entries, effectiveTasks)
+	effectiveStatuses := cronTaskStatuses(extractCronManagedBlock(parsedOutput).Entries, effectiveTasks)
 	details["expected_managed_task_ids"] = cronTaskIDs(effectiveTasks)
 	details["installed_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "installed", "stale", "blocked")
 	details["missing_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "missing")
 	details["stale_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "stale")
 	details["blocked_managed_task_ids"] = cronTaskIDsByStatus(effectiveStatuses, "blocked")
 	details["tasks"] = cronTaskStatusSliceOrEmpty(effectiveStatuses)
-	installedBlock := extractCronManagedBlock(string(output))
+	installedBlock := extractCronManagedBlock(parsedOutput)
 	matchesCurrentPolicy := installedBlock.Installed && normalizeCronBlock(installedBlock.Text) == normalizeCronBlock(managedCronBlock(policyOpts))
 	details["matches_current_policy"] = matchesCurrentPolicy
 	if installedBlock.Installed && !matchesCurrentPolicy && check["status"] == "pass" {
@@ -454,6 +459,9 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 	if !available {
 		status = "pending"
 		message = "crontab command is not available on PATH"
+	} else if errors.Is(err, errExternalProcessOutputTooLarge) {
+		status = "warn"
+		message = "current user crontab could not be inspected because command output exceeded the safety bound"
 	} else if err != nil && summary.EntryCount == 0 {
 		status = "pending"
 		message = "current user crontab has no cdp entries"
@@ -491,6 +499,7 @@ func scheduledTasksStatusForSummary(available bool, err error, summary crontabSu
 			"source":                                            "crontab -l",
 			"user_level":                                        true,
 			"crontab_available":                                 available,
+			"command_output_truncated":                          errors.Is(err, errExternalProcessOutputTooLarge),
 			"cdp_entries_count":                                 summary.EntryCount,
 			"has_daemon_keepalive":                              summary.HasDaemonKeepalive,
 			"has_headed_daemon_keepalive":                       summary.HasHeadedDaemonKeepalive,

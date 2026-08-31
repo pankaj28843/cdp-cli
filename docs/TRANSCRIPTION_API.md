@@ -77,6 +77,11 @@ cdp transcription service restart
 cdp transcription service stop
 ```
 
+Native service-manager commands are bounded and run inside one owned process
+boundary. Cancellation terminates the owned process group where supported, and
+diagnostic overflow is reported as a stable safety-bound error instead of
+returning an unbounded manager transcript.
+
 For a reusable, cross-platform recovery check, run
 `scripts/chaos_monkey_transcription.sh`. It detects Darwin/LaunchAgent and
 Linux system or user `systemd`, reads the manager-owned PID, verifies a real
@@ -143,6 +148,19 @@ not retain or print transcript text. Remote deployment smoke must use the same
 multipart request against the deployed API and must select every enabled
 provider explicitly and sequentially. Recording through the demo app proves
 the demo, not the provider adapter, and is not a substitute.
+
+Local probe subprocesses are bounded and owned: decoded realtime PCM is capped
+at 16 MiB, ffprobe stdout and stderr are each capped at 64 KiB, and cancellation
+terminates the exact subprocess group where the platform supports process
+groups. Oversized decoder/diagnostic output becomes a stable probe error; PCM,
+ffprobe output, and transcript text are never included in health evidence.
+
+The browser-backed Bing, Claude, Gemini, and Microsoft 365 adapters apply the
+same owned-process boundary to their local ffmpeg conversion step. Their
+existing PCM/WebM output bounds and provider-specific replay/error behavior are
+unchanged; cancellation terminates only the conversion process group where the
+platform supports process groups. Converter output and diagnostics are not
+returned as API evidence.
 
 Authenticated providers derive the minimum owner-only request template from the
 existing signed-in browser session during bounded discovery and auth refresh.

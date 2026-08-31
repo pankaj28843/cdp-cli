@@ -28,14 +28,18 @@ func (a *app) newPerfCommand() *cobra.Command {
 
 func (a *app) newPerfSummaryCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	var duration time.Duration
 	cmd := &cobra.Command{Use: "summary", Short: "Collect a compact performance metrics summary", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		if duration < 0 {
 			return commandError("usage", "usage", "--duration must be non-negative", ExitUsage, []string{"cdp perf summary --duration 5s --json"})
 		}
 		ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -54,11 +58,16 @@ func (a *app) newPerfSummaryCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return a.render(ctx, fmt.Sprintf("perf\t%d metrics", len(metrics)), map[string]any{"ok": true, "target": pageRow(target), "duration_ms": duration.Milliseconds(), "metrics": map[string]any{"raw": metrics, "count": len(metrics)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "duration_ms": duration.Milliseconds(), "metrics": map[string]any{"raw": metrics, "count": len(metrics)}}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, fmt.Sprintf("perf\t%d metrics", len(metrics)), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&duration, "duration", 5*time.Second, "how long to observe before sampling metrics")
 	return cmd
 }
@@ -72,10 +81,14 @@ func (a *app) newMemoryCommand() *cobra.Command {
 
 func (a *app) newMemoryCountersCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{Use: "counters", Short: "Collect DOM and JS heap memory counters", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -84,23 +97,32 @@ func (a *app) newMemoryCountersCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Memory.getDOMCounters", map[string]any{}, &counters); err != nil {
 			return commandError("connection_failed", "connection", fmt.Sprintf("collect memory counters: %v", err), ExitConnection, []string{"cdp protocol describe Memory.getDOMCounters --json"})
 		}
-		return a.render(ctx, "memory counters", map[string]any{"ok": true, "target": pageRow(target), "memory": map[string]any{"counters": counters}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "memory": map[string]any{"counters": counters}}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, "memory counters", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
 func (a *app) newMemoryHeapSnapshotCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, outPath string
+	var targetIndex int
 	cmd := &cobra.Command{Use: "heap-snapshot", Short: "Write a heap snapshot artifact path without embedding heap data", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		if strings.TrimSpace(outPath) == "" {
 			return commandError("usage", "usage", "--out is required for heap snapshots", ExitUsage, []string{"cdp memory heap-snapshot --out tmp/page.heapsnapshot --json"})
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -114,11 +136,16 @@ func (a *app) newMemoryHeapSnapshotCommand() *cobra.Command {
 			return err
 		}
 		artifact := map[string]any{"type": "heap-snapshot", "path": writtenPath, "bytes": len(payload), "warnings": []string{"Heap snapshots may contain page strings and user data"}}
-		return a.render(ctx, "heap snapshot", map[string]any{"ok": true, "target": pageRow(target), "artifact": artifact, "artifacts": []map[string]any{artifact}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "artifact": artifact, "artifacts": []map[string]any{artifact}}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, "heap snapshot", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&outPath, "out", "", "required path for the heap snapshot artifact")
 	return cmd
 }
@@ -127,6 +154,7 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var selector string
 	var limit int
 	var minChars int
@@ -137,10 +165,13 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 		Use:   "snapshot",
 		Short: "Print compact visible text from a page target",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -158,6 +189,9 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 				"items":            snapshot.Items,
 				"interactive_only": interactiveOnly,
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if snapshot.Count == 0 {
 				report["warnings"] = []string{"selector matched zero visible text items; rerun with --diagnose-empty for page diagnostics"}
 				if diagnoseEmpty || debugEmpty {
@@ -168,8 +202,9 @@ func (a *app) newSnapshotCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector to extract visible text from; use article for social feeds")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of text items to return; use 0 for no limit")
 	cmd.Flags().IntVar(&minChars, "min-chars", 1, "minimum normalized text length per item")
@@ -183,6 +218,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var outPath string
 	var outDir string
 	var format string
@@ -202,6 +238,9 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 		Short: "Capture a page screenshot to a file",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -266,7 +305,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				}
 			}
 
-			session, target, err := a.attachOrCreateScreenshotSession(ctx, targetID, urlContains, titleContains, navigateURL)
+			session, target, err := a.attachOrCreateScreenshotSession(ctx, targetID, urlContains, titleContains, navigateURL, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -302,7 +341,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				}
 			}
 			if tileFullPage {
-				return a.captureTiledScreenshot(ctx, session, target, normalizedFormat, quality, outDir, tileHeight, tileMax, selectedPreset, strings.TrimSpace(preset) != "", navigateURL, wait)
+				return a.captureTiledScreenshot(ctx, session, target, targetIndex, normalizedFormat, quality, outDir, tileHeight, tileMax, selectedPreset, strings.TrimSpace(preset) != "", navigateURL, wait)
 			}
 			shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{
 				Format:   normalizedFormat,
@@ -360,19 +399,24 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 				screenshot["navigate"] = map[string]any{"url": navigateURL, "wait": durationString(wait)}
 			}
 			human := fmt.Sprintf("%s\t%d bytes", writtenPath, len(data))
-			return a.render(ctx, human, map[string]any{
+			report := map[string]any{
 				"ok":         true,
 				"target":     pageRow(target),
 				"screenshot": screenshot,
 				"artifacts": []map[string]any{
 					{"type": "screenshot", "path": writtenPath},
 				},
-			})
+			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
+			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&outPath, "out", "", "required path to write the screenshot image")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "directory for --tile-full-page tile artifacts and manifest")
 	cmd.Flags().StringVar(&format, "format", "", "screenshot format: png, jpeg, or webp; defaults to file extension or png")
@@ -391,7 +435,7 @@ func (a *app) newScreenshotCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) captureTiledScreenshot(ctx context.Context, session *cdp.PageSession, target cdp.TargetInfo, format string, quality int, outDir string, requestedTileHeight int, maxTiles int, selectedPreset responsiveViewport, hasPreset bool, navigateURL string, wait time.Duration) error {
+func (a *app) captureTiledScreenshot(ctx context.Context, session *cdp.PageSession, target cdp.TargetInfo, targetIndex int, format string, quality int, outDir string, requestedTileHeight int, maxTiles int, selectedPreset responsiveViewport, hasPreset bool, navigateURL string, wait time.Duration) error {
 	metrics, err := screenshotLayout(ctx, session)
 	if err != nil {
 		return commandError("connection_failed", "connection", fmt.Sprintf("get screenshot layout metrics target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp protocol describe Page.getLayoutMetrics --json"})
@@ -486,12 +530,16 @@ func (a *app) captureTiledScreenshot(ctx context.Context, session *cdp.PageSessi
 		screenshot["navigate"] = map[string]any{"url": navigateURL, "wait": durationString(wait)}
 	}
 	human := fmt.Sprintf("%s\t%d tiles", manifestPath, len(tileMetas))
-	return a.render(ctx, human, map[string]any{
+	report := map[string]any{
 		"ok":         true,
 		"target":     pageRow(target),
 		"screenshot": screenshot,
 		"artifacts":  artifacts,
-	})
+	}
+	if targetIndex > 0 {
+		report["target_index"] = targetIndex
+	}
+	return a.render(ctx, human, report)
 }
 
 type screenshotLayoutMetrics struct {
@@ -586,8 +634,11 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "render <html-file>",
 		Short: "Render a local HTML file to a PNG screenshot",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Long:  "Render a local HTML file in a workflow-owned page and write a PNG artifact. The created page is closed with bounded target-gone confirmation before its attached session is released; JSON reports metadata-only cleanup evidence.",
+		Example: "  cdp screenshot render ./diagram.html --out tmp/diagram.png --wait-for 'window.__rendered' --json\n" +
+			"  cdp screenshot render ./diagram.html --out tmp/diagram.png --serve --crop --json",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			outPath = strings.TrimSpace(outPath)
 			if outPath == "" {
 				return commandError("missing_output_path", "usage", "screenshot render requires --out <path>", ExitUsage, []string{"cdp screenshot render ./diagram.html --out tmp/diagram.png --json"})
@@ -623,13 +674,29 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer cdp.CloseTargetWithClient(context.Background(), client, targetID)
 			target := cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}
+			cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true}
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, func(context.Context) error { return nil })
 			if err != nil {
-				return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				primary := commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+				cleanup := cleanupGuard.cleanup()
+				if cleanup.Error != "" {
+					return screenshotRenderCleanupError(targetID, primary, cleanup)
+				}
+				return primary
 			}
-			defer session.Close(ctx)
+			defer closeRenderedExtractSession(session, nil)
+			cleanupFinalized := false
+			defer func() {
+				if cleanupFinalized {
+					return
+				}
+				cleanupFinalized = true
+				cleanup := cleanupGuard.cleanup()
+				if cleanup.Error != "" {
+					retErr = screenshotRenderCleanupError(targetID, retErr, cleanup)
+				}
+			}()
 			params := map[string]any{"width": width, "height": height, "deviceScaleFactor": dpr, "mobile": false}
 			if err := execSessionJSON(ctx, session, "Emulation.setDeviceMetricsOverride", params, nil); err != nil {
 				return commandError("connection_failed", "connection", fmt.Sprintf("emulate viewport: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setDeviceMetricsOverride --json"})
@@ -671,7 +738,12 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 			if cropMeta != nil {
 				screenshot["crop"] = cropMeta
 			}
-			return a.render(ctx, fmt.Sprintf("%s\t%d bytes", writtenPath, len(data)), map[string]any{"ok": true, "target": pageRow(target), "render": map[string]any{"source": htmlPath, "url": rawURL, "served": serve, "viewport": params, "wait": durationString(wait), "wait_for": waitFor}, "screenshot": screenshot, "artifacts": []map[string]any{{"type": "screenshot", "path": writtenPath}}})
+			cleanup := cleanupGuard.cleanup()
+			cleanupFinalized = true
+			if cleanup.Error != "" {
+				return screenshotRenderCleanupError(targetID, nil, cleanup)
+			}
+			return a.render(ctx, fmt.Sprintf("%s\t%d bytes", writtenPath, len(data)), map[string]any{"ok": true, "target": pageRow(target), "render": map[string]any{"source": htmlPath, "url": rawURL, "served": serve, "viewport": params, "wait": durationString(wait), "wait_for": waitFor}, "screenshot": screenshot, "cleanup": cleanup, "artifacts": []map[string]any{{"type": "screenshot", "path": writtenPath}}})
 		},
 	}
 	cmd.Flags().StringVar(&outPath, "out", "", "required path to write the rendered PNG")
@@ -684,6 +756,17 @@ func (a *app) newScreenshotRenderCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&crop, "crop", false, "auto-crop white transparent margins from the PNG")
 	cmd.Flags().IntVar(&cropPadding, "crop-padding", 10, "padding in pixels to keep around --crop content")
 	return cmd
+}
+
+func screenshotRenderCleanupError(targetID string, primary error, cleanup renderedExtractCleanupResult) error {
+	data := map[string]any{"cleanup": cleanup}
+	message := fmt.Sprintf("close screenshot render target %s: %s", targetID, cleanup.Error)
+	if primary != nil {
+		data["primary_error"] = commandErrorSummary(primary)
+		message = fmt.Sprintf("%s; cleanup failed: %s", primary.Error(), cleanup.Error)
+	}
+	remediation := []string{cleanup.RecoveryCommand, "cdp pages --json"}
+	return commandErrorWithData("screenshot_render_cleanup_failed", "internal", message, ExitInternal, remediation, data)
 }
 
 func serveLocalHTML(ctx context.Context, htmlPath string) (string, func(context.Context) error, error) {
@@ -723,7 +806,10 @@ func settleScreenshotRenderFrame(ctx context.Context, session *cdp.PageSession) 
 	return nil
 }
 
-func (a *app) attachOrCreateScreenshotSession(ctx context.Context, targetID, urlContains, titleContains, navigateURL string) (*cdp.PageSession, cdp.TargetInfo, error) {
+func (a *app) attachOrCreateScreenshotSession(ctx context.Context, targetID, urlContains, titleContains, navigateURL string, targetIndex int) (*cdp.PageSession, cdp.TargetInfo, error) {
+	if targetIndex > 0 {
+		return a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
+	}
 	if strings.TrimSpace(navigateURL) == "" || strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "" {
 		return a.attachPageSession(ctx, targetID, urlContains, titleContains)
 	}

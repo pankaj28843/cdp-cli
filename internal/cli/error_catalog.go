@@ -45,6 +45,17 @@ func errorCatalog() []errorInfo {
 			},
 		},
 		{
+			Code:     "cdp_command_failed",
+			Class:    "protocol",
+			ExitCode: ExitCheckFailed,
+			Message:  "Chrome rejected a DevTools Protocol command",
+			Meaning:  "The browser connection worked, but Chrome rejected the requested CDP method or parameters.",
+			RemediationCommands: []string{
+				"cdp protocol describe <method> --json",
+				"cdp protocol examples <method> --json",
+			},
+		},
+		{
 			Code:     "permission_pending",
 			Class:    "permission",
 			ExitCode: ExitPermission,
@@ -88,6 +99,17 @@ func errorCatalog() []errorInfo {
 			RemediationCommands: []string{
 				"cdp pages --json",
 				"cdp open <url> --json",
+			},
+		},
+		{
+			Code:     "invalid_target_index",
+			Class:    "usage",
+			ExitCode: ExitUsage,
+			Message:  "the page target index is invalid",
+			Meaning:  "Page target indexes are 1-based and an explicitly supplied index must be greater than zero.",
+			RemediationCommands: []string{
+				"cdp pages --json",
+				"cdp snapshot --target-index 1 --json",
 			},
 		},
 		{
@@ -168,6 +190,95 @@ func errorCatalog() []errorInfo {
 			},
 		},
 		{
+			Code:     "lighthouse_failed",
+			Class:    "check_failed",
+			ExitCode: ExitCheckFailed,
+			Message:  "the Lighthouse CLI failed against daemon-owned Chrome",
+			Meaning:  "The external Lighthouse process failed; its captured output is bounded and cancellation uses the platform-safe process termination policy.",
+			RemediationCommands: []string{
+				"cdp --browser-mode headless daemon status --json",
+				"cdp workflow a11y <url> --json",
+			},
+		},
+		{
+			Code:     "artifact_missing",
+			Class:    "internal",
+			ExitCode: ExitInternal,
+			Message:  "a required report artifact was missing or invalid",
+			Meaning:  "A workflow could not prove that its expected file-backed artifact exists as a regular non-empty file.",
+			RemediationCommands: []string{
+				"cdp workflow lighthouse --help",
+				"cdp pages --json",
+			},
+		},
+		{
+			Code:     "pdf_burst_failed",
+			Class:    "extraction",
+			ExitCode: ExitCheckFailed,
+			Message:  "the Poppler PDF image burst failed",
+			Meaning:  "The local pdftoppm process failed or was canceled; its diagnostics are bounded and its owned-process termination policy is reported.",
+			RemediationCommands: []string{
+				"verify the PDF opens normally",
+				"cdp workflow google-translate --help",
+			},
+		},
+		{
+			Code:     "pdf_burst_invalid_page",
+			Class:    "extraction",
+			ExitCode: ExitCheckFailed,
+			Message:  "the Poppler PDF image burst produced an invalid page artifact",
+			Meaning:  "Scanned-PDF translation requires every discovered page artifact to be a regular, non-empty file before browser translation starts.",
+			RemediationCommands: []string{
+				"verify the PDF opens normally",
+				"cdp workflow google-translate --help",
+			},
+		},
+		{
+			Code:     "pdf_burst_empty",
+			Class:    "extraction",
+			ExitCode: ExitCheckFailed,
+			Message:  "the Poppler PDF image burst produced no page artifacts",
+			Meaning:  "The local pdftoppm process completed without producing a usable PNG page set for scanned-PDF translation.",
+			RemediationCommands: []string{
+				"verify the PDF opens normally",
+				"cdp workflow google-translate --help",
+			},
+		},
+		{
+			Code:     "pdf_text_extraction_canceled",
+			Class:    "extraction",
+			ExitCode: ExitTimeout,
+			Message:  "the Poppler PDF text-layer extraction was canceled",
+			Meaning:  "The local pdftotext process exceeded the command deadline or was canceled; bounded diagnostics and the platform process-termination policy are reported without extracted text.",
+			RemediationCommands: []string{
+				"retry with a larger --timeout",
+				"cdp workflow pdf-to-markdown --help",
+			},
+		},
+		{
+			Code:     "pdf_text_extraction_failed",
+			Class:    "extraction",
+			ExitCode: ExitCheckFailed,
+			Message:  "the Poppler PDF text-layer extraction failed",
+			Meaning:  "The local pdftotext process failed; its diagnostics are bounded and its owned-process termination policy is reported without embedding extracted text.",
+			RemediationCommands: []string{
+				"verify the PDF opens normally",
+				"cdp workflow pdf-to-markdown --help",
+			},
+		},
+		{
+			Code:     "pdf_text_output_too_large",
+			Class:    "extraction",
+			ExitCode: ExitCheckFailed,
+			Message:  "the Poppler PDF text layer exceeded the extraction limit",
+			Meaning:  "The local pdftotext stdout stream exceeded the bounded extraction buffer; reduce or split the PDF before extracting.",
+			RemediationCommands: []string{
+				"use a smaller PDF",
+				"split the PDF before extraction",
+				"cdp workflow pdf-to-markdown --help",
+			},
+		},
+		{
 			Code:     "internal",
 			Class:    "internal",
 			ExitCode: ExitInternal,
@@ -183,7 +294,12 @@ func errorCatalog() []errorInfo {
 
 func findErrorInfo(code string) (errorInfo, bool) {
 	for _, info := range errorCatalog() {
-		if info.Code == code || info.Class == code {
+		if info.Code == code {
+			return info, true
+		}
+	}
+	for _, info := range errorCatalog() {
+		if info.Class == code {
 			return info, true
 		}
 	}

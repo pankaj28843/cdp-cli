@@ -20,6 +20,7 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +34,10 @@ const (
 	// entries below that portable boundary and reject custom values that
 	// would exceed it before invoking crontab.
 	cronMaxEntryBytes = 998
+	// /proc/locks is a read-only diagnostic input. Keep its total scan bounded
+	// so a pathological or synthetic lock table cannot make cron status retain
+	// unbounded kernel output.
+	cronProcLocksMaxBytes = 1 << 20
 )
 
 type cronRenderOptions struct {
@@ -108,6 +113,8 @@ type cronFlockOwner struct {
 	Age time.Duration
 }
 
+var cronProcLocksPath = "/proc/locks"
+var cronProcLocksOpen = func() (io.ReadCloser, error) { return os.Open(cronProcLocksPath) }
 var cronFlockOwnerForPath = cronFlockOwnerFromProcLocks
 var cronRunExecutable = os.Executable
 
@@ -115,7 +122,7 @@ func (a *app) newCronCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cron",
 		Short: "Manage cdp-managed browser runtime cron tasks",
-		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block with passive-first headed keepalive and canonical unattended headless maintenance tasks.",
+		Long:  "Install, inspect, diff, remove, and heal the cdp-managed user crontab block with passive-first headed keepalive and canonical unattended headless maintenance tasks. Crontab manager output is bounded and canceled within its owned process group; managed task children use the same owned process-tree boundary and race-safe log cap.",
 	}
 	cmd.AddCommand(a.newCronStatusCommand())
 	cmd.AddCommand(a.newCronDiffCommand())
@@ -233,8 +240,15 @@ func (a *app) newCronStatusCommand() *cobra.Command {
 			profileSeed := cronProfileSeedMetadata(opts)
 			managedProcesses := any(map[string]any{"checked": false, "state": "unknown"})
 			if storeErr == nil {
-				locks = cronLockStates(store.Dir)
-				daemonLocks = cronDaemonLockStates(store.Dir)
+				var lockErr error
+				locks, lockErr = cronLockStatesContext(ctx, store.Dir)
+				if lockErr != nil {
+					return lockErr
+				}
+				daemonLocks, lockErr = cronDaemonLockStatesContext(ctx, store.Dir)
+				if lockErr != nil {
+					return lockErr
+				}
 				artifacts = cronLastRunArtifacts(store.Dir)
 				lastCleanup = loadArtifactRetentionSummary(store.Dir)
 				if lastSeed, ok, seedErr := loadProfileSeedStatus(store.Dir); seedErr == nil && ok {
@@ -585,7 +599,7 @@ func (a *app) newCronHealHeadedCommand() *cobra.Command {
 				return commandError("invalid_browser_url", "usage", err.Error(), ExitUsage, []string{"cdp cron heal headed --auto-connect --json"})
 			}
 			before := a.daemonStatus(ctx, probe)
-			if before.State == "running" && daemon.RuntimeRunning(runtimeOrZero(before)) {
+			if before.State == "running" && before.ProcessRunning {
 				health := a.browserHealthSnapshot(ctx, before, false)
 				if health["state"] == "healthy" {
 					return a.render(ctx, "cron heal headed healthy", map[string]any{
@@ -883,25 +897,21 @@ func runManagedCronTask(ctx context.Context, stateDir string, task managedCronTa
 	if err != nil {
 		return nil, err
 	}
-	child := exec.CommandContext(ctx, executable, args...)
-	child.Env = env
-
 	result := map[string]any{
 		"browser_mode": task.BrowserMode,
 	}
+	runChild := func(stdout, stderr io.Writer) error {
+		return processgroup.RunWithOptions(ctx, executable, args, processgroup.Options{Env: env}, stdout, stderr)
+	}
 	if task.ID == cronTaskArtifactPrune {
-		child.Stdout = io.Discard
-		child.Stderr = io.Discard
-		err := child.Run()
+		err := runChild(io.Discard, io.Discard)
 		result["artifact"] = filepath.Join(stateDir, task.LogName)
 		return result, err
 	}
 
 	logPath := filepath.Join(stateDir, task.LogName)
 	logResult, runErr := artifacts.WriteBoundedManagedLog(ctx, stateDir, logPath, opts.MaxLogSizeBytes, func(writer io.Writer) error {
-		child.Stdout = writer
-		child.Stderr = writer
-		return child.Run()
+		return runChild(writer, writer)
 	})
 	result["log"] = logResult
 	return result, runErr
@@ -1179,8 +1189,8 @@ func cronValue(value string) string {
 }
 
 func readUserCrontab(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, crontabBinary(), "-l").CombinedOutput()
-	return string(out), err
+	result, err := runBoundedExternalCommand(ctx, crontabBinary(), "-l")
+	return result.combinedOutput(), err
 }
 
 func writeUserCrontab(ctx context.Context, content string) error {
@@ -1197,8 +1207,13 @@ func writeUserCrontab(ctx context.Context, content string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary crontab: %w", err)
 	}
-	if out, err := exec.CommandContext(ctx, crontabBinary(), path).CombinedOutput(); err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	result, err := runBoundedExternalCommand(ctx, crontabBinary(), path)
+	if err != nil {
+		message := boundedExternalCommandDiagnostic(result, err)
+		if message == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, message)
 	}
 	return nil
 }
@@ -1559,52 +1574,86 @@ func cronTaskStatusSliceOrEmpty(entries []cronTaskStatus) []cronTaskStatus {
 	return entries
 }
 
-func cronLockStates(stateDir string) map[string]any {
+func cronLockStates(ctx context.Context, stateDir string) map[string]any {
+	locks, _ := cronLockStatesContext(ctx, stateDir)
+	return locks
+}
+
+func cronLockStatesContext(ctx context.Context, stateDir string) (map[string]any, error) {
 	locks := map[string]any{}
 	for _, task := range managedCronTasks(defaultCronRenderOptions()) {
 		path := filepath.Join(stateDir, "locks", task.LockName+".lock")
-		locks[task.LockName] = cronLockStateEntry(task.LockName, path, 10*time.Minute)
+		entry, err := cronLockStateEntryContext(ctx, task.LockName, path, 10*time.Minute)
+		if err != nil {
+			return locks, err
+		}
+		locks[task.LockName] = entry
 	}
 	for _, name := range legacyCronLockNames() {
 		if _, ok := locks[name]; ok {
 			continue
 		}
 		path := filepath.Join(stateDir, "locks", name+".lock")
-		locks[name] = cronLockStateEntry(name, path, 10*time.Minute)
+		entry, err := cronLockStateEntryContext(ctx, name, path, 10*time.Minute)
+		if err != nil {
+			return locks, err
+		}
+		locks[name] = entry
 	}
 	if _, ok := locks["cron-headed-heal"]; !ok {
 		path := filepath.Join(stateDir, "locks", "cron-headed-heal.lock")
-		locks["cron-headed-heal"] = cronLockStateEntry("cron-headed-heal", path, 10*time.Minute)
+		entry, err := cronLockStateEntryContext(ctx, "cron-headed-heal", path, 10*time.Minute)
+		if err != nil {
+			return locks, err
+		}
+		locks["cron-headed-heal"] = entry
 	}
-	return locks
+	return locks, nil
 }
 
 func legacyCronLockNames() []string {
 	return []string{"keepalive-headless", "headless-health", "headless-profile-seed", "page-cleanup-headless"}
 }
 
-func cronDaemonLockStates(stateDir string) map[string]any {
-	locks := map[string]any{}
-	matches, err := filepath.Glob(filepath.Join(stateDir, "locks", "daemon-keepalive-*.lock"))
-	if err != nil {
-		return locks
-	}
-	for _, path := range matches {
-		name := strings.TrimSuffix(filepath.Base(path), ".lock")
-		locks[name] = cronLockStateEntry(name, path, 10*time.Minute)
-	}
+func cronDaemonLockStates(ctx context.Context, stateDir string) map[string]any {
+	locks, _ := cronDaemonLockStatesContext(ctx, stateDir)
 	return locks
 }
 
-func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]any {
-	info := daemon.InspectLock(path, staleAfter)
+func cronDaemonLockStatesContext(ctx context.Context, stateDir string) (map[string]any, error) {
+	locks := map[string]any{}
+	matches, err := filepath.Glob(filepath.Join(stateDir, "locks", "daemon-keepalive-*.lock"))
+	if err != nil {
+		return locks, nil
+	}
+	for _, path := range matches {
+		name := strings.TrimSuffix(filepath.Base(path), ".lock")
+		entry, err := cronLockStateEntryContext(ctx, name, path, 10*time.Minute)
+		if err != nil {
+			return locks, err
+		}
+		locks[name] = entry
+	}
+	return locks, nil
+}
+
+func cronLockStateEntry(ctx context.Context, name, path string, staleAfter time.Duration) map[string]any {
+	entry, _ := cronLockStateEntryContext(ctx, name, path, staleAfter)
+	return entry
+}
+
+func cronLockStateEntryContext(ctx context.Context, name, path string, staleAfter time.Duration) (map[string]any, error) {
+	info, err := daemon.InspectLockContext(ctx, path, staleAfter)
+	if err != nil {
+		return map[string]any{"path": path, "exists": info.Exists, "stale": false}, err
+	}
 	entry := map[string]any{
 		"path":   path,
 		"exists": info.Exists,
 		"stale":  info.Stale,
 	}
 	if !info.Exists {
-		return entry
+		return entry, nil
 	}
 	if info.Metadata.PID == 0 && strings.TrimSpace(info.Metadata.StartedAt) == "" && strings.TrimSpace(info.Metadata.Name) == "" {
 		entry["stale"] = false
@@ -1612,10 +1661,10 @@ func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]
 		if info.ModifiedAt != "" {
 			entry["modified_at"] = info.ModifiedAt
 		}
-		if locked, known := cronFlockMarkerLocked(path); known {
+		if locked, known := cronFlockMarkerLocked(ctx, path); known {
 			entry["locked"] = locked
 			if locked {
-				if owner, ownerKnown := cronFlockOwnerForPath(path); ownerKnown {
+				if owner, ownerKnown := cronFlockOwnerForPath(ctx, path); ownerKnown {
 					if owner.PID > 0 {
 						entry["lock_owner_pid"] = owner.PID
 					}
@@ -1630,7 +1679,7 @@ func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]
 				}
 			}
 		}
-		return entry
+		return entry, nil
 	}
 	if info.ModifiedAt != "" {
 		entry["modified_at"] = info.ModifiedAt
@@ -1654,26 +1703,32 @@ func cronLockStateEntry(name, path string, staleAfter time.Duration) map[string]
 	if info.OwnerRunning != nil {
 		entry["owner_running"] = *info.OwnerRunning
 	}
-	return entry
+	return entry, nil
 }
 
-func cronFlockMarkerLocked(path string) (bool, bool) {
+func cronFlockMarkerLocked(ctx context.Context, path string) (bool, bool) {
 	flock, err := exec.LookPath("flock")
 	if err != nil {
 		return false, false
 	}
-	err = exec.Command(flock, "-n", path, "true").Run()
+	err = processgroup.RunWithOptions(ctx, flock, []string{"-n", path, "true"}, processgroup.Options{}, io.Discard, io.Discard)
 	if err == nil {
 		return false, true
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false, false
+	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 		return true, true
 	}
 	return false, false
 }
 
-func cronFlockOwnerFromProcLocks(path string) (cronFlockOwner, bool) {
+func cronFlockOwnerFromProcLocks(ctx context.Context, path string) (cronFlockOwner, bool) {
+	if err := ctx.Err(); err != nil {
+		return cronFlockOwner{}, false
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return cronFlockOwner{}, false
@@ -1684,13 +1739,23 @@ func cronFlockOwnerFromProcLocks(path string) (cronFlockOwner, bool) {
 	}
 	device := procLocksDevice(uint64(stat.Dev))
 	inode := strconv.FormatUint(stat.Ino, 10)
-	file, err := os.Open("/proc/locks")
+	if err := ctx.Err(); err != nil {
+		return cronFlockOwner{}, false
+	}
+	file, err := cronProcLocksOpen()
 	if err != nil {
 		return cronFlockOwner{}, false
 	}
 	defer file.Close()
-	scanner := bufio.NewScanner(file)
+	limited := &io.LimitedReader{R: &cronLockContextReader{ctx: ctx, reader: file}, N: cronProcLocksMaxBytes + 1}
+	scanner := bufio.NewScanner(limited)
+	scanner.Buffer(make([]byte, 4096), cronProcLocksMaxBytes)
+	var owner cronFlockOwner
+	found := false
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return cronFlockOwner{}, false
+		}
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 6 || fields[1] != "FLOCK" {
 			continue
@@ -1704,9 +1769,25 @@ func cronFlockOwnerFromProcLocks(path string) (cronFlockOwner, bool) {
 			return cronFlockOwner{}, false
 		}
 		age, _ := processAge(pid)
-		return cronFlockOwner{PID: pid, Age: age}, true
+		owner = cronFlockOwner{PID: pid, Age: age}
+		found = true
 	}
-	return cronFlockOwner{}, false
+	if err := ctx.Err(); err != nil || scanner.Err() != nil || limited.N <= 0 {
+		return cronFlockOwner{}, false
+	}
+	return owner, found
+}
+
+type cronLockContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *cronLockContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func procLocksDevice(dev uint64) string {
@@ -1808,11 +1889,4 @@ func actionString(changed bool, changedAction, unchangedAction string) string {
 		return changedAction
 	}
 	return unchangedAction
-}
-
-func runtimeOrZero(status daemon.Status) daemon.Runtime {
-	if status.Runtime == nil {
-		return daemon.Runtime{}
-	}
-	return *status.Runtime
 }

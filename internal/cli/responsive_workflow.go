@@ -5,20 +5,22 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 )
 
 type responsiveAuditOptions struct {
-	Viewports string
-	Include   string
-	OutDir    string
-	Wait      time.Duration
-	Limit     int
+	Viewports   string
+	Include     string
+	OutDir      string
+	Wait        time.Duration
+	Limit       int
+	TargetIndex int
 }
 
-func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts responsiveAuditOptions) error {
+func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts responsiveAuditOptions) (retErr error) {
 	presets, err := responsiveViewportPresets(opts.Viewports)
 	if err != nil {
 		return err
@@ -27,18 +29,56 @@ func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts
 	if err != nil {
 		return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 	}
-	defer closeClient(ctx)
-	targetID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "responsive-audit")
-	if err != nil {
-		return err
+	closeClientOnce := idempotentContextCloser(closeClient)
+	defer func() { _ = closeClientOnce(context.Background()) }()
+	target := cdp.TargetInfo{Type: "page", URL: strings.TrimSpace(rawURL)}
+	workflowOwned := opts.TargetIndex == 0
+	if workflowOwned {
+		target.TargetID, err = a.createWorkflowPageTarget(ctx, client, "about:blank", "responsive-audit")
+		if err != nil {
+			return err
+		}
+	} else {
+		target, err = a.resolvePageTargetWithClientIndex(ctx, client, "", "", "", opts.TargetIndex)
+		if err != nil {
+			return err
+		}
+		if target.URL != "" && strings.TrimSpace(rawURL) == "" {
+			rawURL = target.URL
+		}
+		target.URL = strings.TrimSpace(rawURL)
 	}
-	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, nil)
+	cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: target.TargetID, owned: workflowOwned}
+	session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClientOnce)
 	if err != nil {
-		return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+		cleanup := cleanupGuard.cleanup()
+		primary := commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+		closeRenderedExtractSession(nil, closeClientOnce)
+		return diagnosticWorkflowErrorWithCleanup("responsive_audit", primary, cleanup)
 	}
-	defer session.Close(ctx)
+	defer closeRenderedExtractSession(session, nil)
+	var clearOnce sync.Once
+	var clearErr error
+	clearEmulation := func(clearCtx context.Context) error {
+		clearOnce.Do(func() {
+			clearErr = client.CallSession(clearCtx, session.SessionID, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
+		})
+		return clearErr
+	}
+	finalize := func() renderedExtractCleanupResult {
+		clearCtx, cancel := context.WithTimeout(context.Background(), renderedExtractCleanupTimeout)
+		emulationErr := clearEmulation(clearCtx)
+		cancel()
+		cleanup := cleanupGuard.cleanup()
+		if emulationErr != nil {
+			message := fmt.Sprintf("clear responsive emulation: %v", emulationErr)
+			cleanup.Error = message
+			cleanup.Errors = append(cleanup.Errors, message)
+		}
+		return cleanup
+	}
 	defer func() {
-		_ = client.CallSession(ctx, session.SessionID, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
+		retErr = diagnosticWorkflowErrorWithCleanup("responsive_audit", retErr, finalize())
 	}()
 
 	includeSet := parseCSVSet(opts.Include)
@@ -59,8 +99,12 @@ func runResponsiveAuditWorkflow(ctx context.Context, a *app, rawURL string, opts
 		results = append(results, viewportReport)
 		artifacts = append(artifacts, viewportArtifacts...)
 	}
-	_ = client.CallSession(ctx, session.SessionID, "Emulation.clearDeviceMetricsOverride", map[string]any{}, nil)
-	report := map[string]any{"ok": true, "target": pageRow(cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}), "workflow": map[string]any{"name": "responsive-audit", "url": rawURL, "viewports": setKeys(parseCSVSet(opts.Viewports)), "include": setKeys(includeSet), "wait": durationString(opts.Wait), "limit": opts.Limit, "out_dir": outDir, "cleanup": "emulation-cleared"}, "results": results, "artifacts": artifacts}
+	cleanup := finalize()
+	if cleanup.Error != "" {
+		return diagnosticWorkflowErrorWithCleanup("responsive_audit", nil, cleanup)
+	}
+	report := map[string]any{"ok": true, "target": pageRow(target), "cleanup": cleanup, "workflow": map[string]any{"name": "responsive-audit", "url": rawURL, "viewports": setKeys(parseCSVSet(opts.Viewports)), "include": setKeys(includeSet), "wait": durationString(opts.Wait), "limit": opts.Limit, "out_dir": outDir, "emulation_cleared": true, "cleanup": cleanup}, "results": results, "artifacts": artifacts}
+	addWorkflowTargetIndex(report, opts.TargetIndex)
 	return a.render(ctx, fmt.Sprintf("responsive-audit\t%d viewports", len(results)), report)
 }
 
@@ -80,7 +124,7 @@ func collectResponsiveViewport(ctx context.Context, client browserEventClient, s
 	if collectErr != nil {
 		collectorErrors = append(collectorErrors, collectorError("events", collectErr))
 	}
-	viewportReport := map[string]any{"name": vp.Name, "width": vp.Width, "height": vp.Height, "mobile": vp.Mobile, "device_scale_factor": vp.DeviceScaleFactor, "requests": requests, "messages": messages, "failed_request_count": countFailedRequests(requests), "console_issue_count": countConsoleIssues(messages), "requests_truncated": requestsTruncated, "messages_truncated": messagesTruncated, "collector_errors": collectorErrors}
+	viewportReport := map[string]any{"name": vp.Name, "width": vp.Width, "height": vp.Height, "mobile": vp.Mobile, "device_scale_factor": vp.DeviceScaleFactor, "requests": requests, "messages": messages, "failed_request_count": countFailedRequests(requests), "console_issue_count": countConsoleIssues(messages), "requests_truncated": requestsTruncated, "messages_truncated": messagesTruncated}
 	artifacts := []map[string]any{}
 	if includeSet["layout"] {
 		var overflow layoutOverflowResult
@@ -113,5 +157,6 @@ func collectResponsiveViewport(ctx context.Context, client browserEventClient, s
 			artifacts = append(artifacts, artifact)
 		}
 	}
+	viewportReport["collector_errors"] = collectorErrors
 	return viewportReport, artifacts, nil
 }

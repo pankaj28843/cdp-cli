@@ -10,12 +10,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 	"github.com/pankaj28843/cdp-cli/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -425,12 +427,13 @@ func (a *app) startKeepAlive(ctx context.Context, endpoint string, managed *mana
 	metadata := daemon.KeepAliveMetadata{UserDataDir: a.opts.userDataDir}
 	if managed != nil {
 		metadata = daemon.KeepAliveMetadata{
-			UserDataDir:         managed.Metadata.UserDataDir,
-			ManagedBrowser:      managed.ManagedBrowser,
-			ManagedProfilePath:  managed.Metadata.UserDataDir,
-			ProfileSeedStrategy: managed.Metadata.ProfileSeedStrategy,
-			ChromePID:           managed.Metadata.ChromePID,
-			ChromePort:          managed.Metadata.DebuggingPort,
+			UserDataDir:            managed.Metadata.UserDataDir,
+			ManagedBrowser:         managed.ManagedBrowser,
+			ManagedProfilePath:     managed.Metadata.UserDataDir,
+			ProfileSeedStrategy:    managed.Metadata.ProfileSeedStrategy,
+			ChromePID:              managed.Metadata.ChromePID,
+			ChromePort:             managed.Metadata.DebuggingPort,
+			ChromeProcessStartTime: managed.Metadata.ProcessStartTime,
 		}
 	}
 	return a.startKeepAliveFromEndpoint(ctx, endpoint, a.connectionMode(), metadata, reconnect)
@@ -661,7 +664,7 @@ func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "health-check",
 		Short: "Repair and validate the managed headless daemon runtime",
-		Long:  "Repair and validate the managed headless daemon runtime. When --repair or --managed-process-sweep is enabled, Auto Heal first checks internet reachability and a persisted awake observation; offline or post-wake hosts receive a safe structured skip without launching Chrome.",
+		Long:  "Repair and validate the managed headless daemon runtime. The synthetic health-check page is workflow-owned and reports bounded exact-target cleanup with target-gone evidence or a recovery command. When --repair or --managed-process-sweep is enabled, Auto Heal first checks internet reachability and a persisted awake observation; offline or post-wake hosts receive a safe structured skip without launching Chrome. Managed repair also inventories exact superseded daemon holds without touching the current generation.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.FailureThreshold <= 0 || opts.LockTimeout < 0 || opts.StaleLockAfter < 0 || opts.Reconnect < 0 {
@@ -677,7 +680,7 @@ func (a *app) newDaemonHealthCheckCommand() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.Repair, "repair", false, "start or replace the managed headless daemon before validation when health is not healthy")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "when used with --repair, clear stale managed headless runtime state before relaunching")
-	cmd.Flags().BoolVar(&opts.ManagedProcessSweep, "managed-process-sweep", false, "run managed headless process reconciliation before launch-capable repair work; lifecycle enforcement is expanded by cdp cron resilience")
+	cmd.Flags().BoolVar(&opts.ManagedProcessSweep, "managed-process-sweep", false, "run managed headless process and orphaned daemon-hold reconciliation before launch-capable repair work")
 	cmd.Flags().BoolVar(&opts.RequireHealthy, "require-healthy", false, "fail when health is usable but degraded instead of returning a warning success")
 	cmd.Flags().StringVar(&opts.HealthURL, "health-url", opts.HealthURL, "synthetic URL used for navigation/DOM/JS/screenshot validation")
 	cmd.Flags().StringVar(&opts.OutDir, "out-dir", "", "directory for health-check JSON and screenshot artifacts; defaults under the cdp state directory")
@@ -761,15 +764,23 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 			"state":     "pending",
 		}
 	}
+	var ownedTarget *headlessHealthCheckTarget
 	fail := func(failure string, cause error) (string, map[string]any, error) {
 		if cause != nil {
 			report["error"] = cause.Error()
 		}
 		report["failure"] = failure
+		if ownedTarget != nil {
+			report["cleanup"] = ownedTarget.close()
+		}
 		count := a.updateHeadlessHealthCheckFailure(ctx, outDir, runDir, summaryPath, opts.FailureThreshold, true)
 		report["failure_count"] = count
 		_ = writeJSONArtifact(summaryPath, report)
-		return "", report, commandErrorWithData("headless_health_check_failed", "check_failed", fmt.Sprintf("headless health-check failed: %s", failure), ExitCheckFailed, headlessHealthCheckNextCommands(), report)
+		primary := commandErrorWithData("headless_health_check_failed", "check_failed", fmt.Sprintf("headless health-check failed: %s", failure), ExitCheckFailed, headlessHealthCheckNextCommands(), report)
+		if cleanup, ok := report["cleanup"].(renderedExtractCleanupResult); ok && cleanup.Error != "" {
+			return "", report, workflowOwnedCleanupError("headless_health_check", primary, cleanup, headlessHealthCheckNextCommands())
+		}
+		return "", report, primary
 	}
 	addStep := func(name string, ok bool, fields map[string]any) {
 		step := map[string]any{"name": name, "ok": ok}
@@ -895,16 +906,15 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 		return skipForResources()
 	}
 
-	target, session, closeSession, err := a.openHealthCheckTarget(ctx, opts.HealthURL)
+	ownedTarget, err = a.openHealthCheckTarget(ctx, opts.HealthURL)
 	if err != nil {
 		addStep("open", false, map[string]any{"error": err.Error()})
 		return fail("navigate_failed", err)
 	}
-	defer closeSession()
-	report["target"] = pageRow(target)
-	addStep("open", true, map[string]any{"target_id": target.TargetID})
+	report["target"] = pageRow(ownedTarget.target)
+	addStep("open", true, map[string]any{"target_id": ownedTarget.target.TargetID})
 
-	js, jsAttempts, err := evaluateHeadlessHealthCheckJavaScript(ctx, session)
+	js, jsAttempts, err := evaluateHeadlessHealthCheckJavaScript(ctx, ownedTarget.session)
 	if err != nil {
 		addStep("javascript", false, map[string]any{"error": err.Error()})
 		return fail("javascript_failed", err)
@@ -915,7 +925,7 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 	}
 
 	var text textResult
-	if err := evaluateJSONValue(ctx, session, textExpression("body", 1, 1), "headless health-check text", &text); err != nil {
+	if err := evaluateJSONValue(ctx, ownedTarget.session, textExpression("body", 1, 1), "headless health-check text", &text); err != nil {
 		addStep("dom_text", false, map[string]any{"error": err.Error()})
 		return fail("dom_text_failed", err)
 	}
@@ -924,7 +934,7 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 		return fail("dom_text_empty", nil)
 	}
 
-	shot, err := session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{Format: "png"})
+	shot, err := ownedTarget.session.CaptureScreenshot(ctx, cdp.ScreenshotOptions{Format: "png"})
 	if err != nil {
 		addStep("screenshot", false, map[string]any{"error": err.Error()})
 		return fail("screenshot_failed", err)
@@ -936,6 +946,11 @@ func (a *app) runDaemonHealthCheckReport(ctx context.Context, opts daemonHealthC
 	}
 	addStep("screenshot", true, map[string]any{"path": writtenScreenshot, "bytes": len(shot.Data)})
 
+	cleanup := ownedTarget.close()
+	report["cleanup"] = cleanup
+	if cleanup.Error != "" {
+		return fail("cleanup_failed", fmt.Errorf("workflow-owned health-check page cleanup failed: %s", cleanup.Error))
+	}
 	report["ok"] = true
 	report["usable"] = true
 	if healthState(health) == "degraded" && healthUsable(health) {
@@ -998,7 +1013,7 @@ func (a *app) repairManagedHeadlessForHealthCheck(ctx context.Context, storeDir 
 	if mode == "" {
 		mode = a.connectionMode()
 	}
-	human, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, opts.ManagedProcessSweep, opts.StaleLockAfter, status, probeResult, map[string]any{
+	human, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, opts.Reconnect, opts.ChromeCommand, opts.Force, opts.ManagedProcessSweep, opts.Repair || opts.ManagedProcessSweep, opts.StaleLockAfter, status, probeResult, map[string]any{
 		"ok":            false,
 		"result":        healthFailureResult(health),
 		"runtime_state": status.State,
@@ -1035,57 +1050,62 @@ func (a *app) repairManagedHeadlessForHealthCheck(ctx context.Context, storeDir 
 	}
 }
 
-func (a *app) openHealthCheckTarget(ctx context.Context, rawURL string) (cdp.TargetInfo, *cdp.PageSession, func(), error) {
+type headlessHealthCheckTarget struct {
+	closeClient  func(context.Context) error
+	target       cdp.TargetInfo
+	session      *cdp.PageSession
+	cleanupGuard *renderedExtractCleanupGuard
+	once         sync.Once
+	cleanup      renderedExtractCleanupResult
+}
+
+func (h *headlessHealthCheckTarget) close() renderedExtractCleanupResult {
+	if h == nil {
+		return renderedExtractCleanupResult{Skipped: true, Reason: "not_registered"}
+	}
+	h.once.Do(func() {
+		h.cleanup = h.cleanupGuard.cleanup()
+		if h.session != nil {
+			_ = h.session.Close(context.Background())
+		} else if h.closeClient != nil {
+			_ = h.closeClient(context.Background())
+		}
+	})
+	return h.cleanup
+}
+
+func (a *app) openHealthCheckTarget(ctx context.Context, rawURL string) (*headlessHealthCheckTarget, error) {
 	client, closeClient, err := a.browserCDPClient(ctx)
 	if err != nil {
-		return cdp.TargetInfo{}, nil, nil, err
+		return nil, err
 	}
+	closeClientOnce := idempotentContextCloser(closeClient)
 	targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "headless-health-check")
 	if err != nil {
-		_ = closeClient(ctx)
-		return cdp.TargetInfo{}, nil, nil, err
+		_ = closeClientOnce(context.Background())
+		return nil, err
+	}
+	handle := &headlessHealthCheckTarget{
+		closeClient: closeClientOnce,
+		target:      cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL},
+		cleanupGuard: &renderedExtractCleanupGuard{
+			client:   client,
+			targetID: targetID,
+			owned:    true,
+		},
 	}
 	target, err := cdp.TargetInfoWithClient(ctx, client, targetID)
 	if err != nil {
-		closeCtx, cancel := context.WithTimeout(ctx, pageCloseAttemptTimeout(a.browserModeName()))
-		_ = closePageTargetSettled(closeCtx, client, cdp.TargetInfo{TargetID: targetID, Type: "page", URL: rawURL}, pageCloseOptions{
-			WaitGone:     true,
-			MaxAttempts:  defaultPageCloseMaxAttempts,
-			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
-			PollInterval: defaultPageClosePollInterval,
-			RetryBackoff: defaultPageCloseRetryBackoff,
-		})
-		cancel()
-		_ = closeClient(ctx)
-		return cdp.TargetInfo{}, nil, nil, err
+		return handle, err
 	}
-	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
+	handle.target = target
+	handle.cleanupGuard.targetID = target.TargetID
+	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClientOnce)
 	if err != nil {
-		closeCtx, cancel := context.WithTimeout(ctx, pageCloseAttemptTimeout(a.browserModeName()))
-		_ = closePageTargetSettled(closeCtx, client, target, pageCloseOptions{
-			WaitGone:     true,
-			MaxAttempts:  defaultPageCloseMaxAttempts,
-			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
-			PollInterval: defaultPageClosePollInterval,
-			RetryBackoff: defaultPageCloseRetryBackoff,
-		})
-		cancel()
-		_ = closeClient(ctx)
-		return cdp.TargetInfo{}, nil, nil, err
+		return handle, err
 	}
-	closeSession := func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), pageCloseDefaultTimeout(a.browserModeName(), defaultPageCloseMaxAttempts))
-		defer cancel()
-		_ = closePageTargetSettled(closeCtx, client, target, pageCloseOptions{
-			WaitGone:     true,
-			MaxAttempts:  defaultPageCloseMaxAttempts,
-			AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
-			PollInterval: defaultPageClosePollInterval,
-			RetryBackoff: defaultPageCloseRetryBackoff,
-		})
-		_ = session.Close(context.Background())
-	}
-	return target, session, closeSession, nil
+	handle.session = session
+	return handle, nil
 }
 
 func headlessHealthCheckExpression() string {
@@ -1426,7 +1446,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "keepalive",
 		Short: "Idempotently keep the daemon healthy for cron",
-		Long:  "Idempotently keep the daemon healthy for cron. Launch-capable Auto Heal checks internet reachability and a persisted awake observation before it can activate headed Chrome, request remote-debugging approval, or start managed headless Chrome; offline and post-wake hosts return a safe structured skip.",
+		Long:  "Idempotently keep the daemon healthy for cron. Launch-capable Auto Heal checks internet reachability and a persisted awake observation before it can activate headed Chrome, request remote-debugging approval, or start managed headless Chrome; offline and post-wake hosts return a safe structured skip. Headless --repair inventories and safely reclaims exact superseded detached daemon holds; superseded hold generations retire without poisoning current health, and transient endpoint failures remain retryable.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reconnect < 0 || lockTimeout < 0 || staleLockAfter < 0 {
 				return commandError(
@@ -1664,19 +1684,49 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				}
 				runtimeCheck["managed_process_sweep"] = sweep
 			}
+			if browserMode == "headless" && (repair || managedProcessSweep) && runtimeHealthy {
+				holdReconcile, reconcileErr := daemon.ReconcileOrphanedDaemonHolds(ctx, store.Dir, browserMode, true)
+				if reconcileErr != nil {
+					return commandError(
+						"daemon_hold_reconciliation_failed",
+						"connection",
+						fmt.Sprintf("reconcile orphaned headless daemon holds: %v", reconcileErr),
+						ExitConnection,
+						[]string{"cdp --browser-mode headless daemon logs --tail 50 --json", "cdp --browser-mode headless daemon keepalive --repair --json"},
+					)
+				}
+				runtimeCheck["daemon_hold_reconciliation"] = holdReconcile
+				if len(holdReconcile.SignalFailures) > 0 {
+					return commandErrorWithData(
+						"daemon_hold_reconciliation_failed",
+						"connection",
+						"one or more verified orphaned daemon holds could not be reclaimed",
+						ExitConnection,
+						[]string{"cdp --browser-mode headless daemon logs --tail 50 --json", "cdp --browser-mode headless daemon keepalive --repair --json"},
+						map[string]any{"browser_mode": browserMode, "health": runtimeCheck, "daemon": status},
+					)
+				}
+				if len(holdReconcile.ReclaimedPIDs) > 0 {
+					status.Health = a.browserHealthSnapshot(ctx, status, false)
+				}
+			}
 			if runtimeHealthy && reconnect > 0 && status.Runtime != nil && status.Runtime.ReconnectInterval != reconnect.String() {
 				runtimeCheck["reconnect_interval_mismatch"] = true
 				runtimeCheck["current_reconnect"] = status.Runtime.ReconnectInterval
 				runtimeCheck["wanted_reconnect"] = reconnect.String()
 			}
 			if status.State == "running" && runtimeHealthy {
+				action := "none"
+				if holdReconcile, ok := runtimeCheck["daemon_hold_reconciliation"].(daemon.DaemonHoldReconcileResult); ok && len(holdReconcile.ReclaimedPIDs) > 0 {
+					action = "reconciled"
+				}
 				return a.render(ctx, fmt.Sprintf("keepalive\t%s\thealthy", connectionName), map[string]any{
 					"ok":           true,
 					"browser_mode": browserMode,
 					"connection":   connectionName,
 					"mode":         mode,
 					"state":        "healthy",
-					"action":       "none",
+					"action":       action,
 					"locked":       false,
 					"daemon":       status,
 					"probe":        probeResult,
@@ -1751,7 +1801,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 				})
 			}
 			if browserMode == "headless" {
-				human, data, err := a.runHeadlessKeepaliveStartOrRepair(ctx, store.Dir, lock, connectionName, mode, reconnect, chromeCommand, force, managedProcessSweep, staleLockAfter, status, probeResult, runtimeCheck)
+				human, data, err := a.runHeadlessKeepaliveStartOrRepair(ctx, store.Dir, lock, connectionName, mode, reconnect, chromeCommand, force, managedProcessSweep, repair || managedProcessSweep, staleLockAfter, status, probeResult, runtimeCheck)
 				if err != nil {
 					return err
 				}
@@ -1868,6 +1918,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd.Flags().StringVar(&display, "display", os.Getenv("DISPLAY"), "DISPLAY value to use when launching Chrome for auto-connect")
 	cmd.Flags().StringVar(&chromeCommand, "chrome-command", defaultChromeCommand(), "Chrome command to launch for auto-connect repair; empty disables launch")
 	cmd.Flags().StringArrayVar(&chromeArgs, "chrome-args", nil, "extra Chrome argument; repeat for multiple arguments")
+	cmd.Flags().StringVar(&a.opts.fingerprintProfile, "fingerprint-profile", "", "source-compatible JSON profile applied only when launching managed headless Chrome; overrides browser.headless.fingerprint_profile")
 	cmd.Flags().BoolVar(&repair, "repair", false, "human-managed repair mode: remove stale runtime state and restart the daemon when safe")
 	cmd.Flags().BoolVar(&force, "force", false, "for --browser-mode headless repair, clear stale managed runtime state before relaunching")
 	cmd.Flags().BoolVar(&managedProcessSweep, "managed-process-sweep", false, "run managed headless process reconciliation before launch-capable repair work; lifecycle enforcement is expanded by cdp cron resilience")
@@ -1875,7 +1926,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir string, lock daemon.LockHandle, connectionName, mode string, reconnect time.Duration, chromeCommand string, force bool, managedProcessSweep bool, staleLockAfter time.Duration, status daemon.Status, probeResult map[string]any, runtimeCheck map[string]any) (string, map[string]any, error) {
+func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir string, lock daemon.LockHandle, connectionName, mode string, reconnect time.Duration, chromeCommand string, force bool, managedProcessSweep bool, reconcileDaemonHolds bool, staleLockAfter time.Duration, status daemon.Status, probeResult map[string]any, runtimeCheck map[string]any) (string, map[string]any, error) {
 	if managedProcessSweep {
 		if _, ok := runtimeCheck["managed_process_sweep"]; !ok {
 			sweep, err := a.runManagedProcessSweep(ctx, storeDir, lock, status)
@@ -1974,6 +2025,29 @@ func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir st
 	if err != nil {
 		return "", nil, err
 	}
+	if reconcileDaemonHolds {
+		holdReconcile, reconcileErr := daemon.ReconcileOrphanedDaemonHolds(ctx, storeDir, "headless", true)
+		if reconcileErr != nil {
+			return "", nil, commandError(
+				"daemon_hold_reconciliation_failed",
+				"connection",
+				fmt.Sprintf("reconcile orphaned headless daemon holds: %v", reconcileErr),
+				ExitConnection,
+				[]string{"cdp --browser-mode headless daemon logs --tail 50 --json", "cdp --browser-mode headless daemon keepalive --repair --json"},
+			)
+		}
+		runtimeCheck["daemon_hold_reconciliation"] = holdReconcile
+		if len(holdReconcile.SignalFailures) > 0 {
+			return "", nil, commandErrorWithData(
+				"daemon_hold_reconciliation_failed",
+				"connection",
+				"one or more verified orphaned daemon holds could not be reclaimed",
+				ExitConnection,
+				[]string{"cdp --browser-mode headless daemon logs --tail 50 --json", "cdp --browser-mode headless daemon keepalive --repair --json"},
+				map[string]any{"browser_mode": "headless", "health": runtimeCheck, "daemon": result.data["daemon"]},
+			)
+		}
+	}
 	action := "started"
 	state := "started"
 	if status.Runtime != nil {
@@ -1985,6 +2059,9 @@ func (a *app) runHeadlessKeepaliveStartOrRepair(ctx context.Context, storeDir st
 			action = "none"
 			state = "healthy"
 		}
+	}
+	if holdReconcile, ok := runtimeCheck["daemon_hold_reconciliation"].(daemon.DaemonHoldReconcileResult); ok && len(holdReconcile.ReclaimedPIDs) > 0 {
+		action = "reconciled"
 	}
 	if err := lock.Update(ctx, state); err != nil {
 		return "", nil, err
@@ -2147,14 +2224,12 @@ func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chr
 		status.ManagedBrowser = &managedStatus
 		return &managedKeepAlive{Endpoint: launch.Endpoint, Metadata: launch.Metadata, ManagedBrowser: &managedStatus}, status, nil
 	}
-	seedStrategy := ""
-	if cfg, cfgErr := config.Load(a.opts.config); cfgErr != nil {
+	managedOptions, cfgErr := a.managedChromeOptions(stateDir, chromeCommand)
+	if cfgErr != nil {
 		return nil, status, cfgErr
-	} else {
-		seedStrategy = cfg.Browser.Headless.ProfileSeedStrategy
 	}
 	status.MaxAttempts = managedChromeLaunchMaxAttempts
-	launch, err := startManagedChromeWithRetries(ctx, stateDir, browser.ManagedOptions{StateDir: stateDir, Chrome: chromeCommand, ProfileSeedStrategy: seedStrategy}, &status, browser.StartManagedChrome, managedChromeLaunchMaxAttempts, managedChromeLaunchAttemptTimeout)
+	launch, err := startManagedChromeWithRetries(ctx, stateDir, managedOptions, &status, browser.StartManagedChrome, managedChromeLaunchMaxAttempts, managedChromeLaunchAttemptTimeout)
 	if err != nil {
 		return nil, status, fmt.Errorf("managed Chrome launch failed after %d bounded attempt(s): %w", status.Attempts, err)
 	}
@@ -2162,6 +2237,23 @@ func (a *app) ensureManagedChromeForKeepalive(ctx context.Context, stateDir, chr
 	status.Launched = true
 	status.ManagedBrowser = &managedStatus
 	return &managedKeepAlive{Endpoint: launch.Endpoint, Metadata: launch.Metadata, ManagedBrowser: &managedStatus}, status, nil
+}
+
+func (a *app) managedChromeOptions(stateDir, chromeCommand string) (browser.ManagedOptions, error) {
+	cfg, err := config.Load(a.opts.config)
+	if err != nil {
+		return browser.ManagedOptions{}, err
+	}
+	fingerprintProfile := strings.TrimSpace(a.opts.fingerprintProfile)
+	if fingerprintProfile == "" {
+		fingerprintProfile = cfg.Browser.Headless.FingerprintProfile
+	}
+	return browser.ManagedOptions{
+		StateDir:            stateDir,
+		Chrome:              chromeCommand,
+		ProfileSeedStrategy: cfg.Browser.Headless.ProfileSeedStrategy,
+		FingerprintProfile:  fingerprintProfile,
+	}, nil
 }
 
 func startManagedChromeWithRetries(
@@ -2238,14 +2330,16 @@ func keepaliveRuntimeCheck(ctx context.Context, status daemon.Status) (bool, map
 		check["ok"] = false
 		check["result"] = "target_list_failed"
 		check["error"] = err.Error()
-		if _, managed := managedRuntimeProcessCheck(status.Runtime); managed != nil {
+		if _, managed := managedRuntimeProcessCheck(ctx, status.Runtime); managed != nil {
 			check["managed_browser_health"] = managed
 		}
 		return false, check
 	}
-	if ok, managed := managedRuntimeProcessCheck(status.Runtime); managed != nil {
+	if ok, managed := managedRuntimeProcessCheck(ctx, status.Runtime); managed != nil {
 		if !ok {
-			managed["state"] = "daemon_rpc_ready_pid_not_running"
+			if !managedProcessIdentityFailure(managed) && !managedProcessCheckCanceled(managed) {
+				managed["state"] = "daemon_rpc_ready_pid_not_running"
+			}
 			managed["daemon_rpc_ready"] = true
 		}
 		check["managed_browser_health"] = managed
@@ -2276,10 +2370,11 @@ func ensureChromeForKeepalive(ctx context.Context, display, chromeCommand string
 		status.Reason = "chrome launch disabled"
 		return status, nil
 	}
-	if _, err := browser.EnableRemoteDebuggingPreference(ctx, "stable"); err != nil {
-		return status, fmt.Errorf("prepare Chrome remote-debugging preference: %w", err)
+	running, err := chromeProcessRunning(ctx, chromeCommand)
+	if err != nil {
+		return status, fmt.Errorf("inspect headed Chrome process state: %w", err)
 	}
-	if chromeProcessRunning(ctx, chromeCommand) {
+	if running {
 		status.Running = true
 		window, err := browser.EnsureHeadedChromeWindow(ctx, "stable")
 		if err != nil {
@@ -2288,52 +2383,75 @@ func ensureChromeForKeepalive(ctx context.Context, display, chromeCommand string
 		status.Window = &window
 		return status, nil
 	}
-	cmd := exec.CommandContext(ctx, chromeCommand, chromeArgs...)
+	if _, err := browser.EnableRemoteDebuggingPreference(ctx, "stable"); err != nil {
+		return status, fmt.Errorf("prepare Chrome remote-debugging preference: %w", err)
+	}
+	env := os.Environ()
 	if strings.TrimSpace(display) != "" {
-		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+		env = append(env, "DISPLAY="+display)
 	}
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
 		return status, fmt.Errorf("open null device: %w", err)
 	}
 	defer devNull.Close()
-	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
-	if err := cmd.Start(); err != nil {
+	cmd, err := processgroup.StartWithOptions(chromeCommand, chromeArgs, processgroup.Options{
+		Env:    env,
+		Stdin:  devNull,
+		Stdout: devNull,
+		Stderr: devNull,
+	})
+	if err != nil {
 		return status, err
 	}
 	status.Launched = true
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
 	window, err := browser.EnsureHeadedChromeWindow(ctx, "stable")
 	if err != nil {
+		terminateHeadedChromeLaunch(cmd)
 		return status, err
 	}
 	status.Window = &window
+	if window.Supported && !window.WindowReady {
+		terminateHeadedChromeLaunch(cmd)
+		message := strings.TrimSpace(window.Message)
+		if detail := strings.TrimSpace(window.Detail); detail != "" {
+			if message == "" {
+				message = detail
+			} else {
+				message += ": " + detail
+			}
+		}
+		if message == "" {
+			message = "headed Chrome window was not ready"
+		}
+		return status, fmt.Errorf("headed Chrome readiness failed: %s", message)
+	}
+	if cmd.Process != nil {
+		processgroup.Detach(cmd)
+	}
 	return status, nil
 }
 
-func chromeProcessRunning(ctx context.Context, chromeCommand string) bool {
+func terminateHeadedChromeLaunch(command *exec.Cmd) {
+	processgroup.Terminate(command)
+	_ = command.Wait()
+}
+
+func chromeProcessRunning(ctx context.Context, chromeCommand string) (bool, error) {
 	name := strings.ToLower(strings.TrimSpace(filepath.Base(chromeCommand)))
 	if name == "" {
-		return false
+		return false, nil
 	}
-	ps, err := exec.LookPath("ps")
+	result, err := runBoundedExternalCommand(ctx, "ps", "-axo", "pid=,args=")
 	if err != nil {
-		return false
+		return false, fmt.Errorf("run headed Chrome process probe: %w", err)
 	}
-	output, err := exec.CommandContext(ctx, ps, "-axo", "pid=,args=").Output()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(output), "\n") {
+	for _, line := range strings.Split(result.stdout, "\n") {
 		if chromeProcessLineMatches(line, name) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func chromeProcessLineMatches(line, requestedName string) bool {

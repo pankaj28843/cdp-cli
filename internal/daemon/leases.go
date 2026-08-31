@@ -154,6 +154,12 @@ func (m *LeaseManager) Begin(ctx context.Context, ttl time.Duration) (LeaseInfo,
 }
 
 func (m *LeaseManager) Renew(ctx context.Context, leaseID string, ttl time.Duration) (LeaseInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return LeaseInfo{}, err
+	}
 	leaseID = strings.TrimSpace(leaseID)
 	if leaseID == "" {
 		return LeaseInfo{}, fmt.Errorf("lease id is required")
@@ -167,6 +173,7 @@ func (m *LeaseManager) Renew(ctx context.Context, leaseID string, ttl time.Durat
 	if record.State != leaseStateActive {
 		return LeaseInfo{}, fmt.Errorf("lease %s is %s", leaseID, record.State)
 	}
+	previous := record
 	if ttl <= 0 {
 		ttl = time.Duration(record.TTLMillis) * time.Millisecond
 	}
@@ -176,6 +183,7 @@ func (m *LeaseManager) Renew(ctx context.Context, leaseID string, ttl time.Durat
 	record.LastError = ""
 	m.leases[leaseID] = record
 	if err := m.saveLocked(ctx); err != nil {
+		m.leases[leaseID] = previous
 		return LeaseInfo{}, fmt.Errorf("persist renewed browser invocation lease: %w", err)
 	}
 	return record.LeaseInfo, nil
@@ -184,6 +192,12 @@ func (m *LeaseManager) Renew(ctx context.Context, leaseID string, ttl time.Durat
 // Touch extends an active lease using its original TTL. Daemon CDP activity
 // renews the lease without requiring a separate heartbeat RPC from every CLI.
 func (m *LeaseManager) Touch(ctx context.Context, leaseID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	leaseID = strings.TrimSpace(leaseID)
 	if leaseID == "" {
 		return nil
@@ -197,17 +211,25 @@ func (m *LeaseManager) Touch(ctx context.Context, leaseID string) error {
 	if record.State != leaseStateActive {
 		return fmt.Errorf("lease %s is %s", leaseID, record.State)
 	}
+	previous := record
 	ttl := normalizeLeaseTTL(time.Duration(record.TTLMillis) * time.Millisecond)
 	record.ExpiresAt = m.now().UTC().Add(ttl).Format(time.RFC3339Nano)
 	record.LastError = ""
 	m.leases[leaseID] = record
 	if err := m.saveLocked(ctx); err != nil {
+		m.leases[leaseID] = previous
 		return fmt.Errorf("persist touched browser invocation lease: %w", err)
 	}
 	return nil
 }
 
 func (m *LeaseManager) RegisterTarget(ctx context.Context, leaseID string, target LeaseTarget) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	leaseID = strings.TrimSpace(leaseID)
 	target.TargetID = strings.TrimSpace(target.TargetID)
 	target.TargetType = strings.TrimSpace(target.TargetType)
@@ -229,6 +251,7 @@ func (m *LeaseManager) RegisterTarget(ctx context.Context, leaseID string, targe
 	if record.State != leaseStateActive {
 		return fmt.Errorf("lease %s is %s", leaseID, record.State)
 	}
+	previous := record
 	for _, existing := range record.Targets {
 		if existing.TargetID == target.TargetID {
 			return nil
@@ -237,12 +260,19 @@ func (m *LeaseManager) RegisterTarget(ctx context.Context, leaseID string, targe
 	record.Targets = append(record.Targets, target)
 	m.leases[leaseID] = record
 	if err := m.saveLocked(ctx); err != nil {
+		m.leases[leaseID] = previous
 		return fmt.Errorf("persist target ownership for lease %s: %w", leaseID, err)
 	}
 	return nil
 }
 
 func (m *LeaseManager) UnregisterTarget(ctx context.Context, leaseID, targetID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	leaseID = strings.TrimSpace(leaseID)
 	targetID = strings.TrimSpace(targetID)
 	if leaseID == "" || targetID == "" {
@@ -254,6 +284,8 @@ func (m *LeaseManager) UnregisterTarget(ctx context.Context, leaseID, targetID s
 	if !ok {
 		return nil
 	}
+	previous := record
+	previous.Targets = append([]LeaseTarget(nil), record.Targets...)
 	filtered := record.Targets[:0]
 	for _, target := range record.Targets {
 		if target.TargetID != targetID {
@@ -263,12 +295,19 @@ func (m *LeaseManager) UnregisterTarget(ctx context.Context, leaseID, targetID s
 	record.Targets = filtered
 	m.leases[leaseID] = record
 	if err := m.saveLocked(ctx); err != nil {
+		m.leases[leaseID] = previous
 		return fmt.Errorf("persist target release for lease %s: %w", leaseID, err)
 	}
 	return nil
 }
 
 func (m *LeaseManager) SetTargetDisposable(ctx context.Context, leaseID, targetID string, disposable bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	leaseID = strings.TrimSpace(leaseID)
 	targetID = strings.TrimSpace(targetID)
 	if leaseID == "" || targetID == "" {
@@ -282,9 +321,11 @@ func (m *LeaseManager) SetTargetDisposable(ctx context.Context, leaseID, targetI
 	}
 	for index := range record.Targets {
 		if record.Targets[index].TargetID == targetID {
+			previous := record.Targets[index].Disposable
 			record.Targets[index].Disposable = disposable
 			m.leases[leaseID] = record
 			if err := m.saveLocked(ctx); err != nil {
+				m.leases[leaseID].Targets[index].Disposable = previous
 				return fmt.Errorf("persist target lifecycle policy for lease %s: %w", leaseID, err)
 			}
 			return nil
@@ -376,6 +417,12 @@ func (m *LeaseManager) Run(ctx context.Context, client cdp.CommandClient, report
 }
 
 func (m *LeaseManager) markClosing(ctx context.Context, leaseID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record, ok := m.leases[leaseID]
@@ -385,10 +432,12 @@ func (m *LeaseManager) markClosing(ctx context.Context, leaseID string) error {
 	if record.State == leaseStateCleanupPending {
 		return nil
 	}
+	previous := record
 	record.State = leaseStateClosing
 	record.ExpiresAt = m.now().UTC().Format(time.RFC3339Nano)
 	m.leases[leaseID] = record
 	if err := m.saveLocked(ctx); err != nil {
+		m.leases[leaseID] = previous
 		return fmt.Errorf("persist closing browser invocation lease: %w", err)
 	}
 	return nil

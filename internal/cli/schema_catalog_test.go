@@ -44,6 +44,10 @@ func TestSchemaCatalogInvariants(t *testing.T) {
 func TestSchemaCatalogCriticalCommands(t *testing.T) {
 	catalog := schemaCatalog()
 	critical := []string{
+		"guide",
+		"form-values",
+		"form-get",
+		"dialog",
 		"describe",
 		"doctor",
 		"doctor-capabilities",
@@ -78,11 +82,15 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"profile-seed-managed-process-state",
 		"profile-seed-managed-stop-state",
 		"managed-browser",
+		"managed-browser-health",
 		"managed-stop",
 		"managed-process-evidence",
 		"managed-ownership",
 		"managed-recovery-state",
 		"managed-process-reconcile",
+		"daemon-hold-reconcile",
+		"daemon-hold-ownership",
+		"daemon-hold-signal-failure",
 		"managed-process-record",
 		"managed-process-signal-failure",
 		"browser-process",
@@ -107,6 +115,8 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"page-cleanup",
 		"stop-state-classify",
 		"protocol-examples",
+		"events-wait",
+		"events-interactions",
 		"storage",
 		"rendered-extract-content",
 		"rendered-extract-readiness",
@@ -119,6 +129,10 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"workflow-hacker-news-collect",
 		"workflow-arxiv-collect",
 		"workflow-pdf-to-markdown",
+		"workflow-google-translate",
+		"google-translate-cleanup",
+		"page-close-report",
+		"page-close-attempt",
 		"workflow-youtube-cookies",
 		"source-collection-coverage",
 		"workflow-submit-search",
@@ -133,6 +147,30 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 	}
 }
 
+func TestSchemaCatalogGoogleTranslateCleanupContract(t *testing.T) {
+	catalog := schemaCatalog()
+	workflow, ok := catalog["workflow-google-translate"]
+	if !ok {
+		t.Fatal("schemaCatalog() missing workflow-google-translate")
+	}
+	if !catalogSchemaFieldContains(workflow, "cleanup", "google_translate_cleanup", "newly discovered", "recovery command") {
+		t.Fatalf("workflow-google-translate cleanup field is incomplete: %+v", workflow)
+	}
+	cleanup := catalog["google-translate-cleanup"]
+	for _, field := range []string{"attempted", "closed", "target_ids", "reports", "errors", "recovery_command"} {
+		if !catalogSchemaHasField(cleanup, field) {
+			t.Fatalf("google-translate-cleanup schema missing %q: %+v", field, cleanup)
+		}
+	}
+	if !catalogSchemaFieldContains(cleanup, "reports", "array<page_close_report>", "target-gone") {
+		t.Fatalf("google-translate-cleanup reports field is incomplete: %+v", cleanup)
+	}
+	if !catalogSchemaFieldContains(workflow, "mode", "string", "Poppler", "burst") ||
+		!catalogSchemaFieldContains(workflow, "pages", "array<object>", "regular non-empty", "source pages") {
+		t.Fatalf("workflow-google-translate scanned-PDF lifecycle contract is incomplete: %+v", workflow)
+	}
+}
+
 func TestSchemaCatalogPDFToMarkdownContract(t *testing.T) {
 	workflow := schemaCatalog()["workflow-pdf-to-markdown"]
 	for _, field := range []string{"ok", "schema_version", "source", "extraction", "pages", "stats", "coverage", "artifacts"} {
@@ -141,7 +179,7 @@ func TestSchemaCatalogPDFToMarkdownContract(t *testing.T) {
 		}
 	}
 	if !catalogSchemaFieldContains(workflow, "source", "pdf_source", "SHA-256", "local") ||
-		!catalogSchemaFieldContains(workflow, "extraction", "pdf_text_extraction", "pdftotext", "embedded text layer", "never OCR") ||
+		!catalogSchemaFieldContains(workflow, "extraction", "pdf_text_extraction", "pdftotext", "embedded text layer", "never OCR", "bounded diagnostics", "process-group cancellation") ||
 		!catalogSchemaFieldContains(workflow, "pages", "array<pdf_text_page>", "page provenance", "Markdown heading") ||
 		!catalogSchemaFieldContains(workflow, "stats", "pdf_text_stats", "page", "word", "character", "line") ||
 		!catalogSchemaFieldContains(workflow, "coverage", "pdf_text_coverage", "Meaningful", "thresholds") ||
@@ -396,39 +434,90 @@ func TestSchemaCatalogRenderedExtractAndQueryCoverageContracts(t *testing.T) {
 	}
 }
 
+func TestSchemaCatalogDiagnosticWorkflowCleanupContracts(t *testing.T) {
+	catalog := schemaCatalog()
+	cleanup, ok := catalog["workflow-page-cleanup"]
+	if !ok {
+		t.Fatal("schemaCatalog() missing workflow-page-cleanup")
+	}
+	if !catalogSchemaFieldContains(cleanup, "target_gone", "boolean", "Target.getTargets", "exact") ||
+		!catalogSchemaFieldContains(cleanup, "closed", "boolean", "confirmed gone") ||
+		!catalogSchemaFieldContains(cleanup, "recovery_command", "string", "Exact-target") {
+		t.Fatalf("workflow-page-cleanup schema is incomplete: %+v", cleanup)
+	}
+	for _, name := range []string{"workflow-verify", "workflow-perf", "workflow-a11y", "workflow-page-load"} {
+		workflow, ok := catalog[name]
+		if !ok {
+			t.Fatalf("schemaCatalog() missing %q", name)
+		}
+		if !catalogSchemaFieldContains(workflow, "cleanup", "workflow_page_cleanup", "exact-target", "target_gone", "caller-owned") {
+			t.Fatalf("%s schema does not expose diagnostic cleanup contract: %+v", name, workflow)
+		}
+		if !catalogSchemaFieldContains(workflow, "workflow", "workflow_summary", "created_page", "ownership") {
+			t.Fatalf("%s schema does not expose created-page ownership: %+v", name, workflow)
+		}
+	}
+	readiness, ok := catalog["browser-preflight-readiness"]
+	if !ok || !catalogSchemaFieldContains(readiness, "cleanup", "workflow_page_cleanup", "target_gone", "keep-open") {
+		t.Fatalf("browser-preflight-readiness schema does not expose cleanup contract: %+v", readiness)
+	}
+	healthCheck, ok := catalog["daemon-health-check"]
+	if !ok || !catalogSchemaFieldContains(healthCheck, "cleanup", "workflow_page_cleanup", "target_gone", "recovery") {
+		t.Fatalf("daemon-health-check schema does not expose cleanup contract: %+v", healthCheck)
+	}
+	policyFailure, ok := catalog["lease-target-policy-failure"]
+	if !ok || !catalogSchemaFieldContains(policyFailure, "close", "page_close_report", "target-gone") ||
+		!catalogSchemaFieldContains(policyFailure, "recovery_command", "string", "recovery") ||
+		!catalogSchemaFieldContains(policyFailure, "primary_error", "object", "lease_target_policy_failed") {
+		t.Fatalf("lease-target-policy-failure schema does not expose additive policy/cleanup contract: %+v", policyFailure)
+	}
+	lighthouse, ok := catalog["workflow-lighthouse"]
+	if !ok || !strings.Contains(lighthouse.Description, "bounded") || !strings.Contains(lighthouse.Description, "validated") || !strings.Contains(lighthouse.Description, "cancellation") ||
+		!catalogSchemaFieldContains(lighthouse, "ok", "boolean", "regular non-empty", "JSON", "HTML") ||
+		!catalogSchemaFieldContains(lighthouse, "artifact_list", "array<artifact>", "Validated", "byte counts") ||
+		!catalogSchemaFieldContains(lighthouse, "workflow", "workflow_summary", "bounded process-output", "cancellation") {
+		t.Fatalf("workflow-lighthouse schema does not expose process/artifact lifecycle contract: %+v", lighthouse)
+	}
+}
+
 func TestSchemaCatalogBrowserModeContracts(t *testing.T) {
 	catalog := schemaCatalog()
 	cases := map[string][]string{
-		"browser-mode":               {"browser_mode", "browser_mode_source", "next_commands"},
-		"browser-preflight":          {"browser_mode", "state", "resource_preflight", "health"},
-		"browser-profile-status":     {"browser_mode", "state_dir", "state", "managed_browser", "profile_perm", "metadata_perm", "seed_strategy", "resource_preflight", "last_seed", "seed_status_path"},
-		"browser-profile-seed":       {"browser_mode", "state_dir", "state", "seed_strategy", "seed_age_seconds", "seed_interval_seconds", "managed_browser", "maintenance", "resource_preflight", "last_seed", "seed_status_path"},
-		"profile-seed-status":        {"schema_version", "browser_mode", "status", "state", "seed_strategy", "seed_action", "checked_at", "fresh", "resource_preflight", "maintenance"},
-		"profile-seed-maintenance":   {"was_running", "managed_process_sweep", "managed_stop", "healed", "managed_browser"},
-		"managed-browser":            {"browser_mode", "user_data_dir", "profile_seed_strategy", "debugging_port", "default_profile_copied", "copied_file_count"},
-		"managed-stop":               {"checked", "stopped", "skipped", "process_evidence", "remaining_pids", "safety_checks"},
-		"managed-process-evidence":   {"pid", "root_pid", "role", "profile_matched", "debugging_port_match"},
-		"managed-ownership":          {"checked", "owned", "safety_checks", "reasons"},
-		"managed-recovery-state":     {"connections_removed", "stale_locks", "runtime_artifacts_cleared"},
-		"managed-process-reconcile":  {"checked", "state", "browser_mode", "registered_count", "live_count", "stale_count", "reaped_count", "records", "signal_failures", "next_commands"},
-		"resource-preflight":         {"checked", "browser_mode", "state", "status", "heavy_work_allowed", "policy", "checks", "reasons", "next_commands"},
-		"resource-preflight-check":   {"name", "status", "live_count", "stale_count", "tab_count", "window_count", "retryable", "next_command"},
-		"connection-current":         {"browser_mode", "browser_mode_source", "connection", "effective_connection", "connection_matches_effective"},
-		"connection-resolve":         {"browser_mode", "browser_mode_source", "connection"},
-		"daemon-status":              {"daemon"},
-		"daemon-keepalive":           {"browser_mode", "connection", "mode", "environment", "lock"},
-		"auto-heal-environment":      {"allowed", "state", "network", "sleep_gap_detected", "reason", "checked_at"},
-		"daemon-maintenance":         {"schema_version", "browser_mode", "state", "dry_run", "run_id", "started_at", "finished_at", "locked", "lock", "environment", "options", "phases", "artifacts", "warnings", "next_commands"},
-		"daemon-maintenance-options": {"profile_seed_strategy", "profile_seed_if_older_than", "profile_seed_if_older_than_seconds", "health_check", "cleanup_close", "lock_timeout", "stale_lock_after"},
-		"daemon-maintenance-phase":   {"order", "name", "status", "required", "mutates", "heavy_work", "resource_gated", "started_at", "finished_at", "result"},
-		"daemon-health-check":        {"browser_mode", "state", "status", "environment", "steps", "next_commands"},
-		"cron":                       {"tasks", "managed_processes", "last_run_artifacts", "next_commands"},
-		"cron-task":                  {"id", "browser_mode", "launch_capable", "requires_managed_process_sweep", "managed_process_sweep_installed", "status"},
-		"scheduled-tasks-details":    {"expected_managed_task_ids", "installed_managed_task_ids", "missing_managed_task_ids", "tasks", "has_managed_process_sweep", "has_headless_launch_without_managed_process_sweep", "last_run_artifacts", "managed_processes"},
-		"cron-migrate-pages-polling": {"action", "dry_run", "applied", "candidate_count", "managed_keepalive_installed", "next_commands"},
-		"scheduled-tasks":            {"details", "next_commands"},
-		"headless-security":          {"browser_mode", "details", "next_commands"},
-		"stop-state-classify":        {"stop_state", "stop_state_class", "agent_should_stop", "next_commands"},
+		"browser-mode":                {"browser_mode", "browser_mode_source", "next_commands"},
+		"browser-preflight":           {"browser_mode", "state", "resource_preflight", "health", "readiness"},
+		"browser-health":              {"browser_mode", "connection_mode", "daemon_process_identity_state", "reasons", "retired_hold_pids", "next_commands"},
+		"browser-preflight-readiness": {"ok", "url", "target", "cleanup"},
+		"browser-profile-status":      {"browser_mode", "state_dir", "state", "managed_browser", "profile_perm", "metadata_perm", "seed_strategy", "resource_preflight", "last_seed", "seed_status_path"},
+		"browser-profile-seed":        {"browser_mode", "state_dir", "state", "seed_strategy", "seed_age_seconds", "seed_interval_seconds", "managed_browser", "maintenance", "resource_preflight", "last_seed", "seed_status_path"},
+		"profile-seed-status":         {"schema_version", "browser_mode", "status", "state", "seed_strategy", "seed_action", "checked_at", "fresh", "resource_preflight", "maintenance"},
+		"profile-seed-maintenance":    {"was_running", "managed_process_sweep", "managed_stop", "healed", "managed_browser"},
+		"managed-browser":             {"browser_mode", "user_data_dir", "profile_seed_strategy", "debugging_port", "default_profile_copied", "copied_file_count"},
+		"managed-stop":                {"checked", "stopped", "skipped", "process_evidence", "remaining_pids", "safety_checks"},
+		"managed-process-evidence":    {"pid", "root_pid", "role", "profile_matched", "debugging_port_match"},
+		"managed-ownership":           {"checked", "owned", "safety_checks", "reasons"},
+		"managed-recovery-state":      {"connections_removed", "stale_locks", "runtime_artifacts_cleared"},
+		"managed-process-reconcile":   {"checked", "state", "browser_mode", "registered_count", "live_count", "stale_count", "reaped_count", "records", "signal_failures", "next_commands"},
+		"daemon-hold-reconcile":       {"checked", "state", "browser_mode", "active_pid", "considered_pids", "eligible_pids", "reclaimed_pids", "skipped_pids", "skip_reasons", "signal_failures", "safety_checks", "candidates", "next_commands"},
+		"daemon-hold-ownership":       {"pid", "parent_pid", "state", "generation_state", "ownership_checks", "reason"},
+		"daemon-hold-signal-failure":  {"pid", "error"},
+		"resource-preflight":          {"checked", "browser_mode", "state", "status", "heavy_work_allowed", "policy", "checks", "reasons", "next_commands"},
+		"resource-preflight-check":    {"name", "status", "live_count", "stale_count", "tab_count", "window_count", "retryable", "next_command"},
+		"connection-current":          {"browser_mode", "browser_mode_source", "connection", "effective_connection", "connection_matches_effective"},
+		"connection-resolve":          {"browser_mode", "browser_mode_source", "connection"},
+		"daemon-status":               {"daemon"},
+		"daemon-keepalive":            {"browser_mode", "connection", "mode", "environment", "daemon_hold_reconciliation", "lock"},
+		"auto-heal-environment":       {"allowed", "state", "network", "sleep_gap_detected", "reason", "checked_at"},
+		"daemon-maintenance":          {"schema_version", "browser_mode", "state", "dry_run", "run_id", "started_at", "finished_at", "locked", "lock", "environment", "options", "phases", "artifacts", "warnings", "next_commands"},
+		"daemon-maintenance-options":  {"profile_seed_strategy", "profile_seed_if_older_than", "profile_seed_if_older_than_seconds", "health_check", "cleanup_close", "lock_timeout", "stale_lock_after"},
+		"daemon-maintenance-phase":    {"order", "name", "status", "required", "mutates", "heavy_work", "resource_gated", "started_at", "finished_at", "result"},
+		"daemon-health-check":         {"browser_mode", "state", "status", "environment", "steps", "cleanup", "next_commands"},
+		"cron":                        {"tasks", "managed_processes", "last_run_artifacts", "next_commands"},
+		"cron-task":                   {"id", "browser_mode", "launch_capable", "requires_managed_process_sweep", "managed_process_sweep_installed", "status"},
+		"scheduled-tasks-details":     {"expected_managed_task_ids", "installed_managed_task_ids", "missing_managed_task_ids", "tasks", "has_managed_process_sweep", "has_headless_launch_without_managed_process_sweep", "last_run_artifacts", "managed_processes"},
+		"cron-migrate-pages-polling":  {"action", "dry_run", "applied", "candidate_count", "managed_keepalive_installed", "next_commands"},
+		"scheduled-tasks":             {"details", "next_commands"},
+		"headless-security":           {"browser_mode", "details", "next_commands"},
+		"stop-state-classify":         {"stop_state", "stop_state_class", "agent_should_stop", "next_commands"},
 	}
 	for schemaName, fieldNames := range cases {
 		info, ok := catalog[schemaName]

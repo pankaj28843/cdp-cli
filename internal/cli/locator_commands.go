@@ -73,6 +73,7 @@ func (a *app) newLocatorCommand() *cobra.Command {
 
 func (a *app) newLocatorFindCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	var by, role, testIDAttr string
 	var exact, includeHidden bool
 	var limit int
@@ -81,13 +82,16 @@ func (a *app) newLocatorFindCommand() *cobra.Command {
 		Short: "Find elements by role, text, label, placeholder, alt, title, test id, or CSS",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			by = normalizeLocatorStrategy(by)
 			if err := validateLocatorFindOptions(by, role, testIDAttr, limit); err != nil {
 				return err
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -108,12 +112,16 @@ func (a *app) newLocatorFindCommand() *cobra.Command {
 				"matches":       result.Matches,
 				"next_commands": next,
 			}
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			return a.render(ctx, fmt.Sprintf("locator-find\t%s\t%d matches", by, result.Count), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&by, "by", "text", "locator strategy: role, text, label, placeholder, alt, title, test-id, or css")
 	cmd.Flags().StringVar(&role, "role", "", "ARIA role to match when --by role is used")
 	cmd.Flags().StringVar(&testIDAttr, "test-id-attr", "data-testid", "attribute name for --by test-id")

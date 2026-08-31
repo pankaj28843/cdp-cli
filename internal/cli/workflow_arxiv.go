@@ -26,14 +26,15 @@ func (a *app) newWorkflowArxivCommand() *cobra.Command {
 			_ = closeClient(ctx)
 			return err
 		}
+		closeWorkflowPage := a.workflowPageCloser(client, target, req.URL, false)
 		session, err := cdp.AttachToTargetWithClient(ctx, client, target, closeClient)
 		if err != nil {
-			_ = cdp.CloseTargetWithClient(ctx, client, target)
+			_, _ = closeWorkflowPage()
 			_ = closeClient(ctx)
 			return commandError("connection_failed", "connection", err.Error(), ExitConnection, nil)
 		}
 		defer session.Close(ctx)
-		defer cdp.CloseTargetWithClient(ctx, client, target)
+		defer func() { _, _ = closeWorkflowPage() }()
 		if _, err = session.Navigate(ctx, req.URL); err != nil {
 			return commandError("arxiv_navigation_failed", "connection", err.Error(), ExitConnection, nil)
 		}
@@ -81,7 +82,11 @@ func (a *app) newWorkflowArxivCommand() *cobra.Command {
 			missing = []string{"reference"}
 		}
 		coverage := staticSourceCoverage(observed, missing, status, reason)
-		workflow := map[string]any{"name": "arxiv-collect", "count": len(page.References), "limit": 500, "status": status, "partial_reason": reason, "interactions": 0}
+		closed, closeError := closeWorkflowPage()
+		workflow := map[string]any{"name": "arxiv-collect", "count": len(page.References), "limit": 500, "status": status, "partial_reason": reason, "interactions": 0, "created_page": true, "closed": closed, "close_error": closeError}
+		if closeError != "" {
+			return commandError("arxiv_cleanup_failed", "cleanup", closeError, ExitCheckFailed, nil)
+		}
 		return a.render(ctx, arxivCollectionMarkdown(final.URL, page.Paper, page.References, workflow, coverage), map[string]any{"ok": true, "request": final, "kind": "paper", "paper": page.Paper, "references": page.References, "coverage": coverage, "workflow": workflow})
 	}})
 	return cmd

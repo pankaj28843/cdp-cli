@@ -48,17 +48,23 @@ type actionabilityTarget struct {
 }
 
 type actionabilityPoint struct {
-	X             float64 `json:"x"`
-	Y             float64 `json:"y"`
-	HitTag        string  `json:"hit_tag,omitempty"`
-	HitID         string  `json:"hit_id,omitempty"`
-	HitRole       string  `json:"hit_role,omitempty"`
-	TargetMatches bool    `json:"target_matches"`
+	X              float64                               `json:"x"`
+	Y              float64                               `json:"y"`
+	HitTag         string                                `json:"hit_tag,omitempty"`
+	HitID          string                                `json:"hit_id,omitempty"`
+	HitRole        string                                `json:"hit_role,omitempty"`
+	TargetMatches  bool                                  `json:"target_matches"`
+	HitPath        []actionabilityHit                    `json:"hit_path,omitempty"`
+	PseudoElements map[string]actionabilityPseudoElement `json:"pseudo_elements,omitempty"`
 }
 
 func evaluateActionability(ctx context.Context, session *cdp.PageSession, selector, action string) (actionabilityResult, error) {
+	return evaluateActionabilityWithStrategy(ctx, session, selector, action, "")
+}
+
+func evaluateActionabilityWithStrategy(ctx context.Context, session *cdp.PageSession, selector, action, strategy string) (actionabilityResult, error) {
 	var result actionabilityResult
-	if err := evaluateJSONValue(ctx, session, actionabilityExpression(selector, action), "actionability", &result); err != nil {
+	if err := evaluateJSONValue(ctx, session, actionabilityExpressionWithStrategy(selector, action, strategy), "actionability", &result); err != nil {
 		return actionabilityResult{}, err
 	}
 	result.Action = action
@@ -269,11 +275,35 @@ func actionabilityRemediations(action, query, selector string, opts locatorActio
 	return commands
 }
 
+type actionabilityHit struct {
+	Tag           string `json:"tag,omitempty"`
+	ID            string `json:"id,omitempty"`
+	Role          string `json:"role,omitempty"`
+	PointerEvents string `json:"pointer_events,omitempty"`
+}
+
+type actionabilityPseudoElement struct {
+	Present       bool         `json:"present"`
+	Display       string       `json:"display,omitempty"`
+	Visibility    string       `json:"visibility,omitempty"`
+	Position      string       `json:"position,omitempty"`
+	PointerEvents string       `json:"pointer_events,omitempty"`
+	HasContent    bool         `json:"has_content"`
+	HitMatches    bool         `json:"hit_matches"`
+	Measured      bool         `json:"measured"`
+	Rect          snapshotRect `json:"rect"`
+}
+
 func actionabilityExpression(selector, action string) string {
+	return actionabilityExpressionWithStrategy(selector, action, "")
+}
+
+func actionabilityExpressionWithStrategy(selector, action, strategy string) string {
 	return fmt.Sprintf(`(() => {
   const marker = "__cdp_cli_actionability__";
   const selector = %s;
   const action = %s;
+  const strategy = %s;
   const nativeDisabledTags = new Set(["button", "select", "input", "textarea", "option", "optgroup"]);
   const nativeEditableTags = new Set(["input", "textarea", "select"]);
   const ariaReadonlyRoles = new Set(["checkbox", "combobox", "grid", "gridcell", "listbox", "radiogroup", "searchbox", "slider", "spinbutton", "switch", "textbox", "treegrid"]);
@@ -298,6 +328,47 @@ func actionabilityExpression(selector, action string) string {
       return "textbox";
     }
     return "";
+  };
+  const cssNumber = (value) => {
+    const number = Number.parseFloat(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const pseudoGeometry = (el, pseudoName, baseRect) => {
+    let style;
+    try {
+      style = getComputedStyle(el, pseudoName);
+    } catch (_) {
+      return { present: false, hit_matches: false, rect: { x: 0, y: 0, width: 0, height: 0 }, measured: false };
+    }
+    const width = cssNumber(style.width);
+    const height = cssNumber(style.height);
+    const left = cssNumber(style.left);
+    const right = cssNumber(style.right);
+    const top = cssNumber(style.top);
+    const bottom = cssNumber(style.bottom);
+    const hasContent = Boolean(style.content && style.content !== "none" && style.content !== '""');
+    const present = style.display !== "none" && style.visibility !== "hidden" && (hasContent || (width !== null && height !== null && width > 0 && height > 0));
+    let rect = { x: 0, y: 0, width: width || 0, height: height || 0 };
+    let measured = false;
+    if (present && width !== null && height !== null && (style.position === "absolute" || style.position === "fixed")) {
+      const x = left !== null ? (style.position === "fixed" ? left : baseRect.x + left) : right !== null ? (style.position === "fixed" ? window.innerWidth - right - width : baseRect.x + baseRect.width - right - width) : null;
+      const y = top !== null ? (style.position === "fixed" ? top : baseRect.y + top) : bottom !== null ? (style.position === "fixed" ? window.innerHeight - bottom - height : baseRect.y + baseRect.height - bottom - height) : null;
+      if (x !== null && y !== null) {
+        rect = { x, y, width, height };
+        measured = true;
+      }
+    }
+    return {
+      present,
+      display: style.display || "",
+      visibility: style.visibility || "",
+      position: style.position || "",
+      pointer_events: style.pointerEvents || "",
+      has_content: hasContent,
+      hit_matches: false,
+      rect,
+      measured
+    };
   };
   const disabledInfo = (el) => {
     const tag = el.tagName.toLowerCase();
@@ -341,6 +412,7 @@ func actionabilityExpression(selector, action string) string {
     if (action === "fill" || action === "type") return ["attached", "visible", "enabled", "editable"];
     if (action === "select") return ["attached", "visible", "enabled"];
     if (action === "hover" || action === "drag") return ["attached", "visible", "stable", "receives_events"];
+    if (action === "click" && strategy === "dom") return ["attached", "visible", "stable", "dom_dispatch_safe", "enabled"];
     return ["attached", "visible", "stable", "receives_events", "enabled"];
   };
   const emptyChecks = () => {
@@ -350,6 +422,7 @@ func actionabilityExpression(selector, action string) string {
       visible: check(requiredChecks.includes("visible"), false, "no element to inspect"),
       stable: check(requiredChecks.includes("stable"), false, "no element to inspect"),
       receives_events: check(requiredChecks.includes("receives_events"), false, "no element to inspect"),
+      dom_dispatch_safe: check(requiredChecks.includes("dom_dispatch_safe"), false, "no element to inspect"),
       enabled: check(requiredChecks.includes("enabled"), false, "no element to inspect"),
       editable: check(requiredChecks.includes("editable"), false, "no element to inspect"),
       in_viewport: check(false, false, "no element to inspect")
@@ -376,20 +449,44 @@ func actionabilityExpression(selector, action string) string {
     const rect = { x: liveRect.x, y: liveRect.y, width: liveRect.width, height: liveRect.height };
     const style = getComputedStyle(el);
     const hidden = Boolean(el.hidden || el.closest("[hidden]") || style.display === "none" || style.visibility === "hidden");
-    const visible = !hidden && rect.width > 0 && rect.height > 0;
+    const attached = Boolean(el.isConnected);
+    const visible = attached && !hidden && rect.width > 0 && rect.height > 0;
     const stable = sameRect(first, mid) && sameRect(mid, rect);
-    const inViewport = rect.width > 0 && rect.height > 0 && liveRect.bottom >= 0 && liveRect.right >= 0 && liveRect.top <= window.innerHeight && liveRect.left <= window.innerWidth;
+    const inViewport = attached && rect.width > 0 && rect.height > 0 && liveRect.bottom >= 0 && liveRect.right >= 0 && liveRect.top <= window.innerHeight && liveRect.left <= window.innerWidth;
     const x = rect.x + rect.width / 2;
     const y = rect.y + rect.height / 2;
-    const hit = inViewport ? document.elementFromPoint(Math.min(Math.max(x, 0), Math.max(window.innerWidth - 1, 0)), Math.min(Math.max(y, 0), Math.max(window.innerHeight - 1, 0))) : null;
+    const pointX = Math.min(Math.max(x, 0), Math.max(window.innerWidth - 1, 0));
+    const pointY = Math.min(Math.max(y, 0), Math.max(window.innerHeight - 1, 0));
+    const hit = inViewport ? document.elementFromPoint(pointX, pointY) : null;
     const targetMatches = Boolean(hit && (hit === el || el.contains(hit)));
+    const hitPath = inViewport && typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(pointX, pointY).slice(0, 8).map((node) => ({
+      tag: node.tagName ? node.tagName.toLowerCase() : "",
+      id: node.id || "",
+      role: roleOf(node),
+      pointer_events: getComputedStyle(node).pointerEvents || ""
+    })) : [];
+    const pseudoElements = {};
+    for (const pseudoName of ["::before", "::after"]) {
+      const key = pseudoName.slice(2);
+      const pseudo = pseudoGeometry(el, pseudoName, rect);
+      if (pseudo.measured && pseudo.rect.width > 0 && pseudo.rect.height > 0) {
+        const pseudoX = pseudo.rect.x + pseudo.rect.width / 2;
+        const pseudoY = pseudo.rect.y + pseudo.rect.height / 2;
+        const pseudoHit = pseudoX >= 0 && pseudoY >= 0 && pseudoX < window.innerWidth && pseudoY < window.innerHeight ? document.elementFromPoint(pseudoX, pseudoY) : null;
+        pseudo.hit_matches = Boolean(pseudoHit && (pseudoHit === el || el.contains(pseudoHit)));
+      }
+      pseudoElements[key] = pseudo;
+    }
+    const relatedPseudoHit = Object.values(pseudoElements).some((pseudo) => pseudo.present && pseudo.pointer_events !== "none" && pseudo.hit_matches);
+    const domDispatchSafe = targetMatches || (style.pointerEvents === "none" && relatedPseudoHit);
     const editable = readonly.supportsEditing && !disabled && !readonly.readOnly;
     const requiredChecks = requiredChecksFor();
     const checks = {
-      attached: check(true, elements.length > 0, ""),
+      attached: check(true, attached, attached ? "" : "element was detached during actionability checks"),
       visible: check(requiredChecks.includes("visible"), visible, visible ? "" : "element has empty box or hidden/display-none/visibility-hidden state"),
       stable: check(requiredChecks.includes("stable"), stable, stable ? "" : "bounding box changed across animation frames"),
       receives_events: check(requiredChecks.includes("receives_events"), targetMatches, targetMatches ? "" : "center point is not the hit target"),
+      dom_dispatch_safe: check(requiredChecks.includes("dom_dispatch_safe"), domDispatchSafe, domDispatchSafe ? "" : "center point is not the target and no related pointer-events split hit was proven"),
       enabled: check(requiredChecks.includes("enabled"), !disabled, disabled ? "element is disabled" : ""),
       editable: check(requiredChecks.includes("editable"), editable, editable ? "" : "element is disabled, read-only, or does not support editing"),
       in_viewport: check(false, inViewport, inViewport ? "" : "element center is outside the viewport")
@@ -425,20 +522,36 @@ func actionabilityExpression(selector, action string) string {
         hit_tag: hit ? hit.tagName.toLowerCase() : "",
         hit_id: hit ? hit.id || "" : "",
         hit_role: hit ? roleOf(hit) : "",
-        target_matches: targetMatches
+        target_matches: targetMatches,
+        hit_path: hitPath,
+        pseudo_elements: pseudoElements
       },
       marker
     };
   };
-  // Key presses and file uploads only require attachment. They must work in
-  // background headed tabs too, where requestAnimationFrame is intentionally
-  // suspended and a stability wait would never resolve.
+  // Key presses and file uploads only require attachment. Other actions use a
+  // bounded frame-first sample so a suspended background tab cannot leave the
+  // actionability promise pending until the command timeout.
   if (action === "press" || action === "file") return readResult(first, first);
+  const nextLayoutSample = (callback) => {
+    let settled = false;
+    let timerID;
+    let frameID;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timerID);
+      if (frameID !== undefined && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frameID);
+      callback();
+    };
+    timerID = setTimeout(finish, 100);
+    if (typeof requestAnimationFrame === "function") frameID = requestAnimationFrame(finish);
+  };
   return new Promise((resolve) => {
-    requestAnimationFrame(() => {
+    nextLayoutSample(() => {
       const mid = rectSnapshot(el);
-      requestAnimationFrame(() => resolve(readResult(mid, el.getBoundingClientRect())));
+      nextLayoutSample(() => resolve(readResult(mid, el.getBoundingClientRect())));
     });
   });
-})()`, jsStringLiteral(selector), jsStringLiteral(action), accessibleNameHelpersJS())
+	})()`, jsStringLiteral(selector), jsStringLiteral(action), jsStringLiteral(strategy), accessibleNameHelpersJS())
 }

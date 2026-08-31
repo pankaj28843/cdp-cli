@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -10,17 +11,29 @@ func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
 	var viewports, include, outDir string
 	var wait time.Duration
 	var limit int
+	var targetIndex int
 	cmd := &cobra.Command{
-		Use:   "responsive-audit <url>",
-		Short: "Audit a URL across desktop, tablet, and mobile viewport presets",
-		Args:  cobra.ExactArgs(1),
+		Use:   "responsive-audit [url]",
+		Short: "Audit a page across desktop, tablet, and mobile viewport presets",
+		Long:  "Audit a page across desktop, tablet, and mobile viewport presets. URL-only runs own one disposable page, clears emulation, and reports bounded exact-target cleanup before session release; --target-index runs retain the caller-owned page and report cleanup skipped with reason=caller_owned.",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, "", "", "", targetIndex); err != nil {
+				return err
+			}
 			if wait < 0 || limit < 0 {
 				return commandError("usage", "usage", "--wait and --limit must be non-negative", ExitUsage, []string{"cdp workflow responsive-audit 'https://example.com' --wait 5s --json"})
 			}
+			rawURL := ""
+			if len(args) == 1 {
+				rawURL = strings.TrimSpace(args[0])
+			}
+			if rawURL == "" && targetIndex == 0 {
+				return commandError("usage", "usage", "a URL is required unless --target-index selects an existing page", ExitUsage, []string{"cdp workflow responsive-audit 'https://example.com' --viewports desktop,tablet,mobile --json"})
+			}
 			ctx, cancel := a.commandContextWithDefault(cmd, wait+30*time.Second)
 			defer cancel()
-			return runResponsiveAuditWorkflow(ctx, a, args[0], responsiveAuditOptions{Viewports: viewports, Include: include, OutDir: outDir, Wait: wait, Limit: limit})
+			return runResponsiveAuditWorkflow(ctx, a, rawURL, responsiveAuditOptions{Viewports: viewports, Include: include, OutDir: outDir, Wait: wait, Limit: limit, TargetIndex: targetIndex})
 		},
 	}
 	cmd.Flags().StringVar(&viewports, "viewports", "desktop,tablet,mobile", "comma-separated viewport presets: desktop, tablet, mobile")
@@ -28,6 +41,7 @@ func (a *app) newWorkflowResponsiveAuditCommand() *cobra.Command {
 	cmd.Flags().StringVar(&outDir, "out-dir", "tmp/responsive-audit", "directory for screenshot artifacts")
 	cmd.Flags().DurationVar(&wait, "wait", 3*time.Second, "how long to collect events after each viewport navigation")
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum console, network, and layout items per viewport; use 0 for no limit")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes")
 	return cmd
 }
 
@@ -37,6 +51,7 @@ func (a *app) newWorkflowLighthouseCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "lighthouse <url>",
 		Short: "Run Lighthouse CLI and summarize category scores",
+		Long:  "Run Lighthouse CLI against the selected daemon-owned loopback Chrome and summarize category scores. Tool stdout/stderr is bounded, cancellation terminates the owned process group where supported, and success requires validated non-empty JSON and HTML report artifacts.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wait < 0 {

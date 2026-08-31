@@ -47,6 +47,63 @@ func TestClickJSON(t *testing.T) {
 	}
 }
 
+func TestClickTargetIndexJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "first-page", "type": "page", "title": "First", "url": "https://example.test/first", "attached": false},
+		{"targetId": "second-page", "type": "page", "title": "Second", "url": "https://example.test/second", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "main", "--target-index", "2", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("indexed click exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		OK          bool `json:"ok"`
+		TargetIndex int  `json:"target_index"`
+		Target      struct {
+			ID string `json:"id"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("indexed click output is invalid JSON: %v", err)
+	}
+	if !got.OK || got.TargetIndex != 2 || got.Target.ID != "second-page" {
+		t.Fatalf("indexed click output = %+v, want second page and index evidence", got)
+	}
+}
+
+func TestClickRejectsInvalidTargetIndexSelection(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "zero", args: []string{"click", "main", "--target-index", "0", "--json"}, want: "invalid_target_index"},
+		{name: "combined", args: []string{"click", "main", "--target-index", "1", "--target", "page-1", "--json"}, want: "invalid_target_selector"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), test.args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitUsage {
+				t.Fatalf("%s exit code = %d, want %d; stdout=%s stderr=%s", test.name, code, cli.ExitUsage, out.String(), errOut.String())
+			}
+			var got struct {
+				OK   bool   `json:"ok"`
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("%s error is invalid JSON: %v", test.name, err)
+			}
+			if got.OK || got.Code != test.want {
+				t.Fatalf("%s error = %+v, want code %q", test.name, got, test.want)
+			}
+		})
+	}
+}
+
 func TestClickWaitURLJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false, "afterURL": "https://example.test/results?q=agent", "afterTitle": "Results"},
@@ -1046,6 +1103,104 @@ func TestClickForceSkipsReceivesEventsJSON(t *testing.T) {
 	}
 	if !got.OK || got.Action != "clicked" || !got.Click.Clicked || !got.Click.Force || !got.Actionability.Actionable || !got.Actionability.Force || !containsString(got.Actionability.Skipped, "receives_events") || got.Actionability.Checks.ReceivesEvents.Required || got.Actionability.Checks.ReceivesEvents.Passed || !got.Actionability.Checks.ReceivesEvents.Skipped || !strings.Contains(got.Actionability.Checks.ReceivesEvents.Message, "--force") {
 		t.Fatalf("force covered click = %+v, want receives-events skipped by force", got)
+	}
+}
+
+func TestClickDOMStrategyAcceptsRelatedSplitControlJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#split-control", "--strategy", "dom", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("DOM split-control click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK     bool   `json:"ok"`
+		Action string `json:"action"`
+		Click  struct {
+			Clicked  bool   `json:"clicked"`
+			Strategy string `json:"strategy"`
+		} `json:"click"`
+		Actionability struct {
+			Actionable bool     `json:"actionable"`
+			Required   []string `json:"required_checks"`
+			Checks     map[string]struct {
+				Required bool   `json:"required"`
+				Passed   bool   `json:"passed"`
+				Message  string `json:"message"`
+			} `json:"checks"`
+			Point struct {
+				TargetMatches  bool `json:"target_matches"`
+				PseudoElements map[string]struct {
+					PointerEvents string `json:"pointer_events"`
+					HitMatches    bool   `json:"hit_matches"`
+					Rect          struct {
+						Width  float64 `json:"width"`
+						Height float64 `json:"height"`
+					} `json:"rect"`
+				} `json:"pseudo_elements"`
+			} `json:"point"`
+		} `json:"actionability"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("DOM split-control output is invalid JSON: %v", err)
+	}
+	domSafe := got.Actionability.Checks["dom_dispatch_safe"]
+	if !got.OK || got.Action != "clicked" || !got.Click.Clicked || got.Click.Strategy != "dom" || !got.Actionability.Actionable {
+		t.Fatalf("DOM split-control action = %+v, want successful same-target DOM click", got)
+	}
+	if !containsString(got.Actionability.Required, "dom_dispatch_safe") || containsString(got.Actionability.Required, "receives_events") || !domSafe.Required || !domSafe.Passed || got.Actionability.Point.TargetMatches {
+		t.Fatalf("DOM split-control actionability = %+v, want safe DOM fallback without center hit requirement", got.Actionability)
+	}
+	after := got.Actionability.Point.PseudoElements["after"]
+	if after.PointerEvents != "auto" || !after.HitMatches || after.Rect.Width <= 0 || after.Rect.Height <= 0 {
+		t.Fatalf("DOM split-control pseudo evidence = %+v, want measured interactive pseudo geometry", got.Actionability.Point.PseudoElements)
+	}
+}
+
+func TestClickDOMStrategyRejectsUnrelatedOcclusionJSON(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"click", "button#occluded", "--strategy", "dom", "--force", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("DOM occluded click exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			Click struct {
+				Clicked bool `json:"clicked"`
+			} `json:"click"`
+			Actionability struct {
+				Checks map[string]struct {
+					Required bool   `json:"required"`
+					Passed   bool   `json:"passed"`
+					Message  string `json:"message"`
+				} `json:"checks"`
+			} `json:"actionability"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("DOM occluded output is invalid JSON: %v", err)
+	}
+	domSafe := got.Data.Actionability.Checks["dom_dispatch_safe"]
+	if got.OK || got.Code != "actionability_failed" || got.Data.Click.Clicked || !domSafe.Required || domSafe.Passed || domSafe.Message == "" {
+		t.Fatalf("DOM occluded actionability = %+v, want safe rejection with explicit DOM-fallback failure", got)
+	}
+	if got.Data.Actionability.Checks["receives_events"].Required {
+		t.Fatalf("DOM occluded actionability should report receives_events as diagnostic, not its blocker: %+v", got.Data.Actionability.Checks)
 	}
 }
 

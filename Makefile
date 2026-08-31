@@ -1,6 +1,7 @@
 .PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fixtures-generate fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
+GUIDE := internal/cli/guide.md
 PREFIX ?= $(HOME)/.local
 VERSION ?= 0.1.0
 BUILD_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
@@ -40,6 +41,8 @@ e2e-demo: build
 install: build
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 "$(BINARY)" "$(DESTDIR)$(PREFIX)/bin/cdp"
+	install -d "$(DESTDIR)$(PREFIX)/share/cdp-cli"
+	install -m 0644 "$(GUIDE)" "$(DESTDIR)$(PREFIX)/share/cdp-cli/guide.md"
 
 e2e-installed:
 	@cdp_bin="$$(command -v cdp)"; \

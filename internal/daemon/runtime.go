@@ -17,6 +17,7 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 	"nhooyr.io/websocket"
 )
 
@@ -27,55 +28,67 @@ const RuntimeLogFileName = "daemon.log"
 const (
 	RPCMethodDrainEvents          = "Daemon.drainEvents"
 	RPCMethodReadEvent            = "Daemon.readEvent"
+	RPCMethodDrainSessionEvents   = "Daemon.drainSessionEvents"
+	RPCMethodReadSessionEvent     = "Daemon.readSessionEvent"
 	RPCMethodFetchProtocol        = "Daemon.fetchProtocol"
 	RPCMethodBeginInvocationLease = "Daemon.beginInvocationLease"
 	RPCMethodRenewInvocationLease = "Daemon.renewInvocationLease"
 	RPCMethodEndInvocationLease   = "Daemon.endInvocationLease"
 	RPCMethodMarkTargetDisposable = "Daemon.markTargetDisposable"
 	RPCMethodMarkTargetPersistent = "Daemon.markTargetPersistent"
+	RPCMethodEnableWindowMarker   = "Daemon.enableWindowMarker"
+	RPCMethodDisableWindowMarker  = "Daemon.disableWindowMarker"
+	RPCMethodWindowMarkerStatus   = "Daemon.windowMarkerStatus"
 )
 
+const rpcResponseWriteTimeout = 5 * time.Second
+
 type Runtime struct {
-	PID                 int                    `json:"pid"`
-	StartedAt           string                 `json:"started_at"`
-	BrowserMode         string                 `json:"browser_mode,omitempty"`
-	ConnectionMode      string                 `json:"connection_mode"`
-	ReconnectInterval   string                 `json:"reconnect_interval,omitempty"`
-	SocketPath          string                 `json:"socket_path,omitempty"`
-	LogPath             string                 `json:"log_path,omitempty"`
-	Endpoint            string                 `json:"-"`
-	UserDataDir         string                 `json:"user_data_dir,omitempty"`
-	ManagedBrowser      *browser.ManagedStatus `json:"managed_browser,omitempty"`
-	ManagedProfilePath  string                 `json:"managed_profile_path,omitempty"`
-	ProfileSeedStrategy string                 `json:"profile_seed_strategy,omitempty"`
-	ChromePID           int                    `json:"chrome_pid,omitempty"`
-	ChromePort          string                 `json:"chrome_port,omitempty"`
+	PID                    int                    `json:"pid"`
+	StartedAt              string                 `json:"started_at"`
+	BrowserMode            string                 `json:"browser_mode,omitempty"`
+	ConnectionMode         string                 `json:"connection_mode"`
+	ReconnectInterval      string                 `json:"reconnect_interval,omitempty"`
+	SocketPath             string                 `json:"socket_path,omitempty"`
+	LogPath                string                 `json:"log_path,omitempty"`
+	Endpoint               string                 `json:"-"`
+	ProcessStartTime       string                 `json:"-"`
+	UserDataDir            string                 `json:"user_data_dir,omitempty"`
+	ManagedBrowser         *browser.ManagedStatus `json:"managed_browser,omitempty"`
+	ManagedProfilePath     string                 `json:"managed_profile_path,omitempty"`
+	ProfileSeedStrategy    string                 `json:"profile_seed_strategy,omitempty"`
+	ChromePID              int                    `json:"chrome_pid,omitempty"`
+	ChromePort             string                 `json:"chrome_port,omitempty"`
+	ChromeProcessStartTime string                 `json:"-"`
 }
 
 type KeepAliveMetadata struct {
-	UserDataDir         string
-	ManagedBrowser      *browser.ManagedStatus
-	ManagedProfilePath  string
-	ProfileSeedStrategy string
-	ChromePID           int
-	ChromePort          string
+	UserDataDir            string
+	ManagedBrowser         *browser.ManagedStatus
+	ManagedProfilePath     string
+	ProfileSeedStrategy    string
+	ChromePID              int
+	ChromePort             string
+	ChromeProcessStartTime string
 }
 
 type runtimeFile struct {
-	PID                 int                    `json:"pid"`
-	StartedAt           string                 `json:"started_at"`
-	BrowserMode         string                 `json:"browser_mode,omitempty"`
-	ConnectionMode      string                 `json:"connection_mode"`
-	ReconnectInterval   string                 `json:"reconnect_interval,omitempty"`
-	SocketPath          string                 `json:"socket_path,omitempty"`
-	LogPath             string                 `json:"log_path,omitempty"`
-	Endpoint            string                 `json:"endpoint,omitempty"`
-	UserDataDir         string                 `json:"user_data_dir,omitempty"`
-	ManagedBrowser      *browser.ManagedStatus `json:"managed_browser,omitempty"`
-	ManagedProfilePath  string                 `json:"managed_profile_path,omitempty"`
-	ProfileSeedStrategy string                 `json:"profile_seed_strategy,omitempty"`
-	ChromePID           int                    `json:"chrome_pid,omitempty"`
-	ChromePort          string                 `json:"chrome_port,omitempty"`
+	PID                    int                    `json:"pid"`
+	StartedAt              string                 `json:"started_at"`
+	BrowserMode            string                 `json:"browser_mode,omitempty"`
+	ConnectionMode         string                 `json:"connection_mode"`
+	ReconnectInterval      string                 `json:"reconnect_interval,omitempty"`
+	SocketPath             string                 `json:"socket_path,omitempty"`
+	LogPath                string                 `json:"log_path,omitempty"`
+	Endpoint               string                 `json:"endpoint,omitempty"`
+	ProcessStartTime       string                 `json:"process_start_time,omitempty"`
+	UserDataDir            string                 `json:"user_data_dir,omitempty"`
+	ManagedBrowser         *browser.ManagedStatus `json:"managed_browser,omitempty"`
+	ManagedProfilePath     string                 `json:"managed_profile_path,omitempty"`
+	ProfileSeedStrategy    string                 `json:"profile_seed_strategy,omitempty"`
+	ChromePID              int                    `json:"chrome_pid,omitempty"`
+	ChromePort             string                 `json:"chrome_port,omitempty"`
+	ChromeProcessStartTime string                 `json:"chrome_process_start_time,omitempty"`
 }
 
 type LogEntry struct {
@@ -102,9 +115,12 @@ type RPCResponse struct {
 }
 
 type RPCError struct {
-	Code    string `json:"code,omitempty"`
-	Class   string `json:"class,omitempty"`
-	Message string `json:"message"`
+	Code            string `json:"code,omitempty"`
+	Class           string `json:"class,omitempty"`
+	Message         string `json:"message"`
+	ProtocolCode    *int   `json:"protocol_code,omitempty"`
+	ProtocolMethod  string `json:"protocol_method,omitempty"`
+	ProtocolMessage string `json:"protocol_message,omitempty"`
 }
 
 func (e *RPCError) Error() string {
@@ -126,6 +142,39 @@ func (e *RPCError) Error() string {
 type RuntimeClient struct {
 	Runtime Runtime
 	LeaseID string
+}
+
+const (
+	RuntimeProcessStateRunning             = "running"
+	RuntimeProcessStateNotRunning          = "process_not_running"
+	RuntimeProcessStateCanceled            = "process_check_canceled"
+	RuntimeProcessStateIdentityMismatch    = "process_identity_mismatch"
+	RuntimeProcessStateIdentityUnavailable = "process_identity_unavailable"
+)
+
+const runtimeProcessIdentityTimeout = time.Second
+
+// RuntimeProcessCheck is the privacy-safe result of checking a persisted
+// daemon runtime. The process-start token itself never leaves the private
+// runtime file or this package's ownership checks.
+type RuntimeProcessCheck struct {
+	Running bool
+	State   string
+}
+
+var runtimeProcessStartTime = processgroup.ProcessStartTime
+var runtimeProcessRunning = ProcessRunningContext
+var runtimeProcessInterrupt = func(process *os.Process) error { return process.Signal(os.Interrupt) }
+var runtimeRemoveFile = removeRuntimeFile
+
+func removeRuntimeFile(ctx context.Context, path string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 // IsInvocationLeaseUnsupported reports the compatibility error returned by a
@@ -280,39 +329,43 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 
 func runtimeFromFile(file runtimeFile) Runtime {
 	return Runtime{
-		PID:                 file.PID,
-		StartedAt:           file.StartedAt,
-		BrowserMode:         file.BrowserMode,
-		ConnectionMode:      file.ConnectionMode,
-		ReconnectInterval:   file.ReconnectInterval,
-		SocketPath:          file.SocketPath,
-		LogPath:             file.LogPath,
-		Endpoint:            file.Endpoint,
-		UserDataDir:         file.UserDataDir,
-		ManagedBrowser:      file.ManagedBrowser,
-		ManagedProfilePath:  file.ManagedProfilePath,
-		ProfileSeedStrategy: file.ProfileSeedStrategy,
-		ChromePID:           file.ChromePID,
-		ChromePort:          file.ChromePort,
+		PID:                    file.PID,
+		StartedAt:              file.StartedAt,
+		BrowserMode:            file.BrowserMode,
+		ConnectionMode:         file.ConnectionMode,
+		ReconnectInterval:      file.ReconnectInterval,
+		SocketPath:             file.SocketPath,
+		LogPath:                file.LogPath,
+		Endpoint:               file.Endpoint,
+		ProcessStartTime:       file.ProcessStartTime,
+		UserDataDir:            file.UserDataDir,
+		ManagedBrowser:         file.ManagedBrowser,
+		ManagedProfilePath:     file.ManagedProfilePath,
+		ProfileSeedStrategy:    file.ProfileSeedStrategy,
+		ChromePID:              file.ChromePID,
+		ChromePort:             file.ChromePort,
+		ChromeProcessStartTime: file.ChromeProcessStartTime,
 	}
 }
 
 func runtimeFileFromRuntime(runtime Runtime) runtimeFile {
 	return runtimeFile{
-		PID:                 runtime.PID,
-		StartedAt:           runtime.StartedAt,
-		BrowserMode:         runtime.BrowserMode,
-		ConnectionMode:      runtime.ConnectionMode,
-		ReconnectInterval:   runtime.ReconnectInterval,
-		SocketPath:          runtime.SocketPath,
-		LogPath:             runtime.LogPath,
-		Endpoint:            runtime.Endpoint,
-		UserDataDir:         runtime.UserDataDir,
-		ManagedBrowser:      runtime.ManagedBrowser,
-		ManagedProfilePath:  runtime.ManagedProfilePath,
-		ProfileSeedStrategy: runtime.ProfileSeedStrategy,
-		ChromePID:           runtime.ChromePID,
-		ChromePort:          runtime.ChromePort,
+		PID:                    runtime.PID,
+		StartedAt:              runtime.StartedAt,
+		BrowserMode:            runtime.BrowserMode,
+		ConnectionMode:         runtime.ConnectionMode,
+		ReconnectInterval:      runtime.ReconnectInterval,
+		SocketPath:             runtime.SocketPath,
+		LogPath:                runtime.LogPath,
+		Endpoint:               runtime.Endpoint,
+		ProcessStartTime:       runtime.ProcessStartTime,
+		UserDataDir:            runtime.UserDataDir,
+		ManagedBrowser:         runtime.ManagedBrowser,
+		ManagedProfilePath:     runtime.ManagedProfilePath,
+		ProfileSeedStrategy:    runtime.ProfileSeedStrategy,
+		ChromePID:              runtime.ChromePID,
+		ChromePort:             runtime.ChromePort,
+		ChromeProcessStartTime: runtime.ChromeProcessStartTime,
 	}
 }
 
@@ -321,6 +374,9 @@ func ClearRuntime(ctx context.Context, stateDir string, pid int) error {
 }
 
 func ClearRuntimeForMode(ctx context.Context, stateDir, browserMode string, pid int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode)
 	if err != nil || !ok {
 		return err
@@ -328,7 +384,10 @@ func ClearRuntimeForMode(ctx context.Context, stateDir, browserMode string, pid 
 	if pid > 0 && runtime.PID != pid {
 		return nil
 	}
-	if err := os.Remove(RuntimePathForMode(stateDir, browserMode)); err != nil && !os.IsNotExist(err) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := runtimeRemoveFile(ctx, RuntimePathForMode(stateDir, browserMode)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove daemon runtime state: %w", err)
 	}
 	return nil
@@ -339,17 +398,138 @@ func RuntimeRunning(runtime Runtime) bool {
 }
 
 func ProcessRunning(pid int) bool {
+	running, _ := ProcessRunningContext(context.Background(), pid)
+	return running
+}
+
+// ProcessRunningContext performs the historical PID liveness check under the
+// caller's context. It returns context cancellation separately from ordinary
+// not-running evidence so read-only health callers cannot publish a result
+// after their observation window has ended.
+func ProcessRunningContext(ctx context.Context, pid int) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if pid <= 0 {
-		return false
+		return false, nil
 	}
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	if err := process.Signal(syscall.Signal(0)); err != nil {
-		return false
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		return false, nil
 	}
-	return true
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// CheckRuntimeProcess verifies that the recorded daemon PID is live and, when
+// a strong private process-start identity exists, that the same OS process
+// still owns it. Legacy runtime records without an opaque identity remain
+// compatible and use the historical PID-only check.
+func CheckRuntimeProcess(ctx context.Context, runtime Runtime) RuntimeProcessCheck {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return RuntimeProcessCheck{State: RuntimeProcessStateCanceled}
+	}
+	running, livenessErr := runtimeProcessRunning(ctx, runtime.PID)
+	if livenessErr != nil {
+		if ctx.Err() != nil || errors.Is(livenessErr, context.Canceled) || errors.Is(livenessErr, context.DeadlineExceeded) {
+			return RuntimeProcessCheck{State: RuntimeProcessStateCanceled}
+		}
+		return RuntimeProcessCheck{State: RuntimeProcessStateNotRunning}
+	}
+	if err := ctx.Err(); err != nil {
+		return RuntimeProcessCheck{State: RuntimeProcessStateCanceled}
+	}
+	if !running {
+		return RuntimeProcessCheck{State: RuntimeProcessStateNotRunning}
+	}
+	if !processgroup.IsStrongProcessStartIdentity(runtime.ProcessStartTime) {
+		if err := ctx.Err(); err != nil {
+			return RuntimeProcessCheck{State: RuntimeProcessStateCanceled}
+		}
+		return RuntimeProcessCheck{Running: true, State: RuntimeProcessStateRunning}
+	}
+	identityCtx, cancel := context.WithTimeout(ctx, runtimeProcessIdentityTimeout)
+	actual, err := runtimeProcessStartTime(identityCtx, runtime.PID)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return RuntimeProcessCheck{State: RuntimeProcessStateCanceled}
+		}
+		running, livenessErr = runtimeProcessRunning(ctx, runtime.PID)
+		if livenessErr != nil {
+			if ctx.Err() != nil || errors.Is(livenessErr, context.Canceled) || errors.Is(livenessErr, context.DeadlineExceeded) {
+				return RuntimeProcessCheck{State: RuntimeProcessStateCanceled}
+			}
+			return RuntimeProcessCheck{State: RuntimeProcessStateNotRunning}
+		}
+		if !running {
+			return RuntimeProcessCheck{State: RuntimeProcessStateNotRunning}
+		}
+		return RuntimeProcessCheck{State: RuntimeProcessStateIdentityUnavailable}
+	}
+	if err := ctx.Err(); err != nil {
+		return RuntimeProcessCheck{State: RuntimeProcessStateCanceled}
+	}
+	if strings.TrimSpace(actual) != strings.TrimSpace(runtime.ProcessStartTime) {
+		return RuntimeProcessCheck{State: RuntimeProcessStateIdentityMismatch}
+	}
+	return RuntimeProcessCheck{Running: true, State: RuntimeProcessStateRunning}
+}
+
+func runtimeProcessCheckError(ctx context.Context, action string, check RuntimeProcessCheck) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	switch check.State {
+	case RuntimeProcessStateCanceled:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return fmt.Errorf("%s: daemon process check canceled", action)
+	case RuntimeProcessStateIdentityMismatch:
+		return fmt.Errorf("%s: daemon process identity mismatch", action)
+	case RuntimeProcessStateIdentityUnavailable:
+		return fmt.Errorf("%s: daemon process identity unavailable", action)
+	default:
+		return fmt.Errorf("%s: daemon process is not running", action)
+	}
+}
+
+func clearRuntimeForModeIfCurrent(ctx context.Context, stateDir, browserMode string, expected Runtime) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	current, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode)
+	if err != nil || !ok {
+		return false, err
+	}
+	if current.PID != expected.PID || current.ProcessStartTime != expected.ProcessStartTime {
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := runtimeRemoveFile(ctx, RuntimePathForMode(stateDir, browserMode)); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("remove daemon runtime state: %w", err)
+	}
+	return true, nil
 }
 
 func StartKeepAlive(ctx context.Context, executable, stateDir, endpoint, connectionMode, userDataDir string, reconnect time.Duration) (Runtime, bool, error) {
@@ -363,25 +543,36 @@ func StartKeepAliveForMode(ctx context.Context, executable, stateDir, browserMod
 func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir, browserMode, endpoint, connectionMode string, metadata KeepAliveMetadata, reconnect time.Duration) (Runtime, bool, error) {
 	if runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode); err != nil {
 		return Runtime{}, false, err
-	} else if ok && RuntimeRunning(runtime) {
-		if runtimeMatchesKeepAliveRequest(runtime, browserMode, endpoint, connectionMode, metadata, reconnect) {
-			if RuntimeSocketReady(ctx, runtime) {
-				return runtime, true, nil
-			}
-			if ready, waitErr := waitForRuntimeSocket(ctx, runtime); waitErr == nil {
-				return ready, true, nil
-			} else {
-				return Runtime{}, true, fmt.Errorf("existing daemon keepalive did not become ready: %w", waitErr)
-			}
+	} else if ok {
+		processCheck := CheckRuntimeProcess(ctx, runtime)
+		if processCheck.State == RuntimeProcessStateIdentityUnavailable {
+			return Runtime{}, true, runtimeProcessCheckError(ctx, "verify existing daemon keepalive identity", processCheck)
 		}
-		if _, stopped, stopErr := StopRuntimeForMode(ctx, stateDir, browserMode); stopErr != nil {
-			return Runtime{}, true, fmt.Errorf("stop mismatched daemon keepalive: %w", stopErr)
-		} else if !stopped || RuntimeRunning(runtime) {
-			return Runtime{}, true, fmt.Errorf("mismatched daemon keepalive did not stop")
+		if processCheck.State != RuntimeProcessStateNotRunning {
+			if processCheck.Running && runtimeMatchesKeepAliveRequest(runtime, browserMode, endpoint, connectionMode, metadata, reconnect) {
+				if RuntimeSocketReady(ctx, runtime) {
+					return runtime, true, nil
+				}
+				if ready, waitErr := waitForRuntimeSocket(ctx, runtime); waitErr == nil {
+					return ready, true, nil
+				} else {
+					return Runtime{}, true, fmt.Errorf("existing daemon keepalive did not become ready: %w", waitErr)
+				}
+			}
+			if _, stopped, stopErr := StopRuntimeForMode(ctx, stateDir, browserMode); stopErr != nil {
+				return Runtime{}, true, fmt.Errorf("stop mismatched daemon keepalive: %w", stopErr)
+			} else if !stopped {
+				current, currentOK, loadErr := LoadRuntimeForMode(ctx, stateDir, browserMode)
+				if loadErr != nil {
+					return Runtime{}, true, fmt.Errorf("check mismatched daemon keepalive state: %w", loadErr)
+				}
+				if currentOK {
+					return Runtime{}, true, fmt.Errorf("mismatched daemon keepalive did not stop (pid %d remains recorded)", current.PID)
+				}
+			}
 		}
 	}
 
-	cmd := exec.Command(executable, "daemon", "hold")
 	socketPath := RuntimeSocketPathForMode(stateDir, browserMode)
 	managedBrowser := ""
 	if metadata.ManagedBrowser != nil {
@@ -389,7 +580,7 @@ func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir
 			managedBrowser = string(b)
 		}
 	}
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"CDP_DAEMON_HOLD_ENDPOINT="+endpoint,
 		"CDP_DAEMON_STATE_DIR="+stateDir,
 		"CDP_DAEMON_CONNECTION_MODE="+connectionMode,
@@ -402,38 +593,48 @@ func StartKeepAliveForModeWithMetadata(ctx context.Context, executable, stateDir
 		"CDP_DAEMON_PROFILE_SEED_STRATEGY="+metadata.ProfileSeedStrategy,
 		"CDP_DAEMON_CHROME_PID="+strconv.Itoa(metadata.ChromePID),
 		"CDP_DAEMON_CHROME_PORT="+metadata.ChromePort,
+		"CDP_DAEMON_CHROME_PROCESS_START_TIME="+metadata.ChromeProcessStartTime,
 	)
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
 		return Runtime{}, false, fmt.Errorf("open null device: %w", err)
 	}
 	defer devNull.Close()
-	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-
-	if err := cmd.Start(); err != nil {
+	cmd, err := processgroup.StartWithOptions(executable, []string{"daemon", "hold"}, processgroup.Options{
+		Env:        env,
+		Stdin:      devNull,
+		Stdout:     devNull,
+		Stderr:     devNull,
+		NewSession: true,
+	})
+	if err != nil {
 		return Runtime{}, false, fmt.Errorf("start daemon keepalive process: %w", err)
 	}
 	pid := cmd.Process.Pid
-	_ = cmd.Process.Release()
 
 	runtime, err := waitForRuntimeForMode(ctx, stateDir, browserMode, pid)
 	if err != nil {
-		if process, findErr := os.FindProcess(pid); findErr == nil {
-			_ = process.Kill()
-		}
+		terminateDaemonKeepAliveLaunch(cmd)
 		_ = ClearRuntimeForMode(context.Background(), stateDir, browserMode, pid)
 		return Runtime{}, false, err
 	}
+	processgroup.Detach(cmd)
 	return runtime, false, nil
+}
+
+func terminateDaemonKeepAliveLaunch(command *exec.Cmd) {
+	processgroup.Terminate(command)
+	_ = command.Wait()
 }
 
 func waitForRuntimeSocket(ctx context.Context, runtime Runtime) (Runtime, error) {
 	for {
-		if !RuntimeRunning(runtime) {
+		processCheck := CheckRuntimeProcess(ctx, runtime)
+		if processCheck.State == RuntimeProcessStateNotRunning {
 			return Runtime{}, fmt.Errorf("daemon keepalive process exited")
+		}
+		if !processCheck.Running {
+			return Runtime{}, runtimeProcessCheckError(ctx, "verify daemon keepalive identity", processCheck)
 		}
 		if RuntimeSocketReady(ctx, runtime) {
 			return runtime, nil
@@ -474,6 +675,9 @@ func runtimeMatchesKeepAliveRequest(runtime Runtime, browserMode, endpoint, conn
 	if strings.TrimSpace(metadata.ChromePort) != "" && runtime.ChromePort != metadata.ChromePort {
 		return false
 	}
+	if strings.TrimSpace(metadata.ChromeProcessStartTime) != "" && runtime.ChromeProcessStartTime != metadata.ChromeProcessStartTime {
+		return false
+	}
 	if metadata.ManagedBrowser != nil {
 		if runtime.ManagedBrowser == nil {
 			return false
@@ -497,33 +701,122 @@ func StopRuntimeForMode(ctx context.Context, stateDir, browserMode string) (Runt
 	if err != nil || !ok {
 		return Runtime{}, false, err
 	}
-	if !RuntimeRunning(runtime) {
-		_ = os.Remove(runtime.SocketPath)
-		return runtime, false, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
+	processCheck := CheckRuntimeProcess(ctx, runtime)
+	if processCheck.State == RuntimeProcessStateNotRunning {
+		return runtime, false, clearRuntimeForMode(ctx, stateDir, browserMode, runtime)
+	}
+	if processCheck.State == RuntimeProcessStateIdentityMismatch {
+		cleared, clearErr := clearRuntimeForModeIfCurrent(ctx, stateDir, browserMode, runtime)
+		if clearErr != nil {
+			return runtime, false, clearErr
+		}
+		if cleared {
+			if removeErr := removeRuntimeSocket(ctx, runtime.SocketPath); removeErr != nil {
+				return runtime, false, removeErr
+			}
+		}
+		return runtime, false, nil
+	}
+	if !processCheck.Running {
+		return runtime, false, runtimeProcessCheckError(ctx, "verify daemon process identity", processCheck)
+	}
+	processCheck = CheckRuntimeProcess(ctx, runtime)
+	if processCheck.State == RuntimeProcessStateNotRunning {
+		return runtime, false, clearRuntimeForMode(ctx, stateDir, browserMode, runtime)
+	}
+	if processCheck.State == RuntimeProcessStateIdentityMismatch {
+		cleared, clearErr := clearRuntimeForModeIfCurrent(ctx, stateDir, browserMode, runtime)
+		if clearErr != nil {
+			return runtime, false, clearErr
+		}
+		if cleared {
+			if removeErr := removeRuntimeSocket(ctx, runtime.SocketPath); removeErr != nil {
+				return runtime, false, removeErr
+			}
+		}
+		return runtime, false, nil
+	}
+	if !processCheck.Running && processCheck.State != RuntimeProcessStateNotRunning {
+		return runtime, false, runtimeProcessCheckError(ctx, "verify daemon process identity before signaling", processCheck)
+	}
+	if err := ctx.Err(); err != nil {
+		return runtime, false, err
 	}
 	process, err := os.FindProcess(runtime.PID)
 	if err != nil {
-		_ = os.Remove(runtime.SocketPath)
-		return runtime, false, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
+		return runtime, false, clearRuntimeForMode(ctx, stateDir, browserMode, runtime)
 	}
-	if err := process.Signal(os.Interrupt); err != nil {
-		if killErr := process.Kill(); killErr != nil {
-			return runtime, true, fmt.Errorf("stop daemon process: interrupt: %v; kill: %w", err, killErr)
+	if err := ctx.Err(); err != nil {
+		return runtime, false, err
+	}
+	if err := runtimeProcessInterrupt(process); err != nil {
+		processCheck = CheckRuntimeProcess(ctx, runtime)
+		if processCheck.State == RuntimeProcessStateNotRunning || processCheck.State == RuntimeProcessStateIdentityMismatch {
+			return runtime, true, clearRuntimeForMode(ctx, stateDir, browserMode, runtime)
+		}
+		if !processCheck.Running {
+			return runtime, false, runtimeProcessCheckError(ctx, "verify daemon process identity before escalation", processCheck)
+		}
+		if killErr := processgroup.TerminatePID(runtime.PID); killErr != nil {
+			return runtime, true, fmt.Errorf("stop daemon process: interrupt: %v; kill process group: %w", err, killErr)
 		}
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if !RuntimeRunning(runtime) {
-			_ = os.Remove(runtime.SocketPath)
-			return runtime, true, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
+		processCheck = CheckRuntimeProcess(ctx, runtime)
+		if processCheck.State == RuntimeProcessStateNotRunning || processCheck.State == RuntimeProcessStateIdentityMismatch {
+			return runtime, true, clearRuntimeForMode(ctx, stateDir, browserMode, runtime)
 		}
-		time.Sleep(100 * time.Millisecond)
+		if !processCheck.Running {
+			return runtime, false, runtimeProcessCheckError(ctx, "verify daemon process identity while stopping", processCheck)
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return runtime, false, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	if err := process.Kill(); err != nil {
-		return runtime, true, fmt.Errorf("kill daemon process: %w", err)
+	processCheck = CheckRuntimeProcess(ctx, runtime)
+	if processCheck.State == RuntimeProcessStateNotRunning || processCheck.State == RuntimeProcessStateIdentityMismatch {
+		return runtime, true, clearRuntimeForMode(ctx, stateDir, browserMode, runtime)
 	}
-	_ = os.Remove(runtime.SocketPath)
-	return runtime, true, ClearRuntimeForMode(ctx, stateDir, browserMode, runtime.PID)
+	if !processCheck.Running {
+		return runtime, false, runtimeProcessCheckError(ctx, "verify daemon process identity before escalation", processCheck)
+	}
+	if err := processgroup.TerminatePID(runtime.PID); err != nil {
+		return runtime, true, fmt.Errorf("kill daemon process group: %w", err)
+	}
+	return runtime, true, clearRuntimeForMode(ctx, stateDir, browserMode, runtime)
+}
+
+func clearRuntimeForMode(ctx context.Context, stateDir, browserMode string, expected Runtime) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cleared, err := clearRuntimeForModeIfCurrent(ctx, stateDir, browserMode, expected)
+	if err != nil {
+		return err
+	}
+	if cleared {
+		if err := removeRuntimeSocket(ctx, expected.SocketPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeRuntimeSocket(ctx context.Context, path string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := runtimeRemoveFile(ctx, path); err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconnect time.Duration) error {
@@ -551,6 +844,15 @@ func holdWithOptions(ctx context.Context, stateDir, endpoint, connectionMode str
 	}
 
 	for {
+		if holdHasReplacementRuntime(ctx, stateDir, browserMode, pid) {
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{
+				Level:   "info",
+				Event:   "hold_superseded",
+				Message: "daemon hold retired after another runtime became current",
+				PID:     pid,
+			})
+			return nil
+		}
 		client, err := cdp.Dial(ctx, endpoint)
 		if err == nil {
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "browser_connected", Message: "connected to browser endpoint", PID: pid})
@@ -573,6 +875,17 @@ func holdWithOptions(ctx context.Context, stateDir, endpoint, connectionMode str
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "reconnect_wait_elapsed", Message: "attempting browser reconnect", PID: pid})
 		}
 	}
+}
+
+func holdHasReplacementRuntime(ctx context.Context, stateDir, browserMode string, pid int) bool {
+	runtime, ok, err := LoadRuntimeForMode(ctx, stateDir, browserMode)
+	if err != nil || !ok || runtime.PID <= 0 || runtime.PID == pid {
+		return false
+	}
+	if runtimeModeName(runtime.BrowserMode) != runtimeModeName(browserMode) {
+		return false
+	}
+	return CheckRuntimeProcess(ctx, runtime).Running
 }
 
 func HoldFromEnv(ctx context.Context) error {
@@ -704,6 +1017,41 @@ func (c RuntimeClient) ReadEvent(ctx context.Context) (cdp.Event, error) {
 	return event, nil
 }
 
+func (c RuntimeClient) DrainSessionEvents(ctx context.Context, sessionID string) ([]cdp.Event, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	raw, err := CallRuntime(ctx, c.Runtime, sessionID, RPCMethodDrainSessionEvents, nil)
+	if err != nil {
+		return nil, err
+	}
+	var events []cdp.Event
+	if len(raw) == 0 {
+		return events, nil
+	}
+	if err := json.Unmarshal(raw, &events); err != nil {
+		return nil, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodDrainSessionEvents, err)
+	}
+	return events, nil
+}
+
+func (c RuntimeClient) ReadSessionEvent(ctx context.Context, sessionID string) (cdp.Event, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return cdp.Event{}, fmt.Errorf("session id is required")
+	}
+	raw, err := CallRuntime(ctx, c.Runtime, sessionID, RPCMethodReadSessionEvent, nil)
+	if err != nil {
+		return cdp.Event{}, err
+	}
+	var event cdp.Event
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return cdp.Event{}, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodReadSessionEvent, err)
+	}
+	return event, nil
+}
+
 func (c RuntimeClient) FetchProtocol(ctx context.Context) (cdp.Protocol, error) {
 	raw, err := CallRuntime(ctx, c.Runtime, "", RPCMethodFetchProtocol, nil)
 	if err != nil {
@@ -714,6 +1062,42 @@ func (c RuntimeClient) FetchProtocol(ctx context.Context) (cdp.Protocol, error) 
 		return cdp.Protocol{}, fmt.Errorf("decode daemon rpc response %s: %w", RPCMethodFetchProtocol, err)
 	}
 	return protocol, nil
+}
+
+func (c RuntimeClient) EnableWindowMarker(ctx context.Context, name string) (WindowMarkerStatus, error) {
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodEnableWindowMarker, map[string]any{"name": name})
+	if err != nil {
+		return WindowMarkerStatus{}, err
+	}
+	var status WindowMarkerStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return WindowMarkerStatus{}, fmt.Errorf("decode daemon window marker status: %w", err)
+	}
+	return status, nil
+}
+
+func (c RuntimeClient) DisableWindowMarker(ctx context.Context) (WindowMarkerStatus, error) {
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodDisableWindowMarker, nil)
+	if err != nil {
+		return WindowMarkerStatus{}, err
+	}
+	var status WindowMarkerStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return WindowMarkerStatus{}, fmt.Errorf("decode daemon window marker status: %w", err)
+	}
+	return status, nil
+}
+
+func (c RuntimeClient) WindowMarkerStatus(ctx context.Context) (WindowMarkerStatus, error) {
+	raw, err := CallRuntimeWithOwner(ctx, c.Runtime, c.LeaseID, "", RPCMethodWindowMarkerStatus, nil)
+	if err != nil {
+		return WindowMarkerStatus{}, err
+	}
+	var status WindowMarkerStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return WindowMarkerStatus{}, fmt.Errorf("decode daemon window marker status: %w", err)
+	}
+	return status, nil
 }
 
 func CallRuntime(ctx context.Context, runtime Runtime, sessionID, method string, params any) (json.RawMessage, error) {
@@ -777,6 +1161,13 @@ func errorFromRPCResponse(resp RPCResponse) error {
 		if strings.TrimSpace(rpcErr.Message) == "" {
 			rpcErr.Message = resp.Error
 		}
+		if rpcErr.ProtocolCode != nil {
+			return &cdp.ProtocolError{
+				Method:  rpcErr.ProtocolMethod,
+				Code:    *rpcErr.ProtocolCode,
+				Message: rpcErr.ProtocolMessage,
+			}
+		}
 		if err := rpcContextError(rpcErr.Code, rpcErr.Class, rpcErr.Error()); err != nil {
 			return err
 		}
@@ -834,7 +1225,7 @@ func waitForRuntimeForMode(ctx context.Context, stateDir, browserMode string, pi
 		if err != nil {
 			return Runtime{}, err
 		}
-		if ok && runtime.PID == pid && RuntimeRunning(runtime) && RuntimeSocketReady(ctx, runtime) {
+		if ok && runtime.PID == pid && CheckRuntimeProcess(ctx, runtime).Running && RuntimeSocketReady(ctx, runtime) {
 			return runtime, nil
 		}
 		select {
@@ -842,6 +1233,9 @@ func waitForRuntimeForMode(ctx context.Context, stateDir, browserMode string, pi
 			return Runtime{}, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Runtime{}, err
 	}
 	return Runtime{}, fmt.Errorf("daemon keepalive process did not become ready")
 }
@@ -869,21 +1263,29 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 	}
 	appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "rpc_listening", Message: "daemon rpc socket ready", PID: pid})
 
+	processStartIdentity := ""
+	identityCtx, identityCancel := context.WithTimeout(ctx, time.Second)
+	if token, identityErr := processgroup.ProcessStartTime(identityCtx, pid); identityErr == nil {
+		processStartIdentity = token
+	}
+	identityCancel()
 	runtime := Runtime{
-		PID:                 pid,
-		StartedAt:           time.Now().UTC().Format(time.RFC3339),
-		BrowserMode:         browserMode,
-		ConnectionMode:      connectionMode,
-		ReconnectInterval:   durationString(reconnect),
-		SocketPath:          socketPath,
-		LogPath:             RuntimeLogPathForMode(stateDir, browserMode),
-		Endpoint:            client.Endpoint(),
-		UserDataDir:         os.Getenv("CDP_DAEMON_USER_DATA_DIR"),
-		ManagedBrowser:      managedBrowserFromEnv(),
-		ManagedProfilePath:  os.Getenv("CDP_DAEMON_MANAGED_PROFILE_PATH"),
-		ProfileSeedStrategy: os.Getenv("CDP_DAEMON_PROFILE_SEED_STRATEGY"),
-		ChromePID:           intEnv("CDP_DAEMON_CHROME_PID"),
-		ChromePort:          os.Getenv("CDP_DAEMON_CHROME_PORT"),
+		PID:                    pid,
+		StartedAt:              time.Now().UTC().Format(time.RFC3339),
+		BrowserMode:            browserMode,
+		ConnectionMode:         connectionMode,
+		ReconnectInterval:      durationString(reconnect),
+		SocketPath:             socketPath,
+		LogPath:                RuntimeLogPathForMode(stateDir, browserMode),
+		Endpoint:               client.Endpoint(),
+		ProcessStartTime:       processStartIdentity,
+		UserDataDir:            os.Getenv("CDP_DAEMON_USER_DATA_DIR"),
+		ManagedBrowser:         managedBrowserFromEnv(),
+		ManagedProfilePath:     os.Getenv("CDP_DAEMON_MANAGED_PROFILE_PATH"),
+		ProfileSeedStrategy:    os.Getenv("CDP_DAEMON_PROFILE_SEED_STRATEGY"),
+		ChromePID:              intEnv("CDP_DAEMON_CHROME_PID"),
+		ChromePort:             os.Getenv("CDP_DAEMON_CHROME_PORT"),
+		ChromeProcessStartTime: strings.TrimSpace(os.Getenv("CDP_DAEMON_CHROME_PROCESS_START_TIME")),
 	}
 	if err := SaveRuntimeForMode(ctx, stateDir, browserMode, runtime); err != nil {
 		_ = client.Close(websocket.StatusInternalError, "state write failed")
@@ -894,6 +1296,15 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 
 	cycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	marker := newWindowMarkerController(stateDir, browserMode, client)
+	if err := marker.rehydrate(cycleCtx); err != nil {
+		appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "window_marker_rehydrate_failed", Message: err.Error(), PID: pid})
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = marker.close(closeCtx)
+		closeCancel()
+	}()
 	go leases.Run(cycleCtx, client, func(result LeaseReconcileResult, reconcileErr error) {
 		if reconcileErr != nil {
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "lease_reconcile_failed", Message: reconcileErr.Error(), PID: pid})
@@ -903,7 +1314,7 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "lease_reconciled", Message: fmt.Sprintf("expired_leases=%d closed_targets=%d pending_targets=%d", result.ExpiredLeaseCount, result.ClosedTargetCount, len(result.PendingTargetIDs)), PID: pid})
 		}
 	})
-	go serveRPC(cycleCtx, listener, client, opts, leases)
+	go serveRPC(cycleCtx, listener, client, opts, leases, marker)
 	return keepAlive(cycleCtx, client, reconnect)
 }
 
@@ -943,7 +1354,7 @@ func listenRuntimeSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, opts holdOptions, leases *LeaseManager) {
+func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, opts holdOptions, leases *LeaseManager, marker *windowMarkerController) {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -953,20 +1364,29 @@ func serveRPC(ctx context.Context, listener net.Listener, client *cdp.Client, op
 		if err != nil {
 			return
 		}
-		go handleRPC(ctx, conn, client, opts, leases)
+		go handleRPC(ctx, conn, client, opts, leases, marker)
 	}
 }
 
-func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts holdOptions, leases *LeaseManager) {
+type runtimeRPCClient interface {
+	cdp.CommandClient
+	Endpoint() string
+	DrainEvents() []cdp.Event
+	ReadEvent(context.Context) (cdp.Event, error)
+	DrainSessionEvents(string) []cdp.Event
+	ReadSessionEvent(context.Context, string) (cdp.Event, error)
+}
+
+func handleRPC(ctx context.Context, conn net.Conn, client runtimeRPCClient, opts holdOptions, leases *LeaseManager, marker *windowMarkerController) {
 	defer conn.Close()
 	var req RPCRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		_ = json.NewEncoder(conn).Encode(rpcErrorResponse("rpc_request_invalid", "usage", fmt.Sprintf("decode daemon rpc request: %v", err)))
+		_ = writeRPCResponse(ctx, conn, rpcErrorResponse("rpc_request_invalid", "usage", fmt.Sprintf("decode daemon rpc request: %v", err)))
 		return
 	}
 	req.Method = strings.TrimSpace(req.Method)
 	if req.Method == "" {
-		_ = json.NewEncoder(conn).Encode(rpcErrorResponse("rpc_method_required", "usage", "daemon rpc method is required"))
+		_ = writeRPCResponse(ctx, conn, rpcErrorResponse("rpc_method_required", "usage", "daemon rpc method is required"))
 		return
 	}
 	requestCtx, cancelRequest := context.WithCancel(ctx)
@@ -979,6 +1399,7 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 	}
 	defer cancel()
 	ownerID := strings.TrimSpace(req.OwnerID)
+	responseCtx := context.WithoutCancel(callCtx)
 
 	switch req.Method {
 	case RPCMethodBeginInvocationLease:
@@ -987,20 +1408,20 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 		}
 		if len(req.Params) > 0 {
 			if err := json.Unmarshal(req.Params, &params); err != nil {
-				_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_params_invalid", "usage", err.Error()))
+				_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("lease_params_invalid", "usage", err.Error()))
 				return
 			}
 		}
 		info, err := leases.Begin(callCtx, time.Duration(params.TTLMillis)*time.Millisecond)
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_begin_failed", "lifecycle", err))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("lease_begin_failed", "lifecycle", err))
 			return
 		}
-		writeRPCResult(conn, info)
+		writeRPCResult(responseCtx, conn, info)
 		return
 	case RPCMethodRenewInvocationLease:
 		if ownerID == "" {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
 			return
 		}
 		var params struct {
@@ -1008,86 +1429,145 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 		}
 		if len(req.Params) > 0 {
 			if err := json.Unmarshal(req.Params, &params); err != nil {
-				_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_params_invalid", "usage", err.Error()))
+				_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("lease_params_invalid", "usage", err.Error()))
 				return
 			}
 		}
 		info, err := leases.Renew(callCtx, ownerID, time.Duration(params.TTLMillis)*time.Millisecond)
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_renew_failed", "lifecycle", err))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("lease_renew_failed", "lifecycle", err))
 			return
 		}
-		writeRPCResult(conn, info)
+		writeRPCResult(responseCtx, conn, info)
 		return
 	case RPCMethodEndInvocationLease:
 		if ownerID == "" {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
 			return
 		}
-		result, err := leases.End(context.Background(), client, ownerID)
+		result, err := endRPCInvocationLease(callCtx, leases, client, ownerID)
 		if err != nil && result.LeaseID == "" {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_end_failed", "lifecycle", err))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("lease_end_failed", "lifecycle", err))
 			return
 		}
 		if err != nil {
 			result.LastError = err.Error()
 		}
-		writeRPCResult(conn, result)
+		writeRPCResult(responseCtx, conn, result)
 		return
 	case RPCMethodMarkTargetDisposable, RPCMethodMarkTargetPersistent:
 		if ownerID == "" {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("lease_id_required", "usage", "invocation lease owner id is required"))
 			return
 		}
 		var params struct {
 			TargetID string `json:"target_id"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil || strings.TrimSpace(params.TargetID) == "" {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("target_id_required", "usage", "target id is required"))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("target_id_required", "usage", "target id is required"))
 			return
 		}
 		disposable := req.Method == RPCMethodMarkTargetDisposable
 		if err := leases.SetTargetDisposable(callCtx, ownerID, params.TargetID, disposable); err != nil {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_target_policy_failed", "lifecycle", err))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("lease_target_policy_failed", "lifecycle", err))
 			return
 		}
-		writeRPCResult(conn, map[string]any{"target_id": params.TargetID, "disposable": disposable})
+		writeRPCResult(responseCtx, conn, map[string]any{"target_id": params.TargetID, "disposable": disposable})
+		return
+	case RPCMethodEnableWindowMarker:
+		if marker == nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("window_marker_unavailable", "lifecycle", "window marker controller is unavailable"))
+			return
+		}
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("window_marker_params_invalid", "usage", err.Error()))
+			return
+		}
+		status, err := marker.Enable(callCtx, params.Name)
+		if err != nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("window_marker_enable_failed", "lifecycle", err))
+			return
+		}
+		writeRPCResult(responseCtx, conn, status)
+		return
+	case RPCMethodDisableWindowMarker:
+		if marker == nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("window_marker_unavailable", "lifecycle", "window marker controller is unavailable"))
+			return
+		}
+		status, err := marker.Disable(callCtx)
+		if err != nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("window_marker_disable_failed", "lifecycle", err))
+			return
+		}
+		writeRPCResult(responseCtx, conn, status)
+		return
+	case RPCMethodWindowMarkerStatus:
+		if marker == nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("window_marker_unavailable", "lifecycle", "window marker controller is unavailable"))
+			return
+		}
+		writeRPCResult(responseCtx, conn, marker.Status())
 		return
 	case RPCMethodDrainEvents:
-		writeRPCResult(conn, client.DrainEvents())
+		writeRPCResult(responseCtx, conn, client.DrainEvents())
 		return
 	case RPCMethodReadEvent:
 		event, err := client.ReadEvent(callCtx)
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("rpc_read_event_failed", "connection", err))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("rpc_read_event_failed", "connection", err))
 			return
 		}
-		writeRPCResult(conn, event)
+		writeRPCResult(responseCtx, conn, event)
+		return
+	case RPCMethodDrainSessionEvents:
+		sessionID := strings.TrimSpace(req.SessionID)
+		if sessionID == "" {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("session_id_required", "usage", "session id is required"))
+			return
+		}
+		writeRPCResult(responseCtx, conn, client.DrainSessionEvents(sessionID))
+		return
+	case RPCMethodReadSessionEvent:
+		sessionID := strings.TrimSpace(req.SessionID)
+		if sessionID == "" {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("session_id_required", "usage", "session id is required"))
+			return
+		}
+		event, err := client.ReadSessionEvent(callCtx, sessionID)
+		if err != nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("rpc_read_session_event_failed", "connection", err))
+			return
+		}
+		writeRPCResult(responseCtx, conn, event)
 		return
 	case RPCMethodFetchProtocol:
 		protocolURL, err := protocolURLFromEndpoint(client.Endpoint())
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("protocol_endpoint_invalid", "connection", err))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("protocol_endpoint_invalid", "connection", err))
 			return
 		}
 		protocol, err := cdp.FetchProtocol(callCtx, protocolURL)
 		if err != nil {
 			var httpErr cdp.ProtocolHTTPError
 			if !errors.As(err, &httpErr) {
-				_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("protocol_fetch_failed", "connection", err))
+				_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("protocol_fetch_failed", "connection", err))
 				return
 			}
 			protocol, err = opts.fetchProtocolFallback(callCtx)
 			if err != nil {
-				_ = json.NewEncoder(conn).Encode(rpcErrorResponse("protocol_fetch_failed", "connection", fmt.Sprintf("fetch protocol metadata: live endpoint returned %d; fallback failed: %v", httpErr.StatusCode, err)))
+				_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("protocol_fetch_failed", "connection", fmt.Sprintf("fetch protocol metadata: live endpoint returned %d; fallback failed: %v", httpErr.StatusCode, err)))
 				return
 			}
 			protocol.Source = "daemon-fallback"
-			writeRPCResult(conn, protocol)
+			writeRPCResult(responseCtx, conn, protocol)
 			return
 		}
 		protocol.Source = "daemon"
-		writeRPCResult(conn, protocol)
+		writeRPCResult(responseCtx, conn, protocol)
 		return
 	}
 
@@ -1097,19 +1577,19 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 		params = map[string]any{}
 	}
 	if ownerID != "" {
-		if err := leases.Touch(context.Background(), ownerID); err != nil {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_touch_failed", "lifecycle", err))
+		if err := leases.Touch(callCtx, ownerID); err != nil {
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("lease_touch_failed", "lifecycle", err))
 			return
 		}
 	}
 	err := client.CallSession(callCtx, req.SessionID, req.Method, params, &result)
 	if err != nil {
 		if ownerID != "" && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			if _, cleanupErr := leases.End(context.Background(), client, ownerID); cleanupErr != nil {
+			if _, cleanupErr := endRPCInvocationLeaseAfterCancellation(leases, client, ownerID); cleanupErr != nil {
 				appendLogForMode(context.Background(), os.Getenv("CDP_DAEMON_STATE_DIR"), runtimeModeName(os.Getenv("CDP_DAEMON_BROWSER_MODE")), LogEntry{Level: "warn", Event: "lease_cleanup_failed", Message: cleanupErr.Error(), PID: os.Getpid()})
 			}
 		}
-		_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("rpc_call_failed", "connection", err))
+		_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("rpc_call_failed", "connection", err))
 		return
 	}
 	if ownerID != "" && req.Method == "Target.createTarget" {
@@ -1117,14 +1597,14 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 			TargetID string `json:"targetId"`
 		}
 		if err := json.Unmarshal(result, &created); err != nil || strings.TrimSpace(created.TargetID) == "" {
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponse("lease_target_registration_failed", "lifecycle", "Target.createTarget returned no target id for lease registration"))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponse("lease_target_registration_failed", "lifecycle", "Target.createTarget returned no target id for lease registration"))
 			return
 		}
-		if err := leases.RegisterTarget(context.Background(), ownerID, LeaseTarget{TargetID: created.TargetID, TargetType: "page", Disposable: true}); err != nil {
+		if err := leases.RegisterTarget(callCtx, ownerID, LeaseTarget{TargetID: created.TargetID, TargetType: "page", Disposable: true}); err != nil {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), defaultLeaseCleanupTimeout)
 			_ = closeOwnedTarget(cleanupCtx, client, created.TargetID)
 			cleanupCancel()
-			_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("lease_target_registration_failed", "lifecycle", err))
+			_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("lease_target_registration_failed", "lifecycle", err))
 			return
 		}
 	}
@@ -1133,10 +1613,24 @@ func handleRPC(ctx context.Context, conn net.Conn, client *cdp.Client, opts hold
 			TargetID string `json:"targetId"`
 		}
 		if json.Unmarshal(req.Params, &params) == nil {
-			_ = leases.UnregisterTarget(context.Background(), ownerID, params.TargetID)
+			_ = leases.UnregisterTarget(callCtx, ownerID, params.TargetID)
 		}
 	}
-	_ = json.NewEncoder(conn).Encode(RPCResponse{OK: true, Result: result})
+	_ = writeRPCResponse(responseCtx, conn, RPCResponse{OK: true, Result: result})
+}
+
+func endRPCInvocationLease(ctx context.Context, leases *LeaseManager, client cdp.CommandClient, ownerID string) (LeaseEndResult, error) {
+	result, err := leases.End(ctx, client, ownerID)
+	if err == nil || ctx == nil || ctx.Err() == nil {
+		return result, err
+	}
+	return endRPCInvocationLeaseAfterCancellation(leases, client, ownerID)
+}
+
+func endRPCInvocationLeaseAfterCancellation(leases *LeaseManager, client cdp.CommandClient, ownerID string) (LeaseEndResult, error) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultLeaseCleanupTimeout)
+	defer cancel()
+	return leases.End(cleanupCtx, client, ownerID)
 }
 
 func cancelWhenRPCClientDisconnects(conn net.Conn, cancel context.CancelFunc) {
@@ -1146,13 +1640,39 @@ func cancelWhenRPCClientDisconnects(conn net.Conn, cancel context.CancelFunc) {
 	}
 }
 
-func writeRPCResult(conn net.Conn, value any) {
+func writeRPCResponse(ctx context.Context, conn net.Conn, response RPCResponse) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, rpcResponseWriteTimeout)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- json.NewEncoder(conn).Encode(response)
+	}()
+	select {
+	case err := <-done:
+		if ctxErr := writeCtx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	case <-writeCtx.Done():
+		// Closing this exact RPC connection unblocks a peer that stopped
+		// reading, while leaving the daemon's browser connection untouched.
+		_ = conn.Close()
+		<-done
+		return writeCtx.Err()
+	}
+}
+
+func writeRPCResult(ctx context.Context, conn net.Conn, value any) {
 	raw, err := json.Marshal(value)
 	if err != nil {
-		_ = json.NewEncoder(conn).Encode(rpcErrorResponseForError("rpc_result_marshal_failed", "internal", err))
+		_ = writeRPCResponse(ctx, conn, rpcErrorResponseForError("rpc_result_marshal_failed", "internal", err))
 		return
 	}
-	_ = json.NewEncoder(conn).Encode(RPCResponse{OK: true, Result: raw})
+	_ = writeRPCResponse(ctx, conn, RPCResponse{OK: true, Result: raw})
 }
 
 func rpcErrorResponseForError(code, class string, err error) RPCResponse {
@@ -1164,6 +1684,15 @@ func rpcErrorResponseForError(code, class string, err error) RPCResponse {
 	}
 	if errors.Is(err, context.Canceled) {
 		return rpcErrorResponse("canceled", "canceled", context.Canceled.Error())
+	}
+	var protocolErr *cdp.ProtocolError
+	if errors.As(err, &protocolErr) {
+		protocolCode := protocolErr.Code
+		response := rpcErrorResponse("cdp_command_failed", "protocol", protocolErr.Error())
+		response.ErrorEnvelope.ProtocolCode = &protocolCode
+		response.ErrorEnvelope.ProtocolMethod = protocolErr.Method
+		response.ErrorEnvelope.ProtocolMessage = protocolErr.Message
+		return response
 	}
 	return rpcErrorResponse(code, class, err.Error())
 }

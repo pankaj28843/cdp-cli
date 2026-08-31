@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/spf13/cobra"
 )
+
+var fetchOfficialProtocol = cdp.FetchOfficialProtocol
 
 func (a *app) newCDPCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -25,6 +28,7 @@ func (a *app) newCDPCommand() *cobra.Command {
 	cmd.AddCommand(a.newProtocolExamplesCommand())
 	cmd.AddCommand(a.newProtocolCompatCommand())
 	cmd.AddCommand(a.newProtocolExecCommand())
+	cmd.PersistentFlags().BoolVar(&a.opts.protocolOfficial, "official", false, "use the official browser+JavaScript tip-of-tree schema for discovery and --validate; requires network, not a browser daemon")
 	return cmd
 }
 
@@ -163,7 +167,7 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 					[]string{"cdp protocol search <query> --json", "cdp protocol domains --json"},
 				)
 			}
-			human := fmt.Sprintf("%s\t%s", desc.Kind, desc.Path)
+			human := formatProtocolDescription(desc)
 			return a.render(ctx, human, map[string]any{
 				"ok":     true,
 				"entity": desc,
@@ -171,6 +175,83 @@ func (a *app) newProtocolDescribeCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+type protocolDescriptionField struct {
+	Name        string                     `json:"name"`
+	Type        string                     `json:"type"`
+	Ref         string                     `json:"$ref"`
+	Description string                     `json:"description"`
+	Optional    bool                       `json:"optional"`
+	Items       *protocolDescriptionField  `json:"items"`
+	Parameters  []protocolDescriptionField `json:"parameters"`
+	Returns     []protocolDescriptionField `json:"returns"`
+}
+
+func formatProtocolDescription(desc cdp.EntityDescription) string {
+	lines := []string{fmt.Sprintf("%s\t%s", desc.Kind, desc.Path)}
+	if description := strings.Join(strings.Fields(desc.Description), " "); description != "" {
+		lines = append(lines, description)
+	}
+	flags := make([]string, 0, 2)
+	if desc.Experimental {
+		flags = append(flags, "experimental")
+	}
+	if desc.Deprecated {
+		flags = append(flags, "deprecated")
+	}
+	if len(flags) > 0 {
+		lines = append(lines, "Flags: "+strings.Join(flags, ", "))
+	}
+
+	var schema protocolDescriptionField
+	if len(desc.Schema) == 0 || json.Unmarshal(desc.Schema, &schema) != nil {
+		return strings.Join(lines, "\n")
+	}
+	if desc.Kind == "type" && (schema.Type != "" || schema.Ref != "") {
+		lines = append(lines, "", "Type: "+formatProtocolDescriptionType(schema))
+	}
+	lines = appendProtocolDescriptionFields(lines, "Parameters:", schema.Parameters, true)
+	lines = appendProtocolDescriptionFields(lines, "Returns:", schema.Returns, false)
+	return strings.Join(lines, "\n")
+}
+
+func appendProtocolDescriptionFields(lines []string, heading string, fields []protocolDescriptionField, labelOptionality bool) []string {
+	if len(fields) == 0 {
+		return lines
+	}
+	lines = append(lines, "", heading)
+	for _, field := range fields {
+		line := fmt.Sprintf("  %s: %s", field.Name, formatProtocolDescriptionType(field))
+		if labelOptionality {
+			if field.Optional {
+				line += " (optional)"
+			} else {
+				line += " (required)"
+			}
+		}
+		lines = append(lines, line)
+		if description := strings.Join(strings.Fields(field.Description), " "); description != "" {
+			lines = append(lines, "    "+description)
+		}
+	}
+	return lines
+}
+
+func formatProtocolDescriptionType(field protocolDescriptionField) string {
+	if field.Type == "array" {
+		if field.Items == nil {
+			return "array"
+		}
+		return "array<" + formatProtocolDescriptionType(*field.Items) + ">"
+	}
+	if field.Type != "" {
+		return field.Type
+	}
+	if field.Ref != "" {
+		return field.Ref
+	}
+	return "object"
 }
 
 func (a *app) newProtocolExamplesCommand() *cobra.Command {
@@ -351,7 +432,11 @@ func (a *app) newProtocolCompatCommand() *cobra.Command {
 			}
 			checks = append(checks, check)
 		}
-		return a.render(ctx, fmt.Sprintf("compat\t%d checks", len(checks)), map[string]any{"ok": true, "protocol_version": protocol.Version, "schema_source": protocol.Source, "required": checks, "warnings": []string{"Live browser protocol can differ from static tot documentation"}})
+		warning := "Live browser protocol can differ from static tip-of-tree documentation"
+		if a.opts.protocolOfficial {
+			warning = "Official tip-of-tree protocol can differ from the selected live Chrome version"
+		}
+		return a.render(ctx, fmt.Sprintf("compat\t%d checks", len(checks)), map[string]any{"ok": true, "protocol_version": protocol.Version, "schema_source": protocol.Source, "required": checks, "warnings": []string{warning}})
 	}}
 	cmd.Flags().StringVar(&requires, "requires", "", "comma-separated Domain.method or Domain.event paths to check")
 	cmd.Flags().StringVar(&workflow, "workflow", "", "known workflow requirement set: debug-bundle, responsive-audit, network, console, storage")
@@ -435,17 +520,60 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	var targetType string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var savePath string
 	var validate bool
 	cmd := &cobra.Command{
-		Use:   "exec <Domain.method>",
+		Use:   "exec <Domain.method> [JSON_PARAMS]",
 		Short: "Execute a raw browser-scoped or target-scoped CDP method",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.browserCommandContext(cmd)
-			defer cancel()
-
+			if len(args) == 2 && cmd.Flags().Changed("params") {
+				return commandError(
+					"conflicting_params",
+					"usage",
+					"positional JSON params cannot be combined with --params",
+					ExitUsage,
+					[]string{"cdp protocol exec " + args[0] + " --params '{}' --json"},
+				)
+			}
+			if cmd.Flags().Changed("target") && cmd.Flags().Changed("target-id") {
+				return commandError(
+					"invalid_target_selector",
+					"usage",
+					"--target and --target-id are aliases; supply only one",
+					ExitUsage,
+					[]string{"cdp protocol exec Runtime.evaluate --target-id <target-id> --json"},
+				)
+			}
+			if cmd.Flags().Changed("url-contains") && cmd.Flags().Changed("url") {
+				return commandError(
+					"invalid_target_selector",
+					"usage",
+					"--url and --url-contains are aliases; supply only one",
+					ExitUsage,
+					[]string{"cdp protocol exec Runtime.evaluate --url <url-substring> --json"},
+				)
+			}
+			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+			}
+			if targetIndex > 0 && (targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "") {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --target-id, --url, --url-contains, --title-contains, or --target-type", ExitUsage, []string{"cdp pages --json"})
+			}
+			if a.opts.protocolOfficial && !validate {
+				return commandError(
+					"official_protocol_requires_validation",
+					"usage",
+					"--official selects validation metadata only for protocol exec; add --validate or remove --official",
+					ExitUsage,
+					[]string{"cdp protocol exec " + args[0] + " --validate --official --json", "cdp protocol describe " + args[0] + " --official --json"},
+				)
+			}
 			rawParams := json.RawMessage(params)
+			if len(args) == 2 {
+				rawParams = json.RawMessage(args[1])
+			}
 			if len(rawParams) == 0 {
 				rawParams = json.RawMessage(`{}`)
 			}
@@ -458,11 +586,37 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
 			}
-			if targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != "" {
+			var paramsObject map[string]json.RawMessage
+			if err := json.Unmarshal(rawParams, &paramsObject); err != nil || paramsObject == nil {
+				return commandError(
+					"invalid_json",
+					"usage",
+					"--params must be a JSON object",
+					ExitUsage,
+					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
+				)
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
+			targetScoped := targetIndex > 0 || targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != ""
+			if validate {
+				scope := "browser"
+				if targetScoped {
+					scope = "target"
+				}
+				if err := a.validateProtocolExecParams(ctx, args[0], rawParams, scope); err != nil {
+					return err
+				}
+			}
+			if targetScoped {
 				var session *cdp.PageSession
 				var target cdp.TargetInfo
 				var err error
-				if strings.TrimSpace(targetType) == "" {
+				if targetIndex > 0 {
+					session, target, err = a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
+				} else if strings.TrimSpace(targetType) == "" {
 					session, target, err = a.attachPageSession(ctx, targetID, urlContains, titleContains)
 				} else {
 					session, target, err = a.attachProtocolTargetSession(ctx, targetID, urlContains, titleContains, targetType)
@@ -474,6 +628,9 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 
 				result, err := session.Exec(ctx, args[0], rawParams)
 				if err != nil {
+					if protocolErr := protocolCommandError(args[0], "target", target.TargetID, err); protocolErr != nil {
+						return protocolErr
+					}
 					return commandError(
 						"connection_failed",
 						"connection",
@@ -515,6 +672,9 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 
 			result, err := cdp.ExecWithClient(ctx, client, args[0], rawParams)
 			if err != nil {
+				if protocolErr := protocolCommandError(args[0], "browser", "", err); protocolErr != nil {
+					return protocolErr
+				}
 				return commandError(
 					"connection_failed",
 					"connection",
@@ -543,12 +703,45 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&params, "params", "{}", "JSON params object for the CDP method")
 	cmd.Flags().StringVar(&targetID, "target", "", "target id or unique prefix for target-scoped execution")
+	cmd.Flags().StringVar(&targetID, "target-id", "", "source-compatible alias for --target")
 	cmd.Flags().StringVar(&targetType, "target-type", "", "target type to include when selecting a target, such as page or service_worker")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first matching target whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first matching target whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "filter targets by URL substring; combines with ID/title/type filters and must leave one target")
+	cmd.Flags().StringVar(&urlContains, "url", "", "source-compatible alias for --url-contains")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "filter targets by title substring; combines with ID/URL/type filters and must leave one target")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index for target-scoped execution")
 	cmd.Flags().StringVar(&savePath, "save", "", "write a base64 result data field to this artifact path")
-	cmd.Flags().BoolVar(&validate, "validate", false, "validate params against live protocol metadata before executing")
+	cmd.Flags().BoolVar(&validate, "validate", false, "validate method, browser/target scope, and params against selected protocol metadata before executing")
 	return cmd
+}
+
+func protocolCommandError(method, scope, targetID string, err error) error {
+	var protocolErr *cdp.ProtocolError
+	if !errors.As(err, &protocolErr) {
+		return nil
+	}
+	if strings.TrimSpace(protocolErr.Method) != "" {
+		method = protocolErr.Method
+	}
+	data := map[string]any{
+		"scope":            scope,
+		"method":           method,
+		"protocol_code":    protocolErr.Code,
+		"protocol_message": protocolErr.Message,
+	}
+	if targetID != "" {
+		data["target_id"] = targetID
+	}
+	return commandErrorWithData(
+		"cdp_command_failed",
+		"protocol",
+		fmt.Sprintf("Chrome rejected %s: %s (%d)", method, protocolErr.Message, protocolErr.Code),
+		ExitCheckFailed,
+		[]string{
+			"cdp protocol describe " + method + " --json",
+			"cdp protocol examples " + method + " --json",
+		},
+		data,
+	)
 }
 
 func (a *app) attachProtocolTargetSession(ctx context.Context, targetID, urlContains, titleContains, targetType string) (*cdp.PageSession, cdp.TargetInfo, error) {
@@ -598,11 +791,13 @@ func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titl
 	titleContains = strings.TrimSpace(titleContains)
 	targetType = strings.TrimSpace(targetType)
 	matches := make([]cdp.TargetInfo, 0, len(targets))
+	available := make([]cdp.TargetInfo, 0, len(targets))
 	for _, target := range targets {
 		if targetType != "" && target.Type != targetType {
 			continue
 		}
-		if targetID != "" && target.TargetID != targetID && !strings.HasPrefix(target.TargetID, targetID) {
+		available = append(available, target)
+		if targetID != "" && !targetIDMatchesPrefix(target.TargetID, targetID) {
 			continue
 		}
 		if urlContains != "" && !strings.Contains(strings.ToLower(target.URL), strings.ToLower(urlContains)) {
@@ -630,20 +825,22 @@ func resolveProtocolTarget(targets []cdp.TargetInfo, targetID, urlContains, titl
 		label += fmt.Sprintf(" with title containing %q", titleContains)
 	}
 	if len(matches) == 0 {
-		return cdp.TargetInfo{}, commandError(
+		return cdp.TargetInfo{}, commandErrorWithData(
 			"target_not_found",
 			"usage",
 			"no "+label+" matched",
 			ExitUsage,
 			protocolTargetRemediation(targetType),
+			availableTargetEvidence(available),
 		)
 	}
-	return cdp.TargetInfo{}, commandError(
+	return cdp.TargetInfo{}, commandErrorWithData(
 		"ambiguous_target",
 		"usage",
 		fmt.Sprintf("%s matched %d targets; pass a longer --target or add --url-contains/--title-contains", label, len(matches)),
 		ExitUsage,
 		protocolTargetRemediation(targetType),
+		ambiguousTargetEvidence(matches),
 	)
 }
 
@@ -719,6 +916,19 @@ func saveProtocolExecArtifact(path string, result json.RawMessage) (map[string]a
 }
 
 func (a *app) fetchProtocol(ctx context.Context) (cdp.Protocol, error) {
+	if a.opts.protocolOfficial {
+		protocol, err := fetchOfficialProtocol(ctx)
+		if err != nil {
+			return cdp.Protocol{}, commandError(
+				"official_protocol_fetch_failed",
+				"connection",
+				fmt.Sprintf("fetch official protocol metadata: %v", err),
+				ExitConnection,
+				[]string{"cdp --timeout 30s protocol domains --official --json", "cdp protocol domains --json"},
+			)
+		}
+		return protocol, nil
+	}
 	client, err := a.daemonRuntimeClient(ctx)
 	if err != nil {
 		return cdp.Protocol{}, commandError(

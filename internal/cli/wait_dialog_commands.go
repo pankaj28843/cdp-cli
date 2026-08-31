@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	dialogWaitKind    = "dialog"
-	dialogWaitCDPName = "Page.javascriptDialogOpening"
+	dialogWaitKind            = "dialog"
+	dialogWaitCDPName         = "Page.javascriptDialogOpening"
+	waitSessionCleanupTimeout = 5 * time.Second
 )
 
 type dialogWaitCriteria struct {
@@ -53,6 +54,7 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var dialogType string
 	var message string
 	var messageContains string
@@ -64,6 +66,9 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 		Short: "Wait for a JavaScript dialog to open",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			opts := dialogWaitOptions{
 				Criteria: dialogWaitCriteria{
 					Type:            dialogType,
@@ -85,17 +90,20 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, pageURLContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, pageURLContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForDialogEvent(ctx, client, session.SessionID, opts.Criteria)
 			elapsed := time.Since(start)
 			report := dialogWaitReport(observation, opts, elapsed, a.effectiveNetworkWaitTimeout(), redactor)
 			report["target"] = pageRow(target)
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return dialogWaitError(ctx, session.TargetID, opts, report, err)
 			}
@@ -106,8 +114,9 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&dialogType, "type", "", "dialog type to match: alert, confirm, prompt, or beforeunload")
 	cmd.Flags().StringVar(&message, "message", "", "exact dialog message to match")
 	cmd.Flags().StringVar(&messageContains, "message-contains", "", "substring that the dialog message must contain")
@@ -115,6 +124,15 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 	cmd.Flags().StringVar(&promptText, "prompt-text", "", "prompt text to send when --action accept handles a prompt dialog")
 	cmd.Flags().StringVar(&redact, "redact", "safe", "redaction preset for returned dialog URL: safe or none")
 	return cmd
+}
+
+func closeWaitSession(session *cdp.PageSession) {
+	if session == nil {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), waitSessionCleanupTimeout)
+	defer cancel()
+	_ = session.Close(cleanupCtx)
 }
 
 func normalizeDialogWaitOptions(opts *dialogWaitOptions) error {
@@ -274,7 +292,7 @@ func dialogWaitReport(observation dialogWaitObservation, opts dialogWaitOptions,
 		},
 	}
 	if opts.Action == "none" {
-		wait["warnings"] = []string{"JavaScript dialogs block page execution until accepted or dismissed; pass --action accept or --action dismiss, or run cdp dialog accept/dismiss after this wait"}
+		wait["warnings"] = []string{"JavaScript dialogs block page execution until accepted or dismissed; pass --action accept or --action dismiss so observation and handling stay in one session; a later action command cannot assume ownership after this wait detaches"}
 	}
 	report := map[string]any{
 		"ok":   observation.Matched,
@@ -361,7 +379,7 @@ func dialogWaitRemediations(opts dialogWaitOptions) []string {
 	return []string{
 		waitCommand + " --timeout 15s --json",
 		"cdp events tap --enable page --match Page.javascriptDialogOpening --duration 5s --json",
-		"cdp dialog dismiss --json",
+		"cdp dialog dismiss --wait --json",
 		"cdp snapshot --json",
 	}
 }
@@ -371,8 +389,8 @@ func dialogWaitNextCommands(opts dialogWaitOptions) []string {
 		return []string{"cdp snapshot --json", "cdp pages --json"}
 	}
 	return []string{
-		"cdp dialog accept --json",
-		"cdp dialog dismiss --json",
+		"cdp dialog accept --wait --json",
+		"cdp dialog dismiss --wait --json",
 		"cdp events tap --enable page --match Page.javascriptDialogOpening --duration 5s --json",
 	}
 }

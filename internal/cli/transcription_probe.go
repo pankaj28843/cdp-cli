@@ -12,6 +12,7 @@ import (
 const (
 	transcriptionProbeRealtimeChunkBytes = 8192
 	transcriptionProbeRealtimeSampleRate = 24_000
+	transcriptionProbeMaxPCMBytes        = 16 * 1024 * 1024
 )
 
 // ProbeRealtime exercises the same paced PCM/realtime boundary used by the
@@ -68,9 +69,7 @@ func decodeTranscriptionProbePCM(ctx context.Context, path string) ([]byte, erro
 	if err != nil {
 		return nil, transcriptionProviderError(503, "probe", "realtime_probe_decoder_unavailable", "ffmpeg is required for the Microsoft 365 realtime probe", false)
 	}
-	output, err := exec.CommandContext(
-		ctx,
-		ffmpeg,
+	output, truncated, err := runBoundedTranscriptionProbeCommand(ctx, ffmpeg, []string{
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", path,
@@ -80,7 +79,10 @@ func decodeTranscriptionProbePCM(ctx context.Context, path string) ([]byte, erro
 		"-ac", "1",
 		"-ar", "24000",
 		"pipe:1",
-	).Output()
+	}, transcriptionProbeMaxPCMBytes)
+	if truncated {
+		return nil, transcriptionProviderError(502, "probe", "realtime_probe_output_too_large", "the realtime probe decoder output exceeded its safety limit", false)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -91,6 +93,24 @@ func decodeTranscriptionProbePCM(ctx context.Context, path string) ([]byte, erro
 		return nil, transcriptionProviderError(502, "probe", "realtime_probe_decode_empty", "the realtime probe fixture decoded to invalid PCM", true)
 	}
 	return output, nil
+}
+
+func runBoundedTranscriptionProbeCommand(ctx context.Context, bin string, args []string, maxStdoutBytes int) ([]byte, bool, error) {
+	processCtx, cancelProcess := context.WithCancel(ctx)
+	defer cancelProcess()
+	stdout := &boundedProcessOutput{maxBytes: maxStdoutBytes, onTruncate: cancelProcess}
+	stderr := &boundedProcessOutput{maxBytes: maxExternalProcessOutputBytes, onTruncate: cancelProcess}
+	err := runOwnedCommand(processCtx, bin, args, stdout, stderr)
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
+	if stdout.truncated || stderr.truncated {
+		return nil, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return append([]byte(nil), stdout.buffer.Bytes()...), false, nil
 }
 
 func waitForTranscriptionProbeAudio(ctx context.Context, duration time.Duration) error {

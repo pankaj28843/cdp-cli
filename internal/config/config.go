@@ -67,6 +67,7 @@ type ResourceBudgetConfig struct {
 type HeadlessConfig struct {
 	ProfileSeedStrategy string        `json:"profile_seed_strategy,omitempty"`
 	ProfileRefreshAfter time.Duration `json:"profile_refresh_after,omitempty"`
+	FingerprintProfile  string        `json:"-"`
 }
 
 type ArtifactConfig struct {
@@ -306,6 +307,7 @@ type fileBrowserConfig struct {
 type fileHeadlessConfig struct {
 	ProfileSeedStrategy string `json:"profile_seed_strategy,omitempty"`
 	ProfileRefreshAfter string `json:"profile_refresh_after,omitempty"`
+	FingerprintProfile  string `json:"fingerprint_profile,omitempty"`
 }
 
 type fileResourceBudgetConfig struct {
@@ -353,6 +355,7 @@ func decode(data []byte) (Config, error) {
 				return Config{}, err
 			}
 			cfg.Browser.Headless.ProfileSeedStrategy = strategy
+			cfg.Browser.Headless.FingerprintProfile = strings.TrimSpace(raw.Browser.Headless.FingerprintProfile)
 			if raw.Browser.Headless.ProfileRefreshAfter != "" {
 				d, err := time.ParseDuration(raw.Browser.Headless.ProfileRefreshAfter)
 				if err != nil {
@@ -452,7 +455,7 @@ func encode(cfg Config) ([]byte, error) {
 	if cfg.Browser.ResourceBudget.MaxLoadPerCPU < 0 {
 		return nil, fmt.Errorf("browser.resource_budget.max_load_per_cpu must be non-negative")
 	}
-	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MaxRendererProcesses > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
+	if cfg.Browser.Mode != "" || cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.Headless.FingerprintProfile != "" || cfg.Browser.ResourceBudget.MaxTabs > 0 || cfg.Browser.ResourceBudget.MaxRendererProcesses > 0 || cfg.Browser.ResourceBudget.MinFreeMemoryMB > 0 || cfg.Browser.ResourceBudget.MinFreeDiskMB > 0 || cfg.Browser.ResourceBudget.MaxLoadPerCPU > 0 {
 		raw.Browser = &fileBrowserConfig{}
 		if cfg.Browser.Mode != "" {
 			if !cfg.Browser.Mode.Valid() {
@@ -460,13 +463,14 @@ func encode(cfg Config) ([]byte, error) {
 			}
 			raw.Browser.Mode = string(cfg.Browser.Mode)
 		}
-		if cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 {
+		if cfg.Browser.Headless.ProfileSeedStrategy != "" || cfg.Browser.Headless.ProfileRefreshAfter > 0 || cfg.Browser.Headless.FingerprintProfile != "" {
 			strategy, err := parseHeadlessProfileSeedStrategy(cfg.Browser.Headless.ProfileSeedStrategy)
 			if err != nil {
 				return nil, err
 			}
 			raw.Browser.Headless = &fileHeadlessConfig{
 				ProfileSeedStrategy: strategy,
+				FingerprintProfile:  strings.TrimSpace(cfg.Browser.Headless.FingerprintProfile),
 			}
 			if cfg.Browser.Headless.ProfileRefreshAfter > 0 {
 				raw.Browser.Headless.ProfileRefreshAfter = cfg.Browser.Headless.ProfileRefreshAfter.String()

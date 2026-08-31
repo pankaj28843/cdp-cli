@@ -52,7 +52,7 @@ func ExecuteInternal(ctx context.Context, args []string, stdout, stderr io.Write
 
 	encoder := json.NewEncoder(stdout)
 	if args[0] == internalRemoteDebuggingCheckboxCommand {
-		enabled, err := browser.EnableNativeRemoteDebuggingCheckbox(processName)
+		enabled, err := browser.EnableNativeRemoteDebuggingCheckbox(ctx, processName)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1, true
@@ -66,7 +66,7 @@ func ExecuteInternal(ctx context.Context, args []string, stdout, stderr io.Write
 		return 0, true
 	}
 
-	result, err := browser.ScanNativeRemoteDebuggingApproval(processName, press)
+	result, err := browser.ScanNativeRemoteDebuggingApproval(ctx, processName, press)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1, true

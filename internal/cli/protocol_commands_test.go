@@ -237,6 +237,59 @@ func TestProtocolExamplesBrowserScopedJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExecValidateEnforcesLiveSchemaBeforeExecution(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantExit int
+		wantCode string
+		wantText string
+	}{
+		{name: "unknown parameter", args: []string{"Page.captureScreenshot", "--target", "page-1", "--params", `{"unexpected":true}`, "--validate"}, wantExit: cli.ExitUsage, wantCode: "cdp_invalid_params", wantText: "unexpected"},
+		{name: "missing required parameter", args: []string{"Page.navigate", "--target", "page-1", "--params", `{}`, "--validate"}, wantExit: cli.ExitUsage, wantCode: "cdp_invalid_params", wantText: "url"},
+		{name: "target command in browser scope", args: []string{"Page.captureScreenshot", "--params", `{}`, "--validate"}, wantExit: cli.ExitUsage, wantCode: "cdp_invalid_scope", wantText: "target-scoped"},
+		{name: "browser command in target scope", args: []string{"Browser.getVersion", "--target", "page-1", "--params", `{}`, "--validate"}, wantExit: cli.ExitUsage, wantCode: "cdp_invalid_scope", wantText: "browser-scoped"},
+		{name: "unknown command", args: []string{"Page.notReal", "--target", "page-1", "--params", `{}`, "--validate"}, wantExit: cli.ExitUsage, wantCode: "unknown_protocol_entity", wantText: "Page.notReal"},
+		{name: "valid target command", args: []string{"Page.captureScreenshot", "--target", "page-1", "--params", `{"format":"png"}`, "--validate"}, wantExit: cli.ExitOK},
+		{name: "valid browser command", args: []string{"Browser.getVersion", "--params", `{}`, "--validate"}, wantExit: cli.ExitOK},
+		{name: "raw mode stays permissive", args: []string{"Page.captureScreenshot", "--target", "page-1", "--params", `{"unexpected":true}`}, wantExit: cli.ExitOK},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			args := append([]string{"protocol", "exec"}, test.args...)
+			args = append(args, "--json")
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+			if code != test.wantExit {
+				t.Fatalf("validated protocol exec exit=%d, want %d; stdout=%s stderr=%s", code, test.wantExit, out.String(), errOut.String())
+			}
+			var got struct {
+				OK      bool   `json:"ok"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("validated protocol exec output is invalid JSON: %v; output=%s", err, out.String())
+			}
+			if test.wantExit == cli.ExitOK {
+				if !got.OK {
+					t.Fatalf("validated protocol exec = %+v, want success", got)
+				}
+				return
+			}
+			if got.OK || got.Code != test.wantCode || !strings.Contains(got.Message, test.wantText) {
+				t.Fatalf("validated protocol exec = %+v, want %s containing %q", got, test.wantCode, test.wantText)
+			}
+		})
+	}
+}
+
 func TestProtocolExecJSON(t *testing.T) {
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
@@ -261,6 +314,106 @@ func TestProtocolExecJSON(t *testing.T) {
 	}
 	if !got.OK || got.Scope != "browser" || got.Method != "Browser.getVersion" || got.Result.Product != "Chrome/Test" {
 		t.Fatalf("protocol exec = %+v, want Browser.getVersion result", got)
+	}
+}
+
+func TestProtocolExecParamsMustBeJSONObject(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tests := []struct {
+		name     string
+		params   string
+		wantExit int
+	}{
+		{name: "object", params: `{}`, wantExit: cli.ExitOK},
+		{name: "raw object stays permissive", params: `{"unexpected":true}`, wantExit: cli.ExitOK},
+		{name: "explicit empty uses default object", params: "", wantExit: cli.ExitOK},
+		{name: "array", params: `[]`, wantExit: cli.ExitUsage},
+		{name: "null", params: `null`, wantExit: cli.ExitUsage},
+		{name: "string", params: `"value"`, wantExit: cli.ExitUsage},
+		{name: "number", params: `1`, wantExit: cli.ExitUsage},
+		{name: "boolean", params: `true`, wantExit: cli.ExitUsage},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), []string{"protocol", "exec", "Browser.getVersion", "--params", test.params, "--json"}, &out, &errOut, cli.BuildInfo{})
+			if code != test.wantExit {
+				t.Fatalf("protocol exec params %q exit=%d, want %d; stdout=%s stderr=%s", test.params, code, test.wantExit, out.String(), errOut.String())
+			}
+			if test.wantExit == cli.ExitOK {
+				return
+			}
+			var got struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("decode params error: %v; output=%s", err, out.String())
+			}
+			if got.Code != "invalid_json" || !strings.Contains(got.Message, "JSON object") {
+				t.Fatalf("params error = %+v, want invalid_json object guidance", got)
+			}
+		})
+	}
+}
+
+func TestProtocolExecClassifiesChromeRejection(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		args   []string
+		target string
+	}{
+		{name: "browser", method: "Browser.notReal"},
+		{name: "target", method: "Runtime.notReal", args: []string{"--target", "page-1"}, target: "page-1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newFakeCDPServer(t, []map[string]any{
+				{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+			})
+			defer server.Close()
+			startFakeDaemon(t, server, "browser_url")
+
+			args := append([]string{"protocol", "exec", test.method}, test.args...)
+			args = append(args, "--params", "{}", "--json")
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitCheckFailed {
+				t.Fatalf("protocol exec exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
+			}
+
+			var got struct {
+				OK                  bool     `json:"ok"`
+				Code                string   `json:"code"`
+				Class               string   `json:"err_class"`
+				RemediationCommands []string `json:"remediation_commands"`
+				Data                struct {
+					Scope           string `json:"scope"`
+					TargetID        string `json:"target_id"`
+					Method          string `json:"method"`
+					ProtocolCode    int    `json:"protocol_code"`
+					ProtocolMessage string `json:"protocol_message"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("decode protocol rejection: %v; output=%s", err, out.String())
+			}
+			if got.OK || got.Code != "cdp_command_failed" || got.Class != "protocol" {
+				t.Fatalf("protocol rejection envelope = %+v", got)
+			}
+			if got.Data.Method != test.method || got.Data.ProtocolCode != -32601 || got.Data.ProtocolMessage != "method not found" || got.Data.Scope != test.name || got.Data.TargetID != test.target {
+				t.Fatalf("protocol rejection data = %+v, want method/code/message/scope/target", got.Data)
+			}
+			for _, remediation := range got.RemediationCommands {
+				if strings.Contains(remediation, "doctor") || strings.Contains(remediation, "daemon") {
+					t.Fatalf("protocol rejection remediation %q treats Chrome rejection as connectivity failure", remediation)
+				}
+			}
+		})
 	}
 }
 

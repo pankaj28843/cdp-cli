@@ -80,6 +80,7 @@ func (a *app) newWaitRequestCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var url string
 	var matchURL string
 	var method string
@@ -90,6 +91,9 @@ func (a *app) newWaitRequestCommand() *cobra.Command {
 		Short: "Wait for a matching Network.requestWillBeSent event",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			criteria := networkWaitCriteria{
 				URL:          url,
 				URLContains:  matchURL,
@@ -107,17 +111,20 @@ func (a *app) newWaitRequestCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, pageURLContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, pageURLContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForNetworkEvent(ctx, client, session.SessionID, networkWaitKindRequest, criteria)
 			elapsed := time.Since(start)
 			report := networkWaitReport(networkWaitKindRequest, criteria, observation, elapsed, a.effectiveNetworkWaitTimeout(), redact, redactor)
 			report["target"] = pageRow(target)
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return networkWaitError(ctx, session.TargetID, networkWaitKindRequest, criteria, report, err)
 			}
@@ -125,8 +132,9 @@ func (a *app) newWaitRequestCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&url, "url", "", "exact request URL to match")
 	cmd.Flags().StringVar(&matchURL, "match-url", "", "substring that the request URL must contain")
 	cmd.Flags().StringVar(&method, "method", "", "HTTP method to match, such as GET or POST")
@@ -139,6 +147,7 @@ func (a *app) newWaitNetworkIdleCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var idle time.Duration
 	var maxInflight int
 	var ignoreURLContains []string
@@ -148,6 +157,9 @@ func (a *app) newWaitNetworkIdleCommand() *cobra.Command {
 		Short: "Wait until observed network traffic is quiet",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			opts := networkIdleOptions{
 				Idle:              idle,
 				MaxInflight:       maxInflight,
@@ -165,17 +177,20 @@ func (a *app) newWaitNetworkIdleCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, pageURLContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, pageURLContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForNetworkIdle(ctx, client, session.SessionID, opts)
 			elapsed := time.Since(start)
 			report := networkIdleReport(observation, opts, elapsed, a.effectiveNetworkWaitTimeout(), redactor)
 			report["target"] = pageRow(target)
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return networkIdleError(ctx, session.TargetID, opts, report, err)
 			}
@@ -183,8 +198,9 @@ func (a *app) newWaitNetworkIdleCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().DurationVar(&idle, "idle", 500*time.Millisecond, "quiet network window required before succeeding")
 	cmd.Flags().IntVar(&maxInflight, "max-inflight", 0, "maximum tracked in-flight requests allowed during the idle window")
 	cmd.Flags().StringArrayVar(&ignoreURLContains, "ignore-url-contains", nil, "ignore requests whose URL contains this substring; may be repeated")
@@ -196,6 +212,7 @@ func (a *app) newWaitResponseCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var url string
 	var matchURL string
 	var method string
@@ -209,6 +226,9 @@ func (a *app) newWaitResponseCommand() *cobra.Command {
 		Short: "Wait for a matching Network.responseReceived event",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			criteria := networkWaitCriteria{
 				URL:          url,
 				URLContains:  matchURL,
@@ -232,17 +252,20 @@ func (a *app) newWaitResponseCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, target, err := a.attachPageEventSession(ctx, targetID, pageURLContains, titleContains)
+			client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, pageURLContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForNetworkEvent(ctx, client, session.SessionID, networkWaitKindResponse, criteria)
 			elapsed := time.Since(start)
 			report := networkWaitReport(networkWaitKindResponse, criteria, observation, elapsed, a.effectiveNetworkWaitTimeout(), redact, redactor)
 			report["target"] = pageRow(target)
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return networkWaitError(ctx, session.TargetID, networkWaitKindResponse, criteria, report, err)
 			}
@@ -250,8 +273,9 @@ func (a *app) newWaitResponseCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&url, "url", "", "exact response URL to match")
 	cmd.Flags().StringVar(&matchURL, "match-url", "", "substring that the response URL must contain")
 	cmd.Flags().StringVar(&method, "method", "", "HTTP method of the request to match when it was observed")

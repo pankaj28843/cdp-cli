@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ const (
 	defaultPageClosePollInterval       = 100 * time.Millisecond
 	defaultPageCloseRetryBackoff       = 200 * time.Millisecond
 	defaultPageCleanupCloseConcurrency = 4
+	pageIndexOrder                     = "target_id_ascending"
 )
 
 func (a *app) newTargetsCommand() *cobra.Command {
@@ -48,12 +50,8 @@ func (a *app) newTargetsCommand() *cobra.Command {
 				targets = filterTargetsByType(targets, targetType)
 				rows := targetRows(targets)
 				rows = limitRows(rows, limit)
-				var lines []string
-				for _, target := range rows {
-					lines = append(lines, fmt.Sprintf("%s\t%s\t%s", target["id"], target["type"], target["title"]))
-				}
 				return commandRetryResult{
-					Human: strings.Join(lines, "\n"),
+					Human: strings.Join(targetHumanLines(rows), "\n"),
 					Data:  map[string]any{"ok": true, "targets": rows},
 				}, nil
 			})
@@ -100,13 +98,9 @@ func (a *app) newPagesCommand() *cobra.Command {
 				pages = filterRowsContains(pages, "title", titleContains)
 				pages = filterRowsExcludes(pages, "url", excludeURL)
 				pages = limitRows(pages, limit)
-				var lines []string
-				for _, page := range pages {
-					lines = append(lines, fmt.Sprintf("%s\t%s", page["id"], page["title"]))
-				}
 				return commandRetryResult{
-					Human: strings.Join(lines, "\n"),
-					Data:  map[string]any{"ok": true, "pages": pages, "budget": budget},
+					Human: strings.Join(pageHumanLines(pages), "\n"),
+					Data:  map[string]any{"ok": true, "pages": pages, "index_order": pageIndexOrder, "budget": budget},
 				}, nil
 			})
 			if err != nil {
@@ -156,6 +150,7 @@ func targetRows(targets []cdp.TargetInfo) []map[string]any {
 	for _, target := range targets {
 		rows = append(rows, map[string]any{
 			"id":                 target.TargetID,
+			"short_id":           shortTargetID(target.TargetID),
 			"type":               target.Type,
 			"title":              target.Title,
 			"url":                target.URL,
@@ -227,24 +222,133 @@ func firstNonEmpty(values ...string) string {
 }
 
 func pageRows(targets []cdp.TargetInfo) []map[string]any {
-	pages := make([]map[string]any, 0, len(targets))
-	for _, target := range targets {
-		if target.Type != "page" {
-			continue
-		}
-		pages = append(pages, pageRow(target))
+	ordered := orderedPageTargets(targets)
+	pages := make([]map[string]any, 0, len(ordered))
+	for index, target := range ordered {
+		row := pageRow(target)
+		row["index"] = index + 1
+		pages = append(pages, row)
 	}
 	return pages
+}
+
+func orderedPageTargets(targets []cdp.TargetInfo) []cdp.TargetInfo {
+	pages := make([]cdp.TargetInfo, 0, len(targets))
+	for _, target := range targets {
+		if target.Type == "page" {
+			pages = append(pages, target)
+		}
+	}
+	sort.SliceStable(pages, func(i, j int) bool {
+		return pages[i].TargetID < pages[j].TargetID
+	})
+	return pages
+}
+
+func targetHumanLines(rows []map[string]any) []string {
+	lines := make([]string, 0, len(rows))
+	for _, target := range rows {
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%s\t%q", target["short_id"], target["id"], target["type"], target["url"], target["title"]))
+	}
+	return lines
+}
+
+func pageHumanLines(rows []map[string]any) []string {
+	lines := make([]string, 0, len(rows))
+	for _, page := range rows {
+		lines = append(lines, fmt.Sprintf("[%v]\t%s\t%s\t%s\t%q", page["index"], page["short_id"], page["id"], page["url"], page["title"]))
+	}
+	return lines
 }
 
 func pageRow(target cdp.TargetInfo) map[string]any {
 	return map[string]any{
 		"id":       target.TargetID,
+		"short_id": shortTargetID(target.TargetID),
 		"type":     target.Type,
 		"title":    target.Title,
 		"url":      target.URL,
 		"attached": target.Attached,
 	}
+}
+
+func shortTargetID(targetID string) string {
+	const shortLength = 8
+	targetID = strings.ToUpper(strings.TrimSpace(targetID))
+	if len(targetID) > shortLength {
+		return targetID[:shortLength]
+	}
+	return targetID
+}
+
+func targetIDMatchesPrefix(targetID, prefix string) bool {
+	prefix = strings.TrimSpace(prefix)
+	return prefix != "" && strings.HasPrefix(strings.ToUpper(targetID), strings.ToUpper(prefix))
+}
+
+func ambiguousTargetEvidence(matches []cdp.TargetInfo) map[string]any {
+	count, shortIDs, ids, truncated := boundedTargetIDs(matches)
+	return map[string]any{
+		"candidate_count":     count,
+		"candidate_ids":       ids,
+		"candidate_short_ids": shortIDs,
+		"candidate_truncated": truncated,
+	}
+}
+
+func ambiguousPageTargetEvidence(matches, pages []cdp.TargetInfo) map[string]any {
+	data := ambiguousTargetEvidence(matches)
+	data["candidate_indexes"] = boundedPageIndexes(matches, pages)
+	return data
+}
+
+func availableTargetEvidence(targets []cdp.TargetInfo) map[string]any {
+	count, shortIDs, ids, truncated := boundedTargetIDs(targets)
+	return map[string]any{
+		"available_count":     count,
+		"available_ids":       ids,
+		"available_short_ids": shortIDs,
+		"available_truncated": truncated,
+	}
+}
+
+func availablePageTargetEvidence(pages []cdp.TargetInfo) map[string]any {
+	data := availableTargetEvidence(pages)
+	data["available_indexes"] = boundedPageIndexes(pages, pages)
+	return data
+}
+
+func boundedPageIndexes(targets, pages []cdp.TargetInfo) []int {
+	const limit = 10
+	if len(targets) > limit {
+		targets = targets[:limit]
+	}
+	indexByID := make(map[string]int, len(pages))
+	for i, page := range pages {
+		indexByID[page.TargetID] = i + 1
+	}
+	indexes := make([]int, 0, len(targets))
+	for _, target := range targets {
+		if index, ok := indexByID[target.TargetID]; ok {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+func boundedTargetIDs(targets []cdp.TargetInfo) (int, []string, []string, bool) {
+	const limit = 10
+	count := len(targets)
+	if len(targets) > limit {
+		targets = targets[:limit]
+	}
+	shortIDs := make([]string, 0, len(targets))
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		shortIDs = append(shortIDs, shortTargetID(target.TargetID))
+		ids = append(ids, target.TargetID)
+	}
+	return count, shortIDs, ids, count > limit
 }
 
 func (a *app) newPageCommand() *cobra.Command {
@@ -265,6 +369,7 @@ func (a *app) newPageCommand() *cobra.Command {
 func (a *app) newPageSelectCommand() *cobra.Command {
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{
 		Use:   "select [target-id]",
 		Short: "Select the default page target for subsequent commands",
@@ -274,7 +379,10 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 			if len(args) == 1 {
 				targetID = args[0]
 			}
-			if strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
+			if targetIndex == 0 && strings.TrimSpace(targetID) == "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 				return commandError(
 					"missing_page_selector",
 					"usage",
@@ -299,7 +407,12 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			var target cdp.TargetInfo
+			if targetIndex > 0 {
+				target, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+			} else {
+				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -331,8 +444,9 @@ func (a *app) newPageSelectCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "select the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "select the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "select the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "select the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
@@ -340,16 +454,20 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var ignoreCache bool
 	cmd := &cobra.Command{
 		Use:   "reload",
 		Short: "Reload a page target",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -373,8 +491,9 @@ func (a *app) newPageReloadCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", false, "reload while bypassing cache")
 	return cmd
 }
@@ -383,15 +502,19 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{
 		Use:   name,
 		Short: short,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -407,8 +530,8 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
 			}
-			targetIndex := history.CurrentIndex + offset
-			if targetIndex < 0 || targetIndex >= len(history.Entries) {
+			historyIndex := history.CurrentIndex + offset
+			if historyIndex < 0 || historyIndex >= len(history.Entries) {
 				return commandError(
 					"navigation_unavailable",
 					"usage",
@@ -417,7 +540,7 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 					[]string{"cdp page reload --json", "cdp open <url> --new-tab=false --target <target-id> --json"},
 				)
 			}
-			entry := history.Entries[targetIndex]
+			entry := history.Entries[historyIndex]
 			if err := session.NavigateToHistoryEntry(ctx, entry.ID); err != nil {
 				return commandError(
 					"connection_failed",
@@ -433,7 +556,7 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 				"target": pageRow(target),
 				"history": map[string]any{
 					"current_index": history.CurrentIndex,
-					"target_index":  targetIndex,
+					"target_index":  historyIndex,
 					"entry_id":      entry.ID,
 					"entry":         entry,
 				},
@@ -441,8 +564,9 @@ func (a *app) newPageHistoryCommand(name, short string, offset int) *cobra.Comma
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
@@ -454,6 +578,7 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	waitGone := true
 	maxAttempts := defaultPageCloseMaxAttempts
 	cmd := &cobra.Command{
@@ -461,6 +586,12 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 		Short: "Close a page target and wait until it is gone",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeSourceAttachStopNumericTarget(cmd, &targetID, &targetIndex); err != nil {
+				return err
+			}
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			if maxAttempts <= 0 {
 				return commandError("invalid_argument", "usage", "--max-attempts must be positive", ExitUsage, []string{"cdp page close --target <target-id> --max-attempts 3 --json"})
 			}
@@ -479,7 +610,12 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			var target cdp.TargetInfo
+			if targetIndex > 0 {
+				target, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+			} else {
+				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -527,9 +663,12 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 			)
 		},
 	}
-	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id/prefix, or a short numeric 1-based page index")
+	cmd.Flags().StringVar(&targetID, "target-id", "", "source-compatible alias for --target")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&urlContains, "url", "", "source-compatible alias for --url-contains")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().BoolVar(&waitGone, "wait-gone", true, "wait until target listing no longer contains the page")
 	cmd.Flags().IntVar(&maxAttempts, "max-attempts", defaultPageCloseMaxAttempts, "maximum close attempts before reporting failure")
 	return cmd
@@ -707,6 +846,13 @@ func (a *app) runPageCleanup(ctx context.Context, opts pageCleanupRunOptions) (s
 			ExitConnection,
 			a.connectionRemediationCommands(),
 		)
+	}
+	if strings.TrimSpace(opts.ForceTarget) != "" {
+		target, err := resolvePageTarget(targets, opts.ForceTarget, "", "")
+		if err != nil {
+			return "", nil, err
+		}
+		opts.ForceTarget = target.TargetID
 	}
 	store, err := a.stateStore()
 	if err != nil {
@@ -889,7 +1035,7 @@ func cleanupCandidates(ctx context.Context, client cdp.CommandClient, targets []
 		}
 		key := pageCleanupKey(opts.BrowserMode, opts.Connection, target.TargetID)
 		record, hasRecord := opts.Records[key]
-		if forceTarget != "" && target.TargetID != forceTarget && !strings.HasPrefix(target.TargetID, forceTarget) {
+		if forceTarget != "" && !targetIDMatchesPrefix(target.TargetID, forceTarget) {
 			continue
 		}
 		if opts.OwnershipFilter.isSet() {
@@ -1408,11 +1554,15 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
@@ -1428,7 +1578,12 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			var target cdp.TargetInfo
+			if targetIndex > 0 {
+				target, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+			} else {
+				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, urlContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -1449,8 +1604,9 @@ func (a *app) newPageTargetCommand(use, short, action string, run func(context.C
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
@@ -1458,6 +1614,8 @@ type browserEventClient interface {
 	cdp.CommandClient
 	DrainEvents(context.Context) ([]cdp.Event, error)
 	ReadEvent(context.Context) (cdp.Event, error)
+	DrainSessionEvents(context.Context, string) ([]cdp.Event, error)
+	ReadSessionEvent(context.Context, string) (cdp.Event, error)
 }
 
 func (a *app) browserCDPClient(ctx context.Context) (cdp.CommandClient, func(context.Context) error, error) {
@@ -1557,7 +1715,15 @@ func (a *app) loadRequiredDaemonRuntime(ctx context.Context, storeDir, browserMo
 	if !a.runtimeMatchesConnection(runtime) {
 		return daemon.Runtime{}, fmt.Errorf("running daemon does not match the effective %s browser-mode connection; inspect `%s`, `%s`, and `%s`, then run `%s` if the effective connection is correct and repair is appropriate for the current unattended context", browserMode, statusCommand, currentCommand, resolveCommand, repairCommand)
 	}
-	if !daemon.RuntimeRunning(runtime) {
+	processCheck := daemon.CheckRuntimeProcess(ctx, runtime)
+	if !processCheck.Running {
+		if processCheck.State == daemon.RuntimeProcessStateIdentityMismatch || processCheck.State == daemon.RuntimeProcessStateIdentityUnavailable {
+			reason := "does not match the recorded owner"
+			if processCheck.State == daemon.RuntimeProcessStateIdentityUnavailable {
+				reason = "could not be verified"
+			}
+			return daemon.Runtime{}, fmt.Errorf("%s daemon runtime process identity %s; inspect `%s` before retrying", browserMode, reason, statusCommand)
+		}
 		if browserMode == string(config.BrowserModeHeadless) {
 			return daemon.Runtime{}, fmt.Errorf("%s daemon process is not running; run `%s` or inspect `%s`", browserMode, repairCommand, statusCommand)
 		}
@@ -1612,7 +1778,7 @@ func (a *app) repairHeadlessDaemonForBrowserCommand(ctx context.Context, storeDi
 		"result":           probe.State,
 		"repair_requested": true,
 	}
-	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, false, 10*time.Minute, status, probeResult, runtimeCheck)
+	_, keepalive, err := a.runHeadlessKeepaliveStartOrRepair(ctx, storeDir, lock, connectionName, mode, 30*time.Second, defaultChromeCommand(), false, false, false, 10*time.Minute, status, probeResult, runtimeCheck)
 	if err != nil {
 		return err
 	}
@@ -1631,6 +1797,10 @@ func (a *app) repairHeadlessDaemonForBrowserCommand(ctx context.Context, storeDi
 }
 
 func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titleContains string) (*cdp.PageSession, cdp.TargetInfo, error) {
+	return a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, 0)
+}
+
+func (a *app) attachPageSessionWithIndex(ctx context.Context, targetID, urlContains, titleContains string, targetIndex int) (*cdp.PageSession, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserCDPClient(ctx)
 	if err != nil {
 		return nil, cdp.TargetInfo{}, commandError(
@@ -1640,6 +1810,25 @@ func (a *app) attachPageSession(ctx context.Context, targetID, urlContains, titl
 			ExitConnection,
 			a.connectionRemediationCommands(),
 		)
+	}
+	if targetIndex > 0 {
+		target, err := a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, cdp.TargetInfo{}, err
+		}
+		session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, target, commandError(
+				"connection_failed",
+				"connection",
+				fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+				ExitConnection,
+				[]string{"cdp pages --json", "cdp doctor --json"},
+			)
+		}
+		return session, target, nil
 	}
 	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 		session, target, handled, err := a.attachExactPageSession(ctx, client, closeClient, targetID)
@@ -1691,6 +1880,10 @@ func (a *app) attachExactPageSession(ctx context.Context, client cdp.CommandClie
 }
 
 func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains, titleContains string) (browserEventClient, *cdp.PageSession, cdp.TargetInfo, error) {
+	return a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, 0)
+}
+
+func (a *app) attachPageEventSessionWithIndex(ctx context.Context, targetID, urlContains, titleContains string, targetIndex int) (browserEventClient, *cdp.PageSession, cdp.TargetInfo, error) {
 	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		return nil, nil, cdp.TargetInfo{}, commandError(
@@ -1700,6 +1893,25 @@ func (a *app) attachPageEventSession(ctx context.Context, targetID, urlContains,
 			ExitConnection,
 			a.connectionRemediationCommands(),
 		)
+	}
+	if targetIndex > 0 {
+		target, err := a.resolvePageTargetWithClientIndex(ctx, client, targetID, urlContains, titleContains, targetIndex)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, nil, cdp.TargetInfo{}, err
+		}
+		session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+		if err != nil {
+			_ = closeClient(ctx)
+			return nil, nil, cdp.TargetInfo{}, commandError(
+				"connection_failed",
+				"connection",
+				fmt.Sprintf("attach target %s: %v", target.TargetID, err),
+				ExitConnection,
+				[]string{"cdp pages --json", "cdp doctor --json"},
+			)
+		}
+		return client, session, target, nil
 	}
 	if strings.TrimSpace(targetID) != "" && strings.TrimSpace(urlContains) == "" && strings.TrimSpace(titleContains) == "" {
 		session, target, handled, err := a.attachExactPageSession(ctx, client, closeClient, targetID)
@@ -1753,6 +1965,84 @@ func (a *app) resolvePageTargetWithClient(ctx context.Context, client cdp.Comman
 	return resolvePageTarget(targets, targetID, urlContains, titleContains)
 }
 
+func (a *app) resolvePageTargetWithClientIndex(ctx context.Context, client cdp.CommandClient, targetID, urlContains, titleContains string, targetIndex int) (cdp.TargetInfo, error) {
+	if targetIndex <= 0 {
+		return cdp.TargetInfo{}, commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+	}
+	if strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "" {
+		return cdp.TargetInfo{}, commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+	}
+	targets, err := cdp.ListTargetsWithClient(ctx, client)
+	if err != nil {
+		return cdp.TargetInfo{}, commandError(
+			"connection_failed",
+			"connection",
+			fmt.Sprintf("list targets: %v", err),
+			ExitConnection,
+			[]string{"cdp doctor --json", "cdp daemon status --json"},
+		)
+	}
+	return resolvePageTargetByIndex(targets, targetIndex)
+}
+
+func validatePageTargetIndexSelector(cmd *cobra.Command, targetID, urlContains, titleContains string, targetIndex int) error {
+	if cmd.Flags().Changed("target") && cmd.Flags().Changed("target-id") {
+		return commandError("invalid_target_selector", "usage", "--target and --target-id are aliases; supply only one", ExitUsage, []string{"cdp pages --json"})
+	}
+	if cmd.Flags().Changed("url-contains") && cmd.Flags().Changed("url") {
+		return commandError("invalid_target_selector", "usage", "--url and --url-contains are aliases; supply only one", ExitUsage, []string{"cdp pages --json"})
+	}
+	if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
+		return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+	}
+	if targetIndex > 0 && (strings.TrimSpace(targetID) != "" || strings.TrimSpace(urlContains) != "" || strings.TrimSpace(titleContains) != "") {
+		return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+	}
+	return validatePageTargetSelectorValues(targetID, urlContains, titleContains)
+}
+
+// normalizeSourceAttachStopNumericTarget adapts chrome-agent's automatic
+// selector rule only on the three commands that correspond to source attach
+// and target-aware stop. A short ASCII numeric --target is a page index; an
+// explicit --target-id remains an ID prefix, so numeric IDs stay addressable.
+// Keeping this at the command boundary avoids changing direct protocol exec
+// or the many other page-target commands that already have stable semantics.
+func normalizeSourceAttachStopNumericTarget(cmd *cobra.Command, targetID *string, targetIndex *int) error {
+	if !cmd.Flags().Changed("target") ||
+		cmd.Flags().Changed("target-id") ||
+		cmd.Flags().Changed("target-index") ||
+		cmd.Flags().Changed("url-contains") ||
+		cmd.Flags().Changed("url") ||
+		cmd.Flags().Changed("title-contains") ||
+		!isShortNumericTarget(*targetID) {
+		return nil
+	}
+
+	index, err := strconv.Atoi(*targetID)
+	if err != nil {
+		return commandError("invalid_target_index", "usage", "--target must be a valid positive page index; use --target-id for an ID prefix", ExitUsage, []string{"cdp pages --json"})
+	}
+	if index <= 0 {
+		return commandError("invalid_target_index", "usage", "--target must be a positive page index; use --target-id for an ID prefix", ExitUsage, []string{"cdp pages --json"})
+	}
+	*targetID = ""
+	*targetIndex = index
+	return nil
+}
+
+func validatePageTargetSelectorValues(targetID, urlContains, titleContains string) error {
+	selectors := 0
+	for _, selector := range []string{targetID, urlContains, titleContains} {
+		if strings.TrimSpace(selector) != "" {
+			selectors++
+		}
+	}
+	if selectors > 1 {
+		return commandError("invalid_target_selector", "usage", "pass only one of --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
+	}
+	return nil
+}
+
 func (a *app) selectedPageTarget(ctx context.Context, client cdp.CommandClient) (cdp.TargetInfo, bool) {
 	store, err := a.stateStore()
 	if err != nil {
@@ -1792,15 +2082,53 @@ func (a *app) createWorkflowPageTargetWithKeepOpen(ctx context.Context, client c
 		return targetID, err
 	}
 	if err := cdp.MarkTargetPersistent(ctx, client, targetID); err != nil {
-		return targetID, commandError(
-			"lease_target_policy_failed",
-			"lifecycle",
-			fmt.Sprintf("keep %s target %s open: %v", workflow, targetID, err),
-			ExitConnection,
-			[]string{"cdp daemon status --json", "cdp pages --json"},
-		)
+		return targetID, a.keepOpenPromotionFailure(client, targetID, rawURL, workflow, err)
 	}
 	return targetID, nil
+}
+
+func (a *app) keepOpenPromotionFailure(client cdp.CommandClient, targetID, rawURL, workflow string, policyErr error) error {
+	closeCtx, cancel := context.WithTimeout(context.Background(), pageCloseDefaultTimeout(a.browserModeName(), defaultPageCloseMaxAttempts))
+	closeReport := closePageTargetSettled(closeCtx, client, cdp.TargetInfo{
+		TargetID: targetID,
+		Type:     "page",
+		URL:      rawURL,
+	}, pageCloseOptions{
+		WaitGone:     true,
+		MaxAttempts:  defaultPageCloseMaxAttempts,
+		AttemptWait:  pageCloseAttemptTimeout(a.browserModeName()),
+		PollInterval: defaultPageClosePollInterval,
+		RetryBackoff: defaultPageCloseRetryBackoff,
+	})
+	cancel()
+
+	recoveryCommand := "cdp page cleanup --target " + targetID + " --force --close --json"
+	data := map[string]any{
+		"target_id":        targetID,
+		"policy_error":     policyErr.Error(),
+		"primary_error":    commandErrorSummary(policyErr),
+		"close":            closeReport,
+		"recovery_command": recoveryCommand,
+	}
+	message := fmt.Sprintf("keep %s target %s open: %v", workflow, targetID, policyErr)
+	if !closeReport.TargetGone {
+		cleanupError := closeReport.LastError
+		if cleanupError == "" {
+			cleanupError = fmt.Sprintf("target %s close did not settle", targetID)
+		}
+		data["cleanup_error"] = cleanupError
+		message += "; cleanup incomplete: " + cleanupError
+	} else {
+		message += "; created target was closed after policy failure"
+	}
+	return commandErrorWithData(
+		"lease_target_policy_failed",
+		"lifecycle",
+		message,
+		ExitConnection,
+		uniqueCommands([]string{recoveryCommand, "cdp daemon status --json", "cdp pages --json"}),
+		data,
+	)
 }
 
 func (a *app) createPageTargetWithOwnership(ctx context.Context, client cdp.CommandClient, rawURL string, ownership targetOwnershipMetadata) (string, error) {
@@ -1911,55 +2239,91 @@ func resolvePageTarget(targets []cdp.TargetInfo, targetID, urlContains, titleCon
 	targetID = strings.TrimSpace(targetID)
 	urlContains = strings.TrimSpace(urlContains)
 	titleContains = strings.TrimSpace(titleContains)
-	var pages []cdp.TargetInfo
-	for _, target := range targets {
-		if target.Type == "page" {
-			pages = append(pages, target)
-		}
+	if err := validatePageTargetSelectorValues(targetID, urlContains, titleContains); err != nil {
+		return cdp.TargetInfo{}, err
 	}
+	pages := orderedPageTargets(targets)
 	if targetID != "" {
 		var matches []cdp.TargetInfo
 		for _, page := range pages {
-			if page.TargetID == targetID || strings.HasPrefix(page.TargetID, targetID) {
+			if targetIDMatchesPrefix(page.TargetID, targetID) {
 				matches = append(matches, page)
 			}
 		}
-		return onePageTarget(matches, fmt.Sprintf("target %q", targetID))
+		return onePageTarget(matches, pages, fmt.Sprintf("target %q", targetID))
 	}
 	if urlContains != "" {
+		matches := make([]cdp.TargetInfo, 0)
 		for _, page := range pages {
 			if strings.Contains(strings.ToLower(page.URL), strings.ToLower(urlContains)) {
-				return page, nil
+				matches = append(matches, page)
 			}
 		}
-		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page URL contains %q", urlContains))
+		if len(matches) == 0 {
+			return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page URL contains %q", urlContains), pages)
+		}
+		return onePageTarget(matches, pages, fmt.Sprintf("page URL containing %q", urlContains))
 	}
 	if titleContains != "" {
+		matches := make([]cdp.TargetInfo, 0)
 		for _, page := range pages {
 			if strings.Contains(strings.ToLower(page.Title), strings.ToLower(titleContains)) {
-				return page, nil
+				matches = append(matches, page)
 			}
 		}
-		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no page title contains %q", titleContains))
+		if len(matches) == 0 {
+			return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no page title contains %q", titleContains), pages)
+		}
+		return onePageTarget(matches, pages, fmt.Sprintf("page title containing %q", titleContains))
 	}
-	return onePageTarget(pages, "default page")
+	return onePageTarget(pages, pages, "default page")
 }
 
-func onePageTarget(matches []cdp.TargetInfo, label string) (cdp.TargetInfo, error) {
+func resolvePageTargetByIndex(targets []cdp.TargetInfo, targetIndex int) (cdp.TargetInfo, error) {
+	pages := orderedPageTargets(targets)
+	if targetIndex <= 0 {
+		return cdp.TargetInfo{}, commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
+	}
+	if targetIndex > len(pages) {
+		return cdp.TargetInfo{}, commandErrorWithData(
+			"target_not_found",
+			"usage",
+			fmt.Sprintf("page target index %d is out of range; found %d page targets", targetIndex, len(pages)),
+			ExitUsage,
+			[]string{"cdp pages --json"},
+			availablePageTargetEvidence(pages),
+		)
+	}
+	return pages[targetIndex-1], nil
+}
+
+func onePageTarget(matches, available []cdp.TargetInfo, label string) (cdp.TargetInfo, error) {
 	switch len(matches) {
 	case 0:
-		return cdp.TargetInfo{}, targetNotFound(fmt.Sprintf("no %s matched", label))
+		return cdp.TargetInfo{}, pageTargetNotFound(fmt.Sprintf("no %s matched", label), available)
 	case 1:
 		return matches[0], nil
 	default:
-		return cdp.TargetInfo{}, commandError(
+		return cdp.TargetInfo{}, commandErrorWithData(
 			"ambiguous_target",
 			"usage",
 			fmt.Sprintf("%s matched %d pages; pass a longer --target", label, len(matches)),
 			ExitUsage,
 			[]string{"cdp pages --json", "cdp snapshot --target <target-id> --json"},
+			ambiguousPageTargetEvidence(matches, available),
 		)
 	}
+}
+
+func pageTargetNotFound(message string, available []cdp.TargetInfo) error {
+	return commandErrorWithData(
+		"target_not_found",
+		"usage",
+		message,
+		ExitUsage,
+		[]string{"cdp pages --json", "cdp open <url> --json"},
+		availablePageTargetEvidence(available),
+	)
 }
 
 func targetNotFound(message string) error {

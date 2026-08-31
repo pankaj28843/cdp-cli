@@ -89,8 +89,7 @@ func runLinuxRemoteDebuggingApprovalHelper(ctx context.Context, processNames []s
 		args = append(args, "--process-name", processName)
 	}
 	args = append(args, "--press")
-	cmd := exec.CommandContext(helperCtx, python, args...)
-	output, err := cmd.Output()
+	result, err := runOwnedBrowserCommand(helperCtx, python, args...)
 	if err != nil {
 		if helperCtx.Err() != nil {
 			return linuxRemoteDebuggingApprovalReport{}, fmt.Errorf("Linux AT-SPI helper timed out")
@@ -99,7 +98,7 @@ func runLinuxRemoteDebuggingApprovalHelper(ctx context.Context, processNames []s
 	}
 
 	var report linuxRemoteDebuggingApprovalReport
-	decoder := json.NewDecoder(bytes.NewReader(output))
+	decoder := json.NewDecoder(bytes.NewReader(result.stdout))
 	if err := decoder.Decode(&report); err != nil {
 		return linuxRemoteDebuggingApprovalReport{}, fmt.Errorf("parse Linux AT-SPI helper report: %w", err)
 	}

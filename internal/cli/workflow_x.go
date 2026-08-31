@@ -46,23 +46,15 @@ func (a *app) newWorkflowXCollectionCommand(use, short string) *cobra.Command {
 				_ = closeClient(ctx)
 				return err
 			}
-			closed := false
-			closePage := func() string {
-				if keepOpen || closed {
-					return ""
-				}
-				closed = true
-				if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
-					return err.Error()
-				}
-				return ""
-			}
-			defer closePage()
+			closeWorkflowPage := a.workflowPageCloser(client, targetID, request.URL, keepOpen)
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 			if err != nil {
+				_, _ = closeWorkflowPage()
+				_ = closeClient(ctx)
 				return commandError("connection_failed", "connection", fmt.Sprintf("attach X target: %v", err), ExitConnection, nil)
 			}
 			defer session.Close(ctx)
+			defer func() { _, _ = closeWorkflowPage() }()
 			if _, err := session.Navigate(ctx, request.URL); err != nil {
 				return commandError("x_navigation_failed", "connection", err.Error(), ExitConnection, nil)
 			}
@@ -75,9 +67,9 @@ func (a *app) newWorkflowXCollectionCommand(use, short string) *cobra.Command {
 				return commandError("x_identity_changed", "check_failed", fmt.Sprintf("%s (final URL: %s)", err, readiness.URL), ExitCheckFailed, nil)
 			}
 			if final.HandleChanged {
-				closeError := closePage()
+				closed, closeError := closeWorkflowPage()
 				coverage := dynamicSourceCoverage(nil, xPossibleRecordKinds(final.Kind), "invalid", "profile_handle_changed_requires_stable_account_verification", "profile_identity", "", true)
-				workflow := map[string]any{"name": "x-collect", "count": 0, "limit": limit, "status": "invalid", "partial_reason": "profile_handle_changed_requires_stable_account_verification", "interactions": 0, "created_page": true, "closed": closeError == "", "close_error": closeError}
+				workflow := map[string]any{"name": "x-collect", "count": 0, "limit": limit, "status": "invalid", "partial_reason": "profile_handle_changed_requires_stable_account_verification", "interactions": 0, "created_page": true, "closed": closed, "close_error": closeError}
 				return a.render(ctx, xCollectionMarkdown(request.URL, final.Kind, nil, workflow, coverage), map[string]any{"ok": true, "request": request, "kind": final.Kind, "records": []x.Record{}, "coverage": coverage, "workflow": workflow})
 			}
 			status, interactions := "partial", 0
@@ -163,20 +155,20 @@ func (a *app) newWorkflowXCollectionCommand(use, short string) *cobra.Command {
 			} else if final.Kind == x.KindPostThread && status != "exhausted" && status != "ceiling" {
 				partialReason = "discussion_" + status
 			}
-			closeError := closePage()
+			closed, closeError := closeWorkflowPage()
 			observed, missing := xRecordKinds(records, final.Kind)
 			continuation := "profile_scroll"
 			if final.Kind == x.KindPostThread {
 				continuation = "discussion_" + status
 			}
 			coverage := dynamicSourceCoverage(observed, missing, status, partialReason, continuation, "", status != "exhausted" && status != "ceiling")
-			workflow := map[string]any{"name": "x-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closeError == "", "close_error": closeError}
+			workflow := map[string]any{"name": "x-collect", "count": len(records), "limit": limit, "status": status, "partial_reason": partialReason, "interactions": interactions, "discussion_interactions": interactions, "created_page": true, "closed": closed, "close_error": closeError}
 			return a.render(ctx, xCollectionMarkdown(final.URL, final.Kind, records, workflow, coverage), map[string]any{"ok": true, "request": final, "kind": final.Kind, "records": records, "coverage": coverage, "workflow": workflow})
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum source-native records to collect (1-500)")
 	cmd.Flags().DurationVar(&wait, "wait", 10*time.Second, "how long to wait for visible X source records")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	return cmd
 }
 

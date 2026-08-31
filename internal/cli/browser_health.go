@@ -2,17 +2,25 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 )
 
 const autoConnectHumanAction = "Open chrome://inspect/#remote-debugging in Chrome and click Allow for the cdp remote debugging request."
+
+var managedRuntimeProcessRunning = daemon.ProcessRunningContext
+
+var managedRuntimeEndpointReachable = browser.ManagedBrowserEndpointReachable
 
 func safeDiagnosticCommands() []string {
 	return []string{
@@ -184,6 +192,10 @@ func (a *app) browserHealthSnapshot(ctx context.Context, status daemon.Status, i
 		"target_resource_attribution": cdp.UnavailableTargetResourceAttribution(),
 		"next_commands":               status.NextCommands,
 	}
+	if status.ProcessIdentityState == daemon.RuntimeProcessStateIdentityMismatch || status.ProcessIdentityState == daemon.RuntimeProcessStateIdentityUnavailable {
+		health["daemon_process_identity_state"] = status.ProcessIdentityState
+		health["reasons"] = appendStringReasons(health["reasons"], "daemon_process_identity_unverified")
+	}
 	health["daemon_processes_by_mode"] = a.daemonProcessesByMode(ctx)
 	if strings.EqualFold(status.BrowserMode, string(config.BrowserModeHeadless)) {
 		health["managed_processes"] = a.managedProcessLifecycleStatus(ctx, status)
@@ -270,7 +282,7 @@ func (a *app) managedProcessLifecycleStatus(ctx context.Context, status daemon.S
 }
 
 func (a *app) applyManagedBrowserHealth(ctx context.Context, health map[string]any, runtime *daemon.Runtime) {
-	ok, detail := managedRuntimeProcessCheck(runtime)
+	ok, detail := managedRuntimeProcessCheck(ctx, runtime)
 	if detail == nil {
 		return
 	}
@@ -296,14 +308,35 @@ func (a *app) applyManagedBrowserHealth(ctx context.Context, health map[string]a
 	} else if expected.UserDataDir == "" {
 		expected.UserDataDir = runtime.UserDataDir
 	}
-	ownership := browser.VerifyManagedOwnership(store.Dir, expected)
+	ownership, ownershipErr := browser.VerifyManagedOwnershipContext(ctx, store.Dir, expected)
 	health["managed_ownership"] = ownership
+	if ownershipErr != nil {
+		health["managed_chrome_owned"] = false
+		detail["state"] = "ownership_check_canceled"
+		detail["running"] = false
+		health["state"] = "degraded"
+		health["reasons"] = appendStringReasons(health["reasons"], "managed_chrome_ownership_check_canceled")
+		health["next_commands"] = uniqueCommands(toStringSlice(health["next_commands"]), a.connectionRemediationCommands(), []string{modeScopedCommand(a.browserModeName(), "daemon logs --tail 50 --json")})
+		return
+	}
 	health["managed_chrome_owned"] = ownership.Owned
+	identityReason := managedOwnershipIdentityReason(ownership)
+	if identityReason != "" {
+		detail["state"] = identityReason
+		detail["running"] = false
+		ok = false
+	}
+	identityFailure := managedProcessIdentityFailure(detail)
 	if ok {
 		return
 	}
 	if ready, _ := health["daemon_rpc_ready"].(bool); ready {
-		detail["state"] = "daemon_rpc_ready_pid_not_running"
+		if !identityFailure {
+			detail["state"] = "daemon_rpc_ready_pid_not_running"
+		} else {
+			health["state"] = "degraded"
+			health["reasons"] = appendStringReasons(health["reasons"], "managed_chrome_process_identity_unverified")
+		}
 		detail["daemon_rpc_ready"] = true
 		return
 	}
@@ -336,7 +369,10 @@ func headlessHealthFailureCode(status daemon.Status, health map[string]any) stri
 	return "headless_runtime_degraded"
 }
 
-func managedRuntimeProcessCheck(runtime *daemon.Runtime) (bool, map[string]any) {
+func managedRuntimeProcessCheck(ctx context.Context, runtime *daemon.Runtime) (bool, map[string]any) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if runtime == nil || !strings.EqualFold(strings.TrimSpace(runtime.BrowserMode), string(config.BrowserModeHeadless)) {
 		return true, nil
 	}
@@ -360,13 +396,105 @@ func managedRuntimeProcessCheck(runtime *daemon.Runtime) (bool, map[string]any) 
 		return true, detail
 	}
 	detail["chrome_pid"] = chromePID
-	if !daemon.ProcessRunning(chromePID) {
+	if err := ctx.Err(); err != nil {
+		detail["state"] = "process_check_canceled"
+		return false, detail
+	}
+	running, livenessErr := managedRuntimeProcessRunning(ctx, chromePID)
+	if livenessErr != nil {
+		if ctx.Err() != nil || errors.Is(livenessErr, context.Canceled) || errors.Is(livenessErr, context.DeadlineExceeded) {
+			detail["state"] = "process_check_canceled"
+			return false, detail
+		}
+		detail["state"] = "process_liveness_unavailable"
+		return false, detail
+	}
+	if err := ctx.Err(); err != nil {
+		detail["state"] = "process_check_canceled"
+		return false, detail
+	}
+	if !running {
+		profile, port := managedRuntimeManagedProfileAndPort(runtime)
+		if profile != "" {
+			fallbackCtx, cancel := context.WithTimeout(ctx, time.Second)
+			endpointLive := managedRuntimeEndpointReachable(fallbackCtx, profile, port)
+			cancel()
+			if err := ctx.Err(); err != nil {
+				detail["state"] = "process_check_canceled"
+				return false, detail
+			}
+			if endpointLive {
+				detail["state"] = "running"
+				detail["running"] = true
+				detail["liveness_source"] = "debugging_endpoint"
+				return true, detail
+			}
+		}
 		detail["state"] = "process_not_running"
 		return false, detail
 	}
+	if isStrongManagedProcessStartIdentity(runtime.ChromeProcessStartTime) {
+		identityCtx, cancel := context.WithTimeout(ctx, time.Second)
+		actual, err := processgroup.ProcessStartTime(identityCtx, chromePID)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				detail["state"] = "process_check_canceled"
+				return false, detail
+			}
+			detail["state"] = "process_identity_unavailable"
+			return false, detail
+		}
+		if actual != strings.TrimSpace(runtime.ChromeProcessStartTime) {
+			detail["state"] = "process_identity_mismatch"
+			return false, detail
+		}
+	}
 	detail["state"] = "running"
 	detail["running"] = true
+	detail["liveness_source"] = "recorded_pid"
 	return true, detail
+}
+
+func managedRuntimeManagedProfileAndPort(runtime *daemon.Runtime) (string, string) {
+	if runtime == nil {
+		return "", ""
+	}
+	profile := strings.TrimSpace(runtime.ManagedProfilePath)
+	port := strings.TrimSpace(runtime.ChromePort)
+	if runtime.ManagedBrowser != nil {
+		if profile == "" {
+			profile = strings.TrimSpace(runtime.ManagedBrowser.UserDataDir)
+		}
+		if port == "" {
+			port = strings.TrimSpace(runtime.ManagedBrowser.DebuggingPort)
+		}
+	}
+	return profile, port
+}
+
+func isStrongManagedProcessStartIdentity(value string) bool {
+	return processgroup.IsStrongProcessStartIdentity(value)
+}
+
+func managedOwnershipIdentityReason(evidence browser.ManagedOwnershipEvidence) string {
+	for _, reason := range evidence.Reasons {
+		switch reason {
+		case "process_start_identity_mismatch", "process_start_identity_unavailable":
+			return reason
+		}
+	}
+	return ""
+}
+
+func managedProcessIdentityFailure(detail map[string]any) bool {
+	state, _ := detail["state"].(string)
+	return state == "process_identity_mismatch" || state == "process_identity_unavailable"
+}
+
+func managedProcessCheckCanceled(detail map[string]any) bool {
+	state, _ := detail["state"].(string)
+	return state == "process_check_canceled"
 }
 
 func (a *app) daemonProcessesByMode(ctx context.Context) map[string]any {
@@ -404,11 +532,16 @@ func (a *app) daemonProcessesByMode(ctx context.Context) map[string]any {
 		if runtime.ChromePort != "" {
 			summary["managed_chrome_port"] = runtime.ChromePort
 		}
-		running := daemon.RuntimeRunning(runtime)
+		processCheck := daemon.CheckRuntimeProcess(ctx, runtime)
+		summary["daemon_process_identity_state"] = processCheck.State
+		running := processCheck.Running
 		ready := running && daemon.RuntimeSocketReady(ctx, runtime)
 		summary["daemon_process_running"] = running
 		summary["daemon_rpc_ready"] = ready
 		if !ready {
+			if processCheck.State == daemon.RuntimeProcessStateIdentityMismatch || processCheck.State == daemon.RuntimeProcessStateIdentityUnavailable {
+				summary["state"] = processCheck.State
+			}
 			out[mode] = summary
 			continue
 		}
@@ -479,12 +612,16 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 		}
 	}
 	entries = entries[startIndex:]
+	retiredHoldPIDs := retiredDaemonHoldPIDs(entries)
 	warns := 0
 	errs := 0
 	lastDisconnect := ""
 	recentCrashes := []map[string]any{}
 	reasons := []string{}
 	for _, entry := range entries {
+		if _, retired := retiredHoldPIDs[entry.PID]; retired {
+			continue
+		}
 		level := strings.ToLower(strings.TrimSpace(entry.Level))
 		if level == "warn" || level == "warning" {
 			warns++
@@ -525,10 +662,32 @@ func (a *app) daemonLogHealth(ctx context.Context, tail int) map[string]any {
 		out["crash_capture"] = "daemon_logs"
 		out["recent_crashes"] = recentCrashes
 	}
+	if len(retiredHoldPIDs) > 0 {
+		pids := make([]int, 0, len(retiredHoldPIDs))
+		for pid := range retiredHoldPIDs {
+			pids = append(pids, pid)
+		}
+		sort.Ints(pids)
+		out["retired_hold_pids"] = pids
+	}
 	if len(reasons) > 0 {
 		out["degraded_reasons"] = reasons
 	}
 	return out
+}
+
+func retiredDaemonHoldPIDs(entries []daemon.LogEntry) map[int]struct{} {
+	retired := map[int]struct{}{}
+	for _, entry := range entries {
+		if entry.PID <= 0 {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(entry.Event)) {
+		case "hold_superseded", "hold_reclaimed":
+			retired[entry.PID] = struct{}{}
+		}
+	}
+	return retired
 }
 
 func daemonCrashLogEntry(entry daemon.LogEntry) (map[string]any, bool) {

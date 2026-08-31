@@ -1,6 +1,9 @@
 package cli
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 type schemaInfo struct {
 	Name        string        `json:"name"`
@@ -30,8 +33,34 @@ func withCommandRetrySchemaFields(fields []schemaField, includeLastObservedTarge
 	return fields
 }
 
+func emulationCommandSchema(name, description, detail string) schemaInfo {
+	return schemaInfo{
+		Name:        name,
+		Description: description + " Accepts a mutually exclusive 1-based page --target-index selector.",
+		Fields: []schemaField{
+			{Name: "ok", Type: "boolean", Required: true, Description: "True when the emulation command completed."},
+			{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+			{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+			{Name: "emulation", Type: "object", Required: true, Description: detail},
+		},
+	}
+}
+
 func schemaCatalog() map[string]schemaInfo {
-	return map[string]schemaInfo{
+	catalog := map[string]schemaInfo{
+		"guide": {
+			Name:        "guide",
+			Description: "Version-matched public cdp-cli agent guide returned as content or a readable installed/materialized file path.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the guide content or path was produced."},
+				{Name: "schema_version", Type: "string", Required: true, Description: "Stable guide result schema, currently guide/v1."},
+				{Name: "mode", Type: "string", Required: true, Description: "content for embedded guide text or path for a readable filesystem resource."},
+				{Name: "bytes", Type: "integer", Required: true, Description: "UTF-8 byte length of the bundled guide."},
+				{Name: "content", Type: "string", Required: false, Description: "Bundled public guide text when mode is content."},
+				{Name: "path", Type: "string", Required: false, Description: "Readable path to the exact embedded guide when mode is path."},
+				{Name: "source", Type: "string", Required: true, Description: "embedded, installed-sidecar, or materialized resource source."},
+			},
+		},
 		"webagent-operation": {
 			Name:        "webagent-operation",
 			Description: "Stable outer result envelope for authenticated web-agent provider operations; provider-specific result fields remain under data.",
@@ -238,17 +267,18 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "name", Type: "string", Required: true, Description: "Doctor check name: scheduled-tasks."},
 				{Name: "status", Type: "string", Required: true, Description: "Check status: pass, warn, pending, or fail."},
 				{Name: "message", Type: "string", Required: true, Description: "Human-readable readiness summary."},
-				{Name: "details", Type: "scheduled_tasks_details", Required: true, Description: "Crontab availability, cdp entry counts, mode-explicit headed keepalive, canonical headless maintenance, managed task ID coverage, legacy pages polling, flock, cleanup ambiguity, and managed process sweep flags."},
+				{Name: "details", Type: "scheduled_tasks_details", Required: true, Description: "Crontab availability, bounded manager diagnostics, cdp entry counts, mode-explicit headed keepalive, canonical headless maintenance, managed task ID coverage, legacy pages polling, flock, cleanup ambiguity, and managed process sweep flags."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe crontab inspection and install commands with explicit browser modes and flock locks."},
 			},
 		},
 		"scheduled-tasks-details": {
 			Name:        "scheduled-tasks-details",
-			Description: "Details object for the scheduled-tasks doctor check.",
+			Description: "Details object for the scheduled-tasks doctor check, including bounded manager diagnostics and managed process-tree policy.",
 			Fields: []schemaField{
 				{Name: "source", Type: "string", Required: true, Description: "Inspection source, currently crontab -l."},
 				{Name: "user_level", Type: "boolean", Required: true, Description: "True when the inspected schedule is the current user's crontab."},
 				{Name: "crontab_available", Type: "boolean", Required: true, Description: "True when user crontab inspection was available."},
+				{Name: "command_output_truncated", Type: "boolean", Required: true, Description: "True when the crontab manager exceeded the bounded diagnostic output limit and the partial schedule was not classified."},
 				{Name: "cdp_entries_count", Type: "number", Required: true, Description: "Number of cdp-related cron entries found."},
 				{Name: "has_daemon_keepalive", Type: "boolean", Required: true, Description: "True when any daemon keepalive or maintenance entry is present."},
 				{Name: "has_headed_daemon_keepalive", Type: "boolean", Required: true, Description: "True when the headed daemon keepalive task is present."},
@@ -344,13 +374,13 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"artifacts-run-managed": {
 			Name:        "artifacts-run-managed",
-			Description: "Managed child command result with an atomically replaced hard-bounded latest-run log.",
+			Description: "Managed child command result with an atomically replaced hard-bounded latest-run log and owned process-tree cancellation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the managed child exits successfully."},
 				{Name: "task", Type: "string", Required: true, Description: "Stable managed task identity."},
 				{Name: "command", Type: "array<string>", Required: true, Description: "Executed child command and arguments."},
 				{Name: "policy", Type: "artifact_retention_policy", Required: true, Description: "Effective hard managed-log size policy."},
-				{Name: "log", Type: "object", Required: true, Description: "Owner-only log path, exact cap, written bytes, dropped bytes, and pre-run reclaimed bytes."},
+				{Name: "log", Type: "object", Required: true, Description: "Owner-only log path, exact cap, written bytes, dropped bytes, and pre-run reclaimed bytes; stdout and stderr share a synchronized hard bound."},
 			},
 		},
 		"artifact-retention-item": {
@@ -423,6 +453,46 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "records", Type: "array<managed_process_record>", Required: false, Description: "Registry records after lifecycle classification."},
 				{Name: "reason", Type: "string", Required: false, Description: "Reason for degraded, skipped, or error states."},
 				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Safe follow-up commands for lifecycle repair."},
+			},
+		},
+		"daemon-hold-reconcile": {
+			Name:        "daemon-hold-reconcile",
+			Description: "Metadata-only reconciliation of exact superseded detached headless daemon holds.",
+			Fields: []schemaField{
+				{Name: "checked", Type: "boolean", Required: true, Description: "True when the mode-scoped daemon hold inventory was attempted."},
+				{Name: "state", Type: "string", Required: true, Description: "Reconciliation state such as healthy, inspected, reclaimed, skipped, degraded, no_runtime, or runtime_unverified."},
+				{Name: "browser_mode", Type: "string", Required: true, Description: "Browser mode inspected; mutating reconciliation is headless-only."},
+				{Name: "active_pid", Type: "number", Required: false, Description: "Current mode-scoped daemon PID preserved by reconciliation."},
+				{Name: "considered_pids", Type: "array<number>", Required: false, Description: "PIDs from the exact daemon-hold command inventory considered by the safety ladder."},
+				{Name: "eligible_pids", Type: "array<number>", Required: false, Description: "Superseded hold PIDs eligible in read-only inspection mode."},
+				{Name: "reclaimed_pids", Type: "array<number>", Required: false, Description: "Superseded hold PIDs reclaimed after final identity and ownership rechecks."},
+				{Name: "skipped_pids", Type: "array<number>", Required: false, Description: "Candidate PIDs left untouched by a safety check."},
+				{Name: "skip_reasons", Type: "object", Required: true, Description: "Bounded counts of stable skip reasons; raw process/environment details are never included."},
+				{Name: "signal_failures", Type: "array<daemon_hold_signal_failure>", Required: false, Description: "Verified candidates whose exact process-group reclamation could not be confirmed."},
+				{Name: "safety_checks", Type: "array<string>", Required: false, Description: "Ownership, generation, current-runtime, and exact process-group checks applied."},
+				{Name: "candidates", Type: "array<daemon_hold_ownership>", Required: false, Description: "Metadata-only per-PID ownership decisions without command lines, environment values, endpoints, profiles, sockets, or opaque tokens."},
+				{Name: "reason", Type: "string", Required: false, Description: "Stable summary reason for a skipped, degraded, or successful reconciliation."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Safe health and log inspection commands."},
+			},
+		},
+		"daemon-hold-ownership": {
+			Name:        "daemon-hold-ownership",
+			Description: "Metadata-only ownership decision for one daemon-hold candidate.",
+			Fields: []schemaField{
+				{Name: "pid", Type: "number", Required: true, Description: "Candidate process ID."},
+				{Name: "parent_pid", Type: "number", Required: false, Description: "Candidate parent PID when available."},
+				{Name: "state", Type: "string", Required: true, Description: "Candidate state: current, eligible, reclaimed, or skipped."},
+				{Name: "generation_state", Type: "string", Required: true, Description: "Generation classification: current, superseded, or unknown."},
+				{Name: "ownership_checks", Type: "array<string>", Required: false, Description: "Stable checks that passed before the decision."},
+				{Name: "reason", Type: "string", Required: false, Description: "Stable skip or decision reason."},
+			},
+		},
+		"daemon-hold-signal-failure": {
+			Name:        "daemon-hold-signal-failure",
+			Description: "Metadata-only exact daemon-hold reclamation failure.",
+			Fields: []schemaField{
+				{Name: "pid", Type: "number", Required: true, Description: "Candidate process ID."},
+				{Name: "error", Type: "string", Required: true, Description: "Stable failure category without raw process metadata."},
 			},
 		},
 		"managed-process-record": {
@@ -594,7 +664,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "profile_seed", Type: "object", Required: false, Description: "Managed headless profile seed result when requested, including maintenance/heal metadata for copy-default."},
 				{Name: "cleanup_requested", Type: "boolean", Required: true, Description: "True when cleanup evaluation or cleanup-close was requested."},
 				{Name: "cleanup", Type: "object", Required: false, Description: "Embedded page-cleanup output with dry_run, close_required, candidate counts, candidates, and closed targets. Cleanup is dry-run unless --cleanup-close is set."},
-				{Name: "readiness", Type: "object", Required: false, Description: "Neutral open-readiness target evidence when --open-readiness is set."},
+				{Name: "readiness", Type: "browser_preflight_readiness", Required: false, Description: "Neutral open-readiness target evidence when --open-readiness is set, including bounded exact-target cleanup or keep-open retention."},
 				{Name: "warnings", Type: "array<string>", Required: true, Description: "Non-fatal preflight warnings such as usable degradation or headed passive repair."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe diagnostics, repair, cleanup, and follow-up commands scoped to the selected browser mode."},
 			},
@@ -628,6 +698,22 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Suggested commands for seeding or starting the headless runtime."},
 			},
 		},
+		"browser-preflight-readiness": {
+			Name:        "browser-preflight-readiness",
+			Description: "Bounded neutral-page readiness evidence and ownership-aware cleanup for browser preflight.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the neutral page reached interactive or complete readiness."},
+				{Name: "url", Type: "string", Required: true, Description: "Requested readiness URL; page content is not embedded."},
+				{Name: "target", Type: "page", Required: false, Description: "Metadata-only created target row."},
+				{Name: "closed", Type: "boolean", Required: false, Description: "True only when a non-keep-open created target is confirmed gone."},
+				{Name: "attempt_count", Type: "number", Required: false, Description: "Bounded readiness polling attempts."},
+				{Name: "elapsed_ms", Type: "number", Required: false, Description: "Readiness elapsed time in milliseconds."},
+				{Name: "readiness_state", Type: "object", Required: false, Description: "Metadata-only readyState, title, URL, and body-text length observation."},
+				{Name: "cleanup", Type: "workflow_page_cleanup", Required: true, Description: "Exact-target cleanup evidence; target_gone is required for closed and keep-open is explicit retention."},
+				{Name: "error", Type: "string", Required: false, Description: "Readiness or cleanup failure summary without page content."},
+				{Name: "last_error", Type: "string", Required: false, Description: "Last bounded readiness evaluation error."},
+			},
+		},
 		"browser-profile-seed": {
 			Name:        "browser-profile-seed",
 			Description: "Managed profile seed result; creates cdp-owned profile metadata and can optionally take an explicit full-state local snapshot of the default Chrome profile.",
@@ -657,6 +743,30 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "seed_status_path", Type: "string", Required: true, Description: "Local state artifact path where this profile seed outcome was written."},
 				{Name: "last_seed", Type: "profile_seed_status", Required: false, Description: "Privacy-safe persisted seed outcome, including strategy, freshness, skip/failure state, and resource summary without copied profile contents."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Suggested commands for starting or inspecting the headless runtime."},
+			},
+		},
+		"browser-window-marker": {
+			Name:        "browser-window-marker",
+			Description: "Daemon-backed visual marker status for the selected headed browser; state contains metadata only and never page content.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the marker operation or status query completed."},
+				{Name: "marker", Type: "window_marker", Required: true, Description: "Marker lifecycle, identity, color, active session count, and safe state path."},
+			},
+		},
+		"window-marker": {
+			Name:        "window-marker",
+			Description: "Safe daemon window-marker metadata; host identity is represented only as a presence bit.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Window marker schema version, currently cdp-window-marker/v1."},
+				{Name: "state", Type: "string", Required: true, Description: "disabled, configured, enabled, or error."},
+				{Name: "enabled", Type: "boolean", Required: true, Description: "True when the daemon is configured to mark current and future page targets."},
+				{Name: "name", Type: "string", Required: false, Description: "Human-recognizable marker name."},
+				{Name: "color", Type: "string", Required: false, Description: "Stable curated palette color derived from the marker name."},
+				{Name: "host_id_present", Type: "boolean", Required: true, Description: "Whether a randomized page-marker host identity is configured; the identity itself is not emitted."},
+				{Name: "active_session_count", Type: "integer", Required: true, Description: "Number of page sessions currently supervised by the daemon marker."},
+				{Name: "setup_failure_count", Type: "integer", Required: false, Description: "Bounded count of page setup attempts that failed since this daemon connection started."},
+				{Name: "state_path", Type: "string", Required: true, Description: "Owner-local state path for marker metadata."},
+				{Name: "warning", Type: "string", Required: false, Description: "Sanitized marker state warning when persisted configuration could not be rehydrated."},
 			},
 		},
 		"profile-seed-status": {
@@ -911,6 +1021,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "start", Type: "daemon_start", Required: false, Description: "Daemon start metadata when keepalive started or repaired it."},
 				{Name: "chrome", Type: "chrome_keepalive", Required: false, Description: "Chrome launch/check metadata for auto-connect repair."},
 				{Name: "environment", Type: "auto_heal_environment", Required: false, Description: "Host availability gate used before launch-capable Auto Heal; offline and post-wake results are safe skips."},
+				{Name: "daemon_hold_reconciliation", Type: "daemon-hold-reconcile", Required: false, Description: "Headless repair inventory and exact reclamation evidence for superseded detached daemon holds."},
 				{Name: "lock", Type: "lock_metadata", Required: true, Description: "Keepalive lock metadata."},
 			},
 		},
@@ -1014,6 +1125,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "repair", Type: "object", Required: false, Description: "Keepalive-backed repair metadata when --repair starts or repairs managed headless before validation."},
 				{Name: "environment", Type: "auto_heal_environment", Required: false, Description: "Host availability gate used before --repair or managed-process-sweep work."},
 				{Name: "steps", Type: "array<health_check_step>", Required: false, Description: "Ordered health, optional repair, open, JavaScript, DOM text, and screenshot validation steps."},
+				{Name: "cleanup", Type: "workflow_page_cleanup", Required: false, Description: "Exact cleanup evidence for the synthetic health-check page; present after target creation, including target_gone, failure, and recovery metadata."},
 				{Name: "artifacts", Type: "object", Required: false, Description: "Local run directory, latest summary JSON, and screenshot artifact paths."},
 				{Name: "failure_count", Type: "number", Required: false, Description: "Consecutive failure count stored next to health-check artifacts."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe diagnostics and repair commands for managed headless runtime recovery."},
@@ -1031,7 +1143,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"daemon-health": {
 			Name:        "daemon-health",
-			Description: "Safe daemon/browser health telemetry for the selected daemon-backed connection.",
+			Description: "Safe daemon/browser health telemetry for the selected daemon-backed connection; detached superseded hold generations retire after a different live PID owns the mode-scoped runtime.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the selected runtime is healthy; headless returns false for degraded runtime gates."},
 				{Name: "code", Type: "string", Required: false, Description: "Machine-actionable first blocking health failure code when ok is false."},
@@ -1046,7 +1158,8 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Open page targets from the selected browser connection.",
 			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when page targets were listed."},
-				{Name: "pages", Type: "array<page>", Required: true, Description: "Page rows with id, type, title, url, and attachment state."},
+				{Name: "pages", Type: "array<page>", Required: true, Description: "Page rows with full id, uppercase eight-character short_id, 1-based page-only index in ascending full target-ID order, type, title, url, and attachment state."},
+				{Name: "index_order", Type: "string", Required: true, Description: "Stable value target_id_ascending; opening or closing a page can still renumber the current set."},
 				{Name: "budget", Type: "browser_resource_budget", Required: true, Description: "Safe tab/window budget summary computed from target metadata."},
 			}, false),
 		},
@@ -1055,20 +1168,21 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Browser targets from the selected browser connection.",
 			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when targets were listed."},
-				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with id, type, title, url, and attachment state."},
+				{Name: "targets", Type: "array<target>", Required: true, Description: "Target rows with full id, uppercase eight-character short_id, type, title, url, and attachment state."},
 			}, false),
 		},
 		"open": {
 			Name:        "open",
-			Description: "Page open or navigation result.",
+			Description: "Page open or navigation result; existing-page navigation and reuse accept a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page was opened or navigated."},
 				{Name: "action", Type: "string", Required: true, Description: "Created, navigated, or reused."},
 				{Name: "created", Type: "boolean", Required: true, Description: "True when the command created a new page target."},
 				{Name: "reused", Type: "boolean", Required: true, Description: "True when the command navigated an existing page target."},
 				{Name: "page", Type: "page", Required: true, Description: "Page target metadata with id, url, and action fields."},
-				{Name: "reuse", Type: "object", Required: false, Description: "Reuse policy, filters, match state, fallback-created flag, and reused target id when --reuse is enabled."},
-				{Name: "tab_budget", Type: "tab_budget_summary", Required: false, Description: "Before/after browser budget snapshots, policy, max tabs, managed tab id, created/reused flags, cleanup status, and suggested cleanup commands when --budget-summary is enabled."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The explicit 1-based page target index used for existing-page navigation; workers do not consume indexes."},
+				{Name: "reuse", Type: "object", Required: false, Description: "Reuse policy, target selector including target_index when supplied, filters, match state, fallback-created flag, and reused target id when --reuse is enabled."},
+				{Name: "tab_budget", Type: "tab_budget_summary", Required: false, Description: "Before/after browser budget snapshots, policy, optional target_index, max tabs, managed tab id, created/reused flags, cleanup status, and suggested cleanup commands when --budget-summary is enabled."},
 				{Name: "run_id", Type: "string", Required: false, Description: "Caller-supplied run id recorded with the target ownership metadata."},
 				{Name: "task_id", Type: "string", Required: false, Description: "Caller-supplied task id that owns the opened or explicitly reused target."},
 				{Name: "root_task_id", Type: "string", Required: false, Description: "Root task id for task-tree cleanup; defaults to task_id when omitted."},
@@ -1087,7 +1201,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"stop-state-classify": {
 			Name:        "stop-state-classify",
-			Description: "Conservative browser stop-state classification for supplied text/title/URL or the selected page.",
+			Description: "Conservative browser stop-state classification for supplied text/title/URL or the selected page; browser-backed page inspection accepts a page-only 1-based --target-index.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when classification completed."},
 				{Name: "status", Type: "string", Required: true, Description: "Classification status: ok or blocked."},
@@ -1103,15 +1217,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "remediation_commands", Type: "array<string>", Required: false, Description: "Safe commands an agent can run next for blocked states."},
 				{Name: "input", Type: "object", Required: true, Description: "Safe input summary with URL, title, text presence, and text byte count."},
 				{Name: "classification_ok", Type: "boolean", Required: true, Description: "True when the classifier ran successfully."},
+				{Name: "target", Type: "page", Required: false, Description: "Selected page target metadata when classification read the browser-backed page path."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "Explicit 1-based page index used for browser-backed selection; workers do not consume indexes."},
 			},
 		},
 		"page-action": {
 			Name:        "page-action",
-			Description: "Page target control result for reload, history navigation, activate, and close.",
+			Description: "Page target control result for reload, history navigation, activate, and close; direct page lifecycle commands accept a mutually exclusive 1-based --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page action completed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name such as reloaded, back, forward, activated, or closed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata; direct page lifecycle commands can select it with a 1-based --target-index."},
 				{Name: "history", Type: "object", Required: false, Description: "History metadata for back and forward actions."},
 				{Name: "closed", Type: "boolean", Required: false, Description: "True when close was sent or the target was already gone."},
 				{Name: "target_gone", Type: "boolean", Required: false, Description: "True when target listing no longer contains the closed page target."},
@@ -1133,20 +1249,21 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"page-select": {
 			Name:        "page-select",
-			Description: "Selected default page target for the effective browser connection.",
+			Description: "Selected default page target for the effective browser connection; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page selection was saved."},
 				{Name: "selected_page", Type: "page_selection", Required: true, Description: "Browser-mode and connection-scoped selected target id, url, title, and timestamp."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
 				{Name: "state_path", Type: "string", Required: true, Description: "Local state file path where the selection was saved."},
 			},
 		},
 		"eval": {
 			Name:        "eval",
-			Description: "Page-scoped JavaScript evaluation result.",
+			Description: "Page-scoped JavaScript evaluation result; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when JavaScript evaluation completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "result", Type: "runtime_object", Required: true, Description: "Runtime object with type, value, and description fields."},
 				{Name: "attempts", Type: "array<command_retry_attempt>", Required: false, Description: "Per-attempt transient retry evidence when --retry transient is enabled."},
 				{Name: "attempt_count", Type: "number", Required: false, Description: "Number of attempts made when retry is enabled."},
@@ -1159,10 +1276,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"text": {
 			Name:        "text",
-			Description: "Compact visible text extracted from a CSS selector.",
+			Description: "Compact visible text extracted from a CSS selector; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when text extraction completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "text", Type: "text_result", Required: true, Description: "Selector, joined text, and per-element text items."},
 				{Name: "items", Type: "array<text_item>", Required: true, Description: "Text items duplicated for jq convenience."},
 				{Name: "attempts", Type: "array<command_retry_attempt>", Required: false, Description: "Per-attempt transient retry evidence when --retry transient is enabled."},
@@ -1176,10 +1294,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"locator-find": {
 			Name:        "locator-find",
-			Description: "User-facing locator discovery by role, text, label, placeholder, alt text, title, test id, or CSS.",
+			Description: "User-facing locator discovery by role, text, label, placeholder, alt text, title, test id, or CSS; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when locator discovery completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "locator", Type: "locator_find_result", Required: true, Description: "Requested strategy, query, strictness, counts, and bounded matches."},
 				{Name: "matches", Type: "array<locator_match>", Required: true, Description: "Matches duplicated for jq convenience with selector hints, role/name/text, visibility, and geometry."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Suggested follow-up commands using a unique selector hint when available."},
@@ -1192,12 +1311,13 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the click completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: clicked for dispatched clicks, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Final selected page target metadata after the click and any requested wait."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "before_target", Type: "page", Required: true, Description: "Selected page target metadata before dispatching the click."},
 				{Name: "after_target", Type: "page", Required: true, Description: "Selected page target metadata refreshed after the click and any requested wait."},
 				{Name: "final_target", Type: "page", Required: true, Description: "Alias of after_target for jq-friendly final URL/title extraction."},
 				{Name: "page_state", Type: "action_page_state", Required: true, Description: "Before/after/final page metadata and URL/title change booleans."},
 				{Name: "click", Type: "click_result", Required: true, Description: "Selector, matched count, strategy, coordinates for raw-input or trial checks, verification status, trial/force flags, and final URL/title."},
-				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective actionability evidence for attached, visible, stable, receives-events, enabled, editable, in-viewport, force, and skipped-check state."},
+				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective actionability evidence for attached, visible, stable, enabled, DOM-dispatch safety, receives-events diagnostics, hit-path/pseudo geometry, editable, in-viewport, force, and skipped-check state."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal click auto-scrolled an offscreen target before rechecking actionability."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
 				{Name: "resolved_selector", Type: "string", Required: false, Description: "Unique CSS selector hint selected from the locator before clicking."},
@@ -1230,11 +1350,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"fill": {
 			Name:        "fill",
-			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks. Optional text, selector, or URL waits verify post-fill state.",
+			Description: "Set the value of the first matching form control after actionability checks, or run non-mutating fill checks with --trial. --force records skipped non-essential checks. Optional text, selector, or URL waits verify post-fill state. Accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when fill command completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: filled for value updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "fill", Type: "fill_result", Required: true, Description: "Selector, matched count, filled boolean, trial/force flags, optional verification boolean, and previous/current values."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective actionability evidence for attached, visible, enabled, editable, supporting checks, force, and skipped-check state."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1242,13 +1363,69 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "verification", Type: "wait_result", Required: false, Description: "Text, selector, or URL wait result when --wait-text, --wait-selector, --wait-url, or --wait-url-contains is used."},
 			},
 		},
+		"focus": {
+			Name:        "focus",
+			Description: "Focus the first matching form element on an optionally indexed page with --target-index and return bounded focus evidence.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the focus evaluation completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "focus", Type: "object", Required: true, Description: "Selector, focused state, and bounded element tag evidence."},
+			},
+		},
+		"clear": {
+			Name:        "clear",
+			Description: "Clear the first matching form control on an optionally indexed page with --target-index and return bounded value-change evidence.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the clear evaluation completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "clear", Type: "object", Required: true, Description: "Selector, cleared state, and bounded previous/current value evidence."},
+			},
+		},
+		"form-values": {
+			Name:        "form-values",
+			Description: "List visible or explicitly included form-control values from a selected page; accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when form controls were inspected."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "form", Type: "form_values_result", Required: true, Description: "Page URL/title, control count, bounded control metadata, and optional evaluation error."},
+				{Name: "controls", Type: "array<form_control>", Required: true, Description: "Form controls duplicated at the top level for jq-friendly inspection."},
+			},
+		},
+		"form-get": {
+			Name:        "form-get",
+			Description: "Inspect one CSS-selected form control on a selected page; accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when the selector matched one or more form controls."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "form", Type: "form_get_result", Required: true, Description: "Page URL/title, selector, match count, selected control, and optional evaluation error."},
+				{Name: "control", Type: "form_control", Required: true, Description: "Bounded value, identity, visibility, and editability metadata for the first matched control."},
+			},
+		},
+		"dialog": {
+			Name:        "dialog",
+			Description: "Accept or dismiss a JavaScript dialog on a selected page; direct mode handles an already-owned dialog, while optional --wait observes and handles on the same attached session. Accepts a mutually exclusive 1-based page --target-index selector and omits worker targets from page order.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when Page.handleJavaScriptDialog completed, including same-session wait mode."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "wait", Type: "dialog_wait_result", Required: false, Description: "Page.javascriptDialogOpening wait criteria, match counts, bounded timing, and handling action on the same attached session when --wait or a wait criterion is used."},
+				{Name: "dialog", Type: "dialog_action_or_wait_event", Required: true, Description: "Direct action, accepted state, prompt-text presence, and—when waiting—safe dialog event metadata and handling state."},
+				{Name: "last_event", Type: "dialog_wait_event", Required: false, Description: "Last non-matching dialog event when wait mode times out."},
+				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Bounded follow-up commands that preserve same-session dialog ownership guidance."},
+			},
+		},
 		"select": {
 			Name:        "select",
-			Description: "Set the selected option on the first matching select control after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-select state.",
+			Description: "Set the selected option on the first matching select control on an optionally indexed page with --target-index after locator resolution and select actionability checks, or run non-mutating checks with --trial. --force records skipped non-essential checks. Optional text/selector waits verify post-select state.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when select completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: selected for value updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "select", Type: "select_result", Required: true, Description: "Selector, matched count, selected boolean, trial/force flags, optional verification boolean, previous value, requested value, selected value, selected values, and match mode."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective select actionability evidence for attached, visible, enabled, supporting checks, force, and skipped-check state. Stable, receives-events, and editable are reported but not required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1258,11 +1435,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"check": {
 			Name:        "check",
-			Description: "Set a checkbox or radio-like control to checked after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
+			Description: "Set a checkbox or radio-like control to checked on an optionally indexed page with --target-index after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when check completed, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: checked for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "check", Type: "check_result", Required: true, Description: "Selector, matched count, checked state, desired state, previous state, changed/already flags, trial/force flags, and element identity."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective check actionability evidence for attached, visible, stable, receives-events, enabled, supporting checks, force, and skipped-check state. Editable is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal check auto-scrolled an offscreen target before rechecking actionability."},
@@ -1272,11 +1450,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"uncheck": {
 			Name:        "uncheck",
-			Description: "Set a checkbox-like control to unchecked after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
+			Description: "Set a checkbox-like control to unchecked on an optionally indexed page with --target-index after locator resolution and click-like actionability checks, or run non-mutating checks with --trial. --force records skipped receives-events evidence.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when uncheck completed, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: unchecked for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "uncheck", Type: "check_result", Required: true, Description: "Selector, matched count, checked state, desired state, previous state, changed/already flags, trial/force flags, and element identity."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective uncheck actionability evidence for attached, visible, stable, receives-events, enabled, supporting checks, force, and skipped-check state. Editable is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal uncheck auto-scrolled an offscreen target before rechecking actionability."},
@@ -1286,11 +1465,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"type": {
 			Name:        "type",
-			Description: "Type text into an editable control after locator resolution and fill-like actionability checks, or run non-mutating checks with --trial. --force records skipped visible evidence. Optional text, selector, or URL waits verify post-type state.",
+			Description: "Type text into an editable control after locator resolution and fill-like actionability checks, or run non-mutating checks with --trial. --force records skipped visible evidence. Optional text, selector, or URL waits verify post-type state. Accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when type completed and any requested verification matched, or when --trial actionability checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: typed for updates, trial for --trial checks, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "type", Type: "type_result", Required: true, Description: "Selector, matched count, typed string, previous value, strategy, trial/force flags, optional verification boolean, and success flag."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Effective type actionability evidence for attached, visible, enabled, editable, force, and skipped-check state. Stable and receives-events are reported but not required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1301,20 +1481,22 @@ func schemaCatalog() map[string]schemaInfo {
 
 		"insert-text": {
 			Name:        "insert-text",
-			Description: "Text inserted through the browser input pipeline into an editable element.",
+			Description: "Text inserted through the browser input pipeline into an editable element on a selected page; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when text insertion completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "insert_text", Type: "type_result", Required: true, Description: "Selector, match count, previous text, resulting value/text, element kind, and strategy."},
 			},
 		},
 		"press": {
 			Name:        "press",
-			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching; optional text, selector, or URL waits verify post-press state.",
+			Description: "Dispatch keyboard events for a key on the focused element, CSS selector, or strict locator; --trial resolves selector/locator evidence without dispatching; optional text, selector, or URL waits verify post-press state. Accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when press command completed and any requested verification matched, or --trial target evidence passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: pressed, trial, or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "press", Type: "press_result", Required: true, Description: "Selector, key name, matched count, trial flag, dispatch status, and optional verification boolean."},
 				{Name: "actionability", Type: "actionability_result", Required: false, Description: "Locator/selector target evidence for press. Playwright locator.press does not require visible/stable/enabled/editable checks, so only attachment is required."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1324,11 +1506,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"hover": {
 			Name:        "hover",
-			Description: "Resolve a CSS selector or strict locator, enforce hover actionability, then dispatch pointer hover events unless running a trial.",
+			Description: "Resolve a CSS selector or strict locator on an optionally indexed page with --target-index, enforce hover actionability, then dispatch pointer hover events unless running a trial.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when hover completed or trial actionability passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: hovered, trial, or blocked in error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "1-based page index used to select the target, following `cdp pages` order and excluding workers."},
 				{Name: "hover", Type: "hover_result", Required: true, Description: "Selector, matched count, hovered flag, trial/force flags, and hover coordinates."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Visible, stable, and receives-events checks used before dispatch; enabled is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal hover auto-scrolled an offscreen target before rechecking actionability."},
@@ -1338,11 +1521,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"drag": {
 			Name:        "drag",
-			Description: "Resolve a CSS selector or strict locator, enforce drag actionability, then drag by a delta unless running a trial.",
+			Description: "Resolve a CSS selector or strict locator on an optionally indexed page with --target-index, enforce drag actionability, then drag by a delta unless running a trial.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when drag completed or trial actionability passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: dragged, trial, or blocked in error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "1-based page index used to select the target, following `cdp pages` order and excluding workers."},
 				{Name: "drag", Type: "drag_result", Required: true, Description: "Selector, matched count, drag success flag, trial/force flags, delta, and coordinates."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Visible, stable, and receives-events checks used before dispatch; enabled is reported but not required."},
 				{Name: "auto_scroll", Type: "scroll_result", Required: false, Description: "Before/after viewport evidence when a normal drag auto-scrolled an offscreen target before rechecking actionability."},
@@ -1352,11 +1536,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"scroll": {
 			Name:        "scroll",
-			Description: "Resolve a CSS selector or strict locator, require attached/stable target evidence, then scroll it into view unless running a non-mutating trial.",
+			Description: "Resolve a CSS selector or strict locator on an optionally indexed page with --target-index, require attached/stable target evidence, then scroll it into view unless running a non-mutating trial.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when scroll completed, or when --trial target checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: scrolled, trial, or blocked in error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "1-based page index used to select the target, following `cdp pages` order and excluding workers."},
 				{Name: "scroll", Type: "scroll_result", Required: true, Description: "Selector, matched count, scrolled/changed/trial flags, alignment options, and before/after viewport evidence."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Attached and stable checks used before scrolling. Visible, receives-events, enabled, editable, and in-viewport are reported but not required."},
 				{Name: "locator", Type: "locator_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1365,11 +1550,12 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"file": {
 			Name:        "file",
-			Description: "Resolve a CSS selector or strict locator to input[type=file], optionally run a non-mutating trial, then assign the local file path through CDP without printing file contents.",
+			Description: "Resolve a CSS selector or strict locator on a selected page to input[type=file], optionally run a non-mutating trial, then assign the local file path through CDP without printing file contents; page selection accepts a mutually exclusive 1-based --target-index.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when file assignment completed or --trial target checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: file_set for assignment or trial for non-mutating validation."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "file", Type: "file_result", Required: true, Description: "Selector, matched count, accepted input[type=file] state, file_set/trial flags, local path metadata, basename, and content omission marker."},
 				{Name: "actionability", Type: "actionability_result", Required: true, Description: "Attached-only target evidence for file inputs. Playwright set_input_files does not require visible/stable/receives-events/enabled/editable checks."},
 				{Name: "locator", Type: "locator_result", Required: false, Description: "Strict locator resolution details when --by is not css."},
@@ -1378,39 +1564,43 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"file-chooser": {
 			Name:        "file-chooser",
-			Description: "Validate a detached Page.fileChooserOpened backend node and optionally assign one or more local files through CDP without printing file contents.",
+			Description: "Validate a detached Page.fileChooserOpened backend node and optionally assign one or more local files through CDP without printing file contents; select its target with --target or a mutually exclusive 1-based page --target-index.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when file assignment completed or --trial checks passed."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: files_set for assignment or trial for non-mutating validation."},
-				{Name: "target", Type: "page", Required: true, Description: "Explicit selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, chosen by --target or --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "file_chooser", Type: "file_chooser_result", Required: true, Description: "Backend node identity, input type, multiplicity, accept hint, file basenames/count, assignment state, and content omission marker."},
 			},
 		},
 		"frames": {
 			Name:        "frames",
-			Description: "List the frame tree for the selected target.",
+			Description: "List the frame tree for the selected page target; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when frame listing completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "frames", Type: "array<frame_summary>", Required: true, Description: "Flattened frame metadata including id, URL, parent id, and child count."},
 			},
 		},
 		"observe": {
 			Name:        "observe",
-			Description: "Visible interactive element summaries for agent planning before action.",
+			Description: "Visible interactive element summaries for agent planning before action; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when observation completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "observe", Type: "observe_result", Required: true, Description: "URL, title, selector, count, and visible interactive candidates."},
 				{Name: "interactive", Type: "array<observe_node>", Required: true, Description: "Interactive candidates duplicated for jq convenience."},
 			},
 		},
 		"html": {
 			Name:        "html",
-			Description: "Compact HTML extracted from a CSS selector.",
+			Description: "Compact HTML extracted from a CSS selector; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when HTML extraction completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "html", Type: "html_result", Required: true, Description: "Selector and truncated HTML items."},
 				{Name: "warnings", Type: "array<string>", Required: false, Description: "Warnings emitted when extraction succeeds but returns zero items."},
 				{Name: "diagnostics", Type: "extraction_diagnostics", Required: false, Description: "Optional --diagnose-empty page facts for empty successful extractions."},
@@ -1418,39 +1608,43 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"dom-query": {
 			Name:        "dom-query",
-			Description: "DOM node summaries for a CSS selector.",
+			Description: "DOM node summaries for a CSS selector; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when DOM query completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "query", Type: "dom_query_result", Required: true, Description: "Selector, count, and node summaries."},
 				{Name: "nodes", Type: "array<dom_node>", Required: true, Description: "Node summaries duplicated for jq convenience."},
 			},
 		},
 		"css-inspect": {
 			Name:        "css-inspect",
-			Description: "Computed style and box data for the first matching element.",
+			Description: "Computed style and box data for the first matching element; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when CSS inspection completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "inspect", Type: "css_inspect_result", Required: true, Description: "Selector, found flag, styles, and layout box."},
 			},
 		},
 		"layout-overflow": {
 			Name:        "layout-overflow",
-			Description: "Elements whose scroll dimensions exceed their client boxes.",
+			Description: "Elements whose scroll dimensions exceed their client boxes; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when overflow scan completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "overflow", Type: "layout_overflow_result", Required: true, Description: "Selector, count, and overflow items."},
 				{Name: "items", Type: "array<layout_overflow_item>", Required: true, Description: "Overflow items duplicated for jq convenience."},
 			},
 		},
 		"wait": {
 			Name:        "wait",
-			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks.",
+			Description: "Page condition wait result for text, selector, URL, locator, JavaScript expression, load-state, request, response, network-idle, dialog, file-chooser, popup, or download checks. Page-condition and event-oriented waits accept a mutually exclusive 1-based page --target-index selector.",
 			Fields: withCommandRetrySchemaFields([]schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the condition matched before timeout."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind, URL condition, CDP event method, load state and readyState when applicable, criteria, match status, eval ready predicate, last_value, attempt_count, attempts, optional attempt artifacts, bounded evidence, observed event counts, network-idle in-flight evidence and warnings, dialog handling state, file-chooser interception state, popup target discovery state, download progress state, elapsed time, timeout, and poll interval when applicable."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Per-attempt eval readiness artifact references when cdp wait eval --out-dir is used."},
 				{Name: "locator", Type: "locator_find_result", Required: false, Description: "Locator result when waiting by user-facing locator."},
@@ -1471,19 +1665,21 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-url": {
 			Name:        "wait-url",
-			Description: "Page URL wait result for exact or substring URL matching.",
+			Description: "Page URL wait result for exact or substring URL matching; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the page URL matched before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "wait_result", Required: true, Description: "Kind url, URL match needle, condition exact or contains, final observed URL, title, match status, count, bounded evidence, elapsed_ms, and poll_interval."},
 			},
 		},
 		"wait-request": {
 			Name:        "wait-request",
-			Description: "Network request event wait result for Network.requestWillBeSent.",
+			Description: "Network request event wait result for Network.requestWillBeSent; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching request event was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "network_wait_result", Required: true, Description: "Kind, criteria, match status, observed_count, elapsed_ms, timeout, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
 				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched Network.requestWillBeSent event metadata with request_id, URL, method, resource type, and safe URL redaction by default."},
 				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed candidate request event on timeout."},
@@ -1491,10 +1687,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-response": {
 			Name:        "wait-response",
-			Description: "Network response event wait result for Network.responseReceived.",
+			Description: "Network response event wait result for Network.responseReceived; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching response event was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "network_wait_result", Required: true, Description: "Kind, criteria including status/status range, match status, observed_count, elapsed_ms, timeout, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
 				{Name: "event", Type: "network_wait_event", Required: false, Description: "Matched Network.responseReceived event metadata with request_id, URL, method, status, resource type, and safe URL redaction by default."},
 				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed candidate response event on timeout."},
@@ -1502,20 +1699,22 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-network-idle": {
 			Name:        "wait-network-idle",
-			Description: "Network quiet-window wait result.",
+			Description: "Network quiet-window wait result; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the observed network traffic stayed within max_inflight for the configured idle window."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "network_idle_wait_result", Required: true, Description: "Kind, idle window, max_inflight, observed event/request/completion/failure counts, ignored_count, in_flight evidence, elapsed_ms, timeout, warnings, safe redaction preset, and bounded evidence showing headers and bodies are omitted."},
 				{Name: "last_event", Type: "network_wait_event", Required: false, Description: "Last observed request/response/loading lifecycle event."},
 			},
 		},
 		"wait-dialog": {
 			Name:        "wait-dialog",
-			Description: "JavaScript dialog event wait result for Page.javascriptDialogOpening.",
+			Description: "JavaScript dialog event wait result for Page.javascriptDialogOpening; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching JavaScript dialog was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "dialog_wait_result", Required: true, Description: "Kind, dialog criteria, match status, observed_count, elapsed_ms, timeout, optional handling action, warnings for unhandled dialogs, and bounded evidence."},
 				{Name: "dialog", Type: "dialog_wait_event", Required: false, Description: "Matched JavaScript dialog metadata, safe URL redaction, and optional accept/dismiss handling evidence."},
 				{Name: "last_event", Type: "dialog_wait_event", Required: false, Description: "Last observed dialog event on timeout."},
@@ -1524,10 +1723,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-file-chooser": {
 			Name:        "wait-file-chooser",
-			Description: "File chooser event wait result for Page.fileChooserOpened.",
+			Description: "File chooser event wait result for Page.fileChooserOpened; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching file chooser was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including the page selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "file_chooser_wait_result", Required: true, Description: "Kind, mode criteria, match status, observed_count, elapsed_ms, timeout, interception status, and bounded evidence."},
 				{Name: "file_chooser", Type: "file_chooser_wait_event", Required: false, Description: "Matched Page.fileChooserOpened metadata, including mode, multiple flag, frame id, backend node id, and CDP method."},
 				{Name: "last_event", Type: "file_chooser_wait_event", Required: false, Description: "Last observed file chooser event on timeout."},
@@ -1536,10 +1736,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-popup": {
 			Name:        "wait-popup",
-			Description: "Popup/new-tab event wait result for Target targetCreated/targetInfoChanged events.",
+			Description: "Popup/new-tab event wait result for Target targetCreated/targetInfoChanged events; accepts a mutually exclusive 1-based opener page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching popup target was observed before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected opener page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected opener page target metadata, including the opener selected by index when supplied."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based opener page target index used for selection when --target-index was supplied."},
 				{Name: "opener", Type: "page", Required: true, Description: "Selected opener page target metadata duplicated for jq clarity."},
 				{Name: "wait", Type: "popup_wait_result", Required: true, Description: "Kind, opener and popup URL/title criteria, match status, Target discovery CDP methods, baseline_count, observed event counts, elapsed_ms, timeout, warnings when opener_id is absent, and bounded evidence."},
 				{Name: "popup", Type: "popup_wait_event", Required: false, Description: "Matched popup target metadata, including target id, URL, title, opener_id when CDP reports it, opener_matched, and CDP method."},
@@ -1549,10 +1750,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"wait-download": {
 			Name:        "wait-download",
-			Description: "Download event wait result for Browser.downloadWillBegin and Browser.downloadProgress.",
+			Description: "Download event wait result for Browser.downloadWillBegin and Browser.downloadProgress; accepts a mutually exclusive 1-based triggering page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when a matching download reached the requested started or completed state before timeout."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected triggering page target metadata. Browser download events are browser-scoped, so use URL or filename criteria when multiple pages may download concurrently."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected triggering page target metadata, including the page selected by index. Browser download events are browser-scoped, so use URL or filename criteria when multiple pages may download concurrently."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based triggering page target index used for selection when --target-index was supplied."},
 				{Name: "wait", Type: "download_wait_result", Required: true, Description: "Kind, URL and filename criteria, requested state, match status, Browser download CDP methods, download_dir, observed event counts, elapsed_ms, timeout, redaction mode, warnings, and bounded evidence."},
 				{Name: "download", Type: "download_wait_summary", Required: false, Description: "Matched download metadata, including guid, safe URL, suggested filename, state, completion/cancel flags, byte counts, and optional file path."},
 				{Name: "event", Type: "download_wait_event", Required: false, Description: "Matched Browser.downloadWillBegin metadata with safe URL and suggested filename."},
@@ -1821,10 +2023,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"snapshot": {
 			Name:        "snapshot",
-			Description: "Visible text extracted from selected page elements.",
+			Description: "Visible text extracted from selected page elements; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when snapshot extraction completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "snapshot", Type: "snapshot", Required: true, Description: "Page URL, title, selector, count, and extracted items."},
 				{Name: "items", Type: "array<snapshot_item>", Required: true, Description: "Visible text items duplicated for jq convenience."},
 				{Name: "warnings", Type: "array<string>", Required: false, Description: "Warnings emitted when extraction succeeds but returns zero items."},
@@ -1833,41 +2036,46 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"screenshot": {
 			Name:        "screenshot",
-			Description: "Page screenshot saved as a local artifact.",
+			Description: "Page screenshot saved as a local artifact; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when screenshot capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "screenshot", Type: "artifact", Required: true, Description: "Path, byte count, format, capture mode, optional viewport preset metadata, tile manifest metadata, element clip, crop, and navigation metadata."},
 				{Name: "render", Type: "object", Required: false, Description: "HTML render source URL, viewport, serve mode, and wait metadata for screenshot render."},
+				{Name: "cleanup", Type: "object", Required: false, Description: "Metadata-only bounded cleanup evidence for the workflow-owned screenshot-render page; closed is reported only after target_gone, and cleanup failures preserve the primary error."},
 				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Artifact references for agent workflows."},
 			},
 		},
 		"console": {
 			Name:        "console",
-			Description: "Console and browser log messages captured from a page target.",
+			Description: "Console and browser log messages captured from a page target; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when console capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console/log entries with id, source, type or level, text, timestamp, optional location, stack_trace, args, and exception details."},
 				{Name: "console", Type: "console_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
 			},
 		},
 		"network": {
 			Name:        "network",
-			Description: "Network requests captured from a page target.",
+			Description: "Network requests captured from a page target; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when network capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Request rows with id, URL, method, status, failure state, and size metadata."},
 				{Name: "network", Type: "network_summary", Required: true, Description: "Capture metadata including count, wait, limit, filters, and truncation state."},
 			},
 		},
 		"network-block": {
 			Name:        "network-block",
-			Description: "Bounded request blocking with explicit URL rules and independent cleanup.",
+			Description: "Bounded request blocking with explicit URL rules and independent cleanup for a selected page; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when blocking and cleanup completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "matched_count", Type: "number", Required: true, Description: "Requests observed as blocked during the bounded window."},
 				{Name: "rules", Type: "array<network_control_rule>", Required: true, Description: "Explicit URL pattern summaries."},
 				{Name: "cleanup", Type: "network_control_cleanup", Required: true, Description: "Blocked URL clearing and Network.disable state, including cleanup errors."},
@@ -1877,10 +2085,11 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"network-mock": {
 			Name:        "network-mock",
-			Description: "Bounded Fetch response mocking that resolves every paused request and disables interception on exit.",
+			Description: "Bounded Fetch response mocking for a selected page that resolves every paused request and disables interception on exit; accepts a mutually exclusive 1-based page --target-index selector.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when mocking and cleanup completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "matched_count", Type: "number", Required: true, Description: "Requests fulfilled by bounded rules."},
 				{Name: "rules", Type: "array<network_control_rule>", Required: true, Description: "Rule summaries without response body or header values."},
 				{Name: "actions", Type: "object", Required: true, Description: "Fulfilled, continued, fail-open continued, and failed action counts."},
@@ -1891,28 +2100,33 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"network-capture": {
 			Name:        "network-capture",
-			Description: "Full local network metadata capture with headers, bodies, timing, initiators, WebSocket records, redaction, and artifact output.",
+			Description: "Full local network metadata capture with headers, bodies, timing, initiators, WebSocket records, redaction, and artifact output; accepts a mutually exclusive 1-based page --target-index selector. With --out, JSON stdout is a privacy-safe artifact-only manifest and captured records remain file-backed; without --out, records are inline.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when network capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "requests", Type: "array<network_capture_request>", Required: true, Description: "Full request/response records keyed by CDP request id, optionally including WebSocket lifecycle and frame data."},
-				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, WebSocket options, redaction mode, warning, and collector errors."},
+				{Name: "output_mode", Type: "string", Required: true, Description: "inline when --out is absent; artifact_only when --out is supplied, with captured request, response, and WebSocket payloads omitted from JSON stdout."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "requests", Type: "array<network_capture_request>", Required: false, Description: "Full request/response records keyed by CDP request id, optionally including WebSocket lifecycle and frame data; omitted from the artifact-only manifest."},
+				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, request/WebSocket/frame counts, RFC3339 timestamps, output mode, redaction mode, warning, and bounded collector-error metadata."},
 				{Name: "capture.artifact_safety", Type: "artifact_safety", Required: true, Description: "Shared artifact safety metadata: redaction mode, shareability classification, unsafe opt-in warning, and changed sensitive fields."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
 				{Name: "har", Type: "artifact", Required: false, Description: "HAR 1.2 artifact metadata when --har-out is used."},
 				{Name: "body_artifacts", Type: "array<network_body_artifact>", Required: false, Description: "Bounded per-response body artifact paths, truncation, encoding, MIME type, and safety metadata when --body-out-dir is used."},
+				{Name: "body_artifact_count", Type: "integer", Required: false, Description: "Number of body artifact metadata entries in the privacy-safe --out manifest."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
 			},
 		},
 
 		"network-websocket": {
 			Name:        "network-websocket",
-			Description: "Focused WebSocket lifecycle and frame capture from a page target.",
+			Description: "Focused WebSocket lifecycle and frame capture from a page target; accepts a mutually exclusive 1-based page --target-index selector. With --out, JSON stdout is a privacy-safe artifact-only manifest and captured frames remain file-backed; without --out, records are inline.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when WebSocket capture completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
-				{Name: "websockets", Type: "array<network_capture_request>", Required: true, Description: "WebSocket records with handshake metadata, frames, errors, and close status."},
-				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, payload limits, redaction mode, warning, and collector errors."},
+				{Name: "output_mode", Type: "string", Required: true, Description: "inline when --out is absent; artifact_only when --out is supplied, with captured WebSocket payloads omitted from JSON stdout."},
+				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
+				{Name: "websockets", Type: "array<network_capture_request>", Required: false, Description: "WebSocket records with handshake metadata, frames, errors, and close status; omitted from the artifact-only manifest."},
+				{Name: "capture", Type: "network_capture_summary", Required: true, Description: "Capture options, WebSocket/frame counts, RFC3339 timestamps, output mode, redaction mode, warning, and bounded collector-error metadata."},
 				{Name: "capture.artifact_safety", Type: "artifact_safety", Required: true, Description: "Shared artifact safety metadata: redaction mode, shareability classification, unsafe opt-in warning, and changed sensitive fields."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "JSON artifact metadata when --out is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
@@ -1920,47 +2134,52 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"storage": {
 			Name:        "storage",
-			Description: "Application storage inspection and Web Storage, cookie, or Cache Storage mutation result.",
+			Description: "Application storage inspection and Web Storage, cookie, or Cache Storage mutation result; page-bound commands accept a page-only 1-based --target-index.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage command completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata for browser-backed commands."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "Explicit 1-based page index when --target-index selected the target; workers do not consume indexes."},
 				{Name: "storage", Type: "storage_result", Required: true, Description: "Storage area snapshot, operation result, or command metadata."},
 				{Name: "collector_errors", Type: "array<collector_error>", Required: false, Description: "Non-fatal collector errors for optional areas such as quota."},
 			},
 		},
 		"storage-cache": {
 			Name:        "storage-cache",
-			Description: "Cache Storage list/get/put/delete/clear result.",
+			Description: "Cache Storage list/get/put/delete/clear result with optional page-only 1-based --target-index selection.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the Cache Storage command completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "Explicit 1-based page index; workers do not consume indexes."},
 				{Name: "storage", Type: "cache_storage_result", Required: true, Description: "Cache names, request rows, response metadata, body truncation metadata, and mutation booleans."},
 			},
 		},
 		"storage-indexeddb": {
 			Name:        "storage-indexeddb",
-			Description: "IndexedDB list/get/put/dump/delete/clear result.",
+			Description: "IndexedDB list/get/put/dump/delete/clear result with optional page-only 1-based --target-index selection.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the IndexedDB command completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "Explicit 1-based page index; workers do not consume indexes."},
 				{Name: "storage", Type: "indexeddb_result", Required: true, Description: "Database/store metadata, record values, dump pagination fields, mutation booleans, and counts."},
 			},
 		},
 		"storage-service-workers": {
 			Name:        "storage-service-workers",
-			Description: "Service worker registration list/unregister result.",
+			Description: "Service worker registration list/unregister result with optional page-only 1-based --target-index selection.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the service worker command completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "Explicit 1-based page index; workers do not consume indexes."},
 				{Name: "storage", Type: "service_worker_result", Required: true, Description: "Registration scopes, script URLs, lifecycle states, and unregister results."},
 			},
 		},
 		"storage-snapshot": {
 			Name:        "storage-snapshot",
-			Description: "Local forensic storage snapshot with optional redaction and artifact output.",
+			Description: "Local forensic storage snapshot with optional redaction, artifact output, and page-only 1-based --target-index selection.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the storage snapshot completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "Explicit 1-based page index; workers do not consume indexes and storage values are not part of this evidence."},
 				{Name: "snapshot", Type: "storage_snapshot", Required: true, Description: "Origin, localStorage, sessionStorage, cookies, IndexedDB metadata, Cache Storage request metadata, service worker registrations, and quota data; --redact safe replaces storage and cookie values with <redacted>."},
 				{Name: "storage", Type: "storage_snapshot_summary", Required: true, Description: "Snapshot options, redaction mode, warning, and collector errors."},
 				{Name: "storage.artifact_safety", Type: "artifact_safety", Required: true, Description: "Shared artifact safety metadata: redaction mode, shareability classification, unsafe opt-in warning, and changed sensitive fields."},
@@ -2004,7 +2223,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-hacker-news-collect": {
 			Name: "workflow-hacker-news-collect", Description: "Canonical Hacker News item-thread collector with source-native story and comment records.",
-			Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when native collection completed."}, {Name: "request", Type: "object", Required: true, Description: "Validated canonical HN item URL."}, {Name: "kind", Type: "string", Required: true, Description: "Observed source kind: thread."}, {Name: "records", Type: "array<hacker_news_record>", Required: true, Description: "Canonical story and comment records with indentation-derived parent identity."}, {Name: "coverage", Type: "source_collection_coverage", Required: true, Description: "Observed and possibly missing record kinds, continuation state, decode rejections, and termination evidence."}, {Name: "workflow", Type: "object", Required: true, Description: "Count, hard 500 cap, truthful terminal status, partial reason, and zero interactions because the server-rendered tree needs no expansion."}},
+			Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when native collection completed."}, {Name: "request", Type: "object", Required: true, Description: "Validated canonical HN item URL."}, {Name: "kind", Type: "string", Required: true, Description: "Observed source kind: thread."}, {Name: "records", Type: "array<hacker_news_record>", Required: true, Description: "Canonical story and comment records with indentation-derived parent identity."}, {Name: "coverage", Type: "source_collection_coverage", Required: true, Description: "Observed and possibly missing record kinds, continuation state, decode rejections, and termination evidence."}, {Name: "workflow", Type: "object", Required: true, Description: "Count, hard 500 cap, truthful terminal status, partial reason, zero interactions because the server-rendered tree needs no expansion, and exact owned-page cleanup outcome."}},
 		},
 		"workflow-reddit-posts": {
 			Name:        "workflow-reddit-posts",
@@ -2055,20 +2274,20 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "workflow", Type: "object", Required: true, Description: "Count, requested limit capped by the hard 500 ceiling, truthful terminal status, partial reason, standardized interactions plus compatibility discussion interactions, and owned-page cleanup outcome."},
 			},
 		},
-		"workflow-arxiv-collect": {Name: "workflow-arxiv-collect", Description: "Canonical arXiv collector with version-pinned paper and reference records.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when native collection completed."}, {Name: "request", Type: "object", Required: true, Description: "Validated version-pinned arXiv paper identity."}, {Name: "kind", Type: "string", Required: true, Description: "Observed source kind: paper."}, {Name: "paper", Type: "arxiv_paper", Required: true, Description: "Canonical version-pinned paper metadata."}, {Name: "references", Type: "array<arxiv_reference>", Required: true, Description: "Bounded references scoped to the exact paper identity."}, {Name: "coverage", Type: "source_collection_coverage", Required: true, Description: "Observed and possibly missing record kinds, continuation state, decode rejections, and termination evidence."}, {Name: "workflow", Type: "object", Required: true, Description: "Count, hard 500 cap, truthful terminal status, partial reason, and zero interactions because no expandable source control is used."}}},
+		"workflow-arxiv-collect": {Name: "workflow-arxiv-collect", Description: "Canonical arXiv collector with version-pinned paper and reference records.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when native collection completed."}, {Name: "request", Type: "object", Required: true, Description: "Validated version-pinned arXiv paper identity."}, {Name: "kind", Type: "string", Required: true, Description: "Observed source kind: paper."}, {Name: "paper", Type: "arxiv_paper", Required: true, Description: "Canonical version-pinned paper metadata."}, {Name: "references", Type: "array<arxiv_reference>", Required: true, Description: "Bounded references scoped to the exact paper identity."}, {Name: "coverage", Type: "source_collection_coverage", Required: true, Description: "Observed and possibly missing record kinds, continuation state, decode rejections, and termination evidence."}, {Name: "workflow", Type: "object", Required: true, Description: "Count, hard 500 cap, truthful terminal status, partial reason, zero interactions because no expandable source control is used, and exact owned-page cleanup outcome."}}},
 		"workflow-pdf-to-markdown": {
 			Name:        "workflow-pdf-to-markdown",
-			Description: "Deterministic, browser-free extraction of a local PDF embedded text layer into Markdown.",
+			Description: "Deterministic, browser-free extraction of a local PDF embedded text layer into Markdown with bounded diagnostics and owned-process cancellation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True only when text-layer Markdown and metadata artifacts were written."},
 				{Name: "schema_version", Type: "string", Required: true, Description: "Stable contract version, currently pdf-to-markdown/v1."},
 				{Name: "source", Type: "pdf_source", Required: true, Description: "The local PDF identity with absolute path, byte count, and SHA-256."},
-				{Name: "extraction", Type: "pdf_text_extraction", Required: true, Description: "Poppler pdftotext embedded text layer extraction that will never OCR."},
+				{Name: "extraction", Type: "pdf_text_extraction", Required: true, Description: "Poppler pdftotext embedded text layer extraction that will never OCR; its external process uses bounded diagnostics and process-group cancellation where supported."},
 				{Name: "pages", Type: "array<pdf_text_page>", Required: true, Description: "Ordered page provenance with the deterministic Markdown heading and per-page statistics."},
 				{Name: "stats", Type: "pdf_text_stats", Required: true, Description: "Aggregate page, word, character, and line counts."},
 				{Name: "coverage", Type: "pdf_text_coverage", Required: true, Description: "Meaningful embedded text-layer coverage counts and the thresholds applied before artifact creation."},
 				{Name: "artifacts", Type: "pdf_text_artifacts", Required: true, Description: "Owner-only Markdown and metadata artifact paths with SHA-256 identities."},
-				{Name: "workflow", Type: "object", Required: true, Description: "Local-file, browser-free, and OCR-free workflow evidence plus next commands."},
+				{Name: "workflow", Type: "object", Required: true, Description: "Local-file, browser-free, and OCR-free workflow evidence plus next commands; failure metadata never embeds extracted text."},
 			},
 		},
 		"workflow-google-translate": {
@@ -2078,18 +2297,61 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "ok", Type: "boolean", Required: true, Description: "True only after the requested translation artifact has been validated and all task-owned targets have been closed."},
 				{Name: "schema_version", Type: "string", Required: true, Description: "Stable contract version, currently google-translate/v1."},
 				{Name: "input", Type: "object", Required: true, Description: "Input kind, requested URL/path, source/target, and bounded character count without embedding source contents."},
-				{Name: "mode", Type: "string", Required: true, Description: "Resolved mode: text, document, image, or website; auto PDF detection resolves image-only scans to image."},
+				{Name: "mode", Type: "string", Required: true, Description: "Resolved mode: text, document, image, or website; auto PDF detection resolves image-only scans to image and bounds the local Poppler burst process."},
 				{Name: "source", Type: "string", Required: true, Description: "Normalized Google source language code, including auto for detection."},
 				{Name: "target", Type: "string", Required: true, Description: "Normalized Google target language code; auto is never allowed."},
 				{Name: "chunks", Type: "array<object>", Required: false, Description: "Ordered text chunk character counts and translated character counts; each source chunk is bounded at 5,000 characters."},
-				{Name: "pages", Type: "array<object>", Required: false, Description: "Ordered scanned/image page downloads with final-state wait, output path, byte count, and signature validation."},
+				{Name: "pages", Type: "array<object>", Required: false, Description: "Ordered scanned/image page downloads with final-state wait, output path, byte count, and signature validation; scanned-PDF source pages must be regular non-empty artifacts."},
 				{Name: "detected_scan", Type: "boolean", Required: false, Description: "True when PDF text-layer coverage was not meaningful and the image burst path was selected."},
 				{Name: "artifacts", Type: "object", Required: true, Description: "Non-overwriting translated output and owner-only metadata paths."},
 				{Name: "target_id", Type: "string", Required: false, Description: "Exact task-owned Translate input target used by this run."},
 				{Name: "created_target_ids", Type: "array<string>", Required: false, Description: "Exact targets created or observed for this run, including a translate.goog website result target when applicable."},
-				{Name: "cleanup", Type: "object", Required: true, Description: "Exact close attempts and target-gone proof for every target created or adopted by the workflow."},
+				{Name: "cleanup", Type: "google_translate_cleanup", Required: true, Description: "Exact close attempts and target-gone proof for every target created or adopted by the workflow, including newly discovered translate.goog result pages and an exact recovery command when settlement fails."},
 				{Name: "warnings", Type: "array<string>", Required: false, Description: "Non-fatal observations such as UI drift remediation or bounded truncation warnings."},
 				{Name: "next_commands", Type: "array<string>", Required: false, Description: "Safe commands for inspecting metadata and verifying no task-owned target remains."},
+			},
+		},
+		"google-translate-cleanup": {
+			Name:        "google-translate-cleanup",
+			Description: "Exact multi-target Google Translate workflow cleanup evidence; target-gone confirmation is required for every workflow-owned target, including a newly discovered translate.goog website result.",
+			Fields: []schemaField{
+				{Name: "attempted", Type: "boolean", Required: true, Description: "True when workflow-owned target cleanup was attempted."},
+				{Name: "closed", Type: "boolean", Required: true, Description: "True only when every workflow-owned target is confirmed gone and every attached session was released."},
+				{Name: "target_ids", Type: "array<string>", Required: true, Description: "Exact target IDs closed or attempted, in reverse ownership order; caller-owned baseline targets are excluded."},
+				{Name: "reports", Type: "array<page_close_report>", Required: true, Description: "Per-target bounded close and target-gone evidence."},
+				{Name: "errors", Type: "array<string>", Required: false, Description: "Bounded sanitized target/session/discovery cleanup errors."},
+				{Name: "recovery_command", Type: "string", Required: false, Description: "Exact-target forced cleanup command for the first target that did not settle."},
+			},
+		},
+		"page-close-report": {
+			Name:        "page-close-report",
+			Description: "Bounded exact page-target close and target-gone evidence.",
+			Fields: []schemaField{
+				{Name: "closed", Type: "boolean", Required: true, Description: "True when the close command was accepted or the target was already gone."},
+				{Name: "target_gone", Type: "boolean", Required: true, Description: "True when Target.getTargets no longer contains the exact target."},
+				{Name: "attempt_count", Type: "number", Required: true, Description: "Number of close attempts made."},
+				{Name: "max_attempts", Type: "number", Required: true, Description: "Bounded maximum close attempts."},
+				{Name: "elapsed_ms", Type: "number", Required: true, Description: "Total cleanup elapsed time in milliseconds."},
+				{Name: "last_observed_target", Type: "page", Required: false, Description: "Last metadata-only observation when the target remained present."},
+				{Name: "last_error", Type: "string", Required: false, Description: "Last sanitized close or target-list error."},
+				{Name: "timed_out", Type: "boolean", Required: false, Description: "True when the bounded cleanup context expired."},
+				{Name: "retry_policy", Type: "string", Required: true, Description: "Bounded settlement policy, currently target_gone."},
+				{Name: "attempts", Type: "array<page_close_attempt>", Required: true, Description: "Per-attempt close, wait-gone, timing, and metadata-only target evidence."},
+			},
+		},
+		"page-close-attempt": {
+			Name:        "page-close-attempt",
+			Description: "One bounded exact-target close attempt.",
+			Fields: []schemaField{
+				{Name: "attempt", Type: "number", Required: true, Description: "One-based attempt number."},
+				{Name: "close_sent", Type: "boolean", Required: true, Description: "True when Target.closeTarget was accepted."},
+				{Name: "closed", Type: "boolean", Required: true, Description: "True when the attempt closed or observed an already-gone target."},
+				{Name: "target_gone", Type: "boolean", Required: true, Description: "True when the exact target disappeared during this attempt."},
+				{Name: "elapsed_ms", Type: "number", Required: true, Description: "Attempt elapsed time in milliseconds."},
+				{Name: "page_count", Type: "number", Required: false, Description: "Metadata-only page count observed while waiting."},
+				{Name: "last_observed_target", Type: "page", Required: false, Description: "Last metadata-only target observation during this attempt."},
+				{Name: "error", Type: "string", Required: false, Description: "Sanitized attempt error."},
+				{Name: "retryable", Type: "boolean", Required: false, Description: "True when another bounded attempt may be useful."},
 			},
 		},
 		"pdf-source": {
@@ -2209,16 +2471,18 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when workflow collection completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Error and warning console/log messages."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, truncation, and suggested next commands."},
 			},
 		},
 		"workflow-debug-bundle": {
 			Name:        "workflow-debug-bundle",
-			Description: "Comprehensive workflow evidence bundle with public-safe manifest metadata, command logs, stage logs, and local-only artifact references.",
+			Description: "Comprehensive workflow evidence bundle from a newly created URL target or an explicitly selected existing page, with public-safe manifest metadata, command logs, stage logs, and local-only artifact references.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when bundle collection completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes and --url creation remains a separate branch."},
 				{Name: "bundle", Type: "evidence_bundle", Required: true, Description: "Bundle schema version, layout, redaction mode, default JSON policy, public-safe/local-only artifact counts, command log records, and stage records."},
 				{Name: "requests", Type: "array<network_request>", Required: false, Description: "Network requests observed during the collect window only when --inline-payloads is explicitly set."},
 				{Name: "messages", Type: "array<console_message>", Required: false, Description: "Console/log messages observed during the collect window only when --inline-payloads is explicitly set."},
@@ -2237,6 +2501,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the action-capture workflow completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow timings, included collectors, opt-in response-body kinds, byte limit, optional URL substring filter, and collector errors."},
 				{Name: "action", Type: "object", Required: true, Description: "Declared action and nested click/type/insert-text/press result."},
 				{Name: "requests", Type: "array<network_capture_request>", Required: false, Description: "Network records observed during the action window; response bodies are absent unless --include-bodies explicitly selects their MIME kind."},
@@ -2249,55 +2514,74 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-a11y": {
 			Name:        "workflow-a11y",
-			Description: "Focused accessibility signal collection with basic console/network evidence.",
+			Description: "Focused accessibility signal collection with basic console/network evidence; accepts a mutually exclusive 1-based page --target-index and an optional URL for indexed navigation. URL-created pages report bounded exact-target cleanup before session release; indexed pages remain caller-owned.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the accessibility workflow completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
+				{Name: "cleanup", Type: "workflow_page_cleanup", Required: true, Description: "Metadata-only exact-target cleanup for URL-created pages; closed is reported only after target_gone, while caller-owned indexed pages report skipped=true and reason=caller_owned."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Failed network request rows observed during the signal window."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console/log errors and warnings observed during the signal window."},
 				{Name: "a11y", Type: "object", Required: true, Description: "Accessibility signal counts and suggested follow-up commands."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, counts, wait, truncation, and collector metadata."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, created_page ownership, counts, wait, truncation, collector metadata, and next commands."},
 			},
 		},
 		"workflow-perf": {
 			Name:        "workflow-perf",
-			Description: "Collected performance metrics, real streamed trace evidence, and honest compact insights from a page-load window.",
+			Description: "Collected performance metrics, real streamed trace evidence, and honest compact insights from a page-load window; accepts a mutually exclusive 1-based page --target-index and an optional URL for indexed navigation. URL-created pages report bounded exact-target cleanup before session release; indexed pages remain caller-owned.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the workflow completed, even if some collectors were partial."},
-				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
+				{Name: "cleanup", Type: "workflow_page_cleanup", Required: true, Description: "Metadata-only exact-target cleanup for URL-created pages; closed is reported only after target_gone, while caller-owned indexed pages report skipped=true and reason=caller_owned."},
 				{Name: "performance", Type: "performance_metrics", Required: true, Description: "Performance.getMetrics output after Performance.enable."},
 				{Name: "insights", Type: "performance_insights", Required: true, Description: "LCP, CLS, long-task, and blocking-request summaries; unavailable metrics include reasons rather than invented values."},
 				{Name: "trace", Type: "performance_trace_summary", Required: true, Description: "Tracing ReturnAsStream, bounded IO.read, mandatory IO.close, max-byte, and artifact-safety metadata."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "Optional bounded streamed JSON performance trace artifact when --trace is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, requested URL, wait, metric count, and next commands."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, created_page ownership, requested URL, wait, metric count, collector status, and next commands."},
+			},
+		},
+		"workflow-responsive-audit": {
+			Name:        "workflow-responsive-audit",
+			Description: "Bounded multi-viewport responsive audit with daemon-backed page-only --target-index selection; an indexed URL is optional, URL-created pages report exact target-gone cleanup before session release, and caller-owned indexed pages are explicitly retained.",
+			Fields: []schemaField{
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when all configured responsive viewport passes completed."},
+				{Name: "target", Type: "page", Required: true, Description: "Created workflow page or selected caller-owned page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
+				{Name: "cleanup", Type: "workflow_page_cleanup", Required: true, Description: "Metadata-only exact-target cleanup for URL-created pages; closed is reported only after target_gone and before session release, while caller-owned indexed pages report skipped=true and reason=caller_owned."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Viewport list, requested URL, bounded wait/limit, artifact directory, emulation reset, and the same exact cleanup evidence."},
+				{Name: "results", Type: "array<object>", Required: true, Description: "Per-viewport console, network, layout, screenshot, accessibility, and collector evidence."},
+				{Name: "artifacts", Type: "array<artifact>", Required: true, Description: "Responsive screenshot artifact references when screenshot collection is enabled."},
 			},
 		},
 		"workflow-lighthouse": {
 			Name:        "workflow-lighthouse",
-			Description: "Lighthouse run against daemon-owned loopback Chrome with compact categories and guarded report artifacts.",
+			Description: "Lighthouse run against daemon-owned loopback Chrome with bounded external-process output, compact categories, validated non-empty JSON and HTML report artifacts, and platform-safe cancellation.",
 			Fields: []schemaField{
-				{Name: "ok", Type: "boolean", Required: true, Description: "True when Lighthouse completed and report artifacts were verified."},
+				{Name: "ok", Type: "boolean", Required: true, Description: "True when Lighthouse completed and both regular non-empty JSON and HTML report artifacts were verified."},
 				{Name: "url", Type: "string", Required: true, Description: "Audited URL."},
 				{Name: "categories", Type: "object", Required: true, Description: "Compact Lighthouse category title and score metadata."},
 				{Name: "failed_audits", Type: "array<object>", Required: true, Description: "Compact failed-audit metadata."},
-				{Name: "artifacts", Type: "object", Required: true, Description: "JSON and HTML report paths."},
-				{Name: "artifact_list", Type: "array<artifact>", Required: true, Description: "Report path, byte count, and shared safety metadata."},
+				{Name: "artifacts", Type: "object", Required: true, Description: "Validated JSON and HTML report paths."},
+				{Name: "artifact_list", Type: "array<artifact>", Required: true, Description: "Validated regular report paths, byte counts, and shared safety metadata."},
 				{Name: "artifact_safety", Type: "artifact_safety", Required: true, Description: "Shared public-safe or explicit local-only classification."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Categories, form factor, throttling, browser mode, and daemon_backed=true."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Categories, form factor, throttling, bounded process-output and cancellation policy, browser mode, and daemon_backed=true."},
 			},
 		},
 		"workflow-verify": {
 			Name:        "workflow-verify",
-			Description: "Focused URL verification evidence with console and failed network requests.",
+			Description: "Focused URL verification evidence with console and failed network requests; accepts a mutually exclusive 1-based page --target-index and an optional URL for indexed navigation. URL-created pages report bounded exact-target cleanup before session release; indexed pages remain caller-owned.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the verification workflow completed."},
-				{Name: "target", Type: "page", Required: true, Description: "Created page target metadata."},
+				{Name: "target", Type: "page", Required: true, Description: "Created or selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
+				{Name: "cleanup", Type: "workflow_page_cleanup", Required: true, Description: "Metadata-only exact-target cleanup for URL-created pages; closed is reported only after target_gone, while caller-owned indexed pages report skipped=true and reason=caller_owned."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Failed/errored network requests captured during verification."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Error and warning console/log messages captured during verification."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "Optional JSON report artifact when --out is used."},
 				{Name: "artifacts", Type: "array<artifact>", Required: false, Description: "Artifact list for agent workflows."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Trigger, requested URL, wait, truncation, and next commands."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Trigger, created_page ownership, requested URL, wait, truncation, collector status, and next commands."},
 			},
 		},
 		"workflow-submit-search": {
@@ -2307,6 +2591,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when input, optional submit, and any requested verification completed and matched."},
 				{Name: "action", Type: "string", Required: true, Description: "Action name: submit_search for completed workflows or blocked inside actionability_failed error data."},
 				{Name: "target", Type: "page", Required: true, Description: "Final selected page target metadata after input, submit, and any requested wait."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "before_target", Type: "page", Required: true, Description: "Selected page target metadata before the workflow ran."},
 				{Name: "after_target", Type: "page", Required: true, Description: "Selected page target metadata refreshed after the workflow."},
 				{Name: "final_target", Type: "page", Required: true, Description: "Alias of after_target for jq-friendly final URL/title extraction."},
@@ -2336,31 +2621,35 @@ func schemaCatalog() map[string]schemaInfo {
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when workflow collection completed."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Failed request rows."},
 				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Workflow name, count, wait, truncation, and suggested next commands."},
 			},
 		},
 		"workflow-page-load": {
 			Name:        "workflow-page-load",
-			Description: "Page-load evidence bundle with console, network, storage-key, performance, and navigation signals.",
+			Description: "Page-load evidence bundle with console, network, storage-key, performance, and navigation signals. URL-created pages report bounded exact-target cleanup before session release; indexed pages remain caller-owned.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the workflow completed, even if individual collectors are partial."},
 				{Name: "target", Type: "page", Required: true, Description: "Selected or created page target metadata."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
+				{Name: "cleanup", Type: "workflow_page_cleanup", Required: true, Description: "Metadata-only exact-target cleanup for URL-created pages; closed is reported only after target_gone, while caller-owned indexed pages report skipped=true and reason=caller_owned."},
 				{Name: "requests", Type: "array<network_request>", Required: true, Description: "Network requests observed after collectors were attached."},
 				{Name: "messages", Type: "array<console_message>", Required: true, Description: "Console and log messages observed after collectors were attached."},
 				{Name: "content_state", Type: "page_load_content_state", Required: true, Description: "Machine-readable classification of content, block, bot-check, login-wall, or cookie-wall state."},
 				{Name: "storage", Type: "storage_keys", Required: false, Description: "Cookie, localStorage, and sessionStorage key names without values."},
 				{Name: "performance", Type: "performance_metrics", Required: false, Description: "Performance.getMetrics output after Performance.enable."},
 				{Name: "navigation", Type: "navigation_history", Required: false, Description: "Page navigation history after the load window."},
-				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Trigger, requested URL, wait, truncation, artifact, and partial collector metadata."},
+				{Name: "workflow", Type: "workflow_summary", Required: true, Description: "Trigger, created_page ownership, requested URL, wait, truncation, artifact, partial collector metadata, and next commands."},
 			},
 		},
 		"workflow-rendered-extract": {
 			Name:        "workflow-rendered-extract",
-			Description: "Rendered research extraction from a newly created URL target or a uniquely selected existing target, with source-aware Markdown profiles, SPA-aware readiness, ownership-safe cleanup, quality gates, and SERP links.",
+			Description: "Rendered research extraction from a newly created URL target or a uniquely or index-selected existing target, with source-aware Markdown profiles, SPA-aware readiness, ownership-safe cleanup, quality gates, and SERP links.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when extraction completed and artifacts were written."},
 				{Name: "target", Type: "page", Required: true, Description: "Created or reused page target metadata with exact target ID and final URL."},
+				{Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for existing-page selection when --target-index was supplied; workers do not consume indexes."},
 				{Name: "readiness", Type: "rendered_extract_readiness", Required: true, Description: "Non-about:blank, document readiness, selector, DOM/text/HTML stability, growth, and useful-content signals."},
 				{Name: "content", Type: "rendered_extract_content", Required: true, Description: "Source-profile choice, representation navigation, native extraction outcome, fallback evidence, and representation links."},
 				{Name: "artifacts", Type: "object", Required: true, Description: "Stable artifact paths keyed by visible_json, visible_txt, html_json, markdown, links_json, and diagnostics_json when present."},
@@ -2456,16 +2745,55 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"workflow-rendered-extract-cleanup": {
 			Name:        "workflow-rendered-extract-cleanup",
-			Description: "Ownership-aware exact-target cleanup result used by rendered extraction on every exit.",
+			Description: "Ownership-aware exact-target cleanup result used by rendered extraction, Google Maps, and YouTube workflows on every exit; closed is true only after target-gone confirmation.",
 			Fields: []schemaField{
 				{Name: "attempted", Type: "boolean", Required: true, Description: "True when cleanup attempted to close a workflow-created target."},
-				{Name: "closed", Type: "boolean", Required: true, Description: "True only when the exact workflow-created target closed successfully."},
+				{Name: "closed", Type: "boolean", Required: true, Description: "True only when the exact workflow-created target is confirmed gone."},
+				{Name: "target_gone", Type: "boolean", Required: true, Description: "True when Target.getTargets no longer contains the exact workflow-created target."},
+				{Name: "attempt_count", Type: "number", Required: false, Description: "Number of bounded close attempts made."},
+				{Name: "max_attempts", Type: "number", Required: false, Description: "Configured maximum close attempts."},
+				{Name: "elapsed_ms", Type: "number", Required: false, Description: "Total bounded cleanup elapsed time in milliseconds."},
+				{Name: "timed_out", Type: "boolean", Required: false, Description: "True when the bounded cleanup wait exhausted its context."},
+				{Name: "retry_policy", Type: "string", Required: false, Description: "Settled cleanup policy, currently target_gone."},
 				{Name: "skipped", Type: "boolean", Required: false, Description: "True for caller-owned targets or explicit --keep-open workflows."},
 				{Name: "reason", Type: "string", Required: false, Description: "Structured skip reason such as caller_owned or keep_open."},
 				{Name: "target_id", Type: "string", Required: false, Description: "Exact target whose ownership and cleanup were evaluated."},
 				{Name: "timeout", Type: "duration", Required: false, Description: "Independent bounded cleanup timeout."},
 				{Name: "error", Type: "string", Required: false, Description: "Cleanup failure preserved alongside any primary workflow error."},
 				{Name: "recovery_command", Type: "string", Required: false, Description: "Exact-target forced cleanup command when closing fails."},
+			},
+		},
+		"workflow-page-cleanup": {
+			Name:        "workflow-page-cleanup",
+			Description: "Ownership-aware exact-target cleanup result used by URL-created diagnostic, preflight-readiness, and health-check workflows; closed is true only after target-gone confirmation and caller-owned or keep-open targets are explicitly marked skipped. Keep-open lease-promotion failures use lease-target-policy-failure data with the stable lease_target_policy_failed code.",
+			Fields: []schemaField{
+				{Name: "attempted", Type: "boolean", Required: true, Description: "True when cleanup attempted to close a workflow-created target."},
+				{Name: "closed", Type: "boolean", Required: true, Description: "True only when the exact workflow-created target is confirmed gone."},
+				{Name: "target_gone", Type: "boolean", Required: true, Description: "True when Target.getTargets no longer contains the exact workflow-created target."},
+				{Name: "attempt_count", Type: "number", Required: false, Description: "Number of bounded close attempts made."},
+				{Name: "max_attempts", Type: "number", Required: false, Description: "Configured maximum close attempts."},
+				{Name: "elapsed_ms", Type: "number", Required: false, Description: "Total bounded cleanup elapsed time in milliseconds."},
+				{Name: "timed_out", Type: "boolean", Required: false, Description: "True when the bounded cleanup wait exhausted its context."},
+				{Name: "retry_policy", Type: "string", Required: false, Description: "Settled cleanup policy, currently target_gone."},
+				{Name: "skipped", Type: "boolean", Required: false, Description: "True for caller-owned targets."},
+				{Name: "reason", Type: "string", Required: false, Description: "Structured skip reason, currently caller_owned for indexed pages."},
+				{Name: "target_id", Type: "string", Required: false, Description: "Exact target whose ownership and cleanup were evaluated."},
+				{Name: "timeout", Type: "duration", Required: false, Description: "Independent bounded cleanup timeout."},
+				{Name: "error", Type: "string", Required: false, Description: "Cleanup failure preserved alongside any primary workflow error."},
+				{Name: "recovery_command", Type: "string", Required: false, Description: "Exact-target forced cleanup command when closing fails."},
+				{Name: "errors", Type: "array<string>", Required: false, Description: "Bounded sanitized cleanup errors retained for diagnosis."},
+			},
+		},
+		"lease-target-policy-failure": {
+			Name:        "lease-target-policy-failure",
+			Description: "Additive metadata carried by the stable lease_target_policy_failed error when a workflow-created target cannot be promoted to keep-open; the primary policy error is preserved while exact cleanup or recovery evidence is reported.",
+			Fields: []schemaField{
+				{Name: "target_id", Type: "string", Required: true, Description: "Exact workflow-created target whose keep-open promotion failed."},
+				{Name: "policy_error", Type: "string", Required: true, Description: "Primary keep-open lease-policy failure summary."},
+				{Name: "primary_error", Type: "object", Required: true, Description: "Metadata-only summary of the primary lease_target_policy_failed cause."},
+				{Name: "close", Type: "page_close_report", Required: true, Description: "Bounded exact-target close and target-gone evidence attempted after promotion failure."},
+				{Name: "cleanup_error", Type: "string", Required: false, Description: "Cleanup failure when target-gone settlement did not complete."},
+				{Name: "recovery_command", Type: "string", Required: true, Description: "Exact-target forced cleanup recovery command when the created page remains recoverable."},
 			},
 		},
 		"workflow-web-research-serp": {
@@ -2550,7 +2878,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"protocol-metadata": {
 			Name:        "protocol-metadata",
-			Description: "Summarized CDP protocol metadata.",
+			Description: "Summarized CDP protocol metadata from the selected live or official source.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol metadata was fetched."},
 				{Name: "protocol", Type: "protocol_summary", Required: true, Description: "Version, domain count, and compact domain summaries."},
@@ -2558,38 +2886,41 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"protocol-domains": {
 			Name:        "protocol-domains",
-			Description: "Compact list of CDP domains.",
+			Description: "Compact list of CDP domains from the selected live or official source.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol domains were fetched."},
 				{Name: "domain_count", Type: "number", Required: true, Description: "Number of protocol domains returned."},
 				{Name: "domains", Type: "array<domain_summary>", Required: true, Description: "Compact domain summaries."},
+				{Name: "source", Type: "string", Required: true, Description: "Selected live endpoint or official browser+JavaScript source URLs."},
 			},
 		},
 		"protocol-search": {
 			Name:        "protocol-search",
-			Description: "Search results across live CDP domains, commands, events, and types.",
+			Description: "Search results across selected live or official CDP domains, commands, events, and types.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when protocol search completed."},
 				{Name: "query", Type: "string", Required: true, Description: "Search query."},
 				{Name: "matches", Type: "array<protocol_match>", Required: true, Description: "Matching protocol entities."},
+				{Name: "source", Type: "string", Required: true, Description: "Selected live endpoint or official browser+JavaScript source URLs."},
 			},
 		},
 		"protocol-describe": {
 			Name:        "protocol-describe",
-			Description: "A live CDP domain, command, event, or type schema.",
+			Description: "A CDP domain, command, event, or type schema from the selected live or official source.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the entity was found."},
 				{Name: "entity", Type: "protocol_entity", Required: true, Description: "Entity metadata and raw protocol schema."},
+				{Name: "source", Type: "string", Required: true, Description: "Selected live endpoint or official browser+JavaScript source URLs."},
 			},
 		},
 		"protocol-exec": {
 			Name:        "protocol-exec",
-			Description: "Raw CDP method execution result.",
+			Description: "Raw CDP method execution result with browser or exact target selection, including a page-only 1-based target index, an optional positional JSON params alias, and optional pre-execution selected-schema validation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the CDP method completed."},
 				{Name: "scope", Type: "string", Required: true, Description: "Either browser or target."},
 				{Name: "method", Type: "string", Required: true, Description: "Executed CDP method."},
-				{Name: "target", Type: "target", Required: false, Description: "Selected CDP target for target-scoped execution, including page, worker, and service_worker targets."},
+				{Name: "target", Type: "target", Required: false, Description: "Selected CDP target for target-scoped execution, including page, worker, and service_worker targets; --target-index selects a 1-based page target."},
 				{Name: "session_id", Type: "string", Required: false, Description: "Temporary CDP session id used for target-scoped execution."},
 				{Name: "result", Type: "object", Required: true, Description: "Raw CDP result payload."},
 				{Name: "artifact", Type: "artifact", Required: false, Description: "Artifact metadata when --save writes a base64 data field to disk."},
@@ -2606,19 +2937,22 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "source", Type: "string", Required: true, Description: "Protocol source endpoint."},
 			},
 		},
-		"protocol-compat":      {Name: "protocol-compat", Description: "Live CDP compatibility report for required protocol paths.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when compatibility metadata was generated."}, {Name: "protocol_version", Type: "object", Required: true, Description: "Live protocol version metadata."}, {Name: "schema_source", Type: "string", Required: true, Description: "Protocol schema source used for checks."}, {Name: "required", Type: "array<protocol_compat_check>", Required: true, Description: "Requested protocol paths and availability."}}},
-		"a11y":                 {Name: "a11y", Description: "Accessibility tree query result.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when accessibility data was collected."}, {Name: "nodes", Type: "array<a11y_node>", Required: false, Description: "Accessibility nodes."}, {Name: "truncated", Type: "boolean", Required: false, Description: "True when output was bounded."}}},
-		"a11y-snapshot":        {Name: "a11y-snapshot", Description: "Bounded YAML-like ARIA snapshot generated from Chrome accessibility tree nodes.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when snapshot generation completed."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."}, {Name: "snapshot", Type: "a11y_snapshot", Required: true, Description: "Selector scope label, line_count, lines, text, truncation, depth, limit, include_ignored flag, and source metadata."}, {Name: "lines", Type: "array<string>", Required: true, Description: "ARIA snapshot lines duplicated for jq-friendly inspection."}, {Name: "text", Type: "string", Required: true, Description: "Newline-terminated ARIA snapshot text suitable for local assertion templates."}, {Name: "truncated", Type: "boolean", Required: true, Description: "True when --limit bounded the generated snapshot."}}},
+		"protocol-compat":      {Name: "protocol-compat", Description: "Compatibility report for required paths in the selected live or official CDP schema.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when compatibility metadata was generated."}, {Name: "protocol_version", Type: "object", Required: true, Description: "Selected protocol version metadata."}, {Name: "schema_source", Type: "string", Required: true, Description: "Protocol schema source used for checks."}, {Name: "required", Type: "array<protocol_compat_check>", Required: true, Description: "Requested protocol paths and availability."}}},
+		"a11y":                 {Name: "a11y", Description: "Accessibility tree query result for a selected page; accepts a mutually exclusive 1-based page --target-index selector.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when accessibility data was collected."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."}, {Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."}, {Name: "nodes", Type: "array<a11y_node>", Required: false, Description: "Accessibility nodes."}, {Name: "node", Type: "object", Required: false, Description: "Accessibility information for the selected CSS node when using a11y node."}, {Name: "truncated", Type: "boolean", Required: false, Description: "True when output was bounded."}}},
+		"a11y-snapshot":        {Name: "a11y-snapshot", Description: "Bounded YAML-like ARIA snapshot generated from Chrome accessibility tree nodes; accepts a mutually exclusive 1-based page --target-index selector.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when snapshot generation completed."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."}, {Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."}, {Name: "snapshot", Type: "a11y_snapshot", Required: true, Description: "Selector scope label, line_count, lines, text, truncation, depth, limit, include_ignored flag, and source metadata."}, {Name: "lines", Type: "array<string>", Required: true, Description: "ARIA snapshot lines duplicated for jq-friendly inspection."}, {Name: "text", Type: "string", Required: true, Description: "Newline-terminated ARIA snapshot text suitable for local assertion templates."}, {Name: "truncated", Type: "boolean", Required: true, Description: "True when --limit bounded the generated snapshot."}}},
 		"emulation":            {Name: "emulation", Description: "Target emulation result.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when emulation command completed."}, {Name: "target", Type: "page", Required: false, Description: "Selected page target metadata."}, {Name: "emulation", Type: "object", Required: true, Description: "Applied emulation metadata and cleanup command."}}},
 		"emulate-timezone":     {Name: "emulate-timezone", Description: "Timezone emulation result for a page target.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when timezone override was applied."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."}, {Name: "emulation", Type: "object", Required: true, Description: "Contains timezone.timezone_id, optional same-session observed_timezone, verified flag, and cleanup_command."}}},
 		"emulate-locale":       {Name: "emulate-locale", Description: "Locale emulation result for a page target.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when locale override was applied."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."}, {Name: "emulation", Type: "object", Required: true, Description: "Contains locale.locale, optional same-session observed_locale, verified flag, and cleanup_command."}}},
 		"emulate-color-scheme": {Name: "emulate-color-scheme", Description: "Prefers-color-scheme emulation result for a page target.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when color-scheme override was applied."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata."}, {Name: "emulation", Type: "object", Required: true, Description: "Contains color_scheme.scheme, media_features, optional same-session observed_scheme, verified flag, and cleanup_command."}}},
 		"permissions":          {Name: "permissions", Description: "Browser permission grant or reset result.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when permission overrides were applied or reset."}, {Name: "permissions", Type: "object", Required: true, Description: "Action metadata, origin, granted permission rows, browser_scoped/reset_all_origins flags, warnings, and reset command when applicable."}, {Name: "next_commands", Type: "array<string>", Required: true, Description: "Follow-up commands such as reset or protocol discovery."}}},
-		"events-tap":           {Name: "events-tap", Description: "Duration-bounded, exact-session raw CDP event stream.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when event collection completed."}, {Name: "events", Type: "array<cdp_event>", Required: true, Description: "Captured events from only the attached target session."}, {Name: "tap", Type: "object", Required: true, Description: "Collection bounds, truncation, session_bound, foreign_events_dropped, and readiness artifact metadata."}}},
+		"events-tap":           {Name: "events-tap", Description: "Duration-bounded, exact-session raw CDP event stream; page selection accepts a mutually exclusive 1-based --target-index.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when event collection completed."}, {Name: "events", Type: "array<cdp_event>", Required: true, Description: "Captured events from only the attached target session."}, {Name: "tap", Type: "object", Required: true, Description: "Collection bounds, 1-based target_index when --target-index selected the page, truncation, session_bound, foreign_events_dropped, and readiness artifact metadata."}}},
+		"events-stream":        {Name: "events-stream", Description: "Persistent exact-session CDP event stream with bounded liveness emitted as one JSON record per line.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "Whether this JSONL record represents a successful stream state or event."}, {Name: "type", Type: "string", Required: true, Description: "JSONL record type: ready, event, subscription, stopped, or error."}, {Name: "target", Type: "page", Required: false, Description: "Selected page target metadata on the ready record."}, {Name: "event", Type: "cdp_event", Required: false, Description: "Raw CDP event from only the attached target session."}, {Name: "stream", Type: "object", Required: false, Description: "Session binding, exact-session dequeue, target selection, event bounds, enabled domains, active subscriptions, and liveness configuration."}, {Name: "liveness", Type: "object", Required: false, Description: "Metadata-only runtime-registration and exact-session heartbeat configuration; definitive runtime replacement may set state retired, reason runtime_retired, and source runtime_registration, while ambiguous state falls through to heartbeat."}, {Name: "operation", Type: "string", Required: false, Description: "Subscription operation: add or remove."}, {Name: "method", Type: "string", Required: false, Description: "Subscription method on a subscription record."}, {Name: "reason", Type: "string", Required: false, Description: "Why the stream stopped."}, {Name: "event_count", Type: "number", Required: false, Description: "Number of matching events emitted before stopping."}, {Name: "foreign_events_dropped", Type: "number", Required: false, Description: "Defensive count of foreign-session events returned despite exact-session dequeue; normally zero."}, {Name: "truncated", Type: "boolean", Required: false, Description: "Whether the max-events bound stopped the stream."}, {Name: "all_events", Type: "boolean", Required: false, Description: "Whether the stream is in wildcard mode; a minus subscription excludes one method."}, {Name: "code", Type: "string", Required: false, Description: "Stable error code on an error record."}, {Name: "err_class", Type: "string", Required: false, Description: "Stable error class on an error record."}, {Name: "message", Type: "string", Required: false, Description: "Actionable error message on an error record."}, {Name: "remediation_commands", Type: "array<string>", Required: false, Description: "Safe follow-up commands on an error record."}}},
+		"events-wait":          {Name: "events-wait", Description: "Browser-free, offset-aware wait for a matching complete record in a JSONL event stream file.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when one complete record matched."}, {Name: "file", Type: "string", Required: true, Description: "Caller-selected local JSONL event stream path; the command reads it without mutation."}, {Name: "record", Type: "object", Required: true, Description: "Complete matched JSON record, including cdp-cli events stream envelopes or raw CDP records."}, {Name: "event", Type: "cdp_event", Required: false, Description: "Inner raw CDP event when the matched record is a cdp-cli event envelope."}, {Name: "offset", Type: "integer", Required: true, Description: "Byte offset immediately after the matched newline-terminated record, suitable for the next --from-offset."}, {Name: "wait", Type: "object", Required: true, Description: "File, method any-of/content all-of predicates, starting and current offsets, complete-record guarantee, scan count, poll interval, and elapsed time."}}},
+		"events-interactions":  {Name: "events-interactions", Description: "Bounded exact-session DOM interaction observer adapted from the Runtime.addBinding collaboration bridge with metadata-only output and persistent-session liveness retirement.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "Whether this JSONL record is a valid observer state or sanitized interaction."}, {Name: "type", Type: "string", Required: true, Description: "JSONL record type: ready, interaction, or stopped."}, {Name: "target", Type: "page", Required: false, Description: "Selected exact page target metadata."}, {Name: "observer", Type: "object", Required: false, Description: "Session binding, exact-session dequeue, target, kind filters, bounds, current/future listener installation, sanitized-payload contract, and runtime-registration plus read-only exact-session liveness state."}, {Name: "event", Type: "cdp_event", Required: false, Description: "Safe method-only Runtime.bindingCalled marker for composing with events wait; raw binding payload is never returned."}, {Name: "interaction", Type: "object", Required: false, Description: "Allow-listed click, scroll, selectionchange, or keydown metadata without page text, key values, input values, HTML, cookies, or arbitrary binding fields."}, {Name: "reason", Type: "string", Required: false, Description: "Why observation stopped, including liveness retirement."}, {Name: "event_count", Type: "number", Required: false, Description: "Number of emitted sanitized interactions."}, {Name: "foreign_events_dropped", Type: "number", Required: false, Description: "Defensive count of foreign-session events returned despite exact-session dequeue; normally zero."}, {Name: "ignored_binding_events", Type: "number", Required: false, Description: "Malformed or unsafe binding payloads dropped without output."}, {Name: "cleanup", Type: "object", Required: false, Description: "Whether current listeners, future-document script, and binding were removed."}, {Name: "truncated", Type: "boolean", Required: false, Description: "Whether max-events stopped observation."}}},
 		"workflow-feeds":       {Name: "workflow-feeds", Description: "RSS, Atom, and JSON Feed discovery workflow.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when feeds were discovered."}, {Name: "workflow", Type: "object", Required: true, Description: "Workflow cleanup metadata."}, {Name: "feeds", Type: "array<feed_link>", Required: true, Description: "Discovered feed links."}}},
-		"perf-summary":         {Name: "perf-summary", Description: "Lightweight performance metric summary.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when metrics were collected."}, {Name: "metrics", Type: "object", Required: true, Description: "Performance metrics summary."}}},
-		"memory":               {Name: "memory", Description: "Memory counters or heap artifact result.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when memory command completed."}, {Name: "memory", Type: "object", Required: false, Description: "Memory counters."}, {Name: "artifact", Type: "artifact", Required: false, Description: "Heap snapshot artifact metadata."}}},
-		"transcription-server": {Name: "transcription-server", Description: "Provider-neutral OpenAI-compatible transcription service configuration and readiness.", Fields: []schemaField{{Name: "contract_version", Type: "string", Required: true, Description: "Versioned transcription contract exposed by REST, SSE, and realtime WebSocket transports."}, {Name: "address", Type: "string", Required: true, Description: "Configured listen address."}, {Name: "state_dir", Type: "string", Required: true, Description: "Local state directory containing durable audio records; credentials remain outside public output."}, {Name: "auth_refresh_interval", Type: "duration", Required: true, Description: "Shared recurring freshness-check cadence for online providers."}, {Name: "providers", Type: "array<provider_capability>", Required: true, Description: "Provider-neutral readiness and capability rows."}}},
+		"perf-summary":         {Name: "perf-summary", Description: "Lightweight performance metric summary for a selected page; accepts a mutually exclusive 1-based page --target-index selector.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when metrics were collected."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."}, {Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."}, {Name: "duration_ms", Type: "number", Required: true, Description: "Configured observation duration in milliseconds."}, {Name: "metrics", Type: "object", Required: true, Description: "Performance metrics summary."}}},
+		"memory":               {Name: "memory", Description: "Memory counters or heap artifact result for a selected page; accepts a mutually exclusive 1-based page --target-index selector.", Fields: []schemaField{{Name: "ok", Type: "boolean", Required: true, Description: "True when memory command completed."}, {Name: "target", Type: "page", Required: true, Description: "Selected page target metadata, including a page selected by --target-index."}, {Name: "target_index", Type: "integer", Required: false, Description: "The 1-based page target index used for selection when --target-index was supplied."}, {Name: "memory", Type: "object", Required: false, Description: "Memory counters."}, {Name: "artifact", Type: "artifact", Required: false, Description: "Heap snapshot artifact metadata."}}},
+		"transcription-server": {Name: "transcription-server", Description: "Provider-neutral OpenAI-compatible transcription service configuration, readiness, bounded probe subprocess safety, and owned provider conversion process groups.", Fields: []schemaField{{Name: "contract_version", Type: "string", Required: true, Description: "Versioned transcription contract exposed by REST, SSE, and realtime WebSocket transports."}, {Name: "address", Type: "string", Required: true, Description: "Configured listen address."}, {Name: "state_dir", Type: "string", Required: true, Description: "Local state directory containing durable audio records; credentials remain outside public output."}, {Name: "auth_refresh_interval", Type: "duration", Required: true, Description: "Shared recurring freshness-check cadence for online providers."}, {Name: "providers", Type: "array<provider_capability>", Required: true, Description: "Provider-neutral readiness and capability rows."}}},
 		"browser-process": {
 			Name:        "browser-process",
 			Description: "Privacy-safe browser process row from SystemInfo.getProcessInfo.",
@@ -2678,13 +3012,28 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "usable", Type: "boolean", Required: true, Description: "True when bounded browser work may proceed."},
 				{Name: "browser_mode", Type: "string", Required: true, Description: "Selected browser runtime mode."},
 				{Name: "connection_mode", Type: "string", Required: true, Description: "Selected daemon connection mode."},
+				{Name: "daemon_process_identity_state", Type: "string", Required: false, Description: "Safe daemon process identity state: process_identity_mismatch or process_identity_unavailable when a strong private runtime identity could not be verified."},
+				{Name: "managed_browser_health", Type: "managed-browser-health", Required: false, Description: "Metadata-only managed Chrome liveness detail; endpoint fallback is not ownership evidence."},
 				{Name: "resource_budget", Type: "browser_resource_budget", Required: false, Description: "Tab/window/renderer budget when browser target inspection succeeded."},
 				{Name: "target_resource_attribution", Type: "target_resource_attribution", Required: true, Description: "Explicit target-to-renderer attribution state."},
 				{Name: "process_info", Type: "browser_process_info", Required: false, Description: "Optional SystemInfo.getProcessInfo telemetry requested by --process-info."},
 				{Name: "process_info_error", Type: "string", Required: false, Description: "Optional process telemetry error."},
 				{Name: "reasons", Type: "array<string>", Required: true, Description: "Machine-readable health degradation reasons."},
 				{Name: "degraded_reasons", Type: "array<string>", Required: true, Description: "Machine-readable reasons retained for downstream policy."},
+				{Name: "retired_hold_pids", Type: "array<number>", Required: false, Description: "Superseded daemon-hold PIDs whose prior log warnings were excluded from current-generation health."},
 				{Name: "next_commands", Type: "array<string>", Required: true, Description: "Safe diagnostics or recovery commands."},
+			},
+		},
+		"managed-browser-health": {
+			Name:        "managed-browser-health",
+			Description: "Metadata-only managed Chrome liveness detail used by health and keepalive diagnostics.",
+			Fields: []schemaField{
+				{Name: "expected", Type: "boolean", Required: true, Description: "Whether managed headless Chrome was expected for this runtime."},
+				{Name: "state", Type: "string", Required: true, Description: "Managed liveness state such as running, process_not_running, process_identity_mismatch, or process_check_canceled."},
+				{Name: "running", Type: "boolean", Required: true, Description: "Whether bounded managed liveness evidence currently reports a usable browser."},
+				{Name: "chrome_pid", Type: "number", Required: false, Description: "Recorded managed Chrome launcher PID; endpoint fallback does not replace this identity."},
+				{Name: "liveness_source", Type: "string", Required: false, Description: "Safe liveness provenance: recorded_pid or debugging_endpoint."},
+				{Name: "daemon_rpc_ready", Type: "boolean", Required: false, Description: "Whether the daemon RPC path was ready when keepalive added its context."},
 			},
 		},
 
@@ -2701,6 +3050,8 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "last_seeded_at", Type: "string", Required: false, Description: "Managed profile seed timestamp when recorded."},
 				{Name: "default_profile_copied", Type: "boolean", Required: false, Description: "True when managed metadata records an explicit copy-default snapshot."},
 				{Name: "copied_file_count", Type: "number", Required: false, Description: "Number of profile filesystem entries copied during copy-default seeding."},
+				{Name: "fingerprint_profile_applied", Type: "boolean", Required: true, Description: "True when this managed Chrome launch used a validated fingerprint profile."},
+				{Name: "fingerprint_profile_fields", Type: "array<string>", Required: false, Description: "Metadata-only effective field names; profile path and values are never included."},
 			},
 		},
 		"error-envelope": {
@@ -2719,6 +3070,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "resource_budget", Type: "browser_resource_budget", Required: false, Description: "Budget snapshot for resource-budget failures."},
 				{Name: "stop_state", Type: "string", Required: false, Description: "Stop state lifted for permission, resource budget, and other conservative boundaries."},
 				{Name: "stop_state_class", Type: "string", Required: false, Description: "Stop-state class lifted for agent policy decisions."},
+				{Name: "data", Type: "object", Required: false, Description: "Typed command-specific evidence; lease_target_policy_failed may carry lease-target-policy-failure cleanup and primary-error metadata, while Lighthouse, PDF text-layer, and scanned-PDF Poppler failures may carry bounded per-stream output and process-termination metadata without private payloads."},
 			},
 		},
 		"exit-codes": {
@@ -2743,6 +3095,45 @@ func schemaCatalog() map[string]schemaInfo {
 			},
 		},
 	}
+	for _, schema := range []schemaInfo{
+		emulationCommandSchema("emulate-viewport", "Viewport emulation result for a page target.", "Contains viewport width, height, device scale factor, mobile mode, preset, and cleanup command."),
+		emulationCommandSchema("emulate-clear", "Cleared emulation result for a page target.", "Contains cleared flag and the list of best-effort overrides cleared."),
+		emulationCommandSchema("emulate-media", "Media-feature emulation result for a page target.", "Contains the applied media feature rows."),
+		emulationCommandSchema("emulate-color-scheme", "Prefers-color-scheme emulation result for a page target.", "Contains color scheme, media features, optional observed scheme, verification, and cleanup command."),
+		emulationCommandSchema("emulate-user-agent", "User-agent emulation result for a page target.", "Contains user-agent string, optional platform, and cleanup command."),
+		emulationCommandSchema("emulate-geolocation", "Geolocation emulation result for a page target.", "Contains latitude, longitude, accuracy, and cleanup command."),
+		emulationCommandSchema("emulate-timezone", "Timezone emulation result for a page target.", "Contains timezone ID, optional observed timezone, verification, and cleanup command."),
+		emulationCommandSchema("emulate-locale", "Locale emulation result for a page target.", "Contains locale, optional observed locale, verification, and cleanup command."),
+		emulationCommandSchema("emulate-cpu", "CPU throttling emulation result for a page target.", "Contains CPU rate and cleanup command."),
+		emulationCommandSchema("emulate-network", "Network throttling emulation result for a page target.", "Contains network conditions, preset label, and cleanup command."),
+	} {
+		catalog[schema.Name] = schema
+	}
+	catalog["events-tap"] = schemaInfo{
+		Name:        catalog["events-tap"].Name,
+		Description: "Duration-bounded, exact-session raw CDP event stream with validated target-domain enablement and mutually exclusive 1-based page --target-index selection.",
+		Fields:      catalog["events-tap"].Fields,
+	}
+	catalog["events-stream"] = schemaInfo{
+		Name:        catalog["events-stream"].Name,
+		Description: "Persistent exact-session CDP event stream with validated target-domain enablement, exact-session dequeue, and bounded exact-session liveness emitted as one JSON record per line.",
+		Fields:      catalog["events-stream"].Fields,
+	}
+	for name, schema := range catalog {
+		if !strings.HasPrefix(name, "assert-") {
+			continue
+		}
+		schema.Description += " Accepts a mutually exclusive 1-based page --target-index selector."
+		schema.Fields = append(schema.Fields, schemaField{
+			Name:        "target_index",
+			Type:        "integer",
+			Required:    false,
+			Description: "The 1-based page target index used for selection when --target-index was supplied.",
+		})
+		catalog[name] = schema
+	}
+	catalog["emulation"] = emulationCommandSchema("emulation", "Target emulation result.", "Applied emulation metadata and cleanup command.")
+	return catalog
 }
 
 func schemaNames() []string {

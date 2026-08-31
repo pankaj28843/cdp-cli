@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,8 +12,11 @@ import (
 )
 
 func (a *app) newEventsCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "events", Short: "Observe bounded raw CDP event streams"}
+	cmd := &cobra.Command{Use: "events", Short: "Observe bounded CDP events and DOM interaction causes"}
 	cmd.AddCommand(a.newEventsTapCommand())
+	cmd.AddCommand(a.newEventsStreamCommand())
+	cmd.AddCommand(a.newEventsWaitCommand())
+	cmd.AddCommand(a.newEventsInteractionsCommand())
 	return cmd
 }
 
@@ -22,39 +24,31 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, enable, match string
 	var readyFile string
 	var duration time.Duration
-	var maxEvents int
+	var maxEvents, targetIndex int
 	cmd := &cobra.Command{Use: "tap", Short: "Collect a bounded stream of CDP events", RunE: func(cmd *cobra.Command, args []string) error {
 		if duration < 0 || maxEvents < 0 {
 			return commandError("usage", "usage", "--duration and --max-events must be non-negative", ExitUsage, []string{"cdp events tap --duration 10s --max-events 50 --json"})
 		}
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
+		enabledDomains, err := parseEventDomains(enable)
+		if err != nil {
+			return err
+		}
 		ctx, cancel := a.commandContextWithDefault(cmd, duration+10*time.Second)
 		defer cancel()
-		client, session, target, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+		client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
 		defer session.Close(ctx)
-		enabledDomains := parseCSVSet(enable)
-		for domain := range enabledDomains {
-			var enableErr error
-			switch domain {
-			case "page":
-				enableErr = client.CallSession(ctx, session.SessionID, "Page.enable", map[string]any{}, nil)
-			case "network":
-				enableErr = client.CallSession(ctx, session.SessionID, "Network.enable", map[string]any{}, nil)
-			case "runtime":
-				enableErr = client.CallSession(ctx, session.SessionID, "Runtime.enable", map[string]any{}, nil)
-			case "log":
-				enableErr = client.CallSession(ctx, session.SessionID, "Log.enable", map[string]any{}, nil)
-			default:
-				return commandError("usage", "usage", fmt.Sprintf("unsupported --enable domain %q", domain), ExitUsage, []string{"cdp events tap --enable page,network,runtime,log --json"})
-			}
-			if enableErr != nil {
-				return commandError("collector_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", domain, target.TargetID, enableErr), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
+		for _, domain := range enabledDomains.names() {
+			if err := enableEventDomain(ctx, client, session.SessionID, domain); err != nil {
+				return commandError("collector_enable_failed", "connection", fmt.Sprintf("enable %s for target %s: %v", domain, target.TargetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 			}
 		}
-		domainNames := setKeys(enabledDomains)
-		sort.Strings(domainNames)
+		domainNames := enabledDomains.names()
 		removeReady, err := publishCollectorReadiness(readyFile, target.TargetID, session.SessionID, domainNames)
 		if err != nil {
 			return collectorReadinessError(err)
@@ -88,12 +82,13 @@ func (a *app) newEventsTapCommand() *cobra.Command {
 				break
 			}
 		}
-		return a.render(ctx, fmt.Sprintf("events\t%d", len(events)), map[string]any{"ok": true, "target": pageRow(target), "events": events, "tap": map[string]any{"duration": durationString(duration), "max_events": maxEvents, "truncated": maxEvents > 0 && len(events) >= maxEvents, "session_bound": true, "foreign_events_dropped": foreignEventsDropped, "ready_file": readyFile}})
+		return a.render(ctx, fmt.Sprintf("events\t%d", len(events)), map[string]any{"ok": true, "target": pageRow(target), "events": events, "tap": map[string]any{"duration": durationString(duration), "max_events": maxEvents, "target_index": targetIndex, "truncated": maxEvents > 0 && len(events) >= maxEvents, "session_bound": true, "foreign_events_dropped": foreignEventsDropped, "ready_file": readyFile}})
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
-	cmd.Flags().StringVar(&enable, "enable", "page,network,runtime,log", "comma-separated domains to enable: page,network,runtime,log")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
+	cmd.Flags().StringVar(&enable, "enable", "page,network,runtime,log", "comma-separated CDP target domains to enable (for example page,network,runtime,log,DOM,Performance)")
 	cmd.Flags().StringVar(&match, "match", "", "comma-separated event method names to keep")
 	cmd.Flags().DurationVar(&duration, "duration", 5*time.Second, "maximum event collection duration")
 	cmd.Flags().IntVar(&maxEvents, "max-events", 100, "maximum events to collect; 0 disables the count limit")

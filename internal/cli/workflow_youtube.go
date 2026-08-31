@@ -87,12 +87,12 @@ func (a *app) runYouTubeCookiesWorkflow(ctx context.Context, rawURL, outPath str
 		return err
 	}
 	cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: targetID, owned: true}
-	defer cleanupGuard.cleanup()
 	session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 	if err != nil {
 		return youtubeCookiesWorkflowError("attach YouTube target", err, cleanupGuard.cleanup())
 	}
 	defer closeRenderedExtractSession(session, nil)
+	defer cleanupGuard.cleanup()
 
 	cookies, err := harvestYouTubeCookies(ctx, session, rawURL, settle)
 	if err != nil {

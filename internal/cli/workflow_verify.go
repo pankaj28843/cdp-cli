@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,16 +15,22 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 	var wait time.Duration
 	var limit int
 	var outPath string
+	var targetIndex int
 	cmd := &cobra.Command{
-		Use:   "verify <url>",
-		Short: "Open a URL and collect basic verification evidence",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Use:   "verify [url]",
+		Short: "Inspect a page and collect basic verification evidence",
+		Long:  "Inspect a page and collect basic verification evidence. URL-only runs own one disposable page and report bounded exact-target cleanup; --target-index runs retain the caller-owned page.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
 			if wait < 0 {
 				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow verify 'https://example.com' --wait 2s --json"})
 			}
 			if limit < 0 {
 				return commandError("usage", "usage", "--limit must be non-negative", ExitUsage, []string{"cdp workflow verify 'https://example.com' --limit 50 --json"})
+			}
+			rawURL, err := diagnosticWorkflowURL(cmd, args, targetIndex, "cdp workflow verify 'https://example.com' --json")
+			if err != nil {
+				return err
 			}
 			fallback := wait + 10*time.Second
 			if fallback < 30*time.Second {
@@ -32,7 +39,6 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 			ctx, cancel := a.commandContextWithDefault(cmd, fallback)
 			defer cancel()
 
-			rawURL := strings.TrimSpace(args[0])
 			client, closeClient, err := a.browserEventCDPClient(ctx)
 			if err != nil {
 				return commandError(
@@ -43,43 +49,43 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 					a.connectionRemediationCommands(),
 				)
 			}
-			closeOwned := true
-			defer func() {
-				if closeOwned {
-					_ = closeClient(ctx)
-				}
-			}()
-
-			target := cdp.TargetInfo{Type: "page", URL: rawURL}
-			createdID, err := a.createWorkflowPageTarget(ctx, client, "about:blank", "verify")
+			closeClientOnce := idempotentContextCloser(closeClient)
+			defer func() { _ = closeClientOnce(context.Background()) }()
+			target, createdPage, err := a.selectOrCreateDiagnosticPage(ctx, client, rawURL, "verify", targetIndex)
 			if err != nil {
 				return err
 			}
-			target.TargetID = createdID
+			cleanupGuard := &renderedExtractCleanupGuard{client: client, targetID: target.TargetID, owned: createdPage}
 
-			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClient)
+			session, err := cdp.AttachToTargetWithClient(ctx, client, target.TargetID, closeClientOnce)
 			if err != nil {
-				closeOwned = true
-				return commandError(
+				cleanup := cleanupGuard.cleanup()
+				primary := commandError(
 					"connection_failed",
 					"connection",
 					fmt.Sprintf("attach target %s: %v", target.TargetID, err),
 					ExitConnection,
 					[]string{"cdp pages --json", "cdp doctor --json"},
 				)
+				closeRenderedExtractSession(nil, closeClientOnce)
+				return diagnosticWorkflowErrorWithCleanup("verify", primary, cleanup)
 			}
-			closeOwned = false
-			defer session.Close(ctx)
+			defer closeRenderedExtractSession(session, nil)
+			defer func() {
+				retErr = diagnosticWorkflowErrorWithCleanup("verify", retErr, cleanupGuard.cleanup())
+			}()
 
 			includeSet := map[string]bool{"console": true, "network": true}
 			collectorErrors := enablePageLoadCollectors(ctx, client, session.SessionID, includeSet)
 			trigger := "observe"
-			_, err = session.Navigate(ctx, rawURL)
-			if err != nil {
-				collectorErrors = append(collectorErrors, collectorError("navigation", err))
-			} else {
-				target.URL = rawURL
-				trigger = "navigate"
+			if rawURL != "" {
+				_, err = session.Navigate(ctx, rawURL)
+				if err != nil {
+					collectorErrors = append(collectorErrors, collectorError("navigation", err))
+				} else {
+					target.URL = rawURL
+					trigger = "navigate"
+				}
 			}
 
 			requests, requestsTruncated, messages, messagesTruncated, err := collectPageLoadEvents(ctx, client, session.SessionID, wait, limit, includeSet)
@@ -107,10 +113,12 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 			report := map[string]any{
 				"ok":       true,
 				"target":   pageRow(target),
+				"cleanup":  cleanupGuard.cleanup(),
 				"requests": requests,
 				"messages": messages,
 				"workflow": map[string]any{
 					"name":               "verify",
+					"created_page":       createdPage,
 					"trigger":            trigger,
 					"requested_url":      rawURL,
 					"wait":               durationString(wait),
@@ -127,25 +135,38 @@ func (a *app) newWorkflowVerifyCommand() *cobra.Command {
 					},
 				},
 			}
+			addWorkflowTargetIndex(report, targetIndex)
+			cleanup := cleanupGuard.cleanup()
+			var artifactErr error
 			if strings.TrimSpace(outPath) != "" {
 				b, err := json.MarshalIndent(report, "", "  ")
 				if err != nil {
-					return commandError("internal", "internal", fmt.Sprintf("marshal verify report: %v", err), ExitInternal, []string{"cdp workflow verify --json"})
+					artifactErr = commandError("internal", "internal", fmt.Sprintf("marshal verify report: %v", err), ExitInternal, []string{"cdp workflow verify --json"})
+				} else {
+					writtenPath, writeErr := writeArtifactFile(outPath, append(b, '\n'))
+					if writeErr != nil {
+						artifactErr = writeErr
+					} else {
+						report["artifact"] = map[string]any{"type": "workflow-verify", "path": writtenPath, "bytes": len(b) + 1}
+						report["artifacts"] = []map[string]any{{"type": "workflow-verify", "path": writtenPath, "bytes": len(b) + 1}}
+					}
 				}
-				writtenPath, err := writeArtifactFile(outPath, append(b, '\n'))
-				if err != nil {
-					return err
-				}
-				report["artifact"] = map[string]any{"type": "workflow-verify", "path": writtenPath, "bytes": len(b) + 1}
-				report["artifacts"] = []map[string]any{{"type": "workflow-verify", "path": writtenPath, "bytes": len(b) + 1}}
+			}
+			if artifactErr != nil || cleanup.Error != "" {
+				return diagnosticWorkflowErrorWithCleanup("verify", artifactErr, cleanup)
 			}
 
-			human := fmt.Sprintf("verify\t%s\t%d failed requests\t%d errors", rawURL, len(requests), len(messages))
+			displayURL := rawURL
+			if displayURL == "" {
+				displayURL = target.URL
+			}
+			human := fmt.Sprintf("verify\t%s\t%d failed requests\t%d errors", displayURL, len(requests), len(messages))
 			return a.render(ctx, human, report)
 		},
 	}
 	cmd.Flags().DurationVar(&wait, "wait", 5*time.Second, "how long to collect evidence after navigation")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum number of events to return; use 0 for no limit")
 	cmd.Flags().StringVar(&outPath, "out", "", "optional path for the JSON verification report artifact")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes")
 	return cmd
 }

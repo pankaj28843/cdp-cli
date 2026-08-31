@@ -13,6 +13,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var locatorOpts locatorActionOptions
 	var suggestionQuery string
 	var suggestionBy string
@@ -47,6 +48,9 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 		Short: "Fill or type into a search input, optionally submit with Enter, and verify the resulting page state",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			inputMode = strings.ToLower(strings.TrimSpace(inputMode))
 			if inputMode == "" {
 				inputMode = "fill"
@@ -133,7 +137,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
 
-			client, session, selectedTarget, err := a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+			client, session, selectedTarget, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -156,6 +160,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 			prepareActionability(&actionability, actionName, false, force)
 			if !actionability.Actionable {
 				report := submitSearchBlockedReport(selectedTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, force, actionability)
+				addWorkflowTargetIndex(report, targetIndex)
 				if locator != nil {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
@@ -236,20 +241,24 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				suggestion = &result
 				if result.Error != nil {
 					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_invalid")
+					addWorkflowTargetIndex(report, targetIndex)
 					return commandErrorWithData("invalid_suggestion_locator", "usage", fmt.Sprintf("submit-search suggestion locator %s %q: %s", suggestionOpts.By, suggestionOpts.Query, result.Error.Message), ExitUsage, submitSearchSuggestionRemediations(suggestionOpts), report)
 				}
 				if result.Count == 0 || len(result.Matches) == 0 {
 					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_not_found")
+					addWorkflowTargetIndex(report, targetIndex)
 					return commandErrorWithData("suggestion_not_found", "check_failed", fmt.Sprintf("submit-search suggestion %s %q matched no elements", suggestionOpts.By, suggestionOpts.Query), ExitCheckFailed, submitSearchSuggestionRemediations(suggestionOpts), report)
 				}
 				if result.Count != 1 || len(result.Matches) != 1 {
 					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_ambiguous")
+					addWorkflowTargetIndex(report, targetIndex)
 					return commandErrorWithData("ambiguous_suggestion", "check_failed", fmt.Sprintf("submit-search suggestion %s %q matched %d elements; refine the suggestion locator before acting", suggestionOpts.By, suggestionOpts.Query, result.Count), ExitCheckFailed, submitSearchSuggestionRemediations(suggestionOpts), report)
 				}
 				match := result.Matches[0]
 				suggestionSelector = strings.TrimSpace(match.SelectorHint)
 				if suggestionSelector == "" || match.SelectorAmbiguous {
 					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_ambiguous")
+					addWorkflowTargetIndex(report, targetIndex)
 					return commandErrorWithData("ambiguous_suggestion", "check_failed", fmt.Sprintf("submit-search suggestion %s %q matched one element but did not produce a unique CSS selector hint", suggestionOpts.By, suggestionOpts.Query), ExitCheckFailed, submitSearchSuggestionRemediations(suggestionOpts), report)
 				}
 				checks, err := evaluateActionability(ctx, session, suggestionSelector, "click")
@@ -258,12 +267,14 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				}
 				if checks.Error != nil {
 					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_invalid")
+					addWorkflowTargetIndex(report, targetIndex)
 					return commandErrorWithData("invalid_suggestion_selector", "usage", fmt.Sprintf("submit-search suggestion %q: %s", suggestionSelector, checks.Error.Message), ExitUsage, submitSearchSuggestionRemediations(suggestionOpts), report)
 				}
 				prepareActionability(&checks, "click", false, false)
 				suggestionActionability = &checks
 				if !checks.Actionable {
 					report := submitSearchSuggestionFailureReport(beforeTarget, selector, args[1], inputMode, inputStrategy, submit, submitKey, poll, actionability, fill, typed, locator, result, "suggestion_blocked")
+					addWorkflowTargetIndex(report, targetIndex)
 					report["suggestion_actionability"] = checks
 					return commandErrorWithData("suggestion_not_actionable", "check_failed", actionabilityFailureMessage("click", suggestionSelector, checks), ExitCheckFailed, actionabilityRemediations("click", suggestionOpts.Query, suggestionSelector, locatorActionOptions{By: suggestionOpts.By, Role: suggestionOpts.Role, Exact: suggestionOpts.Exact, IncludeHidden: suggestionOpts.IncludeHidden, TestIDAttr: suggestionOpts.TestIDAttr, Limit: suggestionOpts.Limit}), report)
 				}
@@ -400,6 +411,7 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addWorkflowTargetIndex(report, targetIndex)
 			if verification != nil {
 				report["verification"] = verification
 			}
@@ -428,8 +440,9 @@ func (a *app) newWorkflowSubmitSearchCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().StringVar(&suggestionQuery, "suggestion", "", "optional suggestion locator query to click after input and before submit")
 	cmd.Flags().StringVar(&suggestionBy, "suggestion-by", "text", "suggestion locator strategy: css, role, text, label, placeholder, alt, title, or test-id")

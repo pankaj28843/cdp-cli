@@ -4,7 +4,7 @@ package browser
 
 import (
 	"context"
-	"os/exec"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -27,10 +27,16 @@ func ensureHeadedChromeWindow(ctx context.Context, channel string) (HeadedWindow
 		Action:             "scan",
 		Message:            "checking for a headed Chrome process",
 	}
-	before := headedChromeProcessCount(ctx, processName, channel)
+	before, err := headedChromeProcessCount(ctx, processName, channel)
+	if err != nil {
+		result.Action = "failed"
+		result.Message = "could not inspect headed Chrome process table"
+		result.Detail = err.Error()
+		return result, nil
+	}
 	result.WindowsBefore = before
 	if before == 0 {
-		if err := exec.CommandContext(ctx, "open", "-n", "-a", processName, "--args", "--profile-directory=Default", "--new-window", RemoteDebuggingApprovalURL).Run(); err != nil {
+		if _, err := runOwnedBrowserCommand(ctx, "open", "-n", "-a", processName, "--args", "--profile-directory=Default", "--new-window", RemoteDebuggingApprovalURL); err != nil {
 			result.Action = "failed"
 			result.Message = "could not launch a headed Chrome window"
 			result.Detail = err.Error()
@@ -38,7 +44,7 @@ func ensureHeadedChromeWindow(ctx context.Context, channel string) (HeadedWindow
 		}
 		result.Action = "created"
 	} else {
-		if err := exec.CommandContext(ctx, "open", "-a", processName).Run(); err != nil {
+		if _, err := runOwnedBrowserCommand(ctx, "open", "-a", processName); err != nil {
 			result.Action = "failed"
 			result.Message = "could not activate headed Chrome"
 			result.Detail = err.Error()
@@ -52,7 +58,13 @@ func ensureHeadedChromeWindow(ctx context.Context, channel string) (HeadedWindow
 		return result, ctx.Err()
 	case <-time.After(500 * time.Millisecond):
 	}
-	after := headedChromeProcessCount(ctx, processName, channel)
+	after, err := headedChromeProcessCount(ctx, processName, channel)
+	if err != nil {
+		result.Action = "failed"
+		result.Message = "could not inspect headed Chrome process table"
+		result.Detail = err.Error()
+		return result, nil
+	}
 	result.WindowsAfter = after
 	result.WindowReady = after > 0
 	if result.WindowReady {
@@ -68,14 +80,14 @@ func ensureHeadedChromeWindow(ctx context.Context, channel string) (HeadedWindow
 	return result, nil
 }
 
-func headedChromeProcessCount(ctx context.Context, processName, channel string) int {
+func headedChromeProcessCount(ctx context.Context, processName, channel string) (int, error) {
 	userDataDir, err := defaultUserDataDir(channel)
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	output, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,command=").Output()
+	output, err := runManagedProcessTable(ctx, "-axo", "pid=,command=")
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("inspect headed Chrome process table: %w", err)
 	}
 	count := 0
 	for _, line := range strings.Split(string(output), "\n") {
@@ -83,5 +95,5 @@ func headedChromeProcessCount(ctx context.Context, processName, channel string) 
 			count++
 		}
 	}
-	return count
+	return count, nil
 }

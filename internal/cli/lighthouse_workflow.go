@@ -77,24 +77,39 @@ func runLighthouseWorkflow(ctx context.Context, a *app, rawURL string, opts ligh
 	if strings.TrimSpace(opts.Throttling) != "" {
 		args = append(args, "--throttling-method="+strings.TrimSpace(opts.Throttling))
 	}
-	cmd := exec.CommandContext(ctx, bin, args...)
-	combined, err := cmd.CombinedOutput()
-	jsonPath := prefix + ".report.json"
-	htmlPath := prefix + ".report.html"
-	if _, statErr := os.Stat(jsonPath); statErr != nil {
-		jsonPath = prefix + ".json"
-		htmlPath = prefix + ".html"
-	}
+	stdout := &boundedProcessOutput{maxBytes: maxExternalProcessOutputBytes}
+	stderr := &boundedProcessOutput{maxBytes: maxExternalProcessOutputBytes}
+	err = runLighthouseCommand(ctx, bin, args, stdout, stderr)
+	jsonPath, htmlPath := lighthouseReportPaths(prefix)
 	if err != nil {
-		message := artifacts.NewRedactor(redact).BodyText(strings.TrimSpace(string(combined)), "lighthouse.stderr")
+		message := artifacts.NewRedactor(redact).BodyText(strings.TrimSpace(strings.TrimSpace(stdout.String())+"\n"+strings.TrimSpace(stderr.String())), "lighthouse.output")
 		if len(message) > 2048 {
-			message = message[:2048] + "<truncated>"
+			message = strings.ToValidUTF8(message[:2048], "") + "<truncated>"
 		}
-		return commandError("lighthouse_failed", "check_failed", fmt.Sprintf("lighthouse failed against daemon-owned Chrome: %v: %s", err, message), ExitCheckFailed, []string{"cdp --browser-mode headless daemon status --json", "cdp workflow a11y " + rawURL + " --json"})
+		return commandErrorWithData(
+			"lighthouse_failed",
+			"check_failed",
+			fmt.Sprintf("lighthouse failed against daemon-owned Chrome: %v: %s", err, message),
+			ExitCheckFailed,
+			[]string{"cdp --browser-mode headless daemon status --json", "cdp workflow a11y " + rawURL + " --json"},
+			map[string]any{
+				"max_output_bytes_per_stream": maxExternalProcessOutputBytes,
+				"output_truncated":            stdout.truncated || stderr.truncated,
+				"process_termination":         ownedProcessTerminationMode(),
+			},
+		)
 	}
-	reportBytes, err := os.ReadFile(jsonPath)
+	jsonArtifact, err := validateLighthouseArtifact(jsonPath, "lighthouse-json")
 	if err != nil {
-		return commandError("artifact_missing", "internal", fmt.Sprintf("read Lighthouse JSON report: %v", err), ExitInternal, []string{"lighthouse " + rawURL + " --output=json --output=html"})
+		return lighthouseArtifactFailure(jsonPath, htmlPath, "lighthouse-json", err)
+	}
+	_, err = validateLighthouseArtifact(htmlPath, "lighthouse-html")
+	if err != nil {
+		return lighthouseArtifactFailure(jsonPath, htmlPath, "lighthouse-html", err)
+	}
+	reportBytes := jsonArtifact.data
+	if len(reportBytes) == 0 {
+		return lighthouseArtifactFailure(jsonPath, htmlPath, "lighthouse-json", fmt.Errorf("report is empty"))
 	}
 	var parsed lighthouseReport
 	if err := json.Unmarshal(reportBytes, &parsed); err != nil {
@@ -126,10 +141,18 @@ func runLighthouseWorkflow(ctx context.Context, a *app, rawURL string, opts ligh
 		}
 		failed = safeFailed
 	}
+	jsonArtifact, err = validateLighthouseArtifact(jsonPath, "lighthouse-json")
+	if err != nil {
+		return lighthouseArtifactFailure(jsonPath, htmlPath, "lighthouse-json", err)
+	}
+	htmlArtifact, err := validateLighthouseArtifact(htmlPath, "lighthouse-html")
+	if err != nil {
+		return lighthouseArtifactFailure(jsonPath, htmlPath, "lighthouse-html", err)
+	}
 	safety := redactor.Metadata(true, artifactWarning)
 	artifactList := []map[string]any{
-		lighthouseArtifact("lighthouse-json", jsonPath, safety),
-		lighthouseArtifact("lighthouse-html", htmlPath, safety),
+		lighthouseArtifact("lighthouse-json", jsonPath, jsonArtifact.bytes, safety),
+		lighthouseArtifact("lighthouse-html", htmlPath, htmlArtifact.bytes, safety),
 	}
 	report := map[string]any{
 		"ok":            true,
@@ -170,12 +193,67 @@ func lighthouseDaemonPort(runtime daemon.Runtime) (string, error) {
 	return endpoint.Port(), nil
 }
 
-func lighthouseArtifact(kind, path string, safety artifacts.SafetyMetadata) map[string]any {
-	artifact := map[string]any{"type": kind, "path": path, "safety": safety}
-	if info, err := os.Stat(path); err == nil {
-		artifact["bytes"] = info.Size()
+func lighthouseReportPaths(prefix string) (string, string) {
+	jsonPath := prefix + ".report.json"
+	if _, err := os.Lstat(jsonPath); err == nil {
+		return jsonPath, prefix + ".report.html"
 	}
-	return artifact
+	return prefix + ".json", prefix + ".html"
+}
+
+type lighthouseArtifactValidation struct {
+	data  []byte
+	bytes int64
+}
+
+func validateLighthouseArtifact(path, kind string) (lighthouseArtifactValidation, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return lighthouseArtifactValidation{}, fmt.Errorf("%s report is unavailable: %w", kind, err)
+	}
+	if !info.Mode().IsRegular() {
+		return lighthouseArtifactValidation{}, fmt.Errorf("%s report is not a regular file", kind)
+	}
+	if info.Size() <= 0 {
+		return lighthouseArtifactValidation{}, fmt.Errorf("%s report is empty", kind)
+	}
+	result := lighthouseArtifactValidation{bytes: info.Size()}
+	if kind != "lighthouse-json" {
+		return result, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return lighthouseArtifactValidation{}, fmt.Errorf("read %s report: %w", kind, err)
+	}
+	if len(data) == 0 {
+		return lighthouseArtifactValidation{}, fmt.Errorf("%s report is empty", kind)
+	}
+	result.data = data
+	return result, nil
+}
+
+func lighthouseArtifactFailure(jsonPath, htmlPath, kind string, cause error) error {
+	path := jsonPath
+	if kind == "lighthouse-html" {
+		path = htmlPath
+	}
+	return commandErrorWithData(
+		"artifact_missing",
+		"internal",
+		fmt.Sprintf("Lighthouse %s artifact is invalid: %v", kind, cause),
+		ExitInternal,
+		[]string{"cdp workflow lighthouse --help", "cdp --browser-mode headless daemon status --json"},
+		map[string]any{
+			"artifact_kind": kind,
+			"path":          path,
+			"json_path":     jsonPath,
+			"html_path":     htmlPath,
+		},
+	)
+}
+
+func lighthouseArtifact(kind, path string, byteCount int64, safety artifacts.SafetyMetadata) map[string]any {
+	return map[string]any{"type": kind, "path": path, "bytes": byteCount, "safety": safety}
 }
 
 func lighthouseSafeHTML(rawURL string, categories map[string]any, failed []map[string]any) string {

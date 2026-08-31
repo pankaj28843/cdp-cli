@@ -3,8 +3,10 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -107,7 +109,7 @@ func enableRemoteDebuggingInLocalState(data []byte) ([]byte, bool, error) {
 }
 
 func chromeDefaultProfileInUse(ctx context.Context, processName, userDataDir string) bool {
-	output, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,command=").Output()
+	output, err := runManagedProcessTable(ctx, "-axo", "pid=,command=")
 	if err != nil {
 		// Refuse a profile rewrite when process ownership cannot be checked.
 		return true
@@ -221,7 +223,8 @@ func chromeRemoteDebuggingEnabled(channel string) (enabled, known bool, err erro
 }
 
 func openRemoteDebuggingApprovalPage(ctx context.Context, processName string) error {
-	return exec.CommandContext(ctx, "open", "-a", processName, RemoteDebuggingApprovalURL).Run()
+	_, err := runOwnedBrowserCommand(ctx, "open", "-a", processName, RemoteDebuggingApprovalURL)
+	return err
 }
 
 func waitForRemoteDebuggingPage(ctx context.Context) error {
@@ -271,14 +274,26 @@ func parseChromeProcessIDs(output string) []int {
 	return pids
 }
 
+func nativeChromeProcessIDs(ctx context.Context, processName string) ([]int, error) {
+	result, err := runOwnedBrowserCommand(ctx, "pgrep", "-x", processName)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(bytes.TrimSpace(result.stdout)) == 0 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find Chrome processes: %w", err)
+	}
+	return parseChromeProcessIDs(string(result.stdout)), nil
+}
+
 func enableRemoteDebuggingCheckbox(ctx context.Context, processName string) (bool, error) {
 	// AX can inspect Chrome while it is backgrounded, but Quartz input is
 	// delivered to the active application. Bring the headed browser forward
 	// before asking the native helper to click the exact checkbox.
-	openErr := exec.CommandContext(ctx, "open", "-a", processName).Run()
+	_, openErr := runOwnedBrowserCommand(ctx, "open", "-a", processName)
 	activateCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	activateScript := fmt.Sprintf("tell application %q to activate", processName)
-	activateErr := exec.CommandContext(activateCtx, "osascript", "-e", activateScript).Run()
+	_, activateErr := runOwnedBrowserCommand(activateCtx, "osascript", "-e", activateScript)
 	cancel()
 	if openErr != nil && activateErr != nil {
 		return false, fmt.Errorf("activate headed Chrome: open: %v; AppleScript: %w", openErr, activateErr)
@@ -371,15 +386,15 @@ func runRemoteDebuggingNativeHelper(ctx context.Context, helperArgs ...string) (
 	if err != nil {
 		return nil, fmt.Errorf("resolve cdp executable for macOS accessibility helper: %w", err)
 	}
-	output, err := exec.CommandContext(helperCtx, helperPath, helperArgs...).CombinedOutput()
+	result, err := runOwnedBrowserCommand(helperCtx, helperPath, helperArgs...)
 	if err != nil {
 		if helperCtx.Err() != nil {
 			return nil, fmt.Errorf("macOS accessibility helper timed out: %w", helperCtx.Err())
 		}
-		if detail := strings.TrimSpace(string(output)); detail != "" {
+		if detail := strings.TrimSpace(string(result.stderr)); detail != "" {
 			return nil, fmt.Errorf("macOS accessibility helper failed: %w: %s", err, detail)
 		}
 		return nil, fmt.Errorf("macOS accessibility helper failed: %w", err)
 	}
-	return output, nil
+	return result.stdout, nil
 }

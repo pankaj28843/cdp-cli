@@ -18,6 +18,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	var targetID string
 	var urlContains string
 	var titleContains string
+	var targetIndex int
 	var outDir string
 	var since time.Duration
 	var screenshotFull bool
@@ -36,6 +37,12 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 		Short: "Collect a full debug bundle with events, snapshot, screenshot, and artifact references",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+				return err
+			}
+			if targetIndex > 0 && strings.TrimSpace(rawURL) != "" {
+				return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with workflow-created --url", ExitUsage, []string{"cdp workflow debug-bundle --target-index 1 --json", "cdp workflow debug-bundle --url https://example.com --json"})
+			}
 			if since < 0 {
 				return commandError("usage", "usage", "--since must be non-negative", ExitUsage, []string{"cdp workflow debug-bundle --url 'https://example.com' --since 2s --json"})
 			}
@@ -176,7 +183,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 				defer session.Close(ctx)
 				trigger = "navigate"
 			} else {
-				client, session, target, err = a.attachPageEventSession(ctx, targetID, urlContains, titleContains)
+				client, session, target, err = a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 				if err != nil {
 					return err
 				}
@@ -359,6 +366,8 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 			commandArgv := []string{"cdp", "workflow", "debug-bundle"}
 			if rawURL != "" {
 				commandArgv = append(commandArgv, "--url", argvRedactor.URL(rawURL, "command.argv.url"))
+			} else if targetIndex > 0 {
+				commandArgv = append(commandArgv, "--target-index", fmt.Sprintf("%d", targetIndex))
 			} else if targetID != "" {
 				commandArgv = append(commandArgv, "--target", targetID)
 			} else if urlContains != "" {
@@ -475,6 +484,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 					"stage":           stageName,
 				},
 			}
+			addWorkflowTargetIndex(report, targetIndex)
 			if inlinePayloads {
 				report["requests"] = debugBundleRedactedRequests(requests, artifacts.NewRedactor(redact))
 				report["messages"] = debugBundleRedactedMessages(messages, artifacts.NewRedactor(redact))
@@ -499,8 +509,9 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&rawURL, "url", "", "open this URL before collecting the debug bundle")
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "use the 1-based existing page index; workers do not consume indexes and this cannot be combined with --url, --target, --url-contains, or --title-contains")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "optional directory for debug bundle artifacts")
 	cmd.Flags().DurationVar(&since, "since", 5*time.Second, "how long to collect evidence after navigation/attach")
 	cmd.Flags().BoolVar(&screenshotFull, "screenshot-full", false, "capture full-page screenshot in the debug bundle")
@@ -511,7 +522,7 @@ func (a *app) newWorkflowDebugBundleCommand() *cobra.Command {
 	cmd.Flags().StringVar(&runID, "run-id", "", "optional run id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "optional task id recorded in bundle command and stage logs")
 	cmd.Flags().StringVar(&stageName, "stage", "", "optional stage name recorded in bundle command and stage logs")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for follow-up commands")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for follow-up commands; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	cmd.Flags().BoolVar(&reload, "reload", true, "reload an existing selected target after collectors are armed")
 	cmd.Flags().BoolVar(&ignoreCache, "ignore-cache", true, "bypass ordinary HTTP cache for the evidence-triggering reload or navigation")
 	return cmd

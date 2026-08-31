@@ -65,6 +65,137 @@ architecture is intentionally small: keep browser protocol mechanics in
   filesystem boundary, and always retains browser profiles, runtime metadata,
   connections/page selections, registries, sockets, locks, current summaries,
   unknown paths, and external custom output directories.
+- Short-lived CLI-owned external commands use bounded stdout/stderr and an
+  owned cancellation boundary. Manager and jq diagnostics must not grow
+  without bound or leave a descendant holding a pipe after cancellation;
+  managed cron and artifact children use the same owned process-tree boundary,
+  and shared stdout/stderr log writers synchronize their hard cap. Explicit jq
+  stdout remains caller-requested rather than receiving an implicit result cap.
+  Partial schedule output is never treated as a complete schedule.
+- Managed browser process-table probes use the same owned process boundary on
+  Unix external scans and retain only a complete table within a documented
+  byte budget. Overflow or probe failure is explicit; partial output and an
+  empty process set are never used as a success signal.
+- Native remote-debugging approval discovery and its short-lived platform
+  helpers use a bounded owned process boundary as well. Complete PID/JSON
+  metadata is the only retained result; helper overflow, failure, or
+  cancellation is explicit and cannot be interpreted as native approval.
+- Darwin Launch Services, AppleScript, and System Events action transport uses
+  the same boundary with bounded script input/output. The shared System Events
+  service is never broadly signaled as if it were cdp-owned; exact native
+  action matching and the daemon transport proof remain unchanged.
+- A headed keepalive launch remains owned through the supported window
+  readiness check. A failed readiness path terminates and reaps only the
+  command started by that invocation; successful readiness is the detach
+  boundary, while unsupported window adapters preserve the existing behavior.
+- A detached daemon hold follows the same readiness boundary: its process
+  group remains owned until the mode-scoped runtime socket is ready, failed
+  startup is terminated and reaped before stale state is cleared, and only a
+  ready hold is detached.
+- Headless repair also inventories adopted detached `cdp daemon hold`
+  processes. It can reclaim only an exact executable/argument match whose
+  mode-scoped state root, connection mode, socket, profile, parent, and strong
+  process-start identity agree with the current runtime; every ownership and
+  generation check is repeated immediately before the exact process-group
+  signal. Lookalikes, PID reuse, missing metadata, non-leaders, and runtime
+  replacement remain untouched, and the public result contains only PIDs and
+  stable reason labels.
+- Detached runtime stop is identity-aware: the private mode-scoped runtime
+  records an opaque OS process-start token when available, and stop verifies
+  PID plus token before signaling or force-terminating the exact process group.
+  A mismatched token is stale state and an unavailable verification fails
+  closed; legacy runtime files without a token retain their prior compatibility
+  behavior. Tokens and raw process probes never enter public JSON or evidence.
+- User-facing runtime status and readiness use one bounded identity-aware
+  process check. Its safe `process_identity_state` distinguishes running,
+  stopped, mismatched, and unverifiable owners; a strong-token mismatch or
+  unavailable probe cannot be retried into a PID-only healthy result.
+- Daemon-internal runtime reuse, socket readiness, replacement detection,
+  startup readiness, and stop polling use the same private identity check.
+  Stop rechecks before forced process-group escalation and refuses escalation
+  when a strong identity is mismatched or unavailable; legacy records without a
+  token retain PID-only compatibility.
+- Normal daemon runtime stop performs a final context-aware process check after
+  its initial ownership check and immediately before `os.Interrupt`. A changed,
+  unavailable, canceled, or vanished owner is never signaled; only the existing
+  current-runtime guard may clear stale state.
+- Daemon runtime cleanup carries cancellation through the final removal boundary:
+  mode-scoped runtime state is checked immediately before removal, and the
+  expected runtime socket is checked again before removal. A canceled cleanup
+  cannot continue into socket deletion, while detached hold teardown retains
+  its explicit background cleanup boundary.
+- Daemon RPC lease bookkeeping carries the request context through touch,
+  target ownership registration, target release, and lease state transitions.
+  If a request disconnects after creating a target, registration failure still
+  uses a separate bounded cleanup context to close only that exact target;
+  explicit lease recovery remains a named background cleanup boundary.
+- Daemon RPC response delivery uses one bounded context-aware writer. Final
+  envelopes use a cancellation-independent delivery context so an operation
+  that has just ended can still return its existing error or result envelope;
+  the writer closes only the exact local RPC connection when its five-second
+  bound expires, while normal responses remain complete and no browser
+  transport is created.
+- The shared daemon `CheckRuntimeProcess` carries its caller context through
+  both PID liveness decisions and the strong identity probe. A canceled check
+  is explicitly non-running and cannot authorize runtime cleanup, signaling,
+  or escalation; context-free `ProcessRunning` and `RuntimeRunning` wrappers
+  remain compatible.
+- The cdp-owned managed-process registry lock also records a private process
+  identity when available. Stale-lock cleanup removes a dead or mismatched
+  owner, retains an unverifiable live owner, and keeps legacy PID-only lock
+  files compatible while preserving same-file replacement protection.
+- Default managed-process signaling carries its operation context through the
+  bounded graceful wait; cancellation returns promptly without leader-kill
+  escalation, while the existing direct PID signal/kill policy and caller-owned
+  callback contract remain unchanged.
+- Cron's read-only `/proc/locks` owner attribution uses the status context and a
+  hard total-input bound. Only a complete successful scan can return owner
+  evidence; overflow, read failure, or cancellation remains unknown and cannot
+  make an empty flock marker look stale.
+- Managed headless health uses the same private Chrome PID-plus-token evidence
+  when available. A recycled PID is reported as an identity mismatch and never
+  as a running managed browser; legacy wall-clock metadata remains compatible,
+  while token verification failures are explicit and fail closed. If the
+  recorded launcher PID is gone, read-only health/keepalive diagnostics may
+  use the cdp-owned profile's active loopback DevTools endpoint as a
+  source-aligned wrapper/fork liveness fallback; profile/port attribution is
+  conservative and this evidence never authorizes ownership or cleanup.
+- Cdp-owned metadata locks use the same private PID-plus-token rule when the
+  host provides it. A mismatched owner is stale and replaceable; an unavailable
+  identity probe remains held/unknown so recovery cannot remove a possibly live
+  owner, while legacy lock files retain their prior liveness behavior.
+- Context-bearing lock acquisition, stale cleanup, and cron status preserve
+  their caller context through ownership inspection. An interrupted strong
+  identity probe returns cancellation before any stale/recovery decision;
+  legacy `InspectLock` callers retain the background-context compatibility
+  wrapper.
+- Managed-browser ownership diagnostics likewise derive their strong identity
+  probe from the health operation context. Cancellation returns unchecked,
+  unowned evidence instead of publishing a partial healthy result; the legacy
+  `VerifyManagedOwnership` wrapper remains available for context-free callers.
+- Persistent event streams also compare their captured daemon runtime
+  registration before each exact-session heartbeat. A strong current runtime
+  identity is present, a strong readable replacement retires the stream, and
+  missing, empty, corrupt, unreadable, or insufficient legacy state remains
+  unknown so the existing heartbeat can decide liveness. The check is
+  metadata-only, stays inside the daemon boundary, and remains optional for
+  older or fake clients.
+- Managed launch registry writes likewise derive their bounded lock operation
+  from the `StartManagedChrome` caller context. Pre-cancellation and lock
+  contention return before publishing a live record; the legacy
+  `RegisterManagedProcessLaunch` wrapper remains available for context-free
+  callers, and the registry shape is unchanged.
+- Managed browser health liveness likewise checks its caller context before
+  the initial PID probe and uses a context-aware daemon liveness wrapper.
+  Cancellation remains a safe non-running detail; any following ownership
+  inspection still uses its own caller-aware contract and cannot claim owned,
+  while no repair or signal is triggered. The legacy `ProcessRunning` wrapper
+  remains available for context-free callers. Endpoint fallback is bounded and
+  loopback/profile-bound, and it reports safe provenance without replacing the
+  recorded PID or its identity evidence.
+- Concurrent workflow workers resolve browser probe options into per-call
+  copies; command-level connection state is not mutated while workers are
+  running.
 - Raw CDP is a first-class escape hatch. High-level commands should cover common
   workflows, but agents must be able to discover and execute current protocol
   methods without waiting for wrappers. `protocol exec --target-type` also
@@ -78,13 +209,14 @@ architecture is intentionally small: keep browser protocol mechanics in
 | Package | Owns | Must Not Own |
 | --- | --- | --- |
 | `cmd/cdp` | Binary entry point and build metadata wiring | Browser logic |
-| `internal/cli` | Cobra commands, output shaping, error envelopes | Raw WebSocket protocol loops |
+| `internal/cli` | Cobra commands, output shaping, error envelopes, and bounded owned short-lived process probes | Raw WebSocket protocol loops |
 | `internal/cdp` | CDP transport, target/page helpers, protocol metadata | CLI flag policy |
 | `internal/artifacts` | Retention planning/execution, path and filesystem safety, atomic bounded managed logs | Browser/profile state discovery |
 | `internal/browserflow` | Exact target leases, shared headed-input lease, lifecycle journal, phase transitions, and tri-state irreversible-action dispatch | Provider selectors, Cobra, output rendering, or direct Chrome dialing |
 | `internal/webagent` | Stable provider operation envelope, capability catalog, and concrete provider packages below it | Cobra, direct Chrome dialing, sibling-provider imports, or universal selector/workflow DSLs |
-| `internal/browser` | Browser endpoint probing, auto-connect endpoint resolution, managed headless profile metadata and launch helpers | CLI output policy |
+| `internal/browser` | Browser endpoint probing, auto-connect endpoint resolution, managed headless profile metadata, launch helpers, and bounded process ownership evidence; managed Chrome remains owned through pre-readiness launch failures, detaches only after readiness, and rechecks the recorded root identity immediately before normal stop signaling | CLI output policy |
 | `internal/daemon` | Mode-specific keepalive runtime files, sockets, logs, process status, runtime client | User-facing command formatting |
+| `internal/processgroup` | Context-aware execution and explicit termination of one owned external process tree, with process-group cancellation where supported and a direct-process fallback elsewhere | Browser discovery, provider policy, unbounded output retention |
 | `internal/state` | Disk-backed connection metadata and mode-scoped page selection | Browser/page content |
 | `internal/output` | JSON, compact JSON, jq filtering | Command semantics |
 
@@ -167,6 +299,13 @@ regular registry, retains at most eight terminal generations younger than 24
 hours, preserves active/indeterminate/unknown records, and reports compaction
 and skip counts separately from current health.
 
+Daemon-hold health is generation-scoped as well. A successful orphan
+reconciliation records only a metadata-only `hold_reclaimed` PID marker, and
+natural `hold_superseded` markers identify the same retired generation. Health
+filters warnings from those retired PIDs while retaining warnings from the
+active runtime, so cleanup cannot turn active connection churn into a false
+healthy result or let an old hold poison the current generation.
+
 Cron owns the lifecycle of its output. Headed keepalive and headless maintenance
 run through a latest-run writer with an independent hard byte cap while already
 holding their task lock, so the target log is bounded before child output opens.
@@ -174,6 +313,12 @@ A separately locked daily task applies the shared retention plan at most once a
 day. Manual dry-run and apply use the same immutable plan; apply revalidates the
 observed path, size, timestamp, root, symlink, and filesystem assumptions before
 mutation and continues across independent candidate failures.
+
+Legacy empty `flock` marker inspection is also process-owned and bounded. The
+non-blocking probe treats only exit 0 as unlocked and exit 1 as locked; startup,
+other exit statuses, cancellation, and deadline are unknown rather than a
+false lock claim. The probe never retains flock diagnostics or mutates the
+marker, and its caller context flows from cron status.
 
 Runtime artifacts are mode-specific so headed and headless can coexist: headed
 keeps the historical singleton paths, while headless uses its own runtime file,

@@ -73,6 +73,7 @@ func (a *app) newWaitDownloadCommand() *cobra.Command {
 	var targetID string
 	var pageURLContains string
 	var titleContains string
+	var targetIndex int
 	var matchURL string
 	var filenameContains string
 	var state string
@@ -83,6 +84,9 @@ func (a *app) newWaitDownloadCommand() *cobra.Command {
 		Short: "Wait for a browser download to start or complete",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validatePageTargetIndexSelector(cmd, targetID, pageURLContains, titleContains, targetIndex); err != nil {
+				return err
+			}
 			explicitDownloadDir := strings.TrimSpace(downloadDir)
 			opts := downloadWaitOptions{
 				Criteria: downloadWaitCriteria{
@@ -120,7 +124,12 @@ func (a *app) newWaitDownloadCommand() *cobra.Command {
 			}
 			defer closeClient(ctx)
 
-			target, err := a.resolvePageTargetWithClient(ctx, client, targetID, pageURLContains, titleContains)
+			var target cdp.TargetInfo
+			if targetIndex > 0 {
+				target, err = a.resolvePageTargetWithClientIndex(ctx, client, targetID, pageURLContains, titleContains, targetIndex)
+			} else {
+				target, err = a.resolvePageTargetWithClient(ctx, client, targetID, pageURLContains, titleContains)
+			}
 			if err != nil {
 				return err
 			}
@@ -134,6 +143,9 @@ func (a *app) newWaitDownloadCommand() *cobra.Command {
 				_ = teardown(teardownCtx)
 			}
 			report := downloadWaitReport(observation, opts, target, elapsed, a.effectiveNetworkWaitTimeout(), redactor)
+			if targetIndex > 0 {
+				report["target_index"] = targetIndex
+			}
 			if err != nil {
 				return downloadWaitError(ctx, target.TargetID, opts, report, err)
 			}
@@ -141,8 +153,9 @@ func (a *app) newWaitDownloadCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix used as the triggering page context")
-	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the first triggering page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first triggering page whose title contains this text")
+	cmd.Flags().StringVar(&pageURLContains, "url-contains", "", "use the unique triggering page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique triggering page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based triggering page target index")
 	cmd.Flags().StringVar(&matchURL, "match-url", "", "substring that the download URL must contain")
 	cmd.Flags().StringVar(&filenameContains, "filename-contains", "", "substring that the suggested filename must contain")
 	cmd.Flags().StringVar(&state, "state", "completed", "download wait state: started or completed")

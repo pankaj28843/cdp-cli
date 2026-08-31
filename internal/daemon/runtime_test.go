@@ -384,6 +384,24 @@ func TestRuntimeClientRPCErrorCompatibility(t *testing.T) {
 		t.Fatalf("structured CallRuntime error = %#v, want RPCError with code/class/message", err)
 	}
 
+	protocolCode := 0
+	protocolRuntime := runtimeWithRPCResponse(t, daemon.RPCResponse{
+		OK: false,
+		ErrorEnvelope: &daemon.RPCError{
+			Code:            "cdp_command_failed",
+			Class:           "protocol",
+			Message:         "cdp Test.rejected failed: rejected (0)",
+			ProtocolCode:    &protocolCode,
+			ProtocolMethod:  "Test.rejected",
+			ProtocolMessage: "rejected",
+		},
+	})
+	_, err = daemon.CallRuntime(context.Background(), protocolRuntime, "", "Test.rejected", nil)
+	var protocolErr *cdp.ProtocolError
+	if !errors.As(err, &protocolErr) || protocolErr.Method != "Test.rejected" || protocolErr.Code != 0 || protocolErr.Message != "rejected" {
+		t.Fatalf("protocol CallRuntime error = %#v, want typed code-zero ProtocolError", err)
+	}
+
 	var decoded daemon.RPCResponse
 	if err := json.Unmarshal([]byte(`{"ok":false,"error":"legacy","error_envelope":{"code":"daemon_rpc_failed","class":"connection","message":"structured failure"}}`), &decoded); err != nil {
 		t.Fatalf("Unmarshal structured RPCResponse returned error: %v", err)

@@ -47,6 +47,14 @@ func (f *networkControlFakeClient) ReadEvent(ctx context.Context) (cdp.Event, er
 	return cdp.Event{}, ctx.Err()
 }
 
+func (f *networkControlFakeClient) DrainSessionEvents(context.Context, string) ([]cdp.Event, error) {
+	return nil, nil
+}
+
+func (f *networkControlFakeClient) ReadSessionEvent(ctx context.Context, _ string) (cdp.Event, error) {
+	return f.ReadEvent(ctx)
+}
+
 func (f *networkControlFakeClient) methodSnapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

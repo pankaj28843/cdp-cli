@@ -126,8 +126,9 @@ func TestPagesJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK    bool `json:"ok"`
-		Pages []struct {
+		OK         bool   `json:"ok"`
+		IndexOrder string `json:"index_order"`
+		Pages      []struct {
 			ID       string `json:"id"`
 			Type     string `json:"type"`
 			Title    string `json:"title"`
@@ -138,7 +139,7 @@ func TestPagesJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("pages output is invalid JSON: %v", err)
 	}
-	if !got.OK || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" || got.Pages[0].Type != "page" {
+	if !got.OK || got.IndexOrder != "target_id_ascending" || len(got.Pages) != 1 || got.Pages[0].ID != "page-1" || got.Pages[0].Type != "page" {
 		t.Fatalf("pages output = %+v, want one page target", got)
 	}
 }
@@ -2153,6 +2154,163 @@ func TestOpenJSON(t *testing.T) {
 	}
 }
 
+func TestOpenSelectsExistingPageByTargetIndex(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-one", "type": "page", "title": "First", "url": "https://example.test/first"},
+		{"targetId": "worker-between", "type": "worker", "title": "Worker", "url": "https://example.test/worker"},
+		{"targetId": "page-two", "type": "page", "title": "Second", "url": "https://example.test/second"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"open", "https://example.test/navigated", "--new-tab=false", "--target-index", "2", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("open target-index exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK          bool   `json:"ok"`
+		Action      string `json:"action"`
+		TargetIndex int    `json:"target_index"`
+		Created     bool   `json:"created"`
+		Reused      bool   `json:"reused"`
+		Page        struct {
+			ID      string `json:"id"`
+			URL     string `json:"url"`
+			FrameID string `json:"frame_id"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open target-index output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Action != "navigated" || got.TargetIndex != 2 || got.Created || !got.Reused || got.Page.ID != "page-two" || got.Page.URL != "https://example.test/navigated" || got.Page.FrameID != "frame-1" {
+		t.Fatalf("open target-index output = %+v, want existing page-two navigation", got)
+	}
+}
+
+func TestOpenReuseSelectsExistingPageByTargetIndex(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-one", "type": "page", "title": "First", "url": "https://example.test/first"},
+		{"targetId": "worker-between", "type": "worker", "title": "Worker", "url": "https://example.test/worker"},
+		{"targetId": "page-two", "type": "page", "title": "Second", "url": "https://example.test/second"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"open", "https://example.test/reused", "--reuse", "--target-index", "2", "--budget-summary", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("open reuse target-index exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK          bool   `json:"ok"`
+		Action      string `json:"action"`
+		TargetIndex int    `json:"target_index"`
+		Created     bool   `json:"created"`
+		Reused      bool   `json:"reused"`
+		Page        struct {
+			ID string `json:"id"`
+		} `json:"page"`
+		Reuse struct {
+			Policy      string `json:"policy"`
+			TargetIndex int    `json:"target_index"`
+			TargetID    string `json:"target_id"`
+			Matched     bool   `json:"matched"`
+		} `json:"reuse"`
+		TabBudget struct {
+			Policy      string `json:"policy"`
+			ReuseTarget string `json:"reuse_target"`
+			TargetIndex int    `json:"target_index"`
+			Before      struct {
+				TabCount int `json:"tab_count"`
+			} `json:"before"`
+			After struct {
+				TabCount int `json:"tab_count"`
+			} `json:"after"`
+		} `json:"tab_budget"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("open reuse target-index output is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if !got.OK || got.Action != "reused" || got.TargetIndex != 2 || got.Created || !got.Reused || got.Page.ID != "page-two" {
+		t.Fatalf("open reuse target-index output = %+v, want reused page-two", got)
+	}
+	if got.Reuse.Policy != "reuse_target_index" || got.Reuse.TargetIndex != 2 || got.Reuse.TargetID != "page-two" || !got.Reuse.Matched {
+		t.Fatalf("open reuse target-index report = %+v, want indexed match", got.Reuse)
+	}
+	if got.TabBudget.Policy != "reuse_target_index" || got.TabBudget.ReuseTarget != "index:2" || got.TabBudget.TargetIndex != 2 || got.TabBudget.Before.TabCount != 2 || got.TabBudget.After.TabCount != 2 {
+		t.Fatalf("open reuse target-index budget = %+v, want indexed reuse metadata", got.TabBudget)
+	}
+}
+
+func TestOpenRejectsInvalidTargetIndexBeforeConnection(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		code string
+	}{
+		{name: "zero", args: []string{"--target-index", "0", "--new-tab=false"}, code: "invalid_target_index"},
+		{name: "negative", args: []string{"--target-index", "-1", "--new-tab=false"}, code: "invalid_target_index"},
+		{name: "default new tab", args: []string{"--target-index", "1"}, code: "invalid_target_selector"},
+		{name: "target conflict", args: []string{"--target-index", "1", "--target", "page-one", "--new-tab=false"}, code: "invalid_target_selector"},
+		{name: "url conflict", args: []string{"--target-index", "1", "--url-contains", "example.test", "--new-tab=false"}, code: "invalid_target_selector"},
+		{name: "title conflict", args: []string{"--target-index", "1", "--title-contains", "First", "--new-tab=false"}, code: "invalid_target_selector"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			args := append([]string{"open", "https://example.test/guard"}, test.args...)
+			args = append(args, "--json")
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), args, &out, &errOut, cli.BuildInfo{})
+			if code != cli.ExitUsage {
+				t.Fatalf("open %s exit=%d, want %d; stdout=%s stderr=%s", test.name, code, cli.ExitUsage, out.String(), errOut.String())
+			}
+			assertTargetIndexError(t, out.Bytes(), test.code)
+		})
+	}
+}
+
+func TestOpenTargetIndexOutOfRangeDoesNotCreatePage(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "only-page", "type": "page", "title": "Only", "url": "https://example.test/only"},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"open", "https://example.test/should-not-open", "--new-tab=false", "--target-index", "2", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("open out-of-range target-index exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitUsage, out.String(), errOut.String())
+	}
+	assertTargetIndexError(t, out.Bytes(), "target_not_found")
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"pages", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("pages after out-of-range open exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	var pages struct {
+		Pages []struct {
+			ID string `json:"id"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &pages); err != nil {
+		t.Fatalf("pages after out-of-range open is invalid JSON: %v; output=%s", err, out.String())
+	}
+	if len(pages.Pages) != 1 || pages.Pages[0].ID != "only-page" {
+		t.Fatalf("pages after out-of-range open = %+v, want only original page", pages.Pages)
+	}
+}
+
 func TestOpenReuseURLFilterNavigatesExistingWithBudgetSummaryJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-flights", "type": "page", "title": "Flights", "url": "https://www.google.com/travel/flights", "attached": false},
@@ -3067,6 +3225,138 @@ func TestScreenshotRenderJSON(t *testing.T) {
 	}
 	if !got.OK || !got.Render.Served || got.Render.WaitFor != "window.__rendered === true" || got.Render.Viewport.Width != 800 || got.Screenshot.Path != outPath {
 		t.Fatalf("screenshot render output = %+v, want render metadata", got)
+	}
+}
+
+func TestScreenshotRenderCleanupWaitsForTargetGone(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":             "delayed-close-sentinel",
+		"type":                 "page",
+		"title":                "Sentinel",
+		"url":                  "https://example.test/sentinel",
+		"fakeCloseTargetDelay": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "diagram.html")
+	if err := os.WriteFile(htmlPath, []byte("<main>ready</main>"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	outPath := filepath.Join(dir, "diagram.png")
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "render", htmlPath, "--out", outPath, "--wait", "0", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("screenshot render delayed cleanup exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK      bool `json:"ok"`
+		Cleanup struct {
+			Attempted    bool   `json:"attempted"`
+			Closed       bool   `json:"closed"`
+			TargetGone   bool   `json:"target_gone"`
+			AttemptCount int    `json:"attempt_count"`
+			RetryPolicy  string `json:"retry_policy"`
+		} `json:"cleanup"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("screenshot render delayed cleanup output is invalid JSON: %v", err)
+	}
+	if !got.OK || !got.Cleanup.Attempted || !got.Cleanup.Closed || !got.Cleanup.TargetGone || got.Cleanup.AttemptCount < 1 || got.Cleanup.RetryPolicy != "target_gone" {
+		t.Fatalf("screenshot render delayed cleanup = %+v, want settled cleanup evidence", got)
+	}
+	events := fakeLifecycleEvents(t, server)
+	closeAt, detachAt := -1, -1
+	for index, event := range events {
+		switch event {
+		case "close:created-page":
+			closeAt = index
+		case "detach:session-created-page":
+			detachAt = index
+		}
+	}
+	if closeAt < 0 || detachAt < 0 || closeAt > detachAt {
+		t.Fatalf("screenshot render lifecycle events = %v, want close before session detach", events)
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("screenshot render delayed cleanup page count = %d, want baseline 1", count)
+	}
+}
+
+func TestScreenshotRenderCleanupFailurePreservesPrimaryError(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":             "cleanup-error-sentinel",
+		"type":                 "page",
+		"title":                "Sentinel",
+		"url":                  "https://example.test/sentinel",
+		"fakeCloseTargetError": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "diagram.html")
+	if err := os.WriteFile(htmlPath, []byte("<main>ready</main>"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	blockedOutput := filepath.Join(dir, "blocked")
+	if err := os.Mkdir(blockedOutput, 0o700); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "render", htmlPath, "--out", blockedOutput, "--wait", "0", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitInternal {
+		t.Fatalf("screenshot render cleanup failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitInternal, out.String(), errOut.String())
+	}
+
+	var got struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+		Data struct {
+			PrimaryError struct {
+				Code string `json:"code"`
+			} `json:"primary_error"`
+			Cleanup struct {
+				Attempted       bool   `json:"attempted"`
+				Error           string `json:"error"`
+				RecoveryCommand string `json:"recovery_command"`
+			} `json:"cleanup"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("screenshot render cleanup failure output is invalid JSON: %v", err)
+	}
+	if got.OK || got.Code != "screenshot_render_cleanup_failed" || got.Data.PrimaryError.Code != "artifact_write_failed" || !got.Data.Cleanup.Attempted || got.Data.Cleanup.Error == "" || got.Data.Cleanup.RecoveryCommand == "" {
+		t.Fatalf("screenshot render cleanup failure = %+v, want primary and cleanup evidence", got)
+	}
+}
+
+func TestScreenshotRenderAttachFailureCleansCreatedTarget(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{{
+		"targetId":                  "attach-error-sentinel",
+		"type":                      "page",
+		"title":                     "Sentinel",
+		"url":                       "https://example.test/sentinel",
+		"fakeAttachErrorForCreated": true,
+	}})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	dir := t.TempDir()
+	htmlPath := filepath.Join(dir, "diagram.html")
+	if err := os.WriteFile(htmlPath, []byte("<main>ready</main>"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"screenshot", "render", htmlPath, "--out", filepath.Join(dir, "diagram.png"), "--wait", "0", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitConnection {
+		t.Fatalf("screenshot render attach failure exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitConnection, out.String(), errOut.String())
+	}
+	if count := fakePagesCount(t); count != 1 {
+		t.Fatalf("screenshot render attach failure page count = %d, want baseline 1", count)
 	}
 }
 

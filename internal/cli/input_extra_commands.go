@@ -113,9 +113,13 @@ func (a *app) newFocusCommand() *cobra.Command {
 		Short: "Focus the first matching element for a CSS selector",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -124,12 +128,15 @@ func (a *app) newFocusCommand() *cobra.Command {
 			if err := evaluateJSONValue(ctx, session, focusExpression(args[0]), "focus", &result); err != nil {
 				return err
 			}
-			return a.render(ctx, fmt.Sprintf("focus\t%s", args[0]), map[string]any{"ok": true, "target": pageRow(target), "focus": result})
+			report := map[string]any{"ok": true, "target": pageRow(target), "focus": result}
+			addInputTargetIndexEvidence(report, targetIndex)
+			return a.render(ctx, fmt.Sprintf("focus\t%s", args[0]), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	return cmd
 }
 
@@ -140,9 +147,13 @@ func (a *app) newClearCommand() *cobra.Command {
 		Short: "Clear the value of the first matching form control",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -151,12 +162,15 @@ func (a *app) newClearCommand() *cobra.Command {
 			if err := evaluateJSONValue(ctx, session, clearExpression(args[0]), "clear", &result); err != nil {
 				return err
 			}
-			return a.render(ctx, fmt.Sprintf("clear\t%s", args[0]), map[string]any{"ok": true, "target": pageRow(target), "clear": result})
+			report := map[string]any{"ok": true, "target": pageRow(target), "clear": result}
+			addInputTargetIndexEvidence(report, targetIndex)
+			return a.render(ctx, fmt.Sprintf("clear\t%s", args[0]), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	return cmd
 }
 
@@ -184,12 +198,16 @@ func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -257,6 +275,7 @@ func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				if !actionability.Actionable {
 					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage(name, selector, actionability), ExitCheckFailed, actionabilityRemediations(name, args[0], selector, locatorOpts), report)
 				}
@@ -277,6 +296,7 @@ func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
 				if autoScroll != nil {
 					report["auto_scroll"] = autoScroll
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage(name, selector, actionability), ExitCheckFailed, actionabilityRemediations(name, args[0], selector, locatorOpts), report)
 			}
 
@@ -304,12 +324,14 @@ func (a *app) newCheckedCommand(name string, desired bool) *cobra.Command {
 			if autoScroll != nil {
 				report["auto_scroll"] = autoScroll
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			return a.render(ctx, fmt.Sprintf("%s\t%s\t%s", actionName, target.TargetID, result.Selector), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing checked state")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential checked-state actionability checks and record skipped checks in JSON")
@@ -340,10 +362,13 @@ func (a *app) newScrollCommand() *cobra.Command {
 		Short: "Scroll a CSS selector or strict locator into the viewport and report before/after evidence",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if err := normalizeLocatorActionOptions(&locatorOpts); err != nil {
 				return err
 			}
-			var err error
 			block, err = normalizeScrollAlignment(block, "--block")
 			if err != nil {
 				return err
@@ -355,7 +380,7 @@ func (a *app) newScrollCommand() *cobra.Command {
 
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -398,6 +423,7 @@ func (a *app) newScrollCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("scroll", selector, actionability), ExitCheckFailed, actionabilityRemediations("scroll", args[0], selector, locatorOpts), report)
 			}
 
@@ -427,6 +453,7 @@ func (a *app) newScrollCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if !trial && !result.After.InViewport {
 				return commandErrorWithData("scroll_failed", "check_failed", fmt.Sprintf("scroll %q did not bring the element into the viewport", selector), ExitCheckFailed, []string{"cdp layout overflow --json", "cdp scroll " + shellQuote(selector) + " --block center --json"}, report)
 			}
@@ -434,8 +461,9 @@ func (a *app) newScrollCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "resolve the target and report scroll evidence without changing page scroll")
 	cmd.Flags().StringVar(&block, "block", "center", "vertical scroll alignment: start, center, end, or nearest")
@@ -480,9 +508,13 @@ func (a *app) newSelectCommand() *cobra.Command {
 			if trial && (hasWaitText || hasWaitSelector) {
 				return commandError("usage", "usage", "--trial does not change the page, so it cannot use select wait flags", ExitUsage, []string{"cdp select Plan pro --by label --wait-text Pro --json"})
 			}
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -513,6 +545,7 @@ func (a *app) newSelectCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				if !actionability.Actionable {
 					return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("select", selector, actionability), ExitCheckFailed, actionabilityRemediations("select", args[0], selector, locatorOpts), report)
 				}
@@ -531,6 +564,7 @@ func (a *app) newSelectCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("select", selector, actionability), ExitCheckFailed, actionabilityRemediations("select", args[0], selector, locatorOpts), report)
 			}
 
@@ -573,6 +607,7 @@ func (a *app) newSelectCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			human := fmt.Sprintf("selected\t%s\t%s", target.TargetID, result.Selector)
 			if !verified {
 				human = fmt.Sprintf("select-unverified\t%s\t%s", target.TargetID, result.Selector)
@@ -581,8 +616,9 @@ func (a *app) newSelectCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "run locator resolution and actionability checks without changing the selected option")
 	cmd.Flags().BoolVar(&force, "force", false, "skip non-essential select actionability checks and record skipped checks in JSON")
@@ -601,6 +637,10 @@ func (a *app) newFileCommand() *cobra.Command {
 		Short: "Set a file input by CSS selector or strict locator without printing file contents",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			if _, err := os.Stat(args[1]); err != nil {
 				return commandError("usage", "usage", fmt.Sprintf("file path is not readable: %v", err), ExitUsage, []string{"cdp file input[type=file] tmp/upload.txt --json"})
 			}
@@ -613,7 +653,7 @@ func (a *app) newFileCommand() *cobra.Command {
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -653,6 +693,7 @@ func (a *app) newFileCommand() *cobra.Command {
 					report["locator"] = locator
 					report["resolved_selector"] = selector
 				}
+				addInputTargetIndexEvidence(report, targetIndex)
 				return commandErrorWithData("actionability_failed", "check_failed", actionabilityFailureMessage("file", selector, actionability), ExitCheckFailed, actionabilityRemediations("file", args[0], selector, locatorOpts), report)
 			}
 			if err := evaluateJSONValue(ctx, session, fileInputExpression(selector, filepath.Base(args[1])), "file", &result); err != nil {
@@ -679,6 +720,7 @@ func (a *app) newFileCommand() *cobra.Command {
 				report["locator"] = locator
 				report["resolved_selector"] = selector
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if trial {
 				report["action"] = "trial"
 				return a.render(ctx, fmt.Sprintf("trial\t%s\t%s", target.TargetID, selector), report)
@@ -692,8 +734,9 @@ func (a *app) newFileCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	addLocatorActionFlags(cmd, &locatorOpts)
 	cmd.Flags().BoolVar(&trial, "trial", false, "resolve and validate the file input without assigning the local file")
 	cmd.AddCommand(a.newFileChooserCommand())
@@ -706,11 +749,15 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "chooser <backend-node-id> <path> [path...]",
 		Short: "Set one or more files on a detached DevTools file chooser",
-		Long:  "Validate a Page.fileChooserOpened backend node, then assign one or more local files through DOM.setFileInputFiles. An explicit page target is required because backend node IDs are target-scoped. File contents are never printed.",
+		Long:  "Validate a Page.fileChooserOpened backend node, then assign one or more local files through DOM.setFileInputFiles. Select the emitting page with --target or the 1-based page-only --target-index because backend node IDs are target-scoped. File contents are never printed.",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(targetID) == "" {
-				return commandError("target_required", "usage", "file chooser requires an explicit --target because backend node IDs are target-scoped", ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json", "cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json"})
+			targetIndex, err := inputTargetIndex(cmd, targetID, "", "")
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(targetID) == "" && targetIndex == 0 {
+				return commandError("target_required", "usage", "file chooser requires --target or --target-index because backend node IDs are target-scoped", ExitUsage, []string{"cdp click 'Upload file' --wait-file-chooser --json", "cdp file chooser <backend-node-id> tmp/upload.txt --target <target-id> --trial --json", "cdp file chooser <backend-node-id> tmp/upload.txt --target-index 2 --trial --json"})
 			}
 			backendNodeID, err := strconv.Atoi(args[0])
 			if err != nil || backendNodeID <= 0 {
@@ -723,7 +770,7 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, "", "")
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, "", "", targetIndex)
 			if err != nil {
 				return err
 			}
@@ -739,6 +786,7 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 				"target":       pageRow(target),
 				"file_chooser": result,
 			}
+			addInputTargetIndexEvidence(report, targetIndex)
 			if trial {
 				report["action"] = "trial"
 				return a.render(ctx, fmt.Sprintf("trial\t%s\t%d\t%d", target.TargetID, backendNodeID, len(fileNames)), report)
@@ -755,6 +803,7 @@ func (a *app) newFileChooserCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "explicit page target id or unique prefix that emitted Page.fileChooserOpened")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().BoolVar(&trial, "trial", false, "validate the backend node and local files without assigning them")
 	return cmd
 }
@@ -892,13 +941,59 @@ func (a *app) newDialogCommand() *cobra.Command {
 
 func (a *app) newDialogHandleCommand(name string, accept bool) *cobra.Command {
 	var targetID, urlContains, titleContains, promptText string
+	var waitForDialog bool
+	var dialogType, message, messageContains, redact string
 	cmd := &cobra.Command{
 		Use:   name,
-		Short: name + " the currently open JavaScript dialog",
+		Short: name + " a JavaScript dialog, optionally waiting in this session",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
+			waitMode := waitForDialog || cmd.Flags().Changed("type") || cmd.Flags().Changed("message") || cmd.Flags().Changed("message-contains") || cmd.Flags().Changed("redact")
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			if waitMode {
+				opts := dialogWaitOptions{
+					Criteria: dialogWaitCriteria{
+						Type:            dialogType,
+						Message:         message,
+						MessageContains: messageContains,
+					},
+					Action:     name,
+					PromptText: promptText,
+					Redact:     redact,
+				}
+				if err := normalizeDialogWaitOptions(&opts); err != nil {
+					return err
+				}
+				redactor, err := networkWaitRedactor(opts.Redact)
+				if err != nil {
+					return err
+				}
+				client, session, target, err := a.attachPageEventSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
+				if err != nil {
+					return err
+				}
+				defer closeWaitSession(session)
+
+				start := time.Now()
+				observation, err := waitForDialogEvent(ctx, client, session.SessionID, opts.Criteria)
+				elapsed := time.Since(start)
+				report := dialogWaitReport(observation, opts, elapsed, a.effectiveNetworkWaitTimeout(), redactor)
+				report["target"] = pageRow(target)
+				addInputTargetIndexEvidence(report, targetIndex)
+				if err != nil {
+					return dialogWaitError(ctx, session.TargetID, opts, report, err)
+				}
+				if err := handleDialogWaitAction(ctx, client, session.SessionID, session.TargetID, opts, report); err != nil {
+					return err
+				}
+				return a.render(ctx, fmt.Sprintf("handled dialog\t%s", observation.Event.Type), report)
+			}
+
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -910,13 +1005,21 @@ func (a *app) newDialogHandleCommand(name string, accept bool) *cobra.Command {
 			if err := execSessionJSON(ctx, session, "Page.handleJavaScriptDialog", params, nil); err != nil {
 				return commandError("connection_failed", "connection", fmt.Sprintf("handle dialog: %v", err), ExitConnection, []string{"cdp events tap --enable page --match Page.javascriptDialogOpening --json"})
 			}
-			return a.render(ctx, "dialog "+name, map[string]any{"ok": true, "target": pageRow(target), "dialog": map[string]any{"action": name, "accepted": accept, "prompt_text_supplied": promptText != ""}})
+			report := map[string]any{"ok": true, "target": pageRow(target), "dialog": map[string]any{"action": name, "accepted": accept, "prompt_text_supplied": promptText != ""}}
+			addInputTargetIndexEvidence(report, targetIndex)
+			return a.render(ctx, "dialog "+name, report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
 	cmd.Flags().StringVar(&promptText, "prompt-text", "", "prompt text to send when accepting a prompt dialog")
+	cmd.Flags().BoolVar(&waitForDialog, "wait", false, "wait for a matching dialog and handle it on this same attached session")
+	cmd.Flags().StringVar(&dialogType, "type", "", "dialog type to match in wait mode: alert, confirm, prompt, or beforeunload; implies --wait")
+	cmd.Flags().StringVar(&message, "message", "", "exact dialog message to match in wait mode; implies --wait")
+	cmd.Flags().StringVar(&messageContains, "message-contains", "", "substring that the dialog message must contain in wait mode; implies --wait")
+	cmd.Flags().StringVar(&redact, "redact", "safe", "redaction preset for returned dialog URL in wait mode: safe or none; implies --wait")
+	addInputTargetIndexFlag(cmd)
 	return cmd
 }
 
@@ -944,6 +1047,10 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 		Use:   "viewport",
 		Short: "Apply device metrics emulation to a page target",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+			if err != nil {
+				return err
+			}
 			normalizedPreset := strings.ToLower(strings.TrimSpace(preset))
 			if preset != "" {
 				selected, ok := knownViewportPreset(preset)
@@ -958,7 +1065,7 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 			}
 			ctx, cancel := a.browserCommandContext(cmd)
 			defer cancel()
-			session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+			session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 			if err != nil {
 				return err
 			}
@@ -967,12 +1074,15 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 			if err := execSessionJSON(ctx, session, "Emulation.setDeviceMetricsOverride", params, nil); err != nil {
 				return commandError("connection_failed", "connection", fmt.Sprintf("emulate viewport: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setDeviceMetricsOverride --json"})
 			}
-			return a.render(ctx, fmt.Sprintf("viewport\t%dx%d", width, height), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"viewport": params, "preset": normalizedPreset, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+			report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"viewport": params, "preset": normalizedPreset, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}}
+			addInputTargetIndexEvidence(report, targetIndex)
+			return a.render(ctx, fmt.Sprintf("viewport\t%dx%d", width, height), report)
 		},
 	}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&preset, "preset", "", "viewport preset: desktop, laptop, tablet, mobile, iphone-12")
 	cmd.Flags().IntVar(&width, "width", 390, "viewport width in CSS pixels")
 	cmd.Flags().IntVar(&height, "height", 844, "viewport height in CSS pixels")
@@ -984,9 +1094,13 @@ func (a *app) newEmulateViewportCommand() *cobra.Command {
 func (a *app) newEmulateClearCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	cmd := &cobra.Command{Use: "clear", Short: "Clear viewport, media, user-agent, geolocation, timezone, locale, CPU, and network emulation", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1016,20 +1130,27 @@ func (a *app) newEmulateClearCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Network.emulateNetworkConditions", networkEmulationResetParams(), nil); err == nil {
 			cleared = append(cleared, "network")
 		}
-		return a.render(ctx, "emulation cleared", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true, "cleared_overrides": cleared}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cleared": true, "cleared_overrides": cleared}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, "emulation cleared", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	return cmd
 }
 
 func (a *app) newEmulateMediaCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, colorScheme string
 	cmd := &cobra.Command{Use: "media", Short: "Apply media feature emulation", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1041,11 +1162,14 @@ func (a *app) newEmulateMediaCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Emulation.setEmulatedMedia", map[string]any{"features": features}, nil); err != nil {
 			return commandError("connection_failed", "connection", fmt.Sprintf("emulate media: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setEmulatedMedia --json"})
 		}
-		return a.render(ctx, "media emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"media_features": features}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"media_features": features}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, "media emulation", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&colorScheme, "prefers-color-scheme", "", "emulate prefers-color-scheme: light or dark")
 	return cmd
 }
@@ -1053,13 +1177,17 @@ func (a *app) newEmulateMediaCommand() *cobra.Command {
 func (a *app) newEmulateColorSchemeCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, scheme string
 	cmd := &cobra.Command{Use: "color-scheme", Short: "Apply prefers-color-scheme emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		scheme = strings.ToLower(strings.TrimSpace(scheme))
 		if scheme != "dark" && scheme != "light" {
 			return commandError("usage", "usage", "--scheme must be dark or light", ExitUsage, []string{"cdp emulate color-scheme --scheme dark --json", "cdp emulate color-scheme --scheme light --json"})
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1076,11 +1204,14 @@ func (a *app) newEmulateColorSchemeCommand() *cobra.Command {
 				colorScheme["verified"] = observed == scheme
 			}
 		}
-		return a.render(ctx, "color-scheme emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"color_scheme": colorScheme, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"color_scheme": colorScheme, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, "color-scheme emulation", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&scheme, "scheme", "", "prefers-color-scheme value to emulate: dark or light")
 	return cmd
 }
@@ -1088,12 +1219,16 @@ func (a *app) newEmulateColorSchemeCommand() *cobra.Command {
 func (a *app) newEmulateUserAgentCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, userAgent, platform string
 	cmd := &cobra.Command{Use: "user-agent", Short: "Apply user-agent emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		if userAgent == "" {
 			return commandError("usage", "usage", "--user-agent is required", ExitUsage, []string{"cdp emulate user-agent --user-agent 'Mozilla/5.0 ...' --json"})
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1105,11 +1240,14 @@ func (a *app) newEmulateUserAgentCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Emulation.setUserAgentOverride", params, nil); err != nil {
 			return commandError("connection_failed", "connection", fmt.Sprintf("emulate user-agent: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setUserAgentOverride --json"})
 		}
-		return a.render(ctx, "user-agent emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"user_agent": userAgent, "platform": platform, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"user_agent": userAgent, "platform": platform, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, "user-agent emulation", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&userAgent, "user-agent", "", "user-agent string to apply")
 	cmd.Flags().StringVar(&platform, "platform", "", "optional navigator platform override")
 	return cmd
@@ -1119,6 +1257,10 @@ func (a *app) newEmulateGeolocationCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	var latitude, longitude, accuracy float64
 	cmd := &cobra.Command{Use: "geolocation", Short: "Apply geolocation emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		if latitude < -90 || latitude > 90 {
 			return commandError("usage", "usage", "--latitude must be between -90 and 90", ExitUsage, []string{"cdp emulate geolocation --latitude 55.6761 --longitude 12.5683 --json"})
 		}
@@ -1130,7 +1272,7 @@ func (a *app) newEmulateGeolocationCommand() *cobra.Command {
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1139,11 +1281,14 @@ func (a *app) newEmulateGeolocationCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Emulation.setGeolocationOverride", params, nil); err != nil {
 			return commandError("connection_failed", "connection", fmt.Sprintf("emulate geolocation: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setGeolocationOverride --json"})
 		}
-		return a.render(ctx, "geolocation emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"geolocation": params, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"geolocation": params, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, "geolocation emulation", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().Float64Var(&latitude, "latitude", 0, "latitude to emulate")
 	cmd.Flags().Float64Var(&longitude, "longitude", 0, "longitude to emulate")
 	cmd.Flags().Float64Var(&accuracy, "accuracy", 100, "geolocation accuracy in meters")
@@ -1153,13 +1298,17 @@ func (a *app) newEmulateGeolocationCommand() *cobra.Command {
 func (a *app) newEmulateTimezoneCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, timezoneID string
 	cmd := &cobra.Command{Use: "timezone", Short: "Apply timezone emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		timezoneID = strings.TrimSpace(timezoneID)
 		if timezoneID == "" {
 			return commandError("usage", "usage", "--timezone-id is required", ExitUsage, []string{"cdp emulate timezone --timezone-id UTC --json", "cdp emulate timezone --timezone-id America/New_York --json"})
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1176,11 +1325,14 @@ func (a *app) newEmulateTimezoneCommand() *cobra.Command {
 				timezone["verified"] = observed == timezoneID
 			}
 		}
-		return a.render(ctx, "timezone emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"timezone": timezone, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"timezone": timezone, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, "timezone emulation", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&timezoneID, "timezone-id", "", "IANA timezone id to emulate, for example UTC or America/New_York")
 	return cmd
 }
@@ -1188,13 +1340,17 @@ func (a *app) newEmulateTimezoneCommand() *cobra.Command {
 func (a *app) newEmulateLocaleCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, locale string
 	cmd := &cobra.Command{Use: "locale", Short: "Apply locale emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		locale = strings.TrimSpace(locale)
 		if locale == "" {
 			return commandError("usage", "usage", "--locale is required", ExitUsage, []string{"cdp emulate locale --locale de-DE --json", "cdp emulate locale --locale en-US --json"})
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1211,11 +1367,14 @@ func (a *app) newEmulateLocaleCommand() *cobra.Command {
 				localeInfo["verified"] = strings.EqualFold(observed, locale)
 			}
 		}
-		return a.render(ctx, "locale emulation", map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"locale": localeInfo, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"locale": localeInfo, "cleanup_command": fmt.Sprintf("cdp emulate clear --target %s --json", target.TargetID)}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, "locale emulation", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&locale, "locale", "", "BCP 47 locale to emulate, for example de-DE or en-US")
 	return cmd
 }
@@ -1224,12 +1383,16 @@ func (a *app) newEmulateCPUCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
 	var rate float64
 	cmd := &cobra.Command{Use: "cpu", Short: "Apply CPU throttling emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		if rate < 1 {
 			return commandError("usage", "usage", "--rate must be >= 1; 1 disables CPU throttling", ExitUsage, []string{"cdp emulate cpu --rate 4 --json", "cdp emulate cpu --rate 1 --json"})
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1238,11 +1401,14 @@ func (a *app) newEmulateCPUCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Emulation.setCPUThrottlingRate", params, nil); err != nil {
 			return commandError("connection_failed", "connection", fmt.Sprintf("emulate cpu: %v", err), ExitConnection, []string{"cdp protocol describe Emulation.setCPUThrottlingRate --json"})
 		}
-		return a.render(ctx, fmt.Sprintf("cpu throttling	%.2fx", rate), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cpu": params, "cleanup_command": fmt.Sprintf("cdp emulate cpu --rate 1 --target %s --json", target.TargetID)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"cpu": params, "cleanup_command": fmt.Sprintf("cdp emulate cpu --rate 1 --target %s --json", target.TargetID)}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, fmt.Sprintf("cpu throttling	%.2fx", rate), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().Float64Var(&rate, "rate", 4, "CPU slowdown multiplier; use 1 to disable throttling")
 	return cmd
 }
@@ -1253,13 +1419,17 @@ func (a *app) newEmulateNetworkCommand() *cobra.Command {
 	var downloadKbps, uploadKbps float64
 	var offline bool
 	cmd := &cobra.Command{Use: "network", Short: "Apply network throttling emulation to a page target", RunE: func(cmd *cobra.Command, args []string) error {
+		targetIndex, err := inputTargetIndex(cmd, targetID, urlContains, titleContains)
+		if err != nil {
+			return err
+		}
 		params, label, err := networkEmulationParams(preset, offline, latency, downloadKbps, uploadKbps)
 		if err != nil {
 			return err
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1267,11 +1437,14 @@ func (a *app) newEmulateNetworkCommand() *cobra.Command {
 		if err := execSessionJSON(ctx, session, "Network.emulateNetworkConditions", params, nil); err != nil {
 			return commandError("connection_failed", "connection", fmt.Sprintf("emulate network: %v", err), ExitConnection, []string{"cdp protocol describe Network.emulateNetworkConditions --json"})
 		}
-		return a.render(ctx, fmt.Sprintf("network throttling\t%s", label), map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"network": params, "preset": label, "cleanup_command": fmt.Sprintf("cdp emulate network --preset none --target %s --json", target.TargetID)}})
+		report := map[string]any{"ok": true, "target": pageRow(target), "emulation": map[string]any{"network": params, "preset": label, "cleanup_command": fmt.Sprintf("cdp emulate network --preset none --target %s --json", target.TargetID)}}
+		addInputTargetIndexEvidence(report, targetIndex)
+		return a.render(ctx, fmt.Sprintf("network throttling\t%s", label), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	addInputTargetIndexFlag(cmd)
 	cmd.Flags().StringVar(&preset, "preset", "", "network preset: none, offline, slow-3g, fast-3g, wifi")
 	cmd.Flags().BoolVar(&offline, "offline", false, "emulate offline network state")
 	cmd.Flags().IntVar(&latency, "latency", 0, "round-trip latency in milliseconds")
@@ -1342,12 +1515,16 @@ func (a *app) newA11yCommand() *cobra.Command {
 
 func (a *app) newA11yTreeCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	var depth, limit int
 	var ignored bool
 	cmd := &cobra.Command{Use: "tree", Short: "Return a bounded accessibility tree", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1356,11 +1533,16 @@ func (a *app) newA11yTreeCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return a.render(ctx, fmt.Sprintf("a11y\t%d nodes", len(nodes)), map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated})
+		report := map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, fmt.Sprintf("a11y\t%d nodes", len(nodes)), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().IntVar(&depth, "depth", 4, "maximum tree depth to return")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum nodes to return")
 	cmd.Flags().BoolVar(&ignored, "include-ignored", false, "include ignored accessibility nodes")
@@ -1369,11 +1551,15 @@ func (a *app) newA11yTreeCommand() *cobra.Command {
 
 func (a *app) newA11yFindCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, role, name string
+	var targetIndex int
 	var limit int
 	cmd := &cobra.Command{Use: "find", Short: "Find accessibility nodes by role and accessible name", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1383,11 +1569,16 @@ func (a *app) newA11yFindCommand() *cobra.Command {
 			return err
 		}
 		nodes = filterA11yNodes(nodes, role, name)
-		return a.render(ctx, fmt.Sprintf("a11y-find\t%d nodes", len(nodes)), map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated})
+		report := map[string]any{"ok": true, "target": pageRow(target), "nodes": nodes, "truncated": truncated}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, fmt.Sprintf("a11y-find\t%d nodes", len(nodes)), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&role, "role", "", "accessibility role to match")
 	cmd.Flags().StringVar(&name, "name", "", "accessible name substring to match")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum nodes to inspect")
@@ -1396,10 +1587,14 @@ func (a *app) newA11yFindCommand() *cobra.Command {
 
 func (a *app) newA11yNodeCommand() *cobra.Command {
 	var targetID, urlContains, titleContains string
+	var targetIndex int
 	cmd := &cobra.Command{Use: "node <selector>", Short: "Inspect accessibility information for a CSS selector", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1408,19 +1603,28 @@ func (a *app) newA11yNodeCommand() *cobra.Command {
 		if err := evaluateJSONValue(ctx, session, a11yNodeExpression(args[0]), "a11y node", &result); err != nil {
 			return err
 		}
-		return a.render(ctx, "a11y node", map[string]any{"ok": true, "target": pageRow(target), "node": result})
+		report := map[string]any{"ok": true, "target": pageRow(target), "node": result}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
+		return a.render(ctx, "a11y node", report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	return cmd
 }
 
 func (a *app) newA11ySnapshotCommand() *cobra.Command {
 	var targetID, urlContains, titleContains, selector string
+	var targetIndex int
 	var depth, limit int
 	var includeIgnored bool
 	cmd := &cobra.Command{Use: "snapshot", Short: "Generate a bounded ARIA snapshot from the accessibility tree", RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
+			return err
+		}
 		if depth < 0 {
 			return commandError("usage", "usage", "--depth must be non-negative", ExitUsage, []string{"cdp a11y snapshot --depth 4 --json"})
 		}
@@ -1429,7 +1633,7 @@ func (a *app) newA11ySnapshotCommand() *cobra.Command {
 		}
 		ctx, cancel := a.browserCommandContext(cmd)
 		defer cancel()
-		session, target, err := a.attachPageSession(ctx, targetID, urlContains, titleContains)
+		session, target, err := a.attachPageSessionWithIndex(ctx, targetID, urlContains, titleContains, targetIndex)
 		if err != nil {
 			return err
 		}
@@ -1448,11 +1652,15 @@ func (a *app) newA11ySnapshotCommand() *cobra.Command {
 			"text":      snapshot.Text,
 			"truncated": snapshot.Truncated,
 		}
+		if targetIndex > 0 {
+			report["target_index"] = targetIndex
+		}
 		return a.render(ctx, fmt.Sprintf("a11y-snapshot\t%d lines", snapshot.LineCount), report)
 	}}
 	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
-	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the first page whose URL contains this text")
-	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the first page whose title contains this text")
+	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
+	cmd.Flags().StringVar(&titleContains, "title-contains", "", "use the unique page whose title contains this text")
+	cmd.Flags().IntVar(&targetIndex, "target-index", 0, "select a 1-based page target index")
 	cmd.Flags().StringVar(&selector, "selector", "body", "CSS selector that names the intended snapshot scope")
 	cmd.Flags().IntVar(&depth, "depth", 4, "maximum accessibility tree depth to include")
 	cmd.Flags().IntVar(&limit, "limit", 100, "maximum snapshot lines to return")

@@ -42,6 +42,33 @@ func TestVersionJSON(t *testing.T) {
 	}
 }
 
+func TestVersionRootAliasesMatchSubcommand(t *testing.T) {
+	build := cli.BuildInfo{
+		Version:    "1.2.3",
+		Commit:     "0123456789abcdef0123456789abcdef01234567",
+		Date:       "2026-07-18T12:34:56Z",
+		Dirty:      true,
+		Verified:   true,
+		Provenance: "managed",
+	}
+	var want string
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-V"}} {
+		var out, errOut bytes.Buffer
+		code := cli.Execute(context.Background(), args, &out, &errOut, build)
+		if code != cli.ExitOK {
+			t.Fatalf("%v exit=%d, want %d; stdout=%s stderr=%s", args, code, cli.ExitOK, out.String(), errOut.String())
+		}
+		if errOut.Len() != 0 {
+			t.Fatalf("%v stderr=%q, want empty", args, errOut.String())
+		}
+		if want == "" {
+			want = out.String()
+		} else if out.String() != want {
+			t.Fatalf("%v output=%q, want byte-identical %q", args, out.String(), want)
+		}
+	}
+}
+
 func TestVersionCompactJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"version", "--json", "--compact"}, &out, &errOut, cli.BuildInfo{Version: "test"})
@@ -250,6 +277,21 @@ func TestWaitRequestJSON(t *testing.T) {
 	}
 }
 
+func TestWaitRequestTimeoutDetachesSession(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "request", "--match-url", "does-not-exist", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait request timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
+}
+
 func TestWaitResponseJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -310,7 +352,7 @@ func TestWaitResponseTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--timeout", "200ms", "wait", "response", "--match-url", "does-not-exist", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--timeout", "500ms", "wait", "response", "--match-url", "does-not-exist", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait response timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -348,6 +390,7 @@ func TestWaitResponseTimeoutJSON(t *testing.T) {
 	if strings.Contains(got.Data.LastEvent.URL, "token=abc") {
 		t.Fatalf("wait response timeout last URL was not redacted: %q", got.Data.LastEvent.URL)
 	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
 }
 
 func TestWaitNetworkIdleJSON(t *testing.T) {
@@ -411,7 +454,7 @@ func TestWaitNetworkIdleTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "50ms", "--timeout", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "50ms", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait network-idle timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -449,6 +492,7 @@ func TestWaitNetworkIdleTimeoutJSON(t *testing.T) {
 	if !containsString(got.RemediationCommands, "cdp network --wait 5s --json") {
 		t.Fatalf("wait network-idle remediation commands = %+v, want network diagnostic command", got.RemediationCommands)
 	}
+	requireFakeLifecycleEvent(t, server, "detach:session-busy-page")
 }
 
 func TestWaitNetworkIdleIgnoreURLJSON(t *testing.T) {
@@ -575,7 +619,7 @@ func TestWaitDialogTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "dialog", "--type", "alert", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "dialog", "--type", "alert", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait dialog timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -602,9 +646,10 @@ func TestWaitDialogTimeoutJSON(t *testing.T) {
 	if got.OK || got.Code != "timeout" || got.Data.Wait.Kind != "dialog" || got.Data.Wait.Matched || got.Data.Wait.EventCount != 0 || got.Data.Wait.ObservedCount != 0 || got.Data.Wait.Criteria.Type != "alert" {
 		t.Fatalf("wait dialog timeout = %+v, want timeout envelope with wait criteria", got)
 	}
-	if !containsString(got.RemediationCommands, "cdp dialog dismiss --json") {
+	if !containsString(got.RemediationCommands, "cdp dialog dismiss --wait --json") {
 		t.Fatalf("wait dialog remediation commands = %+v, want dialog dismiss command", got.RemediationCommands)
 	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
 }
 
 func TestWaitDialogInvalidOptionsJSON(t *testing.T) {
@@ -698,7 +743,7 @@ func TestWaitFileChooserTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "file-chooser", "--mode", "multiple", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "file-chooser", "--mode", "multiple", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait file-chooser timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -729,6 +774,7 @@ func TestWaitFileChooserTimeoutJSON(t *testing.T) {
 	if !containsString(got.RemediationCommands, "cdp events tap --enable page --match Page.fileChooserOpened --duration 5s --json") {
 		t.Fatalf("wait file-chooser remediation commands = %+v, want events tap command", got.RemediationCommands)
 	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
 }
 
 func TestWaitFileChooserInvalidModeJSON(t *testing.T) {
@@ -1123,8 +1169,9 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK       bool `json:"ok"`
-		Requests []struct {
+		OK         bool   `json:"ok"`
+		OutputMode string `json:"output_mode"`
+		Requests   []struct {
 			ID              string         `json:"id"`
 			URL             string         `json:"url"`
 			RequestHeaders  map[string]any `json:"request_headers"`
@@ -1155,15 +1202,25 @@ func TestNetworkCaptureJSON(t *testing.T) {
 			Bytes     int    `json:"bytes"`
 			Truncated bool   `json:"truncated"`
 		} `json:"body_artifacts"`
+		BodyArtifactCount int `json:"body_artifact_count"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("network capture output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Capture.Count != 2 || len(got.Requests) != 2 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath || got.HAR.Type != "network-har" || got.HAR.Path != harPath || len(got.BodyArtifacts) != 1 {
-		t.Fatalf("network capture = %+v, want two safe-redacted requests and artifact", got)
+	if !got.OK || got.OutputMode != "artifact_only" || got.Capture.Count != 2 || len(got.Requests) != 0 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath || got.HAR.Type != "network-har" || got.HAR.Path != harPath || got.BodyArtifactCount != 1 {
+		t.Fatalf("network capture manifest = %+v, want safe artifact-only metadata", got)
 	}
 	if got.Capture.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !got.Capture.ArtifactSafety.Shareable || got.Capture.ArtifactSafety.ChangedFieldCount == 0 {
 		t.Fatalf("network capture artifact safety = %+v, want public-safe redaction metadata", got.Capture.ArtifactSafety)
+	}
+	manifestArtifactPath := got.Artifact.Path
+	manifestHARPath := got.HAR.Path
+	artifactBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read network capture artifact: %v", err)
+	}
+	if err := json.Unmarshal(artifactBytes, &got); err != nil {
+		t.Fatalf("network capture artifact is invalid JSON: %v", err)
 	}
 	if got.Requests[0].RequestHeaders["Authorization"] != "<redacted>" || got.Requests[0].ResponseHeaders["Set-Cookie"] != "<redacted>" {
 		t.Fatalf("network capture headers = request=%+v response=%+v, want sensitive headers redacted", got.Requests[0].RequestHeaders, got.Requests[0].ResponseHeaders)
@@ -1177,10 +1234,6 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	if _, err := os.Stat(outPath); err != nil {
 		t.Fatalf("network capture artifact was not written: %v", err)
 	}
-	artifactBytes, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatalf("read network capture artifact: %v", err)
-	}
 	scan := artifacts.ScanBytes(artifactBytes, []string{"Bearer secret", "session=secret", `"token":"secret"`, "csrf=secret"}, 0)
 	if len(scan.Findings) != 0 {
 		t.Fatalf("network capture artifact leaked synthetic secrets: %+v", scan.Findings)
@@ -1188,6 +1241,9 @@ func TestNetworkCaptureJSON(t *testing.T) {
 	harBytes, err := os.ReadFile(harPath)
 	if err != nil {
 		t.Fatalf("read network HAR artifact: %v", err)
+	}
+	if manifestArtifactPath != outPath || manifestHARPath != harPath {
+		t.Fatalf("artifact manifest paths = %q/%q, want %q/%q", manifestArtifactPath, manifestHARPath, outPath, harPath)
 	}
 	scan = artifacts.ScanBytes(harBytes, []string{"Bearer secret", "session=secret", `"token":"secret"`, "csrf=secret"}, 0)
 	if len(scan.Findings) != 0 {
@@ -1249,7 +1305,8 @@ func TestNetworkWebSocketCaptureJSON(t *testing.T) {
 	}
 
 	var got struct {
-		OK         bool `json:"ok"`
+		OK         bool   `json:"ok"`
+		OutputMode string `json:"output_mode"`
 		WebSockets []struct {
 			ID        string `json:"id"`
 			URL       string `json:"url"`
@@ -1284,11 +1341,18 @@ func TestNetworkWebSocketCaptureJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("network websocket output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Capture.Count != 1 || !got.Capture.IncludePayloads || got.Capture.PayloadLimit != 12 || got.Capture.Redact != "safe" || got.Artifact.Path != outPath {
-		t.Fatalf("network websocket = %+v, want one safe-redacted websocket artifact", got)
+	if !got.OK || got.OutputMode != "artifact_only" || got.Capture.Count != 1 || !got.Capture.IncludePayloads || got.Capture.PayloadLimit != 12 || got.Capture.Redact != "safe" || len(got.WebSockets) != 0 || got.Artifact.Path != outPath {
+		t.Fatalf("network websocket manifest = %+v, want safe artifact-only metadata", got)
 	}
 	if got.Capture.ArtifactSafety.RedactionMode != artifacts.ModeSafe || !got.Capture.ArtifactSafety.Shareable || got.Capture.ArtifactSafety.ChangedFieldCount == 0 {
 		t.Fatalf("network websocket artifact safety = %+v, want public-safe redaction metadata", got.Capture.ArtifactSafety)
+	}
+	artifactBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read websocket artifact: %v", err)
+	}
+	if err := json.Unmarshal(artifactBytes, &got); err != nil {
+		t.Fatalf("websocket artifact is invalid JSON: %v", err)
 	}
 	ws := got.WebSockets[0].WebSocket
 	if got.WebSockets[0].ID != "ws-1" || ws.Status != 101 || !ws.Closed || len(ws.Frames) != 2 || len(ws.Errors) != 1 {
@@ -1299,10 +1363,6 @@ func TestNetworkWebSocketCaptureJSON(t *testing.T) {
 	}
 	if strings.Contains(ws.Frames[0].Payload.Text, "secret") || !ws.Frames[0].Payload.Truncated {
 		t.Fatalf("network websocket payload = %+v, want redacted truncated payload", ws.Frames[0].Payload)
-	}
-	artifactBytes, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatalf("read websocket artifact: %v", err)
 	}
 	scan := artifacts.ScanBytes(artifactBytes, []string{"Bearer secret", "session=secret", "secret-frame"}, 0)
 	if len(scan.Findings) != 0 {
@@ -1585,8 +1645,10 @@ func TestExplainErrorJSON(t *testing.T) {
 	var got struct {
 		OK    bool `json:"ok"`
 		Error struct {
-			Code     string `json:"code"`
-			ExitCode int    `json:"exit_code"`
+			Code                string   `json:"code"`
+			Class               string   `json:"err_class"`
+			ExitCode            int      `json:"exit_code"`
+			RemediationCommands []string `json:"remediation_commands"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
@@ -1594,6 +1656,28 @@ func TestExplainErrorJSON(t *testing.T) {
 	}
 	if !got.OK || got.Error.Code != "not_implemented" || got.Error.ExitCode != cli.ExitNotImplemented {
 		t.Fatalf("explain-error = %+v, want not_implemented metadata", got)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = cli.Execute(context.Background(), []string{"explain-error", "invalid_target_index", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("invalid target-index explanation exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
+	}
+	got = struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code                string   `json:"code"`
+			Class               string   `json:"err_class"`
+			ExitCode            int      `json:"exit_code"`
+			RemediationCommands []string `json:"remediation_commands"`
+		} `json:"error"`
+	}{}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid target-index explanation is invalid JSON: %v", err)
+	}
+	if !got.OK || got.Error.Code != "invalid_target_index" || got.Error.Class != "usage" || got.Error.ExitCode != cli.ExitUsage || !containsString(got.Error.RemediationCommands, "cdp pages --json") {
+		t.Fatalf("invalid target-index explanation = %+v, want usage/exit-2 page recovery", got)
 	}
 }
 

@@ -60,21 +60,15 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 				_ = closeClient(ctx)
 				return err
 			}
-			closeWorkflowPage := func() (bool, string) {
-				if keepOpen {
-					return false, ""
-				}
-				if err := cdp.CloseTargetWithClient(ctx, client, targetID); err != nil {
-					return false, err.Error()
-				}
-				return true, ""
-			}
+			closeWorkflowPage := a.workflowPageCloser(client, targetID, rawURL, keepOpen)
 			session, err := cdp.AttachToTargetWithClient(ctx, client, targetID, closeClient)
 			if err != nil {
+				_, _ = closeWorkflowPage()
 				_ = closeClient(ctx)
 				return commandError("connection_failed", "connection", fmt.Sprintf("attach target %s: %v", targetID, err), ExitConnection, []string{"cdp pages --json", "cdp doctor --json"})
 			}
 			defer session.Close(ctx)
+			defer func() { _, _ = closeWorkflowPage() }()
 
 			frontpage, err := waitForHackerNewsStories(ctx, session, limit, wait)
 			if err != nil {
@@ -98,7 +92,7 @@ func (a *app) newWorkflowHackerNewsCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 30, "maximum number of stories to return; use 0 for no limit")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long to wait for Hacker News story rows")
-	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging")
+	cmd.Flags().BoolVar(&keepOpen, "keep-open", false, "leave the workflow-created page open for debugging; failed lease promotion attempts bounded cleanup and reports recovery evidence")
 	cmd.AddCommand(a.newWorkflowHackerNewsCollectCommand())
 	return cmd
 }
@@ -124,14 +118,15 @@ func (a *app) newWorkflowHackerNewsCollectCommand() *cobra.Command {
 			_ = closeClient(ctx)
 			return err
 		}
+		closeWorkflowPage := a.workflowPageCloser(client, target, req.URL, false)
 		session, err := cdp.AttachToTargetWithClient(ctx, client, target, closeClient)
 		if err != nil {
-			_ = cdp.CloseTargetWithClient(ctx, client, target)
+			_, _ = closeWorkflowPage()
 			_ = closeClient(ctx)
 			return commandError("connection_failed", "connection", err.Error(), ExitConnection, nil)
 		}
 		defer session.Close(ctx)
-		defer cdp.CloseTargetWithClient(ctx, client, target)
+		defer func() { _, _ = closeWorkflowPage() }()
 		if _, err = session.Navigate(ctx, req.URL); err != nil {
 			return commandError("hacker_news_navigation_failed", "connection", err.Error(), ExitConnection, nil)
 		}
@@ -175,7 +170,11 @@ func (a *app) newWorkflowHackerNewsCollectCommand() *cobra.Command {
 			missing = []string{"comment"}
 		}
 		coverage := staticSourceCoverage(observed, missing, status, reason)
-		workflow := map[string]any{"name": "hacker-news-collect", "count": len(page.Records), "limit": limit, "status": status, "partial_reason": reason, "interactions": 0}
+		closed, closeError := closeWorkflowPage()
+		workflow := map[string]any{"name": "hacker-news-collect", "count": len(page.Records), "limit": limit, "status": status, "partial_reason": reason, "interactions": 0, "created_page": true, "closed": closed, "close_error": closeError}
+		if closeError != "" {
+			return commandError("hacker_news_cleanup_failed", "cleanup", closeError, ExitCheckFailed, nil)
+		}
 		return a.render(ctx, hackerNewsCollectionMarkdown(req.URL, page.Records, workflow, coverage), map[string]any{"ok": true, "request": req, "kind": "thread", "records": page.Records, "coverage": coverage, "workflow": workflow})
 	}}
 	cmd.Flags().IntVar(&limit, "limit", 500, "maximum source-native records to collect (1-500)")

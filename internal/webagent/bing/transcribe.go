@@ -5,12 +5,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/augloop"
+	"github.com/pankaj28843/cdp-cli/internal/processgroup"
 	"github.com/pankaj28843/cdp-cli/internal/resilience"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
@@ -303,18 +303,13 @@ func readAudio(filePath string) ([]byte, *transcribeFailure) {
 }
 
 func decodeWebMToPCM(ctx context.Context, filePath string) ([]byte, error) {
-	command := exec.CommandContext(
-		ctx,
-		"ffmpeg",
+	output := &boundedBuffer{limit: maxPCMBytes}
+	if err := processgroup.Run(ctx, "ffmpeg", []string{
 		"-hide_banner", "-loglevel", "error",
 		"-i", filePath,
 		"-vn", "-f", "s16le", "-acodec", "pcm_s16le",
 		"-ac", "1", "-ar", "16000", "pipe:1",
-	)
-	output := &boundedBuffer{limit: maxPCMBytes}
-	command.Stdout = output
-	command.Stderr = io.Discard
-	if err := command.Run(); err != nil {
+	}, output, io.Discard); err != nil {
 		return nil, err
 	}
 	return output.Bytes(), nil

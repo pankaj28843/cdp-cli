@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -86,6 +87,56 @@ func TestDaemonStatusReportsRuntimeJSON(t *testing.T) {
 	}
 	if got.Daemon.State != "running" || !got.Daemon.ProcessRunning || got.Daemon.Runtime.PID != os.Getpid() || got.Daemon.Runtime.BrowserMode != "headed" {
 		t.Fatalf("daemon status = %+v, want running current pid headed runtime", got.Daemon)
+	}
+}
+
+func TestDaemonStatusRejectsMismatchedRuntimeProcessIdentity(t *testing.T) {
+	stateDir := shortCLIStateDir(t)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll state directory returned error: %v", err)
+	}
+	socketPath := filepath.Join(stateDir, "daemon.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	defer listener.Close()
+
+	if err := daemon.SaveRuntime(context.Background(), stateDir, daemon.Runtime{
+		PID:              os.Getpid(),
+		StartedAt:        time.Now().UTC().Format(time.RFC3339),
+		ConnectionMode:   "auto_connect",
+		SocketPath:       socketPath,
+		ProcessStartTime: "proc:not-the-live-process",
+	}); err != nil {
+		t.Fatalf("SaveRuntime returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"daemon", "status", "--auto-connect", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon status exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+	}
+	var got struct {
+		Daemon struct {
+			State                string `json:"state"`
+			Message              string `json:"message"`
+			ProcessRunning       bool   `json:"process_running"`
+			RuntimeSocketReady   bool   `json:"runtime_socket_ready"`
+			ProcessIdentityState string `json:"process_identity_state"`
+		} `json:"daemon"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon status output is invalid JSON: %v", err)
+	}
+	if got.Daemon.State != "stale_state" || got.Daemon.ProcessRunning || got.Daemon.RuntimeSocketReady || got.Daemon.ProcessIdentityState != daemon.RuntimeProcessStateIdentityMismatch {
+		t.Fatalf("daemon status = %+v, want identity-safe stale state", got.Daemon)
+	}
+	if got.Daemon.Message != "daemon runtime process identity does not match the recorded owner" {
+		t.Fatalf("daemon status message = %q, want safe identity mismatch message", got.Daemon.Message)
+	}
+	if strings.Contains(out.String(), "proc:not-the-live-process") || strings.Contains(out.String(), "process_start_time") {
+		t.Fatalf("daemon status exposed private process identity: %s", out.String())
 	}
 }
 
@@ -187,6 +238,49 @@ func TestDaemonHealthReportsRecentCrashLogsJSON(t *testing.T) {
 	}
 	if !strings.Contains(got.Health.LastBrowserKeepaliveError, "hold_connection_ended") {
 		t.Fatalf("last_browser_keepalive_error = %q, want hold_connection_ended summary", got.Health.LastBrowserKeepaliveError)
+	}
+}
+
+func TestDaemonHealthExcludesRetiredHoldGenerationButKeepsActiveChurn(t *testing.T) {
+	stateDir := t.TempDir()
+	logPath := daemon.RuntimeLogPathForMode(stateDir, "headless")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll log dir returned error: %v", err)
+	}
+	entries := []string{
+		`{"time":"2026-06-12T00:00:00Z","level":"warn","event":"hold_connection_ended","message":"failed to get reader: old generation","pid":101}`,
+		`{"time":"2026-06-12T00:00:01Z","level":"info","event":"hold_reclaimed","message":"orphaned daemon hold reclaimed after exact ownership verification","pid":101}`,
+		`{"time":"2026-06-12T00:00:02Z","level":"warn","event":"hold_connection_ended","message":"failed to get reader: active generation one","pid":202}`,
+		`{"time":"2026-06-12T00:00:03Z","level":"error","event":"browser_dial_failed","message":"active generation two","pid":202}`,
+	}
+	if err := os.WriteFile(logPath, []byte(strings.Join(entries, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile log returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitCheckFailed {
+		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s", code, cli.ExitCheckFailed, errOut.String())
+	}
+	var got struct {
+		Health struct {
+			RecentLogWarnings int      `json:"recent_log_warnings"`
+			RecentLogErrors   int      `json:"recent_log_errors"`
+			RetiredHoldPIDs   []int    `json:"retired_hold_pids"`
+			DegradedReasons   []string `json:"degraded_reasons"`
+			RecentCrashes     []struct {
+				PID int `json:"pid"`
+			} `json:"recent_crashes"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon health output is invalid JSON: %v", err)
+	}
+	if got.Health.RecentLogWarnings != 1 || got.Health.RecentLogErrors != 1 || !reflect.DeepEqual(got.Health.RetiredHoldPIDs, []int{101}) {
+		t.Fatalf("health log counts = %+v, want retired PID excluded", got.Health)
+	}
+	if len(got.Health.RecentCrashes) != 2 || got.Health.RecentCrashes[0].PID != 202 || got.Health.RecentCrashes[1].PID != 202 || !containsString(got.Health.DegradedReasons, "repeated_connection_churn") {
+		t.Fatalf("health crashes = %+v, want active-generation churn retained", got.Health)
 	}
 }
 
@@ -1094,6 +1188,72 @@ func TestDaemonHealthKeepsReadyHeadlessHealthyWhenLauncherPIDExited(t *testing.T
 	}
 }
 
+func TestDaemonHealthPreservesManagedProcessIdentityMismatch(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	stateDir := shortCLIStateDir(t)
+	t.Setenv("CDP_DAEMON_BROWSER_MODE", "headless")
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- daemon.Hold(ctx, stateDir, fakeWebSocketEndpoint(t, server.URL), "browser_url", 30*time.Second)
+	}()
+	waitForDaemonRuntimeForMode(t, ctx, stateDir, "headless")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("daemon hold returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("daemon hold did not stop")
+		}
+	})
+
+	runtimeState, ok, err := daemon.LoadRuntimeForMode(context.Background(), stateDir, "headless")
+	if err != nil || !ok {
+		t.Fatalf("LoadRuntimeForMode headless ok=%v err=%v, want runtime", ok, err)
+	}
+	runtimeState.ManagedProfilePath = browser.ManagedProfileDir(stateDir)
+	runtimeState.ProfileSeedStrategy = "managed"
+	runtimeState.ChromePID = os.Getpid()
+	runtimeState.ChromePort = "9222"
+	runtimeState.ChromeProcessStartTime = "proc:not-the-live-process"
+	managed := browser.ManagedStatus{BrowserMode: "headless", ChromePID: os.Getpid(), UserDataDir: browser.ManagedProfileDir(stateDir), DebuggingPort: "9222", ProfileSeedStrategy: "managed"}
+	runtimeState.ManagedBrowser = &managed
+	if err := daemon.SaveRuntimeForMode(context.Background(), stateDir, "headless", runtimeState); err != nil {
+		t.Fatalf("SaveRuntimeForMode returned error: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitOK {
+		t.Fatalf("daemon health exit code = %d, want %d; stderr=%s stdout=%s", code, cli.ExitOK, errOut.String(), out.String())
+	}
+	var got struct {
+		Health struct {
+			State                string   `json:"state"`
+			Code                 string   `json:"code"`
+			Reasons              []string `json:"reasons"`
+			ManagedBrowserHealth struct {
+				State     string `json:"state"`
+				Running   bool   `json:"running"`
+				ChromePID int    `json:"chrome_pid"`
+			} `json:"managed_browser_health"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("daemon health output is invalid JSON: %v", err)
+	}
+	if got.Health.State != "degraded" || got.Health.Code != "managed_chrome_ownership_unverified" || !containsString(got.Health.Reasons, "managed_chrome_process_identity_unverified") {
+		t.Fatalf("daemon health = %+v, want degraded identity-safe health", got.Health)
+	}
+	if got.Health.ManagedBrowserHealth.State != "process_identity_mismatch" || got.Health.ManagedBrowserHealth.Running || got.Health.ManagedBrowserHealth.ChromePID != os.Getpid() {
+		t.Fatalf("managed_browser_health = %+v, want preserved identity mismatch", got.Health.ManagedBrowserHealth)
+	}
+}
+
 func TestDaemonStopNotRunningJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"daemon", "stop", "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
@@ -1661,7 +1821,7 @@ func TestDaemonRestartBrowserURLJSON(t *testing.T) {
 	errOut.Reset()
 	code = cli.Execute(context.Background(), []string{"daemon", "restart", "--browser-url", server.URL, "--connection-name", "local", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
-		t.Fatalf("daemon restart exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
+		t.Fatalf("daemon restart exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
 
 	var got struct {

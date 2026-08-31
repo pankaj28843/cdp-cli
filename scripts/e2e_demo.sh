@@ -23,6 +23,13 @@ chrome_pid=""
 app_url=""
 managed_state=""
 managed_stop_verification_state=""
+stream_pid=""
+generic_stream_pid=""
+interaction_pid=""
+future_interaction_pid=""
+dialog_wait_pid=""
+network_block_pid=""
+network_mock_pid=""
 
 require_artifact() {
   local path=$1
@@ -59,6 +66,34 @@ cleanup() {
 	if [[ -n "$managed_stop_verification_state" ]]; then
 		"$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_stop_verification_state" --json >/dev/null 2>&1 || true
 	fi
+  if [[ -n "$stream_pid" ]]; then
+    kill "$stream_pid" 2>/dev/null || true
+    wait "$stream_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$generic_stream_pid" ]]; then
+    kill "$generic_stream_pid" 2>/dev/null || true
+    wait "$generic_stream_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$interaction_pid" ]]; then
+    kill "$interaction_pid" 2>/dev/null || true
+    wait "$interaction_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$future_interaction_pid" ]]; then
+    kill "$future_interaction_pid" 2>/dev/null || true
+    wait "$future_interaction_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$dialog_wait_pid" ]]; then
+    kill "$dialog_wait_pid" 2>/dev/null || true
+    wait "$dialog_wait_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$network_block_pid" ]]; then
+    kill "$network_block_pid" 2>/dev/null || true
+    wait "$network_block_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$network_mock_pid" ]]; then
+    kill "$network_mock_pid" 2>/dev/null || true
+    wait "$network_mock_pid" 2>/dev/null || true
+  fi
   if [[ -n "$chrome_pid" ]]; then
     "$binary" daemon stop --state-dir "$state_dir/cdp-state" --json >/dev/null 2>&1 || true
     kill "$chrome_pid" 2>/dev/null || true
@@ -96,8 +131,30 @@ if [[ -z "$app_url" ]]; then
 fi
 
 managed_stop_verification_state="$state_dir/stop-check"
-"$binary" --browser-mode headless daemon keepalive --repair --force --chrome-command "$chrome" --state-dir "$managed_stop_verification_state" --json \
-  | jq -e '.ok == true and (.state == "started" or .state == "repaired" or .state == "healthy")' >/dev/null
+managed_fingerprint_profile="$state_dir/synthetic-fingerprint.json"
+cat >"$managed_fingerprint_profile" <<'JSON'
+{
+  "userAgent": "SyntheticCdpManaged/1.0",
+  "platform": "SyntheticPlatform",
+  "vendor": "SyntheticVendor",
+  "language": "da-DK",
+  "timezone": "Europe/Copenhagen",
+  "viewport": {"width": 1280, "height": 800}
+}
+JSON
+chmod 600 "$managed_fingerprint_profile"
+"$binary" --browser-mode headless --fingerprint-profile "$managed_fingerprint_profile" daemon keepalive --repair --force --chrome-command "$chrome" --state-dir "$managed_stop_verification_state" --json \
+  | jq -e '.ok == true and (.state == "started" or .state == "repaired" or .state == "healthy") and .chrome.managed_browser.fingerprint_profile_applied == true and (.chrome.managed_browser.fingerprint_profile_fields == ["language","timezone","user_agent","viewport"]) and ([.. | strings | select(contains("SyntheticCdpManaged/1.0"))] | length == 0) and ([.. | strings | select(contains("synthetic-fingerprint.json"))] | length == 0)' >/dev/null
+managed_fingerprint_eval="$("$binary" --browser-mode headless eval '(() => ({userAgent:navigator.userAgent,width:window.innerWidth,height:window.innerHeight,language:navigator.language,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,webdriverOwn:Object.prototype.hasOwnProperty.call(navigator,"webdriver"),platformNative:Object.getOwnPropertyDescriptor(Navigator.prototype,"platform").get.toString().includes("[native code]"),vendorNative:Object.getOwnPropertyDescriptor(Navigator.prototype,"vendor").get.toString().includes("[native code]"),chromeType:typeof window.chrome}))()' --state-dir "$managed_stop_verification_state" --json)"
+if ! jq -e '.ok == true and .result.value.userAgent == "SyntheticCdpManaged/1.0" and .result.value.width == 1280 and .result.value.height > 600 and .result.value.language == "da-DK" and .result.value.timezone == "Europe/Copenhagen" and .result.value.webdriverOwn == false and .result.value.platformNative == true and .result.value.vendorNative == true and .result.value.chromeType == "object"' >/dev/null <<<"$managed_fingerprint_eval"; then
+  printf 'managed fingerprint live assertion failed:\n%s\n' "$managed_fingerprint_eval" >&2
+  exit 1
+fi
+printf '{' >"$state_dir/invalid-fingerprint.json"
+"$binary" --browser-mode headless --fingerprint-profile "$state_dir/invalid-fingerprint.json" daemon keepalive --repair --chrome-command "$chrome" --state-dir "$managed_stop_verification_state" --json \
+  | jq -e '.ok == true and .state == "healthy"' >/dev/null
+"$binary" --browser-mode headless eval 'navigator.userAgent' --state-dir "$managed_stop_verification_state" --json \
+  | jq -e '.ok == true and .result.value == "SyntheticCdpManaged/1.0"' >/dev/null
 managed_stop_verification_output="$("$binary" --browser-mode headless daemon stop --state-dir "$managed_stop_verification_state" --json)"
 jq -e '
   .ok == true and
@@ -120,7 +177,7 @@ done
 "$binary" --browser-mode headless daemon health --state-dir "$managed_state" --json \
   | jq -e '.ok == true and .health.state == "healthy" and .health.usable == true and .health.managed_processes.historical_processes.live_probes_attempted == 0' >/dev/null
 "$binary" --browser-mode headless daemon health-check --managed-process-sweep --require-healthy --chrome-command "$chrome" --state-dir "$managed_state" --json \
-  | jq -e '.ok == true and .state == "healthy" and .usable == true and .managed_process_sweep.state == "healthy"' >/dev/null
+  | jq -e '.ok == true and .state == "healthy" and .usable == true and .managed_process_sweep.state == "healthy" and .cleanup.attempted == true and .cleanup.closed == true and .cleanup.target_gone == true' >/dev/null
 "$binary" --browser-mode headless daemon stop --force-managed --state-dir "$managed_state" --json >/dev/null
 
 "$chrome" \
@@ -160,14 +217,26 @@ fi
   | jq -e '.checks[] | select(.name == "browser_debug_endpoint" and .status == "pass")' >/dev/null
 "$binary" daemon start --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .daemon.state == "running"' >/dev/null
+preflight_readiness_output="$("$binary" browser preflight --open-readiness --open-url "$app_url?preflight-readiness=1" --state-dir "$state_dir/cdp-state" --json)"
+jq -e '.ok == true and .readiness.ok == true and .readiness.cleanup.attempted == true and .readiness.cleanup.closed == true and .readiness.cleanup.target_gone == true and (.readiness.cleanup.target_id | length > 0)' <<<"$preflight_readiness_output" >/dev/null
+set +e
+marker_headless_output="$("$binary" --browser-mode headless browser marker enable --name demo-marker --state-dir "$state_dir/cdp-state" --json)"
+marker_headless_code=$?
+set -e
+if [[ "$marker_headless_code" -ne 2 ]]; then
+  echo "installed headless marker guard exit code: $marker_headless_code" >&2
+  printf '%s\n' "$marker_headless_output" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "invalid_browser_mode" and (.message | contains("headed"))' <<<"$marker_headless_output" >/dev/null
 "$binary" daemon keepalive --browser-url "$browser_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .state == "healthy" and .action == "none"' >/dev/null
 "$binary" daemon logs --state-dir "$state_dir/cdp-state" --tail 20 --json \
   | jq -e '.ok == true and (.entries[] | select(.event == "rpc_listening"))' >/dev/null
 "$binary" targets --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
-  | jq -e '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.targets | type == "array")' >/dev/null
+  | jq -e '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.targets | type == "array") and all(.targets[]; .short_id | type == "string" and length > 0 and length <= 8 and . == ascii_upcase)' >/dev/null
 "$binary" pages --state-dir "$state_dir/cdp-state" --json \
-  | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
+  | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url and (.index | type == "number" and . > 0) and (.short_id | type == "string" and length > 0 and length <= 8 and . == ascii_upcase)))' >/dev/null
 "$binary" pages --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
 set +e
@@ -186,12 +255,43 @@ jq -e '.ok == false and .code == "timeout" and .err_class == "timeout"' <<<"$eva
   | jq -e --arg url "$app_url/" '.ok == true and (.pages[] | select(.url == $url))' >/dev/null
 "$binary" page select --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .selected_page.target_id == .target.id' >/dev/null
-collector_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' | head -n 1)"
+collector_pages_json="$("$binary" pages --state-dir "$state_dir/cdp-state" --json)"
+collector_target_id="$(jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .id' <<<"$collector_pages_json" | head -n 1)"
+collector_target_short_id_upper="$(jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .short_id' <<<"$collector_pages_json" | head -n 1)"
+collector_target_short_id="$(jq -r --arg url "$app_url/" '.pages[] | select(.url == $url) | .short_id | ascii_downcase' <<<"$collector_pages_json" | head -n 1)"
+collector_target_index="$(jq -r --arg id "$collector_target_id" '.pages[] | select(.id == $id) | .index' <<<"$collector_pages_json")"
+collector_pages_human="$("$binary" pages --state-dir "$state_dir/cdp-state")"
+printf -v collector_expected_human '[%s]\t%s\t%s\t%s\t"%s"' "$collector_target_index" "$collector_target_short_id_upper" "$collector_target_id" "$app_url/" "cdp-cli demo app"
+grep -Fqx "$collector_expected_human" <<<"$collector_pages_human"
+collector_targets_human="$("$binary" targets --state-dir "$state_dir/cdp-state")"
+printf -v collector_expected_target_human '%s\t%s\t%s\t%s\t"%s"' "$collector_target_short_id_upper" "$collector_target_id" "page" "$app_url/" "cdp-cli demo app"
+grep -Fqx "$collector_expected_target_human" <<<"$collector_targets_human"
+protocol_exec_help="$("$binary" protocol exec --help)"
+grep -Fq 'filter targets by URL substring; combines with ID/title/type filters and must leave one target' <<<"$protocol_exec_help"
+grep -Fq 'filter targets by title substring; combines with ID/URL/type filters and must leave one target' <<<"$protocol_exec_help"
+set +e
+target_not_found_output="$("$binary" eval 'document.title' --target definitely-missing --state-dir "$state_dir/cdp-state" --json)"
+target_not_found_code=$?
+set -e
+if [[ "$target_not_found_code" -ne 2 ]]; then
+  echo "installed target-not-found exit code: $target_not_found_code" >&2
+  echo "$target_not_found_output" >&2
+  exit 1
+fi
+jq -e --arg target "$collector_target_id" --arg short "$collector_target_short_id" --argjson index "$collector_target_index" '
+  .ok == false and .code == "target_not_found" and
+  (.data.available_count >= 1) and
+  (.data.available_ids | index($target) != null) and
+  (.data.available_short_ids | index(($short | ascii_upcase)) != null) and
+  (.data.available_indexes | index($index) != null) and
+  (.data.available_truncated | type == "boolean") and
+  ((.data | has("url")) | not) and ((.data | has("title")) | not)
+' <<<"$target_not_found_output" >/dev/null
 collector_ready_root="$state_dir/collector-ready"
 collector_ready_file="$collector_ready_root/console.ready.json"
 collector_output="$state_dir/collector-console.json"
 mkdir -m 700 "$collector_ready_root"
-"$binary" console --target "$collector_target_id" --wait 3s --ready-file "$collector_ready_file" --state-dir "$state_dir/cdp-state" --json >"$collector_output" &
+"$binary" console --target "$collector_target_short_id" --wait 3s --ready-file "$collector_ready_file" --state-dir "$state_dir/cdp-state" --json >"$collector_output" &
 collector_pid=$!
 for _ in {1..100}; do
   [[ -s "$collector_ready_file" ]] && break
@@ -203,11 +303,131 @@ for _ in {1..100}; do
   sleep 0.05
 done
 jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and .collector_pid > 0 and .ready_monotonic_ns > 0 and (.enabled_domains | sort == ["Log","Runtime"]) and (has("url") | not) and (has("headers") | not) and (has("cookies") | not)' "$collector_ready_file" >/dev/null
-"$binary" eval "window.setTimeout(() => { throw new Error('ready-collector-exception') }, 0); true" --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json >/dev/null
+"$binary" eval "window.setTimeout(() => { throw new Error('ready-collector-exception') }, 0); true" --target "$collector_target_short_id" --state-dir "$state_dir/cdp-state" --json >/dev/null
 wait "$collector_pid"
 jq -e '.ok == true and (.messages[] | select(.type == "exception" and (.text | contains("ready-collector-exception"))))' "$collector_output" >/dev/null
 if [[ -e "$collector_ready_file" ]]; then
   echo "collector readiness artifact remained after collector exit" >&2
+  exit 1
+fi
+stream_ready_root="$state_dir/stream-ready"
+stream_ready_file="$stream_ready_root/events.ready.json"
+stream_output="$state_dir/events-stream.jsonl"
+mkdir -m 700 "$stream_ready_root"
+"$binary" events stream --target "$collector_target_id" --enable runtime --match Runtime.consoleAPICalled --duration 2s --ready-file "$stream_ready_file" --state-dir "$state_dir/cdp-state" --json < <(sleep 5) >"$stream_output" &
+stream_pid=$!
+for _ in {1..100}; do
+  [[ -s "$stream_ready_file" ]] && break
+  if ! kill -0 "$stream_pid" 2>/dev/null; then
+    echo "event stream exited before readiness" >&2
+    sed -n '1,80p' "$stream_output" >&2 || true
+    wait "$stream_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and (.enabled_domains | sort == ["runtime"])' "$stream_ready_file" >/dev/null
+"$binary" eval "console.error('stream-synthetic-marker')" --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json >/dev/null
+wait "$stream_pid"
+stream_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .stream.session_bound == true)] | length) == 1 and
+  ([.[] | select(.type == "event" and .event.method == "Runtime.consoleAPICalled" and (.event.sessionId | type == "string" and length > 0) and (.event.params.args[0].value == "stream-synthetic-marker"))] | length) == 1 and
+  ([.[] | select(.type == "stopped" and .reason == "duration" and .event_count >= 1 and .truncated == false)] | length) == 1
+' "$stream_output" >/dev/null
+if [[ -e "$stream_ready_file" ]]; then
+  echo "event stream readiness artifact remained after stream exit" >&2
+  exit 1
+fi
+generic_stream_ready_root="$state_dir/generic-stream-ready"
+generic_stream_ready_file="$generic_stream_ready_root/events.ready.json"
+generic_stream_output="$state_dir/events-stream-generic-domain.jsonl"
+mkdir -m 700 "$generic_stream_ready_root"
+"$binary" events stream --target "$collector_target_id" --enable DOM --match DOM.documentUpdated --duration 3s --max-events 1 --ready-file "$generic_stream_ready_file" --state-dir "$state_dir/cdp-state" --json < <(sleep 5) >"$generic_stream_output" &
+generic_stream_pid=$!
+for _ in {1..100}; do
+  [[ -s "$generic_stream_ready_file" ]] && break
+  if ! kill -0 "$generic_stream_pid" 2>/dev/null; then
+    echo "generic-domain event stream exited before readiness" >&2
+    sed -n '1,80p' "$generic_stream_output" >&2 || true
+    wait "$generic_stream_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and (.enabled_domains | sort == ["DOM"])' "$generic_stream_ready_file" >/dev/null
+"$binary" page reload --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "reloaded"' >/dev/null
+wait "$generic_stream_pid"
+generic_stream_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .stream.session_bound == true and (.stream.enabled_domains | sort == ["DOM"]))] | length) == 1 and
+  ([.[] | select(.type == "event" and .event.method == "DOM.documentUpdated" and (.event.sessionId | type == "string" and length > 0))] | length) >= 1 and
+  ([.[] | select(.type == "stopped" and .reason == "max_events" and .event_count == 1 and .truncated == true)] | length) == 1
+' "$generic_stream_output" >/dev/null
+if [[ -e "$generic_stream_ready_file" ]]; then
+  echo "generic-domain event stream readiness artifact remained after stream exit" >&2
+  exit 1
+fi
+interaction_ready_root="$state_dir/interaction-ready"
+interaction_ready_file="$interaction_ready_root/interactions.ready.json"
+interaction_output="$state_dir/events-interactions.jsonl"
+mkdir -m 700 "$interaction_ready_root"
+"$binary" events interactions --target "$collector_target_id" --match click --max-events 1 --duration 5s --ready-file "$interaction_ready_file" --state-dir "$state_dir/cdp-state" --json >"$interaction_output" &
+interaction_pid=$!
+for _ in {1..100}; do
+  [[ -s "$interaction_ready_file" ]] && break
+  if ! kill -0 "$interaction_pid" 2>/dev/null; then
+    echo "interaction observer exited before readiness" >&2
+    sed -n '1,80p' "$interaction_output" >&2 || true
+    wait "$interaction_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+jq -e --arg target "$collector_target_id" '.schema_version == "cdp-collector-readiness/v1" and .state == "ready" and .target_id == $target and .session_bound == true and (.enabled_domains | sort == ["page","runtime"]) and (has("url") | not) and (has("headers") | not) and (has("cookies") | not)' "$interaction_ready_file" >/dev/null
+"$binary" click "Click target" --by role --role button --strategy raw-input --force --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "clicked"' >/dev/null
+wait "$interaction_pid"
+interaction_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .observer.sanitized_payload == true and .observer.current_document_installed == true and .observer.future_documents_installed == true)] | length) == 1 and
+  ([.[] | select(.type == "interaction" and .interaction.type == "click" and .event.method == "Runtime.bindingCalled" and ((.interaction | has("text")) | not) and ((.interaction | has("value")) | not) and ((.interaction | has("key")) | not))] | length) == 1 and
+  ([.[] | select(.type == "stopped" and .reason == "max_events" and .cleanup.current_document_removed == true and .cleanup.future_document_removed == true and .cleanup.binding_removed == true)] | length) == 1
+' "$interaction_output" >/dev/null
+if [[ -e "$interaction_ready_file" ]]; then
+  echo "interaction observer readiness artifact remained after observer exit" >&2
+  exit 1
+fi
+future_interaction_ready_root="$state_dir/future-interaction-ready"
+future_interaction_ready_file="$future_interaction_ready_root/interactions.ready.json"
+future_interaction_output="$state_dir/events-interactions-future.jsonl"
+mkdir -m 700 "$future_interaction_ready_root"
+"$binary" events interactions --target "$collector_target_id" --match click --max-events 1 --duration 8s --ready-file "$future_interaction_ready_file" --state-dir "$state_dir/cdp-state" --json >"$future_interaction_output" &
+future_interaction_pid=$!
+for _ in {1..100}; do
+  [[ -s "$future_interaction_ready_file" ]] && break
+  if ! kill -0 "$future_interaction_pid" 2>/dev/null; then
+    echo "future-document interaction observer exited before readiness" >&2
+    sed -n '1,80p' "$future_interaction_output" >&2 || true
+    wait "$future_interaction_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+"$binary" page reload --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "reloaded"' >/dev/null
+"$binary" click "Click target" --by role --role button --strategy raw-input --force --target "$collector_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "clicked"' >/dev/null
+wait "$future_interaction_pid"
+future_interaction_pid=""
+jq -s -e --arg target "$collector_target_id" '
+  ([.[] | select(.type == "ready" and .target.id == $target and .observer.future_documents_installed == true)] | length) == 1 and
+  ([.[] | select(.type == "interaction" and .interaction.type == "click" and .event.method == "Runtime.bindingCalled")] | length) == 1 and
+  ([.[] | select(.type == "stopped" and .reason == "max_events" and .cleanup.current_document_removed == true and .cleanup.future_document_removed == true and .cleanup.binding_removed == true)] | length) == 1
+' "$future_interaction_output" >/dev/null
+if [[ -e "$future_interaction_ready_file" ]]; then
+  echo "future-document interaction readiness artifact remained after observer exit" >&2
   exit 1
 fi
 reuse_open_output="$("$binary" open "$app_url?cdp_reused=1" --reuse --url-contains "$app_url" --budget-summary --state-dir "$state_dir/cdp-state" --json)"
@@ -250,6 +470,11 @@ if [[ "$stop_state_wait_code" -ne 1 ]]; then
   exit 1
 fi
 jq -e '.ok == false and .code == "stop_state" and .stop_state == "login_required" and .stop_state_class == "auth" and .agent_should_stop == true and .human_required == true and .data.wait.kind == "eval" and .data.wait.matched == false and .data.stop_state_result.stop_state == "login_required" and (.next_commands | any(contains("daemon status"))) and (.remediation_commands | any(contains("daemon status")))' <<<"$stop_state_wait_output" >/dev/null
+stop_state_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg url "$stop_url" '([.pages[] | select(.url == $url)][0].id) | select(type == "string" and length > 0)')"
+stop_state_target_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$stop_state_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+stop_state_index_report="$state_dir/stop-state-target-index.json"
+"$binary" stop-state classify --target-index "$stop_state_target_index" --state-dir "$state_dir/cdp-state" --json >"$stop_state_index_report"
+jq -e --arg id "$stop_state_target_id" --argjson index "$stop_state_target_index" '.ok == true and .status == "blocked" and .stop_state == "login_required" and .target.id == $id and .target_index == $index and .input.text_present == true and (.input.text_bytes > 0) and (.target | has("text") | not)' "$stop_state_index_report" >/dev/null
 "$binary" open "$app_url" --reuse --url-contains "$app_url" --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url" '.ok == true and .reused == true and .created == false and (.page.url | contains($url))' >/dev/null
 "$binary" assert url "$app_url" --mode contains --state-dir "$state_dir/cdp-state" --timeout 2s --poll 100ms --json \
@@ -273,8 +498,8 @@ app_origin="${app_url%/}"
   | jq -e --arg origin "$app_origin" '.ok == true and .permissions.action == "set" and .permissions.origin == $origin and .permissions.setting == "denied" and (.permissions.permissions[] | select(.name == "notifications" and .setting == "denied" and .method == "Browser.setPermission")) and (.permissions.reset_command | contains("permissions reset"))' >/dev/null
 "$binary" permissions reset --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .permissions.action == "reset" and .permissions.method == "Browser.resetPermissions" and .permissions.browser_scoped == true and .permissions.reset_all_origins == true' >/dev/null
-"$binary" workflow page-load --url-contains "$app_url" --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
-  | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
+"$binary" workflow page-load --target-index 1 --reload --state-dir "$state_dir/cdp-state" --wait 1s --out "$state_dir/page-load.local.json" --json \
+  | jq -e --arg path "$state_dir/page-load.local.json" '.ok == true and .target_index == 1 and .workflow.name == "page-load" and .workflow.trigger == "reload" and .artifact.path == $path and .content_state.class == "content" and .content_state.actionable == true and (.storage.local_storage_keys | type == "array") and (.performance.count | type == "number")' >/dev/null
 require_artifact "$state_dir/page-load.local.json"
 "$binary" text main --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and (.text.text | contains("CDP CLI Demo Ready"))' >/dev/null
@@ -386,11 +611,12 @@ hydrated_dir="$state_dir/rendered-extract-hydrated"
 hydrated_report="$state_dir/rendered-extract-hydrated.json"
 "$binary" eval '(() => { const main = document.querySelector("main"); main.innerHTML = "<p>Loading</p>"; setTimeout(() => { main.innerHTML = "<article><h1>Hydrated extraction marker</h1><p>The delayed application content now contains enough meaningful words to satisfy every configured extraction quality threshold.</p><p>This second sentence proves the workflow waited for hydrated content and then observed a full stable interval before capture.</p></article>"; }, 800); return true; })()' --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .result.value == true' >/dev/null
-"$binary" workflow rendered-extract --url-contains "$app_url" --selector main --state-dir "$state_dir/cdp-state" --out-dir "$hydrated_dir" --min-visible-words 12 --min-markdown-words 12 --min-html-chars 64 --wait 5s --settle 1s --json >"$hydrated_report"
+"$binary" workflow rendered-extract --target-index 1 --selector main --state-dir "$state_dir/cdp-state" --out-dir "$hydrated_dir" --min-visible-words 12 --min-markdown-words 12 --min-html-chars 64 --wait 5s --settle 1s --json >"$hydrated_report"
 jq -e --arg dir "$hydrated_dir" '
   .ok == true and
   .workflow.created_page == false and
   .workflow.reused_page == true and
+  .target_index == 1 and
   .workflow.closed == false and
   .readiness.thresholds_met == true and
   .readiness.content_settled_seen == true and
@@ -439,8 +665,8 @@ test "$rendered_after_failure_tabs" -eq "$rendered_baseline_tabs"
   | jq -e '.ok == true and .action == "clicked" and .click.clicked == true and .click.selector == "#action" and .target.url == .after_target.url and .final_target.url == .after_target.url and .page_state.same_target == true and .page_state.url_changed == false and .actionability.actionable == true' >/dev/null
 action_capture_dir="$state_dir/action-capture"
 mkdir -p "$action_capture_dir"
-"$binary" workflow action-capture --action click:#action --state-dir "$state_dir/cdp-state" --wait-before 0s --wait-after 250ms --include network,console,dom,text,a11y --evidence-out-dir "$action_capture_dir" --json \
-  | jq -e --arg before "$action_capture_dir/action-capture.before.text.json" --arg after "$action_capture_dir/action-capture.after.dom.json" --arg before_a11y "$action_capture_dir/action-capture.before.a11y.json" --arg after_a11y "$action_capture_dir/action-capture.after.a11y.json" --arg network "$action_capture_dir/action-capture.action.network.json" --arg console "$action_capture_dir/action-capture.action.console.json" --arg manifest "$action_capture_dir/action-capture.manifest.json" '.ok == true and .workflow.name == "action-capture" and .action.type == "click" and .evidence.artifact_count == 9 and .evidence.before.text.artifact.path == $before and .evidence.after.dom.artifact.path == $after and .evidence.before.a11y.artifact.path == $before_a11y and .evidence.after.a11y.artifact.path == $after_a11y and .evidence.events.network.artifact.path == $network and .evidence.events.console.artifact.path == $console and .evidence.manifest.artifact.path == $manifest and .evidence.manifest.referenced_artifact_count == 8 and (.artifacts | length >= 9)' >/dev/null
+"$binary" workflow action-capture --target-index 1 --action click:#action --state-dir "$state_dir/cdp-state" --wait-before 0s --wait-after 250ms --include network,console,dom,text,a11y --evidence-out-dir "$action_capture_dir" --json \
+  | jq -e --arg before "$action_capture_dir/action-capture.before.text.json" --arg after "$action_capture_dir/action-capture.after.dom.json" --arg before_a11y "$action_capture_dir/action-capture.before.a11y.json" --arg after_a11y "$action_capture_dir/action-capture.after.a11y.json" --arg network "$action_capture_dir/action-capture.action.network.json" --arg console "$action_capture_dir/action-capture.action.console.json" --arg manifest "$action_capture_dir/action-capture.manifest.json" '.ok == true and .target_index == 1 and .workflow.name == "action-capture" and .action.type == "click" and .evidence.artifact_count == 9 and .evidence.before.text.artifact.path == $before and .evidence.after.dom.artifact.path == $after and .evidence.before.a11y.artifact.path == $before_a11y and .evidence.after.a11y.artifact.path == $after_a11y and .evidence.events.network.artifact.path == $network and .evidence.events.console.artifact.path == $console and .evidence.manifest.artifact.path == $manifest and .evidence.manifest.referenced_artifact_count == 8 and (.artifacts | length >= 9)' >/dev/null
 require_artifact "$action_capture_dir/action-capture.before.text.json"
 require_artifact "$action_capture_dir/action-capture.before.dom.json"
 require_artifact "$action_capture_dir/action-capture.before.a11y.json"
@@ -450,6 +676,10 @@ require_artifact "$action_capture_dir/action-capture.after.a11y.json"
 require_artifact "$action_capture_dir/action-capture.action.network.json"
 require_artifact "$action_capture_dir/action-capture.action.console.json"
 require_artifact "$action_capture_dir/action-capture.manifest.json"
+"$binary" workflow console-errors --target-index 1 --wait 250ms --limit 1 --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .target_index == 1 and .target.id != "" and .workflow.name == "console-errors" and .workflow.count == (.messages | length)' >/dev/null
+"$binary" workflow network-failures --target-index 1 --wait 250ms --limit 1 --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .target_index == 1 and .target.id != "" and .workflow.name == "network-failures" and .workflow.count == (.requests | length)' >/dev/null
 "$binary" fill "#agent-input" "filled value" --wait-text "Suggestion ready: filled value" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .action == "filled" and .fill.filled == true and .fill.verified == true and .fill.value == "filled value" and .verification.kind == "text" and .verification.needle == "Suggestion ready: filled value" and .verification.matched == true and .actionability.actionable == true' >/dev/null
 "$binary" type "#agent-input" " plus typed" --wait-text "Suggestion ready: filled value plus typed" --state-dir "$state_dir/cdp-state" --json \
@@ -522,6 +752,37 @@ sleep 0.5
 wait "$network_pid"
 require_artifact "$network_output"
 jq -e --arg probe "$probe_id" '.ok == true and (.requests[] | select((.url | contains($probe)) and .status == 503))' "$network_output" >/dev/null
+network_control_target_id="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg url "$app_url" '([.pages[] | select(.url | startswith($url))][0].id) | select(type == "string" and length > 0)')"
+network_control_target_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$network_control_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+network_block_probe="$(date +%s%N)"
+network_block_output="$state_dir/network-block-target-index.json"
+"$binary" network block --target-index "$network_control_target_index" --pattern '*://*/api/block-control*' --duration 2s --state-dir "$state_dir/cdp-state" --json >"$network_block_output" &
+network_block_pid=$!
+sleep 0.3
+"$binary" eval "fetch('$app_url/api/block-control?probe=$network_block_probe').then(() => 'unexpected').catch(() => 'blocked')" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value == "blocked"' >/dev/null
+wait "$network_block_pid"
+network_block_pid=""
+jq -e --arg id "$network_control_target_id" --argjson index "$network_control_target_index" '.ok == true and .target.id == $id and .target_index == $index and .matched_count >= 1 and .cleanup.complete == true and .cleanup.blocked_urls_cleared == true and .cleanup.network_disabled == true' "$network_block_output" >/dev/null
+mock_rule='{"url_pattern":"*://*/api/mock-control*","method":"GET","status":200,"headers":{"Content-Type":"application/json"},"body":"{\"mocked\":true}","max_matches":1}'
+network_mock_probe="$(date +%s%N)"
+network_mock_output="$state_dir/network-mock-target-index.json"
+"$binary" network mock --target-index "$network_control_target_index" --rule "$mock_rule" --duration 2s --state-dir "$state_dir/cdp-state" --json >"$network_mock_output" &
+network_mock_pid=$!
+sleep 0.3
+"$binary" eval "fetch('$app_url/api/mock-control?probe=$network_mock_probe').then(r => r.json())" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value.mocked == true' >/dev/null
+wait "$network_mock_pid"
+network_mock_pid=""
+if ! jq -e --arg id "$network_control_target_id" --argjson index "$network_control_target_index" '.ok == true and .target.id == $id and .target_index == $index and .matched_count == 1 and .actions.fulfilled == 1 and .cleanup.complete == true and .cleanup.fetch_disabled == true and (.cleanup.pending_released // 0) == 0' "$network_mock_output" >/dev/null; then
+  echo "indexed network mock assertion failed:" >&2
+  sed -n '1,160p' "$network_mock_output" >&2
+  exit 1
+fi
+if rg -q '"mocked":true' "$network_mock_output"; then
+  echo "network mock metadata leaked the synthetic response body" >&2
+  exit 1
+fi
 request_probe="$(date +%s%N)"
 wait_request_output="$state_dir/wait-request.json"
 "$binary" wait request --match-url "$request_probe" --method GET --resource-type Fetch --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_request_output" &
@@ -580,8 +841,8 @@ fill_url_probe="$(date +%s%N)"
 submit_search_probe="$(date +%s%N)"
 "$binary" eval "window.__cdpSubmitSearchProbe = '$submit_search_probe'; document.querySelector('#agent-input').addEventListener('keydown', event => { if (event.key === 'Enter') history.pushState({}, '', '/submit-search?submit_search=' + window.__cdpSubmitSearchProbe); }, { once: true })" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true' >/dev/null
-"$binary" workflow submit-search "Agent input" "workflow-query" --by label --wait-url-contains "$submit_search_probe" --state-dir "$state_dir/cdp-state" --json \
-  | jq -e --arg probe "$submit_search_probe" '.ok == true and .action == "submit_search" and .workflow.name == "submit-search" and .workflow.input_mode == "fill" and .workflow.submit == "enter" and .workflow.verified == true and .input.selector == "input#agent-input" and .input.query == "workflow-query" and .fill.filled == true and .fill.verified == true and .press.dispatched == true and .press.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and .page_state.same_target == true and .page_state.url_changed == true and (.final_target.url | contains($probe))' >/dev/null
+"$binary" workflow submit-search "Agent input" "workflow-query" --by label --wait-url-contains "$submit_search_probe" --target-index 1 --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg probe "$submit_search_probe" '.ok == true and .target_index == 1 and .action == "submit_search" and .workflow.name == "submit-search" and .workflow.input_mode == "fill" and .workflow.submit == "enter" and .workflow.verified == true and .input.selector == "input#agent-input" and .input.query == "workflow-query" and .fill.filled == true and .fill.verified == true and .press.dispatched == true and .press.verified == true and .verification.kind == "url" and .verification.condition == "contains" and .verification.needle == $probe and (.verification.url | contains($probe)) and .page_state.same_target == true and .page_state.url_changed == true and (.final_target.url | contains($probe))' >/dev/null
 suggestion_probe="$(date +%s%N)"
 "$binary" eval "window.__cdpSuggestionProbe = '$suggestion_probe'; document.querySelector('#action').addEventListener('click', () => { history.pushState({}, '', '/suggestion?selected=' + window.__cdpSuggestionProbe); }, { once: true })" --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true' >/dev/null
@@ -643,7 +904,8 @@ require_artifact "$capture_artifact"
 require_artifact "$capture_har"
 test -d "$capture_body_dir"
 test -n "$(find "$capture_body_dir" -type f -print -quit)"
-jq -e --arg path "$capture_artifact" --arg har "$capture_har" '.ok == true and .artifact.path == $path and .har.path == $har and .capture.trigger == "reload" and .capture.artifact_safety.shareable == true and (.body_artifacts | length > 0) and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\"")) and (.body.text | contains("demo-network-secret") | not)))' "$capture_output" >/dev/null
+jq -e --arg path "$capture_artifact" --arg har "$capture_har" '.ok == true and .output_mode == "artifact_only" and (has("requests") | not) and .artifact.path == $path and .har.path == $har and .capture.output_mode == "artifact_only" and .capture.trigger == "reload" and .capture.artifact_safety.shareable == true and .body_artifact_count >= 1' "$capture_output" >/dev/null
+jq -e '.ok == true and .output_mode == "artifact_only" and .capture.trigger == "reload" and .capture.artifact_safety.shareable == true and (.body_artifacts | length > 0) and (.requests[] | select((.url | contains("/api/ok")) and .body.text and (.body.text | contains("\"ok\"")) and (.body.text | contains("demo-network-secret") | not)))' "$capture_artifact" >/dev/null
 if rg -q 'demo-network-secret' "$capture_output" "$capture_artifact" "$capture_har" "$capture_body_dir"; then
   echo "safe network evidence leaked the synthetic secret" >&2
   exit 1
@@ -659,8 +921,8 @@ fi
 "$binary" storage cookies set --state-dir "$state_dir/cdp-state" --url "$app_url" --name debug_bundle_sentinel --value preserved --json >/dev/null
 bootstrap_before="$(python3 -c 'import json,sys,urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1]))["count"])' "$app_url/api/bootstrap-count")"
 for run in 1 2; do
-  "$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --url-contains "$app_url" --since 1s --json \
-    | jq -e '.ok == true and .workflow.trigger == "reload" and .workflow.reloaded == true and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache"' >/dev/null
+  "$binary" workflow debug-bundle --state-dir "$state_dir/cdp-state" --target-index 1 --since 1s --json \
+    | jq -e '.ok == true and .target_index == 1 and .workflow.trigger == "reload" and .workflow.reloaded == true and .workflow.ignore_cache == true and .workflow.cache_policy == "bypass_http_cache"' >/dev/null
 done
 bootstrap_after="$(python3 -c 'import json,sys,urllib.request; print(json.load(urllib.request.urlopen(sys.argv[1]))["count"])' "$app_url/api/bootstrap-count")"
 if [[ "$bootstrap_after" -ne $((bootstrap_before + 2)) ]]; then
@@ -730,6 +992,383 @@ if ! jq -e --arg path "$state_dir/protocol-shot.png" '.ok == true and .artifact.
   exit 1
 fi
 require_artifact "$state_dir/protocol-shot.png"
+protocol_index_open_output="$("$binary" open "$app_url?protocol-index=1" --new-tab --run-id demo-run --task-id protocol-index --root-task-id protocol-index --state-dir "$state_dir/cdp-state" --json)"
+protocol_index_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$protocol_index_open_output")"
+duplicate_selection_open_output="$("$binary" open "$app_url?protocol-index=2" --new-tab --run-id demo-run --task-id duplicate-selection --root-task-id duplicate-selection --state-dir "$state_dir/cdp-state" --json)"
+duplicate_selection_target_id="$(jq -er '.page.id | select(length > 0)' <<<"$duplicate_selection_open_output")"
+selection_pages_json="$("$binary" pages --state-dir "$state_dir/cdp-state" --json)"
+protocol_index_short_id="$(jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .short_id' <<<"$selection_pages_json")"
+duplicate_selection_short_id="$(jq -er --arg id "$duplicate_selection_target_id" '.pages[] | select(.id == $id) | .short_id' <<<"$selection_pages_json")"
+protocol_index_candidate_index="$(jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .index' <<<"$selection_pages_json")"
+duplicate_selection_candidate_index="$(jq -er --arg id "$duplicate_selection_target_id" '.pages[] | select(.id == $id) | .index' <<<"$selection_pages_json")"
+for selector_flag in --url-contains --title-contains; do
+  selector_value="protocol-index="
+  if [[ "$selector_flag" == "--title-contains" ]]; then
+    selector_value="cdp-cli demo app"
+  fi
+  set +e
+  ambiguous_selector_output="$("$binary" eval 'document.title' "$selector_flag" "$selector_value" --state-dir "$state_dir/cdp-state" --json)"
+  ambiguous_selector_code=$?
+  set -e
+  if [[ "$ambiguous_selector_code" -ne 2 ]]; then
+    echo "installed duplicate-page selector exit code ($selector_flag): $ambiguous_selector_code" >&2
+    echo "$ambiguous_selector_output" >&2
+    exit 1
+  fi
+  jq -e --arg first_id "$protocol_index_target_id" --arg second_id "$duplicate_selection_target_id" --arg first "$protocol_index_short_id" --arg second "$duplicate_selection_short_id" --argjson first_index "$protocol_index_candidate_index" --argjson second_index "$duplicate_selection_candidate_index" '
+    .ok == false and .code == "ambiguous_target" and
+    (.data.candidate_count >= 2) and
+    (.data.candidate_ids | index($first_id) != null) and
+    (.data.candidate_ids | index($second_id) != null) and
+    (.data.candidate_short_ids | index($first) != null) and
+    (.data.candidate_short_ids | index($second) != null) and
+    (.data.candidate_indexes | index($first_index) != null) and
+    (.data.candidate_indexes | index($second_index) != null) and
+    (.data.candidate_truncated | type == "boolean") and
+    ((.data | has("url")) | not) and ((.data | has("title")) | not)
+  ' <<<"$ambiguous_selector_output" >/dev/null
+done
+set +e
+plain_ambiguous_output="$("$binary" eval 'document.title' --url-contains 'protocol-index=' --state-dir "$state_dir/cdp-state" 2>&1)"
+plain_ambiguous_code=$?
+set -e
+if [[ "$plain_ambiguous_code" -ne 2 ]]; then
+  echo "installed plain duplicate-page selector exit code: $plain_ambiguous_code" >&2
+  echo "$plain_ambiguous_output" >&2
+  exit 1
+fi
+grep -Fq 'Candidate targets:' <<<"$plain_ambiguous_output"
+grep -Fq "$protocol_index_target_id" <<<"$plain_ambiguous_output"
+grep -Fq "$duplicate_selection_target_id" <<<"$plain_ambiguous_output"
+if grep -Fq 'cdp-cli demo app' <<<"$plain_ambiguous_output" || grep -Fq 'http://' <<<"$plain_ambiguous_output"; then
+  echo "installed plain target recovery exposed page title or URL" >&2
+  echo "$plain_ambiguous_output" >&2
+  exit 1
+fi
+set +e
+selector_conflict_output="$("$binary" eval 'window.__cdpSelectorConflictExecuted = true' --target "$protocol_index_target_id" --url-contains 'protocol-index=1' --state-dir "$state_dir/cdp-state" --json)"
+selector_conflict_code=$?
+set -e
+if [[ "$selector_conflict_code" -ne 2 ]]; then
+  echo "installed selector-conflict exit code: $selector_conflict_code" >&2
+  echo "$selector_conflict_output" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "invalid_target_selector" and (.message | contains("only one"))' <<<"$selector_conflict_output" >/dev/null
+"$binary" eval 'window.__cdpSelectorConflictExecuted === undefined' --target "$protocol_index_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .result.value == true' >/dev/null
+"$binary" page close --target "$duplicate_selection_target_id" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .target_gone == true' >/dev/null
+protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '.pages[] | select(.id == $id) | .index')"
+test "$protocol_index" -gt 0
+diagnostic_page_count_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+diagnostic_verify_index_report="$state_dir/workflow-verify-target-index.json"
+"$binary" workflow verify --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$diagnostic_verify_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .workflow.trigger == "observe" and .workflow.requested_url == "" and (.workflow.collector_errors | length == 0)' "$diagnostic_verify_index_report" >/dev/null
+diagnostic_a11y_index_report="$state_dir/workflow-a11y-target-index.json"
+"$binary" workflow a11y --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$diagnostic_a11y_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .workflow.requested_url == "" and (.workflow.collector_errors | length == 0)' "$diagnostic_a11y_index_report" >/dev/null
+diagnostic_perf_index_trace="$state_dir/workflow-perf-target-index.json"
+diagnostic_perf_index_report="$state_dir/workflow-perf-target-index-report.json"
+"$binary" workflow perf --target-index "$protocol_index" --wait 0s --trace "$diagnostic_perf_index_trace" --state-dir "$state_dir/cdp-state" --json >"$diagnostic_perf_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg path "$diagnostic_perf_index_trace" '.ok == true and .target.id == $id and .target_index == $index and .workflow.requested_url == "" and .trace.stream.closed == true and .artifact.path == $path' "$diagnostic_perf_index_report" >/dev/null
+require_artifact "$diagnostic_perf_index_trace"
+diagnostic_page_count_after_observe="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$diagnostic_page_count_after_observe" -eq "$diagnostic_page_count_before"
+diagnostic_navigation_url="$app_url?diagnostic-indexed-navigation=1"
+diagnostic_navigation_report="$state_dir/workflow-verify-target-index-navigation.json"
+"$binary" workflow verify "$diagnostic_navigation_url" --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$diagnostic_navigation_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg url "$diagnostic_navigation_url" '.ok == true and .target.id == $id and .target_index == $index and .target.url == $url and .workflow.trigger == "navigate" and .workflow.requested_url == $url' "$diagnostic_navigation_report" >/dev/null
+diagnostic_page_count_after_navigation="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$diagnostic_page_count_after_navigation" -eq "$diagnostic_page_count_before"
+responsive_url_only_report="$state_dir/workflow-responsive-url-only.json"
+responsive_url_only_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+"$binary" workflow responsive-audit "$app_url?responsive-created=1" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_url_only_report"
+jq -e '.ok == true and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.emulation_cleared == true and .cleanup.attempted == true and .cleanup.closed == true and .cleanup.target_gone == true and .workflow.cleanup.closed == true' "$responsive_url_only_report" >/dev/null
+responsive_url_only_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$responsive_url_only_after" -eq "$responsive_url_only_before"
+responsive_index_report="$state_dir/workflow-responsive-target-index.json"
+responsive_index_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+responsive_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+test "$responsive_index" -gt 0
+"$binary" workflow responsive-audit --target-index "$responsive_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_index_report"
+if ! jq -e --arg id "$protocol_index_target_id" --argjson index "$responsive_index" '.ok == true and .target.id == $id and .target_index == $index and (.workflow.url | startswith("http://127.0.0.1:")) and (.results | length == 1) and .workflow.emulation_cleared == true and .cleanup.skipped == true and .cleanup.reason == "caller_owned" and .workflow.cleanup.reason == "caller_owned"' "$responsive_index_report" >/dev/null; then
+  echo "responsive indexed cleanup assertion failed:" >&2
+  jq --arg id "$protocol_index_target_id" --argjson index "$responsive_index" '{ok: (.ok == true), target: (.target.id == $id), target_index: (.target_index == $index), loopback_url: (.workflow.url | startswith("http://127.0.0.1:")), result_count: (.results | length == 1), emulation_cleared: (.workflow.emulation_cleared == true), cleanup_skipped: (.cleanup.skipped == true), cleanup_reason: .cleanup.reason, workflow_cleanup_reason: .workflow.cleanup.reason}' "$responsive_index_report" >&2
+  sed -n '1,160p' "$responsive_index_report" >&2
+  exit 1
+fi
+responsive_index_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$responsive_index_after" -eq "$responsive_index_before"
+responsive_navigation_url="$app_url?responsive-indexed-navigation=1"
+responsive_navigation_report="$state_dir/workflow-responsive-target-index-navigation.json"
+responsive_navigation_before="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+responsive_navigation_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+test "$responsive_navigation_index" -gt 0
+"$binary" workflow responsive-audit "$responsive_navigation_url" --target-index "$responsive_navigation_index" --viewports desktop --include layout --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$responsive_navigation_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$responsive_navigation_index" --arg url "$responsive_navigation_url" '.ok == true and .target.id == $id and .target_index == $index and .target.url == $url and .workflow.url == $url and (.results | length == 1) and .workflow.emulation_cleared == true and .cleanup.skipped == true and .cleanup.reason == "caller_owned"' "$responsive_navigation_report" >/dev/null
+responsive_navigation_after="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$responsive_navigation_after" -eq "$responsive_navigation_before"
+protocol_index="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg id "$protocol_index_target_id" '([.pages[].id] | index($id)) as $index | if $index == null then empty else $index + 1 end')"
+test "$protocol_index" -gt 0
+storage_index_report="$state_dir/storage-target-index.json"
+"$binary" storage list --target-index "$protocol_index" --include localStorage,sessionStorage,cookies --state-dir "$state_dir/cdp-state" --json >"$storage_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.local_storage | has("entries")) and (.storage.session_storage | has("keys"))' "$storage_index_report" >/dev/null
+"$binary" storage set localStorage indexed_target yes --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.value == "yes"' >/dev/null
+"$binary" storage get localStorage indexed_target --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.value == "yes"' >/dev/null
+"$binary" storage delete localStorage indexed_target --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index' >/dev/null
+"$binary" storage cookies list --target-index "$protocol_index" --url "$app_url" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.url | type == "string")' >/dev/null
+"$binary" storage cookies set --target-index "$protocol_index" --url "$app_url" --name indexed_target --value yes --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .cookie.name == "indexed_target"' >/dev/null
+"$binary" storage cookies delete --target-index "$protocol_index" --url "$app_url" --name indexed_target --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .cookie.name == "indexed_target"' >/dev/null
+storage_index_snapshot="$state_dir/storage-target-index-snapshot.json"
+"$binary" storage snapshot --target-index "$protocol_index" --include localStorage --redact safe --out "$storage_index_snapshot" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg path "$storage_index_snapshot" '.ok == true and .target.id == $id and .target_index == $index and .artifact.path == $path and .storage.redact == "safe"' >/dev/null
+require_artifact "$storage_index_snapshot"
+"$binary" storage indexeddb list --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.databases | type == "array")' >/dev/null
+"$binary" storage indexeddb get cdp-demo-db settings feature --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.found == true' >/dev/null
+"$binary" storage indexeddb put cdp-demo-db settings indexed-target '{"from":"target-index"}' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.value_source == "inline"' >/dev/null
+"$binary" storage indexeddb delete cdp-demo-db settings indexed-target --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.deleted == true' >/dev/null
+"$binary" storage cache list --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.caches | type == "array")' >/dev/null
+"$binary" storage cache get cdp-demo-cache "$app_url/api/cached" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.found == true' >/dev/null
+"$binary" storage cache put cdp-demo-cache "$app_url/api/indexed-target" '{"from":"target-index"}' --content-type application/json --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.body_source == "inline"' >/dev/null
+"$binary" storage cache delete cdp-demo-cache "$app_url/api/indexed-target" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .storage.deleted == true' >/dev/null
+"$binary" storage service-workers list --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.storage.registrations | type == "array")' >/dev/null
+indexed_file_trial_report="$state_dir/file-target-index-trial.json"
+"$binary" file "#upload-file" "$upload_file" --target-index "$protocol_index" --trial --state-dir "$state_dir/cdp-state" --json >"$indexed_file_trial_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .file.accepted == true and .file.file_set == false and .file.trial == true and .file.content_omitted == true and .actionability.actionable == true' "$indexed_file_trial_report" >/dev/null
+indexed_file_report="$state_dir/file-target-index.json"
+"$binary" file "#upload-file" "$upload_file" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_file_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "file_set" and .target.id == $id and .target_index == $index and .file.accepted == true and .file.file_set == true and .file.content_omitted == true' "$indexed_file_report" >/dev/null
+indexed_chooser_wait_output="$state_dir/file-chooser-target-index-wait.json"
+"$binary" wait file-chooser --target-index "$protocol_index" --mode single --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_chooser_wait_output" &
+indexed_chooser_wait_pid=$!
+sleep 0.2
+"$binary" click "Upload file" --by label --strategy raw-input --target-index "$protocol_index" --force --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "clicked" and .target.id == $id and .target_index == $index and .click.strategy == "raw-input"' >/dev/null
+wait "$indexed_chooser_wait_pid"
+require_artifact "$indexed_chooser_wait_output"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.kind == "file-chooser" and .wait.matched == true and .file_chooser.backend_node_id > 0' "$indexed_chooser_wait_output" >/dev/null
+indexed_chooser_backend_node_id="$(jq -er '.file_chooser.backend_node_id | select(. > 0)' "$indexed_chooser_wait_output")"
+indexed_chooser_trial_report="$state_dir/file-chooser-target-index-trial.json"
+"$binary" file chooser "$indexed_chooser_backend_node_id" "$upload_file" --target-index "$protocol_index" --trial --state-dir "$state_dir/cdp-state" --json >"$indexed_chooser_trial_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .file_chooser.backend_node_id > 0 and .file_chooser.file_count == 1 and .file_chooser.files_set == false and .file_chooser.trial == true and .file_chooser.content_omitted == true' "$indexed_chooser_trial_report" >/dev/null
+indexed_form_values_report="$state_dir/form-values-target-index.json"
+"$binary" form values --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_form_values_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .form.count >= 1 and (.controls | length >= 1)' "$indexed_form_values_report" >/dev/null
+indexed_form_get_report="$state_dir/form-get-target-index.json"
+"$binary" form get "#agent-input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_form_get_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .form.selector == "#agent-input" and .control.selector_hint == "input#agent-input"' "$indexed_form_get_report" >/dev/null
+indexed_dialog_prompt_eval_report="$state_dir/dialog-prompt-eval.json"
+indexed_dialog_prompt_wait_report="$state_dir/dialog-prompt-wait.json"
+"$binary" wait dialog --target-index "$protocol_index" --type prompt --action accept --prompt-text yes --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_prompt_wait_report" &
+indexed_dialog_prompt_wait_pid=$!
+dialog_wait_pid="$indexed_dialog_prompt_wait_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.prompt("Indexed prompt"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_prompt_eval_report"
+jq -e '.ok == true and .result.value == true' "$indexed_dialog_prompt_eval_report" >/dev/null
+wait "$indexed_dialog_prompt_wait_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .dialog.action == "accept" and .dialog.accepted == true and .dialog.prompt_text_supplied == true' "$indexed_dialog_prompt_wait_report" >/dev/null
+indexed_dialog_confirm_eval_report="$state_dir/dialog-confirm-eval.json"
+indexed_dialog_confirm_wait_report="$state_dir/dialog-confirm-wait.json"
+"$binary" wait dialog --target-index "$protocol_index" --type confirm --action dismiss --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_confirm_wait_report" &
+indexed_dialog_confirm_wait_pid=$!
+dialog_wait_pid="$indexed_dialog_confirm_wait_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.confirm("Indexed confirm"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$indexed_dialog_confirm_eval_report"
+jq -e '.ok == true and .result.value == true' "$indexed_dialog_confirm_eval_report" >/dev/null
+wait "$indexed_dialog_confirm_wait_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .dialog.action == "dismiss" and .dialog.accepted == false and .dialog.prompt_text_supplied == false' "$indexed_dialog_confirm_wait_report" >/dev/null
+indexed_direct_dialog_prompt_report="$state_dir/dialog-direct-prompt.json"
+"$binary" dialog accept --wait --target-index "$protocol_index" --type prompt --message "Indexed direct prompt" --prompt-text yes --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_direct_dialog_prompt_report" &
+indexed_direct_dialog_prompt_pid=$!
+dialog_wait_pid="$indexed_direct_dialog_prompt_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.prompt("Indexed direct prompt"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$state_dir/dialog-direct-prompt-eval.json"
+wait "$indexed_direct_dialog_prompt_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.matched == true and .dialog.action == "accept" and .dialog.accepted == true and .dialog.handled == true and .dialog.prompt_text_supplied == true' "$indexed_direct_dialog_prompt_report" >/dev/null
+indexed_direct_dialog_confirm_report="$state_dir/dialog-direct-confirm.json"
+"$binary" dialog dismiss --wait --target-index "$protocol_index" --type confirm --message-contains "Indexed direct confirm" --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$indexed_direct_dialog_confirm_report" &
+indexed_direct_dialog_confirm_pid=$!
+dialog_wait_pid="$indexed_direct_dialog_confirm_pid"
+sleep 0.2
+"$binary" eval 'window.setTimeout(() => window.confirm("Indexed direct confirm"), 500); true' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$state_dir/dialog-direct-confirm-eval.json"
+wait "$indexed_direct_dialog_confirm_pid"
+dialog_wait_pid=""
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.matched == true and .dialog.action == "dismiss" and .dialog.accepted == false and .dialog.handled == true and .dialog.prompt_text_supplied == false' "$indexed_direct_dialog_confirm_report" >/dev/null
+emulation_index_report="$state_dir/emulation-target-index.json"
+"$binary" emulate viewport --preset mobile --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.viewport.width == 390 and .emulation.viewport.height == 844' "$emulation_index_report" >/dev/null
+"$binary" emulate clear --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.cleared == true and (.emulation.cleared_overrides | index("viewport"))' "$emulation_index_report" >/dev/null
+"$binary" emulate media --prefers-color-scheme dark --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.media_features[0].name == "prefers-color-scheme" and .emulation.media_features[0].value == "dark"' "$emulation_index_report" >/dev/null
+"$binary" emulate color-scheme --scheme light --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.color_scheme.scheme == "light"' "$emulation_index_report" >/dev/null
+"$binary" emulate user-agent --user-agent 'SyntheticCdpCliAgent/1.0' --platform Synthetic --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.user_agent == "SyntheticCdpCliAgent/1.0" and .emulation.platform == "Synthetic"' "$emulation_index_report" >/dev/null
+"$binary" emulate geolocation --latitude 55 --longitude 12 --accuracy 50 --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.geolocation.latitude == 55 and .emulation.geolocation.longitude == 12 and .emulation.geolocation.accuracy == 50' "$emulation_index_report" >/dev/null
+"$binary" emulate timezone --timezone-id UTC --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.timezone.timezone_id == "UTC" and (.emulation.timezone.verified == true or (.emulation.timezone.observed_timezone | type == "string"))' "$emulation_index_report" >/dev/null
+"$binary" emulate locale --locale de-DE --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.locale.locale == "de-DE" and (.emulation.locale.verified == true or (.emulation.locale.observed_locale | type == "string"))' "$emulation_index_report" >/dev/null
+"$binary" emulate cpu --rate 2 --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.cpu.rate == 2' "$emulation_index_report" >/dev/null
+"$binary" emulate network --preset fast-3g --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.preset == "fast-3g" and .emulation.network.latency > 0' "$emulation_index_report" >/dev/null
+"$binary" emulate clear --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$emulation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .emulation.cleared == true and (.emulation.cleared_overrides | index("network"))' "$emulation_index_report" >/dev/null
+protocol_index_report="$state_dir/protocol-target-index.json"
+"$binary" protocol exec Runtime.evaluate --target-index "$protocol_index" --params '{"expression":"document.title","returnByValue":true}' --state-dir "$state_dir/cdp-state" --json >"$protocol_index_report"
+jq -e --arg id "$protocol_index_target_id" '.ok == true and .scope == "target" and .target.id == $id and (.session_id | type == "string" and length > 0) and .method == "Runtime.evaluate"' "$protocol_index_report" >/dev/null
+core_observation_index_report="$state_dir/core-observation-target-index.json"
+"$binary" snapshot --selector body --limit 1 --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$core_observation_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .snapshot.selector == "body" and (.items | length >= 1)' "$core_observation_index_report" >/dev/null
+page_inspection_index_report="$state_dir/page-inspection-target-index.json"
+"$binary" frames --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$page_inspection_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.frames | length >= 1)' "$page_inspection_index_report" >/dev/null
+performance_memory_index_report="$state_dir/performance-memory-target-index.json"
+"$binary" perf summary --target-index "$protocol_index" --duration 0s --state-dir "$state_dir/cdp-state" --json >"$performance_memory_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.metrics.count | type == "number")' "$performance_memory_index_report" >/dev/null
+screenshot_index_report="$state_dir/screenshot-target-index.json"
+screenshot_index_path="$state_dir/screenshot-target-index.png"
+"$binary" screenshot --target-index "$protocol_index" --out "$screenshot_index_path" --state-dir "$state_dir/cdp-state" --json >"$screenshot_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg path "$screenshot_index_path" '.ok == true and .target.id == $id and .target_index == $index and .screenshot.path == $path and .screenshot.bytes > 0' "$screenshot_index_report" >/dev/null
+require_artifact "$screenshot_index_path"
+console_index_report="$state_dir/console-target-index.json"
+"$binary" console --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$console_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.console.count | type == "number")' "$console_index_report" >/dev/null
+network_index_report="$state_dir/network-target-index.json"
+"$binary" network --target-index "$protocol_index" --wait 0s --limit 1 --state-dir "$state_dir/cdp-state" --json >"$network_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and (.network.count | type == "number")' "$network_index_report" >/dev/null
+wait_index_probe="$(date +%s%N)"
+wait_index_report="$state_dir/wait-response-target-index.json"
+"$binary" wait response --target-index "$protocol_index" --match-url "wait-index=$wait_index_probe" --method GET --status 200 --resource-type Fetch --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_index_report" &
+wait_index_pid=$!
+sleep 0.3
+"$binary" eval "fetch('$app_url/api/ok?wait-index=$wait_index_probe').then(r => r.status)" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --await-promise --json \
+  | jq -e '.ok == true and .result.value == 200' >/dev/null
+wait "$wait_index_pid"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" --arg probe "wait-index=$wait_index_probe" '.ok == true and .target.id == $id and .target_index == $index and .wait.kind == "response" and .wait.matched == true and (.event.url | contains($probe)) and .event.cdp_method == "Network.responseReceived" and .event.status == 200' "$wait_index_report" >/dev/null
+wait_condition_index_report="$state_dir/wait-eval-target-index.json"
+"$binary" eval "window.__cdpWaitTargetIndexReady = true" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .result.value == true' >/dev/null
+"$binary" wait eval 'window.__cdpWaitTargetIndexReady === true' --target-index "$protocol_index" --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_condition_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .wait.kind == "eval" and .wait.expression == "window.__cdpWaitTargetIndexReady === true" and .wait.matched == true and .wait.ready == true' "$wait_condition_index_report" >/dev/null
+assertion_index_report="$state_dir/assertion-target-index.json"
+"$binary" assert title "cdp-cli demo app" --mode exact --target-index "$protocol_index" --timeout 5s --poll 100ms --state-dir "$state_dir/cdp-state" --json >"$assertion_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .assertion.field == "title" and .assertion.passed == true' "$assertion_index_report" >/dev/null
+input_index_report="$state_dir/input-target-index.json"
+"$binary" fill "#agent-input" "indexed input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$input_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "filled" and .target.id == $id and .target_index == $index and .fill.selector == "#agent-input" and .fill.filled == true and .actionability.actionable == true' "$input_index_report" >/dev/null
+"$binary" assert value "#agent-input" "indexed input" --target-index "$protocol_index" --timeout 5s --poll 100ms --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .assertion.passed == true and .assertion.actual == "indexed input"' >/dev/null
+control_selection_index_report="$state_dir/control-selection-target-index.json"
+"$binary" focus "#agent-input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$control_selection_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .focus.selector == "#agent-input" and .focus.focused == true' "$control_selection_index_report" >/dev/null
+"$binary" clear "#agent-input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$control_selection_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .clear.selector == "#agent-input" and .clear.cleared == true and .clear.value == ""' "$control_selection_index_report" >/dev/null
+"$binary" fill "#agent-input" "indexed input" --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .target_index == $index and .fill.filled == true' >/dev/null
+"$binary" eval 'document.querySelector("#subscribe").scrollIntoView({block:"center"})' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+"$binary" check "Subscribe to newsletter" --by label --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .check.trial == true and .check.changed == false and .actionability.actionable == true' >/dev/null
+"$binary" uncheck "Subscribe to newsletter" --by label --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .uncheck.trial == true and .uncheck.changed == false and .actionability.actionable == true' >/dev/null
+"$binary" select "Plan" pro --by label --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .select.trial == true and .select.selected == false and .actionability.actionable == true' >/dev/null
+"$binary" eval 'window.scrollTo(0, 0)' --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true' >/dev/null
+pointer_scroll_index_report="$state_dir/pointer-scroll-target-index.json"
+"$binary" hover "Click target" --by role --role button --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json >"$pointer_scroll_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .hover.trial == true and .hover.hovered == false and .actionability.actionable == true' "$pointer_scroll_index_report" >/dev/null
+"$binary" drag "Click target" 8 12 --by role --role button --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .drag.trial == true and .drag.dragged == false and .drag.delta_x == 8 and .drag.delta_y == 12 and .actionability.actionable == true' >/dev/null
+"$binary" scroll "scroll-target" --by test-id --trial --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .action == "trial" and .target.id == $id and .target_index == $index and .scroll.trial == true and .scroll.scrolled == false and .scroll.changed == false and .actionability.actionable == true' >/dev/null
+event_tap_index_report="$state_dir/event-tap-target-index.json"
+"$binary" events tap --target-index "$protocol_index" --enable page --match Page.loadEventFired --duration 1s --max-events 1 --state-dir "$state_dir/cdp-state" --json >"$event_tap_index_report"
+jq -e --arg id "$protocol_index_target_id" --argjson index "$protocol_index" '.ok == true and .target.id == $id and .tap.target_index == $index and .tap.session_bound == true' "$event_tap_index_report" >/dev/null
+"$binary" page close --target-index "$protocol_index" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e --arg id "$protocol_index_target_id" '.ok == true and .action == "closed" and .target.id == $id and .target_gone == true' >/dev/null
+
+workflow_cleanup_baseline="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+workflow_cleanup_feeds_url="$app_url?workflow-cleanup-feeds=1"
+set +e
+workflow_cleanup_feeds_output="$("$binary" workflow feeds "$workflow_cleanup_feeds_url" --wait-load 0s --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_feeds_code=$?
+set -e
+if [[ "$workflow_cleanup_feeds_code" -eq 0 ]]; then
+  echo "workflow feeds unexpectedly succeeded for empty-feed cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "feed_not_found"' <<<"$workflow_cleanup_feeds_output" >/dev/null
+workflow_cleanup_after_feeds="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_feeds" -eq "$workflow_cleanup_baseline"
+
+workflow_cleanup_visible_url="$app_url?workflow-cleanup-visible=1"
+set +e
+workflow_cleanup_visible_output="$("$binary" workflow visible-posts "$workflow_cleanup_visible_url" --selector 'article[data-cdp-never]' --wait 0s --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_visible_code=$?
+set -e
+if [[ "$workflow_cleanup_visible_code" -eq 0 ]]; then
+  echo "workflow visible-posts unexpectedly succeeded for empty-selector cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "no_visible_posts"' <<<"$workflow_cleanup_visible_output" >/dev/null
+workflow_cleanup_after_visible="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_visible" -eq "$workflow_cleanup_baseline"
+
+workflow_cleanup_hn_url="$app_url?workflow-cleanup-hacker-news=1"
+set +e
+workflow_cleanup_hn_output="$("$binary" workflow hacker-news "$workflow_cleanup_hn_url" --wait 0s --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_hn_code=$?
+set -e
+if [[ "$workflow_cleanup_hn_code" -eq 0 ]]; then
+  echo "workflow hacker-news unexpectedly succeeded for empty-story cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "no_visible_posts"' <<<"$workflow_cleanup_hn_output" >/dev/null
+workflow_cleanup_after_hn="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_hn" -eq "$workflow_cleanup_baseline"
+
+workflow_cleanup_keep_open_url="$app_url?workflow-cleanup-keep-open=1"
+set +e
+workflow_cleanup_keep_open_output="$("$binary" workflow feeds "$workflow_cleanup_keep_open_url" --wait-load 0s --keep-open --state-dir "$state_dir/cdp-state" --json)"
+workflow_cleanup_keep_open_code=$?
+set -e
+if [[ "$workflow_cleanup_keep_open_code" -eq 0 ]]; then
+  echo "workflow feeds unexpectedly succeeded for keep-open cleanup fixture" >&2
+  exit 1
+fi
+jq -e '.ok == false and .code == "feed_not_found"' <<<"$workflow_cleanup_keep_open_output" >/dev/null
+workflow_cleanup_keep_open_target="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er --arg marker 'workflow-cleanup-keep-open' '.pages[] | select(.url | contains($marker)) | .id' | head -n 1)"
+test -n "$workflow_cleanup_keep_open_target"
+workflow_cleanup_keep_open_pages="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_keep_open_pages" -eq $((workflow_cleanup_baseline + 1))
+"$binary" page close --target "$workflow_cleanup_keep_open_target" --state-dir "$state_dir/cdp-state" --json \
+  | jq -e '.ok == true and .action == "closed" and .target_gone == true' >/dev/null
+workflow_cleanup_after_keep_open="$("$binary" pages --state-dir "$state_dir/cdp-state" --json | jq -er '.pages | length')"
+test "$workflow_cleanup_after_keep_open" -eq "$workflow_cleanup_baseline"
 
 if [[ -n "${CDP_E2E_REAL_BUNDLE_URL:-}" ]]; then
   real_bundle_dir="$state_dir/real-bundle"

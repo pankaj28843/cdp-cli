@@ -51,6 +51,8 @@ type options struct {
 	maxTabs              int
 	maxRendererProcesses int
 	noHeadlessRepair     bool
+	fingerprintProfile   string
+	protocolOfficial     bool
 }
 
 type app struct {
@@ -62,6 +64,13 @@ type app struct {
 }
 
 func Execute(ctx context.Context, args []string, out, err io.Writer, build BuildInfo) int {
+	return ExecuteWithInput(ctx, args, os.Stdin, out, err, build)
+}
+
+// ExecuteWithInput is the command entry point with an explicit stdin reader.
+// The installed binary uses os.Stdin through Execute; the injectable reader
+// keeps long-lived stdin protocols deterministic in tests and embedders.
+func ExecuteWithInput(ctx context.Context, args []string, in io.Reader, out, err io.Writer, build BuildInfo) int {
 	a := &app{
 		out:   out,
 		err:   err,
@@ -72,9 +81,16 @@ func Execute(ctx context.Context, args []string, out, err io.Writer, build Build
 	}
 
 	cmd := a.newRoot()
+	args = rewriteBareProtocolArgs(cmd, args)
 	cmd.SetArgs(args)
+	cmd.SetIn(in)
 	cmd.SetOut(out)
 	cmd.SetErr(err)
+
+	if syntaxErr := cobraFindUsageError(cmd, args); syntaxErr != nil {
+		_ = a.renderError(ctx, syntaxErr)
+		return exitCode(syntaxErr)
+	}
 
 	if runErr := cmd.ExecuteContext(ctx); runErr != nil {
 		var rendered *renderedResultExit
@@ -88,6 +104,117 @@ func Execute(ctx context.Context, args []string, out, err io.Writer, build Build
 	return ExitOK
 }
 
+// rewriteBareProtocolArgs adapts chrome-agent's bare one-shot form
+// (Domain.method [JSON_PARAMS]) to the daemon-backed protocol command. The
+// protocol command remains the sole execution path; this only adds a routing
+// alias at the root and preserves recognized global/protocol flags wherever
+// callers placed them.
+func rewriteBareProtocolArgs(root *cobra.Command, args []string) []string {
+	if !bareProtocolMethodAt(root, args) {
+		return args
+	}
+	routed := make([]string, 0, len(args)+2)
+	routed = append(routed, "protocol", "exec")
+	routed = append(routed, normalizeBareProtocolTarget(args)...)
+	return routed
+}
+
+const sourceTargetIDLength = 8
+
+func normalizeBareProtocolTarget(args []string) []string {
+	normalized := append([]string(nil), args...)
+	for index, arg := range normalized {
+		if arg == "--target" && index+1 < len(normalized) && isShortNumericTarget(normalized[index+1]) {
+			normalized[index] = "--target-index"
+			continue
+		}
+		if strings.HasPrefix(arg, "--target=") && isShortNumericTarget(strings.TrimPrefix(arg, "--target=")) {
+			normalized[index] = "--target-index=" + strings.TrimPrefix(arg, "--target=")
+		}
+	}
+	return normalized
+}
+
+func isShortNumericTarget(value string) bool {
+	if value == "" || len(value) >= sourceTargetIDLength {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func bareProtocolMethodAt(root *cobra.Command, args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	execCommand, _, err := root.Find([]string{"protocol", "exec"})
+	if err != nil || execCommand == nil {
+		return false
+	}
+	protocolCommand, _, _ := root.Find([]string{"protocol"})
+	for index := 0; index < len(args); {
+		arg := args[index]
+		if arg == "--" || arg == "-h" || arg == "--help" || arg == "-V" || arg == "--version" {
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			return looksLikeProtocolMethod(arg)
+		}
+
+		name := strings.TrimPrefix(strings.SplitN(arg, "=", 2)[0], "--")
+		flag := root.PersistentFlags().Lookup(name)
+		if flag == nil {
+			flag = execCommand.Flags().Lookup(name)
+		}
+		if flag == nil && protocolCommand != nil {
+			flag = protocolCommand.PersistentFlags().Lookup(name)
+		}
+		if flag == nil {
+			flag = execCommand.InheritedFlags().Lookup(name)
+		}
+		if flag == nil {
+			return false
+		}
+		index++
+		if strings.Contains(arg, "=") || flag.NoOptDefVal != "" {
+			continue
+		}
+		if index >= len(args) {
+			return false
+		}
+		index++
+	}
+	return false
+}
+
+func looksLikeProtocolMethod(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	for index, char := range parts[0] {
+		if index == 0 {
+			if char < 'A' || char > 'Z' {
+				return false
+			}
+			continue
+		}
+		if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	for _, char := range parts[1] {
+		if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *app) newRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "cdp",
@@ -98,6 +225,9 @@ func (a *app) newRoot() *cobra.Command {
 			if a.opts.maxTabs < 0 || a.opts.maxRendererProcesses < 0 {
 				return commandError("invalid_resource_budget", "usage", "--max-tabs and --max-renderer-processes must be non-negative", ExitUsage, []string{"cdp --max-tabs 25 --max-renderer-processes 12 pages --json"})
 			}
+			if cmd.Name() == "guide" || (cmd.Name() == "wait" && cmd.Parent() != nil && cmd.Parent().Name() == "events") {
+				return nil
+			}
 			_, err := a.resolveBrowserMode(cmd)
 			if err != nil {
 				return err
@@ -107,7 +237,11 @@ func (a *app) newRoot() *cobra.Command {
 		Long: "cdp is a shell-first Chrome DevTools Protocol CLI for coding agents.\n\n" +
 			"The project is being built around a long-running local attach daemon, compact\n" +
 			"JSON output, jq-friendly filtering, high-level browser debugging workflows, and\n" +
-			"cleanup routines such as `cdp page cleanup --json` for cron-safe tab hygiene.",
+			"cleanup routines such as `cdp page cleanup --json` for cron-safe tab hygiene.\n\n" +
+			"For source-compatible one-shot calls, `cdp Domain.method [JSON_PARAMS]` is\n" +
+			"routed through the daemon-backed `protocol exec` command. In that root\n" +
+			"form, a short numeric `--target` selects the 1-based page index; use\n" +
+			"`--target-id` when the numeric value is an ID prefix.",
 	}
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -137,10 +271,13 @@ func (a *app) newRoot() *cobra.Command {
 		defaultHelp(cmd, args)
 	})
 	a.root = root
+	root.Version = buildVersionText(normalizedBuildInfo(a.build))
+	root.SetVersionTemplate("{{.Version}}\n")
+	root.Flags().BoolP("version", "V", false, "print verifiable build provenance")
 
 	root.PersistentFlags().BoolVar(&a.opts.json, "json", false, "emit JSON on stdout")
 	root.PersistentFlags().BoolVar(&a.opts.compact, "compact", false, "emit compact JSON without indentation")
-	root.PersistentFlags().StringVar(&a.opts.jq, "jq", "", "filter the success JSON envelope with a jq expression; implies --json (example: --jq '.records[] | .body')")
+	root.PersistentFlags().StringVar(&a.opts.jq, "jq", "", "filter the success JSON envelope with a jq expression; explicit output stays caller-requested, jq process tree cancellation is owned, and diagnostics are bounded; implies --json (example: --jq '.records[] | .body')")
 	root.PersistentFlags().BoolVar(&a.opts.debug, "debug", false, "write debug details to stderr")
 	root.PersistentFlags().DurationVar(&a.opts.timeout, "timeout", 0, "ceiling-bound command execution, such as 30s or 2m")
 	root.PersistentFlags().StringVar(&a.opts.profile, "profile", config.DefaultProfile, "named cdp-cli profile to use")
@@ -160,6 +297,7 @@ func (a *app) newRoot() *cobra.Command {
 	root.PersistentFlags().IntVar(&a.opts.maxTabs, "max-tabs", envInt("CDP_MAX_TABS", 0), "maximum page-tab resource budget for the selected browser mode; 0 uses the mode default")
 	root.PersistentFlags().IntVar(&a.opts.maxRendererProcesses, "max-renderer-processes", envInt("CDP_MAX_RENDERER_PROCESSES", 0), "maximum renderer-process resource budget; 0 disables the renderer guard and leaves attribution diagnostics enabled")
 
+	root.AddCommand(a.newGuideCommand())
 	root.AddCommand(a.newVersionCommand())
 	root.AddCommand(a.newDescribeCommand())
 	root.AddCommand(a.newDoctorCommand())
@@ -217,8 +355,44 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newCDPCommand())
 	root.AddCommand(a.newTranscriptionCommand())
 	root.AddCommand(a.newWorkflowCommand())
+	installCobraUsageHandlers(root)
 
 	return root
+}
+
+func cobraFindUsageError(root *cobra.Command, args []string) error {
+	command, commandArgs, err := root.Find(args)
+	if err == nil {
+		return nil
+	}
+	if command != nil {
+		if parseErr := command.ParseFlags(commandArgs); parseErr != nil {
+			return cobraUsageError(parseErr)
+		}
+	}
+	return cobraUsageError(err)
+}
+
+func installCobraUsageHandlers(root *cobra.Command) {
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return cobraUsageError(err)
+	})
+	var visit func(*cobra.Command)
+	visit = func(cmd *cobra.Command) {
+		if cmd.Args != nil {
+			cmd.Args = cobraUsageArgs(cmd.Args)
+		}
+		for _, child := range cmd.Commands() {
+			visit(child)
+		}
+	}
+	visit(root)
+}
+
+func cobraUsageArgs(args cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, values []string) error {
+		return cobraUsageError(args(cmd, values))
+	}
 }
 
 func isWorkflowAgentCommand(cmd *cobra.Command) bool {
@@ -313,15 +487,22 @@ func (a *app) browserEndpoint(ctx context.Context) (string, error) {
 }
 
 func (a *app) browserOptions(ctx context.Context) (browser.ProbeOptions, error) {
-	if err := a.applySelectedConnection(ctx); err != nil {
-		return browser.ProbeOptions{}, err
+	selected := a.opts
+	if selected.browserURL == "" && !selected.autoConnect {
+		conn, source, ok, err := a.resolveConnection(ctx)
+		if err != nil {
+			return browser.ProbeOptions{}, err
+		}
+		if ok && source != "browser_mode_default" {
+			applyConnection(&selected, conn)
+		}
 	}
 	return browser.ProbeOptions{
-		BrowserURL:  a.opts.browserURL,
-		AutoConnect: a.opts.autoConnect,
-		Channel:     a.opts.channel,
-		UserDataDir: a.opts.userDataDir,
-		ActiveProbe: a.opts.activeProbe,
+		BrowserURL:  selected.browserURL,
+		AutoConnect: selected.autoConnect,
+		Channel:     selected.channel,
+		UserDataDir: selected.userDataDir,
+		ActiveProbe: selected.activeProbe,
 	}, nil
 }
 
@@ -358,10 +539,19 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	var runtime daemon.Runtime
 	var ok bool
 	var loadErr error
+	var processCheck daemon.RuntimeProcessCheck
+	var processChecked bool
 	for attempt := 0; attempt < attempts; attempt++ {
 		runtime, ok, loadErr = daemon.LoadRuntimeForMode(ctx, store.Dir, browserMode)
-		if loadErr == nil && ok && daemon.RuntimeRunning(runtime) && daemon.RuntimeSocketReady(ctx, runtime) {
-			break
+		if loadErr == nil && ok {
+			processCheck = daemon.CheckRuntimeProcess(ctx, runtime)
+			processChecked = true
+			if processCheck.State == daemon.RuntimeProcessStateIdentityMismatch || processCheck.State == daemon.RuntimeProcessStateIdentityUnavailable {
+				break
+			}
+			if processCheck.Running && daemon.RuntimeSocketReady(ctx, runtime) {
+				break
+			}
 		}
 		if attempt+1 < attempts {
 			timer := time.NewTimer(75 * time.Millisecond)
@@ -379,7 +569,10 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	if !a.runtimeMatchesConnection(runtime) {
 		return status
 	}
-	processRunning := daemon.RuntimeRunning(runtime)
+	if !processChecked {
+		processCheck = daemon.CheckRuntimeProcess(ctx, runtime)
+	}
+	processRunning := processCheck.Running
 	socketReady := processRunning && daemon.RuntimeSocketReady(ctx, runtime)
 	if a.runtimeOverridesSelectedConnection(runtime) {
 		message := "mode-specific managed headless daemon runtime is ready"
@@ -396,7 +589,7 @@ func (a *app) statusWithModeRuntime(ctx context.Context, status daemon.Status, p
 	} else if !a.hasExplicitConnectionOptions() && runtime.ConnectionMode != status.ConnectionMode {
 		status = daemon.SnapshotForMode(browserMode, runtime.ConnectionMode, runtime.ConnectionMode == "auto_connect", probe)
 	}
-	status = daemon.WithRuntimeReadiness(status, runtime, processRunning, socketReady)
+	status = daemon.WithRuntimeProcessCheck(status, runtime, processCheck, socketReady)
 	return status
 }
 
@@ -464,7 +657,7 @@ func (a *app) applySelectedConnection(ctx context.Context) error {
 	if source == "browser_mode_default" {
 		return nil
 	}
-	a.applyConnection(conn)
+	applyConnection(&a.opts, conn)
 	return nil
 }
 
@@ -472,14 +665,14 @@ func (a *app) hasExplicitConnectionOptions() bool {
 	return a.opts.browserURL != "" || a.opts.autoConnect
 }
 
-func (a *app) applyConnection(conn state.Connection) {
-	a.opts.browserURL = conn.BrowserURL
-	a.opts.autoConnect = conn.AutoConnect || conn.Mode == "auto_connect"
+func applyConnection(opts *options, conn state.Connection) {
+	opts.browserURL = conn.BrowserURL
+	opts.autoConnect = conn.AutoConnect || conn.Mode == "auto_connect"
 	if conn.Channel != "" {
-		a.opts.channel = conn.Channel
+		opts.channel = conn.Channel
 	}
 	if conn.UserDataDir != "" {
-		a.opts.userDataDir = conn.UserDataDir
+		opts.userDataDir = conn.UserDataDir
 	}
 }
 
@@ -637,6 +830,18 @@ func (a *app) renderError(ctx context.Context, err error) error {
 		return output.Render(ctx, a.out, output.Options{JSON: true, JQ: a.opts.jq, Compact: a.opts.compact}, "", env)
 	}
 
-	_, writeErr := fmt.Fprintln(a.err, env.Message)
-	return writeErr
+	if _, writeErr := fmt.Fprintln(a.err, env.Message); writeErr != nil {
+		return writeErr
+	}
+	for _, line := range plainTargetRecoveryLines(cmdErr.Data) {
+		if _, writeErr := fmt.Fprintln(a.err, line); writeErr != nil {
+			return writeErr
+		}
+	}
+	for _, line := range plainErrorNextStepLines(env.RemediationCommands) {
+		if _, writeErr := fmt.Fprintln(a.err, line); writeErr != nil {
+			return writeErr
+		}
+	}
+	return nil
 }

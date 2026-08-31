@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -157,7 +158,8 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
     },
     "headless": {
       "profile_seed_strategy": "managed",
-      "profile_refresh_after": "24h"
+      "profile_refresh_after": "24h",
+      "fingerprint_profile": "fixtures/fingerprint.json"
     }
   },
   "agents": {
@@ -195,6 +197,9 @@ func TestLoadParsesBrowserConfig(t *testing.T) {
 	}
 	if got := cfg.Browser.Headless.ProfileRefreshAfter; got != 24*time.Hour {
 		t.Fatalf("ProfileRefreshAfter = %v, want 24h", got)
+	}
+	if got := cfg.Browser.Headless.FingerprintProfile; got != "fixtures/fingerprint.json" {
+		t.Fatalf("FingerprintProfile = %q, want synthetic configured path", got)
 	}
 	if got := cfg.Browser.ResourceBudget.MaxTabs; got != 33 {
 		t.Fatalf("ResourceBudget.MaxTabs = %d, want 33", got)
@@ -362,6 +367,7 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 			Headless: config.HeadlessConfig{
 				ProfileSeedStrategy: "managed",
 				ProfileRefreshAfter: 48 * time.Hour,
+				FingerprintProfile:  "fixtures/fingerprint.json",
 			},
 			ResourceBudget: config.ResourceBudgetConfig{
 				MaxTabs:              33,
@@ -414,6 +420,16 @@ func TestSaveWritesOwnerOnlyConfig(t *testing.T) {
 	}
 	if loaded.Browser.Headless.ProfileRefreshAfter != 48*time.Hour {
 		t.Fatalf("loaded ProfileRefreshAfter = %v, want 48h", loaded.Browser.Headless.ProfileRefreshAfter)
+	}
+	if loaded.Browser.Headless.FingerprintProfile != "fixtures/fingerprint.json" {
+		t.Fatalf("loaded FingerprintProfile = %q, want saved private path", loaded.Browser.Headless.FingerprintProfile)
+	}
+	publicJSON, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatalf("marshal public config view: %v", err)
+	}
+	if strings.Contains(string(publicJSON), "fingerprint") || strings.Contains(string(publicJSON), "fixtures/") {
+		t.Fatalf("public config JSON exposed private fingerprint profile: %s", publicJSON)
 	}
 	if loaded.Browser.ResourceBudget.MaxTabs != 33 {
 		t.Fatalf("loaded ResourceBudget.MaxTabs = %d, want 33", loaded.Browser.ResourceBudget.MaxTabs)
