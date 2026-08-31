@@ -71,6 +71,17 @@ func commandErrorWithData(code, class, message string, exitCode int, remediation
 	}
 }
 
+func cobraUsageError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var commandErr *CommandError
+	if errors.As(err, &commandErr) {
+		return err
+	}
+	return commandError("usage", "usage", err.Error(), ExitUsage, []string{"cdp --help"})
+}
+
 func plainTargetRecoveryLines(data any) []string {
 	fields, ok := data.(map[string]any)
 	if !ok {

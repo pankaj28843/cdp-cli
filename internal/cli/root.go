@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -104,6 +105,10 @@ func (a *app) newRoot() *cobra.Command {
 		Short:         "Agent-oriented Chrome DevTools Protocol CLI",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return flag.ErrHelp
+		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if a.opts.maxTabs < 0 || a.opts.maxRendererProcesses < 0 {
 				return commandError("invalid_resource_budget", "usage", "--max-tabs and --max-renderer-processes must be non-negative", ExitUsage, []string{"cdp --max-tabs 25 --max-renderer-processes 12 pages --json"})
@@ -234,8 +239,31 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newCDPCommand())
 	root.AddCommand(a.newTranscriptionCommand())
 	root.AddCommand(a.newWorkflowCommand())
+	installCobraUsageHandlers(root)
 
 	return root
+}
+
+func installCobraUsageHandlers(root *cobra.Command) {
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return cobraUsageError(err)
+	})
+	var visit func(*cobra.Command)
+	visit = func(cmd *cobra.Command) {
+		if cmd.Args != nil {
+			cmd.Args = cobraUsageArgs(cmd.Args)
+		}
+		for _, child := range cmd.Commands() {
+			visit(child)
+		}
+	}
+	visit(root)
+}
+
+func cobraUsageArgs(args cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, values []string) error {
+		return cobraUsageError(args(cmd, values))
+	}
 }
 
 func isWorkflowAgentCommand(cmd *cobra.Command) bool {
