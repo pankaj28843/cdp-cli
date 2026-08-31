@@ -277,6 +277,23 @@ func TestWaitRequestJSON(t *testing.T) {
 	}
 }
 
+func TestWaitRequestTimeoutDetachesSession(t *testing.T) {
+	server := newFakeCDPServer(t, []map[string]any{
+		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
+	})
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{"wait", "request", "--match-url", "does-not-exist", "--timeout", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitTimeout {
+		t.Fatalf("wait request timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
+	}
+	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
+		t.Fatalf("wait request timeout lifecycle = %v, want exact session detach", events)
+	}
+}
+
 func TestWaitResponseJSON(t *testing.T) {
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -374,6 +391,9 @@ func TestWaitResponseTimeoutJSON(t *testing.T) {
 	}
 	if strings.Contains(got.Data.LastEvent.URL, "token=abc") {
 		t.Fatalf("wait response timeout last URL was not redacted: %q", got.Data.LastEvent.URL)
+	}
+	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
+		t.Fatalf("wait response timeout lifecycle = %v, want exact session detach", events)
 	}
 }
 
@@ -475,6 +495,9 @@ func TestWaitNetworkIdleTimeoutJSON(t *testing.T) {
 	}
 	if !containsString(got.RemediationCommands, "cdp network --wait 5s --json") {
 		t.Fatalf("wait network-idle remediation commands = %+v, want network diagnostic command", got.RemediationCommands)
+	}
+	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-busy-page") {
+		t.Fatalf("wait network-idle timeout lifecycle = %v, want exact session detach", events)
 	}
 }
 
@@ -758,6 +781,9 @@ func TestWaitFileChooserTimeoutJSON(t *testing.T) {
 	}
 	if !containsString(got.RemediationCommands, "cdp events tap --enable page --match Page.fileChooserOpened --duration 5s --json") {
 		t.Fatalf("wait file-chooser remediation commands = %+v, want events tap command", got.RemediationCommands)
+	}
+	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
+		t.Fatalf("wait file-chooser timeout lifecycle = %v, want exact session detach", events)
 	}
 }
 

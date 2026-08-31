@@ -115,7 +115,7 @@ func (a *app) newWaitRequestCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForNetworkEvent(ctx, client, session.SessionID, networkWaitKindRequest, criteria)
@@ -181,7 +181,7 @@ func (a *app) newWaitNetworkIdleCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForNetworkIdle(ctx, client, session.SessionID, opts)
@@ -256,7 +256,7 @@ func (a *app) newWaitResponseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForNetworkEvent(ctx, client, session.SessionID, networkWaitKindResponse, criteria)

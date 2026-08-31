@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	dialogWaitKind           = "dialog"
-	dialogWaitCDPName        = "Page.javascriptDialogOpening"
-	dialogWaitCleanupTimeout = 5 * time.Second
+	dialogWaitKind            = "dialog"
+	dialogWaitCDPName         = "Page.javascriptDialogOpening"
+	waitSessionCleanupTimeout = 5 * time.Second
 )
 
 type dialogWaitCriteria struct {
@@ -94,7 +94,7 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer closeDialogWaitSession(session)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, err := waitForDialogEvent(ctx, client, session.SessionID, opts.Criteria)
@@ -126,11 +126,11 @@ func (a *app) newWaitDialogCommand() *cobra.Command {
 	return cmd
 }
 
-func closeDialogWaitSession(session *cdp.PageSession) {
+func closeWaitSession(session *cdp.PageSession) {
 	if session == nil {
 		return
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), dialogWaitCleanupTimeout)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), waitSessionCleanupTimeout)
 	defer cancel()
 	_ = session.Close(cleanupCtx)
 }

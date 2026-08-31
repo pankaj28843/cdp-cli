@@ -976,7 +976,7 @@ func (a *app) newDialogHandleCommand(name string, accept bool) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				defer closeDialogWaitSession(session)
+				defer closeWaitSession(session)
 
 				start := time.Now()
 				observation, err := waitForDialogEvent(ctx, client, session.SessionID, opts.Criteria)

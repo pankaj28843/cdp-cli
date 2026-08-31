@@ -63,7 +63,7 @@ func (a *app) newWaitFileChooserCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer session.Close(ctx)
+			defer closeWaitSession(session)
 
 			start := time.Now()
 			observation, teardown, err := waitForFileChooserEvent(ctx, client, session.SessionID, criteria)
