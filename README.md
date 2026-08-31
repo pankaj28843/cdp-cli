@@ -178,6 +178,11 @@ alias for cdp-cli's `--target`, and `--url` aliases `--url-contains`. Supply onl
 one spelling of either alias pair. cdp-cli keeps `--target-index` explicit and
 does not infer an index from a numeric `--target` value.
 
+The root bare one-shot form is the source-compatible exception: a short
+all-digit `--target` is interpreted as a 1-based page index, while
+`--target-id` forces ID-prefix matching. Direct `protocol exec --target` keeps
+its established ID/prefix meaning.
+
 Protocol discovery uses the selected live Chrome schema by default. Add
 `--official` to `metadata`, `domains`, `search`, `describe`, `examples`, or
 `compat` for browser-free online discovery from the official browser and

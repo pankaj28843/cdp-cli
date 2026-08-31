@@ -82,7 +82,7 @@ grep -q 'managed build; commit ' <<<"$version_plain"
 test "$("$binary" --version)" = "$version_plain"
 test "$("$binary" -V)" = "$version_plain"
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
-"$binary" describe --json | jq -e '.ok == true and (.commands.examples | any(contains("cdp Runtime.evaluate")))' >/dev/null
+"$binary" describe --json | jq -e '.ok == true and (.commands.examples | any(contains("cdp Runtime.evaluate"))) and (.commands.examples | any(contains("--target 2 Runtime.evaluate")))' >/dev/null
 "$binary" describe --jq '.globals | index("--json") != null' >/dev/null
 "$binary" describe --jq '.globals | index("--compact") != null' >/dev/null
 "$binary" describe --jq '.globals | index("--connection") != null' >/dev/null

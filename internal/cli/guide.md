@@ -263,6 +263,11 @@ compatible aliases for `--target` and `--url-contains`; use only one spelling
 from each pair. `--target-index` remains explicit and is not inferred from a
 numeric `--target` value.
 
+The root bare one-shot form follows the source selector rule for short numeric
+values: `cdp --target 2 Runtime.evaluate ...` selects page index 2, while
+`--target-id 2` forces ID-prefix matching. Direct `protocol exec --target`
+keeps its established ID/prefix meaning.
+
 `cdp page close --target-index N` uses the same page-only order for a bounded
 disposable-tab close. It is mutually exclusive with `--target`,
 `--url-contains`, and `--title-contains` on the close command:

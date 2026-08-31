@@ -115,8 +115,36 @@ func rewriteBareProtocolArgs(root *cobra.Command, args []string) []string {
 	}
 	routed := make([]string, 0, len(args)+2)
 	routed = append(routed, "protocol", "exec")
-	routed = append(routed, args...)
+	routed = append(routed, normalizeBareProtocolTarget(args)...)
 	return routed
+}
+
+const sourceTargetIDLength = 8
+
+func normalizeBareProtocolTarget(args []string) []string {
+	normalized := append([]string(nil), args...)
+	for index, arg := range normalized {
+		if arg == "--target" && index+1 < len(normalized) && isShortNumericTarget(normalized[index+1]) {
+			normalized[index] = "--target-index"
+			continue
+		}
+		if strings.HasPrefix(arg, "--target=") && isShortNumericTarget(strings.TrimPrefix(arg, "--target=")) {
+			normalized[index] = "--target-index=" + strings.TrimPrefix(arg, "--target=")
+		}
+	}
+	return normalized
+}
+
+func isShortNumericTarget(value string) bool {
+	if value == "" || len(value) >= sourceTargetIDLength {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func bareProtocolMethodAt(root *cobra.Command, args []string) bool {
@@ -211,7 +239,9 @@ func (a *app) newRoot() *cobra.Command {
 			"JSON output, jq-friendly filtering, high-level browser debugging workflows, and\n" +
 			"cleanup routines such as `cdp page cleanup --json` for cron-safe tab hygiene.\n\n" +
 			"For source-compatible one-shot calls, `cdp Domain.method [JSON_PARAMS]` is\n" +
-			"routed through the daemon-backed `protocol exec` command.",
+			"routed through the daemon-backed `protocol exec` command. In that root\n" +
+			"form, a short numeric `--target` selects the 1-based page index; use\n" +
+			"`--target-id` when the numeric value is an ID prefix.",
 	}
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
