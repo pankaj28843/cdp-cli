@@ -150,6 +150,9 @@ func (a *app) newRoot() *cobra.Command {
 		defaultHelp(cmd, args)
 	})
 	a.root = root
+	root.Version = buildVersionText(normalizedBuildInfo(a.build))
+	root.SetVersionTemplate("{{.Version}}\n")
+	root.Flags().BoolP("version", "V", false, "print verifiable build provenance")
 
 	root.PersistentFlags().BoolVar(&a.opts.json, "json", false, "emit JSON on stdout")
 	root.PersistentFlags().BoolVar(&a.opts.compact, "compact", false, "emit compact JSON without indentation")

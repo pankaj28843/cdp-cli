@@ -46,10 +46,13 @@ func (a *app) newVersionCommand() *cobra.Command {
 			defer cancel()
 
 			build := normalizedBuildInfo(a.build)
-			human := fmt.Sprintf("cdp %s (%s build; commit %s; date %s; source %s)", build.Version, build.Provenance, build.Commit, build.Date, build.SourceState)
-			return a.render(ctx, human, build)
+			return a.render(ctx, buildVersionText(build), build)
 		},
 	}
+}
+
+func buildVersionText(build BuildInfo) string {
+	return fmt.Sprintf("cdp %s (%s build; commit %s; date %s; source %s)", build.Version, build.Provenance, build.Commit, build.Date, build.SourceState)
 }
 
 var (

@@ -1170,9 +1170,13 @@ the clean/dirty source state. Agents can verify the installed binary matches the
 checkout with:
 
 ```bash
+cdp --version
 cdp version --json | jq --arg head "$(git rev-parse HEAD)" \
   '.verified and .commit == $head'
 ```
+
+`cdp --version` and `cdp -V` are plain-text aliases for `cdp version` and
+print the same verifiable build provenance.
 
 Direct `go build` or `go install` remains available for development, but those
 binaries intentionally report `verified: false`, `provenance: unverified`, and

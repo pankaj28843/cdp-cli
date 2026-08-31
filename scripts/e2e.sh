@@ -77,7 +77,10 @@ jq -e --arg head "$source_head" --arg dirty "$source_dirty" '
   ((.dirty | tostring) == $dirty) and .source_state == (if $dirty == "true" then "dirty" else "clean" end)
 ' >/dev/null <<<"$version_json"
 "$binary" version --json --compact | jq -e --arg head "$source_head" '.verified == true and .commit == $head and .provenance == "managed"' >/dev/null
-"$binary" version | grep -q 'managed build; commit '
+version_plain="$("$binary" version)"
+grep -q 'managed build; commit ' <<<"$version_plain"
+test "$("$binary" --version)" = "$version_plain"
+test "$("$binary" -V)" = "$version_plain"
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
 "$binary" describe --jq '.globals | index("--json") != null' >/dev/null
 "$binary" describe --jq '.globals | index("--compact") != null' >/dev/null

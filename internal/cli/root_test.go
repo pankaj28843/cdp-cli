@@ -42,6 +42,33 @@ func TestVersionJSON(t *testing.T) {
 	}
 }
 
+func TestVersionRootAliasesMatchSubcommand(t *testing.T) {
+	build := cli.BuildInfo{
+		Version:    "1.2.3",
+		Commit:     "0123456789abcdef0123456789abcdef01234567",
+		Date:       "2026-07-18T12:34:56Z",
+		Dirty:      true,
+		Verified:   true,
+		Provenance: "managed",
+	}
+	var want string
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-V"}} {
+		var out, errOut bytes.Buffer
+		code := cli.Execute(context.Background(), args, &out, &errOut, build)
+		if code != cli.ExitOK {
+			t.Fatalf("%v exit=%d, want %d; stdout=%s stderr=%s", args, code, cli.ExitOK, out.String(), errOut.String())
+		}
+		if errOut.Len() != 0 {
+			t.Fatalf("%v stderr=%q, want empty", args, errOut.String())
+		}
+		if want == "" {
+			want = out.String()
+		} else if out.String() != want {
+			t.Fatalf("%v output=%q, want byte-identical %q", args, out.String(), want)
+		}
+	}
+}
+
 func TestVersionCompactJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := cli.Execute(context.Background(), []string{"version", "--json", "--compact"}, &out, &errOut, cli.BuildInfo{Version: "test"})
