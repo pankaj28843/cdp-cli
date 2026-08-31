@@ -261,7 +261,7 @@ path, so target selectors and validation flags remain available:
 The raw one-shot selector spellings `--target-id` and `--url` are source-
 compatible aliases for `--target` and `--url-contains`; use only one spelling
 from each pair. `--target-index` remains explicit and is not inferred from a
-numeric `--target` value.
+numeric `protocol exec --target` value.
 
 The root bare one-shot form follows the source selector rule for short numeric
 values: `cdp --target 2 Runtime.evaluate ...` selects page index 2, while
@@ -271,8 +271,11 @@ keeps its established ID/prefix meaning.
 The source-compatible `--target-id` and `--url` aliases also apply to the
 daemon-backed persistent attach equivalents `events stream` and `events
 interactions`, and to `page close` (the target-aware stop equivalent). Use
-only one spelling from each pair; `page close` keeps its existing settled
-close behavior and the event commands keep exact-session filtering.
+only one spelling from each pair. On those three commands only, a short
+all-digit bare `--target N` follows the source rule and selects the 1-based
+page index; use `--target-id N` when the numeric value is an ID prefix. `page
+close` keeps its existing settled close behavior and the event commands keep
+exact-session filtering.
 
 `cdp page close --target-index N` uses the same page-only order for a bounded
 disposable-tab close. It is mutually exclusive with `--target`,

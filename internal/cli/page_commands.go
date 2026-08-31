@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -585,6 +586,9 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 		Short: "Close a page target and wait until it is gone",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := normalizeSourceAttachStopNumericTarget(cmd, &targetID, &targetIndex); err != nil {
+				return err
+			}
 			if err := validatePageTargetIndexSelector(cmd, targetID, urlContains, titleContains, targetIndex); err != nil {
 				return err
 			}
@@ -659,7 +663,7 @@ func (a *app) newPageCloseCommand() *cobra.Command {
 			)
 		},
 	}
-	cmd.Flags().StringVar(&targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&targetID, "target", "", "page target id/prefix, or a short numeric 1-based page index")
 	cmd.Flags().StringVar(&targetID, "target-id", "", "source-compatible alias for --target")
 	cmd.Flags().StringVar(&urlContains, "url-contains", "", "use the unique page whose URL contains this text")
 	cmd.Flags().StringVar(&urlContains, "url", "", "source-compatible alias for --url-contains")
@@ -1995,6 +1999,35 @@ func validatePageTargetIndexSelector(cmd *cobra.Command, targetID, urlContains, 
 		return commandError("invalid_target_selector", "usage", "--target-index cannot be combined with --target, --url-contains, or --title-contains", ExitUsage, []string{"cdp pages --json"})
 	}
 	return validatePageTargetSelectorValues(targetID, urlContains, titleContains)
+}
+
+// normalizeSourceAttachStopNumericTarget adapts chrome-agent's automatic
+// selector rule only on the three commands that correspond to source attach
+// and target-aware stop. A short ASCII numeric --target is a page index; an
+// explicit --target-id remains an ID prefix, so numeric IDs stay addressable.
+// Keeping this at the command boundary avoids changing direct protocol exec
+// or the many other page-target commands that already have stable semantics.
+func normalizeSourceAttachStopNumericTarget(cmd *cobra.Command, targetID *string, targetIndex *int) error {
+	if !cmd.Flags().Changed("target") ||
+		cmd.Flags().Changed("target-id") ||
+		cmd.Flags().Changed("target-index") ||
+		cmd.Flags().Changed("url-contains") ||
+		cmd.Flags().Changed("url") ||
+		cmd.Flags().Changed("title-contains") ||
+		!isShortNumericTarget(*targetID) {
+		return nil
+	}
+
+	index, err := strconv.Atoi(*targetID)
+	if err != nil {
+		return commandError("invalid_target_index", "usage", "--target must be a valid positive page index; use --target-id for an ID prefix", ExitUsage, []string{"cdp pages --json"})
+	}
+	if index <= 0 {
+		return commandError("invalid_target_index", "usage", "--target must be a positive page index; use --target-id for an ID prefix", ExitUsage, []string{"cdp pages --json"})
+	}
+	*targetID = ""
+	*targetIndex = index
+	return nil
 }
 
 func validatePageTargetSelectorValues(targetID, urlContains, titleContains string) error {

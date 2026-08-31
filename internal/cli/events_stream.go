@@ -45,7 +45,7 @@ func (a *app) newEventsStreamCommand() *cobra.Command {
 			return a.runEventsStream(cmd, options)
 		},
 	}
-	cmd.Flags().StringVar(&options.targetID, "target", "", "page target id or unique prefix")
+	cmd.Flags().StringVar(&options.targetID, "target", "", "page target id/prefix, or a short numeric 1-based page index")
 	cmd.Flags().StringVar(&options.targetID, "target-id", "", "source-compatible alias for --target")
 	cmd.Flags().StringVar(&options.urlContains, "url-contains", "", "use the unique page whose URL contains this text")
 	cmd.Flags().StringVar(&options.urlContains, "url", "", "source-compatible alias for --url-contains")
@@ -68,6 +68,9 @@ func (a *app) runEventsStream(cmd *cobra.Command, options eventStreamOptions) er
 	}
 	if options.duration < 0 || options.maxEvents < 0 {
 		return commandError("usage", "usage", "--duration and --max-events must be non-negative", ExitUsage, []string{"cdp events stream --duration 30s --max-events 50 --json"})
+	}
+	if err := normalizeSourceAttachStopNumericTarget(cmd, &options.targetID, &options.targetIndex); err != nil {
+		return err
 	}
 	if err := validatePageTargetIndexSelector(cmd, options.targetID, options.urlContains, options.titleContains, options.targetIndex); err != nil {
 		return err

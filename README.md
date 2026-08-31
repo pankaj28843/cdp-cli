@@ -175,8 +175,9 @@ output, and artifact flags.
 
 For one-shot target selection, `--target-id` is an explicit source-compatible
 alias for cdp-cli's `--target`, and `--url` aliases `--url-contains`. Supply only
-one spelling of either alias pair. cdp-cli keeps `--target-index` explicit and
-does not infer an index from a numeric `--target` value.
+one spelling of either alias pair. cdp-cli keeps `--target-index` explicit on
+the raw protocol command and does not infer an index from a numeric
+`protocol exec --target` value.
 
 The root bare one-shot form is the source-compatible exception: a short
 all-digit `--target` is interpreted as a 1-based page index, while
@@ -186,8 +187,10 @@ its established ID/prefix meaning.
 The same `--target-id` and `--url` aliases are available on the daemon-backed
 persistent attach equivalents `events stream` and `events interactions`, and
 on `page close` for the source target-aware stop flow. Supply only one spelling
-from either alias pair; the existing exact-session filtering and settled close
-behavior are unchanged.
+from either alias pair. On these three commands only, a short all-digit bare
+`--target N` follows the source rule and selects the 1-based page index; use
+`--target-id N` when the numeric value is an ID prefix. The existing
+exact-session filtering and settled close behavior are unchanged.
 
 Protocol discovery uses the selected live Chrome schema by default. Add
 `--official` to `metadata`, `domains`, `search`, `describe`, `examples`, or

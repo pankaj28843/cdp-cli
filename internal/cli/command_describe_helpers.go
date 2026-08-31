@@ -315,6 +315,7 @@ func commandExamples(path string) []string {
 			"cdp page close --target <target-id> --wait-gone --max-attempts 3 --json",
 			"cdp page close --target-id <target-id> --wait-gone --json",
 			"cdp page close --url <url-substring> --wait-gone --json",
+			"cdp page close --target 2 --wait-gone --json",
 			"cdp page close --target-index 2 --wait-gone --json",
 		},
 		"cdp page cleanup": {
@@ -939,6 +940,7 @@ func commandExamples(path string) []string {
 		"cdp events stream --target <target-id> --enable page,runtime,DOM --match Page.loadEventFired,DOM.documentUpdated --duration 30s --json",
 		"cdp events stream --target-id <target-id> --enable page,runtime --duration 30s --json",
 		"cdp events stream --url <url-substring> --enable page,runtime --duration 30s --json",
+		"cdp events stream --target 2 --enable page,runtime --duration 30s --json",
 		"printf '+Runtime.consoleAPICalled\\n' | cdp events stream --target-index 1 --json",
 		"printf '+DOM.documentUpdated\\n' | cdp events stream --target-index 1 --enable page --json",
 	}
@@ -951,6 +953,7 @@ func commandExamples(path string) []string {
 		"cdp events interactions --target <target-id> --match click --max-events 1 --ready-file tmp/interaction.ready.json --json",
 		"cdp events interactions --target-id <target-id> --match click --max-events 1 --json",
 		"cdp events interactions --url <url-substring> --match click --max-events 1 --json",
+		"cdp events interactions --target 2 --match click --max-events 1 --json",
 	}
 	examples["cdp protocol compat"] = []string{"cdp protocol compat --requires Target.attachToTarget,Runtime.evaluate --json", "cdp protocol compat --workflow debug-bundle --json"}
 	examples["cdp workflow feeds"] = []string{"cdp workflow feeds 'https://example.com' --wait-load 10s --json", "cdp workflow feeds 'https://example.com' --keep-open --json"}
