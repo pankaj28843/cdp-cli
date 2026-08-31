@@ -155,10 +155,16 @@ cdp protocol describe Page.captureScreenshot --official --json
 cdp protocol examples Page.captureScreenshot --json
 cdp protocol exec Browser.getVersion --json
 cdp protocol exec Runtime.evaluate --target <target-id> --params '{"expression":"document.title","returnByValue":true}' --json
+cdp protocol exec Runtime.evaluate '{"expression":"document.title","returnByValue":true}' --target-index 2 --json
 cdp protocol exec Runtime.evaluate --target-index 2 --params '{"expression":"document.title","returnByValue":true}' --json
 cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains chrome-extension:// --params '{"expression":"Object.keys(globalThis).slice(0,50)","returnByValue":true}' --json
 cdp protocol exec Page.captureScreenshot --target <target-id> --params '{"format":"png"}' --save tmp/page.png --json
 ```
+
+For compatibility with chrome-agent one-shot commands, protocol exec also
+accepts one optional positional JSON object after Domain.method. The canonical
+--params flag and the positional form are mutually exclusive; both use the
+same local valid-JSON/object-shape checks before browser setup.
 
 Protocol discovery uses the selected live Chrome schema by default. Add
 `--official` to `metadata`, `domains`, `search`, `describe`, `examples`, or

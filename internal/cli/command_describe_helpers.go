@@ -728,6 +728,7 @@ func commandExamples(path string) []string {
 		"cdp protocol exec": {
 			"cdp protocol exec Browser.getVersion --params '{}' --json",
 			"cdp protocol exec Runtime.evaluate --target <target-id> --params '{\"expression\":\"document.title\",\"returnByValue\":true}' --json",
+			"cdp protocol exec Runtime.evaluate '{\"expression\":\"document.title\",\"returnByValue\":true}' --target-index 2 --json",
 			"cdp protocol exec Runtime.evaluate --target-index 2 --params '{\"expression\":\"document.title\",\"returnByValue\":true}' --json",
 			"cdp protocol exec Runtime.evaluate --target-type service_worker --url-contains chrome-extension:// --params '{\"expression\":\"Object.keys(globalThis).slice(0,50)\",\"returnByValue\":true}' --json",
 			"cdp protocol exec Page.captureScreenshot --target <target-id> --params '{\"format\":\"png\"}' --save tmp/page.png --json",

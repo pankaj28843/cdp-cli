@@ -2915,7 +2915,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"protocol-exec": {
 			Name:        "protocol-exec",
-			Description: "Raw CDP method execution result with browser or exact target selection, including a page-only 1-based target index and optional pre-execution selected-schema validation.",
+			Description: "Raw CDP method execution result with browser or exact target selection, including a page-only 1-based target index, an optional positional JSON params alias, and optional pre-execution selected-schema validation.",
 			Fields: []schemaField{
 				{Name: "ok", Type: "boolean", Required: true, Description: "True when the CDP method completed."},
 				{Name: "scope", Type: "string", Required: true, Description: "Either browser or target."},

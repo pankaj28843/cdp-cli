@@ -245,6 +245,13 @@ other selectors when a non-page target is intended:
 
     cdp protocol exec Runtime.evaluate --target-index 2 --params '{"expression":"document.title","returnByValue":true}' --json
 
+For compatibility with the source chrome-agent one-shot syntax, protocol exec
+also accepts one optional positional JSON object after the method. The
+--params flag remains canonical; do not supply both forms. Both forms pass the
+same valid-JSON/object-shape checks before any browser or target setup:
+
+    cdp protocol exec Runtime.evaluate '{"expression":"document.title","returnByValue":true}' --target-index 2 --json
+
 `cdp page close --target-index N` uses the same page-only order for a bounded
 disposable-tab close. It is mutually exclusive with `--target`,
 `--url-contains`, and `--title-contains` on the close command:

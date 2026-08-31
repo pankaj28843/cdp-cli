@@ -524,10 +524,19 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 	var savePath string
 	var validate bool
 	cmd := &cobra.Command{
-		Use:   "exec <Domain.method>",
+		Use:   "exec <Domain.method> [JSON_PARAMS]",
 		Short: "Execute a raw browser-scoped or target-scoped CDP method",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 2 && cmd.Flags().Changed("params") {
+				return commandError(
+					"conflicting_params",
+					"usage",
+					"positional JSON params cannot be combined with --params",
+					ExitUsage,
+					[]string{"cdp protocol exec " + args[0] + " --params '{}' --json"},
+				)
+			}
 			if targetIndex < 0 || (cmd.Flags().Changed("target-index") && targetIndex == 0) {
 				return commandError("invalid_target_index", "usage", "--target-index must be greater than zero", ExitUsage, []string{"cdp pages --json"})
 			}
@@ -544,6 +553,9 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 				)
 			}
 			rawParams := json.RawMessage(params)
+			if len(args) == 2 {
+				rawParams = json.RawMessage(args[1])
+			}
 			if len(rawParams) == 0 {
 				rawParams = json.RawMessage(`{}`)
 			}
