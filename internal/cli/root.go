@@ -355,6 +355,11 @@ func (a *app) newRoot() *cobra.Command {
 	root.AddCommand(a.newCDPCommand())
 	root.AddCommand(a.newTranscriptionCommand())
 	root.AddCommand(a.newWorkflowCommand())
+	// Reuse Cobra's root help slot for the source-compatible protocol help
+	// route, preserving one help entry and conventional command help dispatch.
+	helpCommand := a.newProtocolHelpCommand()
+	root.AddCommand(helpCommand)
+	root.SetHelpCommand(helpCommand)
 	installCobraUsageHandlers(root)
 
 	return root

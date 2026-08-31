@@ -76,6 +76,7 @@ origin.
 ```bash
 cdp browser mode get --json
 cdp guide --path
+cdp help Page.navigate
 cdp daemon start --auto-connect --json
 cdp daemon status --json
 cdp doctor --check scheduled-tasks --json
@@ -205,6 +206,15 @@ and unknown parameters against the selected protocol before attachment or
 execution. `protocol exec --validate --official` validates against the official
 schema, but execution still runs through the daemon. Omit `--validate` to
 preserve the forward-compatible raw CDP escape hatch.
+
+For compatibility with chrome-agent's protocol discovery command, `cdp help`
+lists all live domains, `cdp help Page` lists that domain's commands and
+events, and `cdp help Page.navigate` prints its typed parameter and return
+signature. Add `--official` for browser-free online schema discovery. The
+argument-free plain form falls back to normal cdp command help when no live
+daemon is available; query forms remain typed daemon-connection errors. Use
+the global `--connection <name>` when a named cdp connection should supply the
+schema.
 
 When Chrome rejects a raw command, JSON output uses
 `code: "cdp_command_failed"`, `err_class: "protocol"`, and exit 1 while

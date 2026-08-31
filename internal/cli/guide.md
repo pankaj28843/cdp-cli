@@ -237,6 +237,13 @@ official browser+JavaScript tip-of-tree schema. `protocol exec --validate
 --official` uses that schema for validation, while execution still requires the
 daemon. Plain `protocol describe` includes an actionable typed parameter and
 return signature. Omit `--validate` for intentionally permissive raw CDP.
+
+The source-compatible discovery spelling is also available: `cdp help` lists
+domains, `cdp help Page` lists Page commands and events, and `cdp help
+Page.navigate` prints a typed parameter/return signature. Add `--official` for
+browser-free online discovery; use the global `--connection <name>` to select
+a named cdp connection. Argument-free plain help falls back to normal command
+help when no daemon schema is available.
 For target-scoped raw execution, `--target-index N` selects the 1-based page
 target order used by `cdp pages`; it is mutually exclusive with
 `--target`, `--url-contains`, `--title-contains`, and
