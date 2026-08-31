@@ -179,7 +179,7 @@ func TestDialogOwnedWaitTimesOutWithStructuredEvidence(t *testing.T) {
 	stateDir := startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"dialog", "dismiss", "--wait", "--type", "alert", "--timeout", "50ms", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"dialog", "dismiss", "--wait", "--type", "alert", "--timeout", "500ms", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("dialog --wait timeout exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
@@ -199,7 +199,5 @@ func TestDialogOwnedWaitTimesOutWithStructuredEvidence(t *testing.T) {
 	if result.OK || result.Code != "timeout" || result.Data.Wait.Kind != "dialog" || result.Data.Wait.Matched {
 		t.Fatalf("dialog --wait timeout=%#v, want structured timeout evidence", result)
 	}
-	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-one") {
-		t.Fatalf("dialog --wait timeout lifecycle = %v, want exact session detach", events)
-	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-one")
 }

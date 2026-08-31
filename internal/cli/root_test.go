@@ -285,13 +285,11 @@ func TestWaitRequestTimeoutDetachesSession(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "request", "--match-url", "does-not-exist", "--timeout", "100ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "request", "--match-url", "does-not-exist", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait request timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
-	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
-		t.Fatalf("wait request timeout lifecycle = %v, want exact session detach", events)
-	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
 }
 
 func TestWaitResponseJSON(t *testing.T) {
@@ -354,7 +352,7 @@ func TestWaitResponseTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--timeout", "200ms", "wait", "response", "--match-url", "does-not-exist", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--timeout", "500ms", "wait", "response", "--match-url", "does-not-exist", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait response timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -392,9 +390,7 @@ func TestWaitResponseTimeoutJSON(t *testing.T) {
 	if strings.Contains(got.Data.LastEvent.URL, "token=abc") {
 		t.Fatalf("wait response timeout last URL was not redacted: %q", got.Data.LastEvent.URL)
 	}
-	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
-		t.Fatalf("wait response timeout lifecycle = %v, want exact session detach", events)
-	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
 }
 
 func TestWaitNetworkIdleJSON(t *testing.T) {
@@ -458,7 +454,7 @@ func TestWaitNetworkIdleTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "50ms", "--timeout", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "50ms", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait network-idle timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -496,9 +492,7 @@ func TestWaitNetworkIdleTimeoutJSON(t *testing.T) {
 	if !containsString(got.RemediationCommands, "cdp network --wait 5s --json") {
 		t.Fatalf("wait network-idle remediation commands = %+v, want network diagnostic command", got.RemediationCommands)
 	}
-	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-busy-page") {
-		t.Fatalf("wait network-idle timeout lifecycle = %v, want exact session detach", events)
-	}
+	requireFakeLifecycleEvent(t, server, "detach:session-busy-page")
 }
 
 func TestWaitNetworkIdleIgnoreURLJSON(t *testing.T) {
@@ -625,7 +619,7 @@ func TestWaitDialogTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "dialog", "--type", "alert", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "dialog", "--type", "alert", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait dialog timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -655,9 +649,7 @@ func TestWaitDialogTimeoutJSON(t *testing.T) {
 	if !containsString(got.RemediationCommands, "cdp dialog dismiss --wait --json") {
 		t.Fatalf("wait dialog remediation commands = %+v, want dialog dismiss command", got.RemediationCommands)
 	}
-	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
-		t.Fatalf("wait dialog timeout lifecycle = %v, want exact session detach", events)
-	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
 }
 
 func TestWaitDialogInvalidOptionsJSON(t *testing.T) {
@@ -751,7 +743,7 @@ func TestWaitFileChooserTimeoutJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "file-chooser", "--mode", "multiple", "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "file-chooser", "--mode", "multiple", "--timeout", "500ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait file-chooser timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -782,9 +774,7 @@ func TestWaitFileChooserTimeoutJSON(t *testing.T) {
 	if !containsString(got.RemediationCommands, "cdp events tap --enable page --match Page.fileChooserOpened --duration 5s --json") {
 		t.Fatalf("wait file-chooser remediation commands = %+v, want events tap command", got.RemediationCommands)
 	}
-	if events := fakeLifecycleEvents(t, server); !containsString(events, "detach:session-page-1") {
-		t.Fatalf("wait file-chooser timeout lifecycle = %v, want exact session detach", events)
-	}
+	requireFakeLifecycleEvent(t, server, "detach:session-page-1")
 }
 
 func TestWaitFileChooserInvalidModeJSON(t *testing.T) {

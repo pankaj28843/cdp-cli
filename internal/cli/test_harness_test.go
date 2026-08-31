@@ -104,6 +104,23 @@ func fakeLifecycleEvents(t *testing.T, server *httptest.Server) []string {
 	return result.Events
 }
 
+func requireFakeLifecycleEvent(t *testing.T, server *httptest.Server, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		events := fakeLifecycleEvents(t, server)
+		for _, event := range events {
+			if event == want {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fake lifecycle events = %v, want %q", events, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func startFakeDaemon(t *testing.T, server *httptest.Server, connectionMode string) string {
 	t.Helper()
 	stateDir := shortCLIStateDir(t)

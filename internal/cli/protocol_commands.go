@@ -543,9 +543,6 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec " + args[0] + " --validate --official --json", "cdp protocol describe " + args[0] + " --official --json"},
 				)
 			}
-			ctx, cancel := a.browserCommandContext(cmd)
-			defer cancel()
-
 			rawParams := json.RawMessage(params)
 			if len(rawParams) == 0 {
 				rawParams = json.RawMessage(`{}`)
@@ -559,6 +556,20 @@ func (a *app) newProtocolExecCommand() *cobra.Command {
 					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
 				)
 			}
+			var paramsObject map[string]json.RawMessage
+			if err := json.Unmarshal(rawParams, &paramsObject); err != nil || paramsObject == nil {
+				return commandError(
+					"invalid_json",
+					"usage",
+					"--params must be a JSON object",
+					ExitUsage,
+					[]string{"cdp protocol exec Browser.getVersion --params '{}' --json"},
+				)
+			}
+
+			ctx, cancel := a.browserCommandContext(cmd)
+			defer cancel()
+
 			targetScoped := targetIndex > 0 || targetID != "" || urlContains != "" || titleContains != "" || strings.TrimSpace(targetType) != ""
 			if validate {
 				scope := "browser"

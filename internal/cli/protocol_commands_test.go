@@ -317,6 +317,49 @@ func TestProtocolExecJSON(t *testing.T) {
 	}
 }
 
+func TestProtocolExecParamsMustBeJSONObject(t *testing.T) {
+	server := newFakeCDPServer(t, nil)
+	defer server.Close()
+	startFakeDaemon(t, server, "browser_url")
+
+	tests := []struct {
+		name     string
+		params   string
+		wantExit int
+	}{
+		{name: "object", params: `{}`, wantExit: cli.ExitOK},
+		{name: "raw object stays permissive", params: `{"unexpected":true}`, wantExit: cli.ExitOK},
+		{name: "explicit empty uses default object", params: "", wantExit: cli.ExitOK},
+		{name: "array", params: `[]`, wantExit: cli.ExitUsage},
+		{name: "null", params: `null`, wantExit: cli.ExitUsage},
+		{name: "string", params: `"value"`, wantExit: cli.ExitUsage},
+		{name: "number", params: `1`, wantExit: cli.ExitUsage},
+		{name: "boolean", params: `true`, wantExit: cli.ExitUsage},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := cli.Execute(context.Background(), []string{"protocol", "exec", "Browser.getVersion", "--params", test.params, "--json"}, &out, &errOut, cli.BuildInfo{})
+			if code != test.wantExit {
+				t.Fatalf("protocol exec params %q exit=%d, want %d; stdout=%s stderr=%s", test.params, code, test.wantExit, out.String(), errOut.String())
+			}
+			if test.wantExit == cli.ExitOK {
+				return
+			}
+			var got struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("decode params error: %v; output=%s", err, out.String())
+			}
+			if got.Code != "invalid_json" || !strings.Contains(got.Message, "JSON object") {
+				t.Fatalf("params error = %+v, want invalid_json object guidance", got)
+			}
+		})
+	}
+}
+
 func TestProtocolExecClassifiesChromeRejection(t *testing.T) {
 	tests := []struct {
 		name   string
