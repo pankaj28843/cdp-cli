@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/resilience"
@@ -31,24 +32,28 @@ const (
 )
 
 type ServerConfig struct {
-	Registry         *Registry
-	Store            *Store
-	DefaultProvider  ProviderID
-	AuthTimeout      time.Duration
-	Address          string
-	HTTPAddress      string
-	TLSCertFile      string
-	TLSKeyFile       string
-	AuthCoordinator  *AuthRefreshCoordinator
-	ProbeHealth      *ProbeHealth
-	ProbeCoordinator *SyntheticProbeCoordinator
-	Logger           *slog.Logger
+	Registry                 *Registry
+	Store                    *Store
+	DefaultProvider          ProviderID
+	AuthTimeout              time.Duration
+	Address                  string
+	HTTPAddress              string
+	TLSCertFile              string
+	TLSKeyFile               string
+	AuthCoordinator          *AuthRefreshCoordinator
+	ProbeHealth              *ProbeHealth
+	ProbeCoordinator         *SyntheticProbeCoordinator
+	AuthRefreshAPIEnabled    bool
+	AuthRefreshRequestMinAge time.Duration
+	Logger                   *slog.Logger
 }
 
 type Server struct {
-	config       ServerConfig
-	httpServer   *http.Server
-	availability *availabilityTracker
+	config               ServerConfig
+	httpServer           *http.Server
+	availability         *availabilityTracker
+	authorityRefreshMu   sync.Mutex
+	authorityLastAttempt map[ProviderID]time.Time
 }
 
 func NewServer(config ServerConfig) (*Server, error) {
@@ -72,12 +77,16 @@ func NewServer(config ServerConfig) (*Server, error) {
 	if (strings.TrimSpace(config.TLSCertFile) == "") != (strings.TrimSpace(config.TLSKeyFile) == "") {
 		return nil, fmt.Errorf("transcription TLS certificate and key must be provided together")
 	}
+	if config.AuthRefreshAPIEnabled && config.AuthRefreshRequestMinAge <= 0 {
+		return nil, fmt.Errorf("transcription auth refresh API minimum age must be positive")
+	}
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	server := &Server{
-		config:       config,
-		availability: newAvailabilityTracker(filepath.Join(config.Store.Root(), "availability.json"), time.Now, config.Logger),
+		config:               config,
+		availability:         newAvailabilityTracker(filepath.Join(config.Store.Root(), "availability.json"), time.Now, config.Logger),
+		authorityLastAttempt: make(map[ProviderID]time.Time),
 	}
 	server.httpServer = &http.Server{
 		Addr:              config.Address,
@@ -105,7 +114,93 @@ func (s *Server) Handler() http.Handler {
 		s.handleFile(w, r, TaskTranslate)
 	})
 	mux.HandleFunc("/v1/realtime", s.handleRealtime)
+	if s.config.AuthRefreshAPIEnabled {
+		mux.HandleFunc("/v1/provider-auth/refresh", s.handleAuthorityAuthRefresh)
+	}
 	return mux
+}
+
+type authorityAuthRefreshRequest struct {
+	Provider ProviderID `json:"provider"`
+}
+
+func (s *Server) handleAuthorityAuthRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, APIError{Type: "invalid_request_error", Message: "method not allowed"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request authorityAuthRefreshRequest
+	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(string(request.Provider)) == "" {
+		writeAPIError(w, http.StatusBadRequest, APIError{Type: "invalid_request_error", Code: "provider_required", Message: "provider is required"})
+		return
+	}
+	provider, ok := s.config.Registry.Provider(request.Provider)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, APIError{Type: "provider_unavailable", Code: "provider_not_configured", Message: "provider is not configured"})
+		return
+	}
+	authority, ok := provider.(AuthorityAuthRefresher)
+	if !ok {
+		writeAPIError(w, http.StatusConflict, APIError{Type: "provider_unavailable", Code: "provider_auth_refresh_unsupported", Message: "provider does not support authority refresh"})
+		return
+	}
+
+	// One authority-wide lock prevents simultaneous provider tabs when several
+	// leaves detect stale state together. Freshness is checked after taking the
+	// lock, so followers become cooldown no-ops after the leader succeeds.
+	s.authorityRefreshMu.Lock()
+	defer s.authorityRefreshMu.Unlock()
+	now := time.Now().UTC()
+	capturedAt, hasState := authority.AuthCapturedAt(r.Context())
+	stateAge := time.Duration(0)
+	if hasState {
+		stateAge = now.Sub(capturedAt)
+		if stateAge < 0 {
+			stateAge = 0
+		}
+		if stateAge < s.config.AuthRefreshRequestMinAge {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"provider":            request.Provider,
+				"refreshed":           false,
+				"reason":              "minimum_age",
+				"minimum_age_seconds": int64(s.config.AuthRefreshRequestMinAge / time.Second),
+				"retry_after_seconds": int64((s.config.AuthRefreshRequestMinAge - stateAge + time.Second - 1) / time.Second),
+			})
+			return
+		}
+	}
+	if lastAttempt := s.authorityLastAttempt[request.Provider]; !lastAttempt.IsZero() {
+		elapsed := now.Sub(lastAttempt)
+		if elapsed < s.config.AuthRefreshRequestMinAge {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"provider":            request.Provider,
+				"refreshed":           false,
+				"reason":              "request_cooldown",
+				"minimum_age_seconds": int64(s.config.AuthRefreshRequestMinAge / time.Second),
+				"retry_after_seconds": int64((s.config.AuthRefreshRequestMinAge - elapsed + time.Second - 1) / time.Second),
+			})
+			return
+		}
+	}
+	s.authorityLastAttempt[request.Provider] = now
+	refreshContext, cancel := context.WithTimeout(r.Context(), s.config.AuthTimeout)
+	defer cancel()
+	refreshed, err := authority.RefreshAuthNow(refreshContext, capturedAt)
+	if err != nil {
+		s.config.Logger.Warn("authority auth refresh failed", "event", "transcription.auth_refresh.request_failed", "provider", request.Provider)
+		writeAPIError(w, http.StatusBadGateway, APIError{Type: "provider_unavailable", Code: "auth_refresh_failed", Message: "provider auth refresh failed"})
+		return
+	}
+	s.config.Logger.Info("authority auth refresh completed", "event", "transcription.auth_refresh.request_completed", "provider", request.Provider)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider":            request.Provider,
+		"refreshed":           refreshed,
+		"reason":              map[bool]string{true: "refreshed", false: "authority_newer"}[refreshed],
+		"minimum_age_seconds": int64(s.config.AuthRefreshRequestMinAge / time.Second),
+	})
 }
 
 func (s *Server) handleDemo(w http.ResponseWriter, r *http.Request) {

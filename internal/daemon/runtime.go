@@ -1608,12 +1608,27 @@ func handleRPC(ctx context.Context, conn net.Conn, client runtimeRPCClient, opts
 			return
 		}
 	}
-	if ownerID != "" && req.Method == "Target.closeTarget" {
+	if ownerID != "" && req.Method == "Target.getTargets" && callCtx.Err() == nil {
+		var listed struct {
+			TargetInfos []cdp.TargetInfo `json:"targetInfos"`
+		}
+		if json.Unmarshal(result, &listed) == nil {
+			_ = leases.ReconcileTargetSnapshot(callCtx, ownerID, listed.TargetInfos)
+		}
+	}
+	if ownerID != "" && req.Method == "Target.closeTarget" && callCtx.Err() == nil {
 		var params struct {
 			TargetID string `json:"targetId"`
 		}
 		if json.Unmarshal(req.Params, &params) == nil {
-			_ = leases.UnregisterTarget(callCtx, ownerID, params.TargetID)
+			// Target.closeTarget only acknowledges that Chrome accepted the
+			// request. Release ownership only after an independent exact-target
+			// lookup proves removal; otherwise the lease retry remains authoritative.
+			info, infoErr := targetInfo(callCtx, client, params.TargetID)
+			if (infoErr != nil && targetGoneError(infoErr)) ||
+				(infoErr == nil && info.TargetID == "") {
+				_ = leases.UnregisterTarget(callCtx, ownerID, params.TargetID)
+			}
 		}
 	}
 	_ = writeRPCResponse(responseCtx, conn, RPCResponse{OK: true, Result: result})

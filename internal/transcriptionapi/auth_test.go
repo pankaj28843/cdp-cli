@@ -15,6 +15,9 @@ type authRefreshTestProvider struct {
 	capabilityCalls atomic.Int32
 	err             error
 	capabilityErr   error
+	active          *atomic.Int32
+	maxActive       *atomic.Int32
+	delay           time.Duration
 }
 
 func (p *authRefreshTestProvider) ID() ProviderID { return p.id }
@@ -34,6 +37,15 @@ func (p *authRefreshTestProvider) NewRealtime(context.Context, RealtimeSessionCo
 
 func (p *authRefreshTestProvider) EnsureAuthFresh(context.Context) error {
 	p.calls.Add(1)
+	if p.active != nil && p.maxActive != nil {
+		active := p.active.Add(1)
+		for current := p.maxActive.Load(); active > current && !p.maxActive.CompareAndSwap(current, active); current = p.maxActive.Load() {
+		}
+		defer p.active.Add(-1)
+	}
+	if p.delay > 0 {
+		time.Sleep(p.delay)
+	}
 	return p.err
 }
 
@@ -58,6 +70,25 @@ func TestAuthRefreshCoordinatorRefreshesAllProvidersIndependently(t *testing.T) 
 	coordinator.RefreshAll(context.Background())
 	if first.calls.Load() != 1 || second.calls.Load() != 1 {
 		t.Fatalf("calls = %d/%d, want one attempt per provider", first.calls.Load(), second.calls.Load())
+	}
+}
+
+func TestAuthRefreshCoordinatorSerializesProviders(t *testing.T) {
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	first := &authRefreshTestProvider{id: ProviderChatGPT, active: &active, maxActive: &maxActive, delay: 10 * time.Millisecond}
+	second := &authRefreshTestProvider{id: ProviderClaude, active: &active, maxActive: &maxActive, delay: 10 * time.Millisecond}
+	third := &authRefreshTestProvider{id: ProviderGemini, active: &active, maxActive: &maxActive, delay: 10 * time.Millisecond}
+
+	NewAuthRefreshCoordinator(NewRegistry(third, first, second), 0).RefreshAll(context.Background())
+
+	if maxActive.Load() != 1 {
+		t.Fatalf("concurrent provider refreshes = %d, want 1", maxActive.Load())
+	}
+	for _, provider := range []*authRefreshTestProvider{first, second, third} {
+		if provider.calls.Load() != 1 {
+			t.Fatalf("provider %s calls = %d, want 1", provider.id, provider.calls.Load())
+		}
 	}
 }
 

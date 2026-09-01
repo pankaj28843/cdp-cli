@@ -138,10 +138,19 @@ func TestRunOwnedPreservesTargetCloseProofWhenJournalFinalizationFails(
 		},
 	}
 	engine := newReadTestEngine(t, client, journal)
+	clientCloseCount := 0
 	const runID = "run-close-proof-with-journal-failure"
 	result := runOwned(
 		context.Background(),
-		BrowserConfig{Client: client, Engine: engine, Journal: journal},
+		BrowserConfig{
+			Client:  client,
+			Engine:  engine,
+			Journal: journal,
+			CloseClient: func(context.Context) error {
+				clientCloseCount++
+				return nil
+			},
+		},
 		runID,
 		webagent.OperationConversationsDetail,
 		"",
@@ -171,6 +180,7 @@ func TestRunOwnedPreservesTargetCloseProofWhenJournalFinalizationFails(
 	)
 
 	if !failed ||
+		clientCloseCount != 1 ||
 		!result.OK ||
 		result.Error != nil ||
 		result.Evidence.Target == nil ||

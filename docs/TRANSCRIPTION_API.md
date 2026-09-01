@@ -184,19 +184,26 @@ upload for `file: true`, and the native paced PCM WebSocket path for
 A synthetic probe uses cached provider capability/auth evidence and never
 invokes a provider's auth or capability refresh hook. It exercises the same
 direct provider adapter as an ordinary upload and opens no browser target. The
-installed service's headed auth/capability schedule is enabled by default and
-runs the providers independently on the shared `--auth-refresh-interval`
-cadence. Use
-`--auth-refresh-interval 0s` only for a deliberately transient service with
-lifecycle refresh disabled; normal installations should keep the schedule
-enabled so an expired ChatGPT, Claude, Gemini, or Microsoft 365 session is
-repaired before it breaks the next turn.
+installed service's local auth/capability schedule is enabled by default and
+runs the providers sequentially on the shared `--auth-refresh-interval`
+cadence. A standalone installation should keep local mode enabled so expired
+provider state is repaired before it breaks the next turn. A fleet may instead
+designate one service as the browser authority and run leaf services with
+`--auth-refresh-mode external --auth-refresh-interval 0s`. An external leaf
+cannot launch browser repair: when configured, it invokes the absolute
+`--external-auth-refresh-command` as `COMMAND refresh PROVIDER`, allowing an
+operator-owned helper to request authority repair and synchronize state.
 The default cadence is ten minutes, which stays ahead of Microsoft 365's
 45-minute auth-evidence TTL and its 15-minute proactive refresh margin.
 `--auth-refresh-offset` phases recurring refreshes against the wall clock and
-must be shorter than the interval. Startup refresh remains immediate. Fleet
-operators should give each node a distinct offset so restarts cannot collapse
-all nodes onto one provider-facing boundary.
+must be shorter than the interval. Startup refresh remains immediate.
+Independent local authorities should use distinct offsets. Externally managed
+leaves have no offset because they do not perform provider-facing refresh. An
+authority may explicitly enable `--auth-refresh-api`; the
+`POST /v1/provider-auth/refresh` endpoint then accepts only a provider ID,
+coalesces requests across providers, and suppresses browser work while either
+the provider state or the last refresh attempt is newer than
+`--auth-refresh-request-min-age` (45 minutes by default).
 The first live probe waits for the first lifecycle pass to finish. Every later
 probe performs the same cheap auth/capability preflight before exercising the
 provider's real file or realtime transcription path; an auth rejection can
@@ -486,19 +493,22 @@ provider file or realtime adapter. It does not call a provider refresh hook or
 open a browser target. With an explicitly empty fixture directory, no synthetic
 transcription is scheduled. A separate
 service-owned coordinator is enabled by default whenever
-`--auth-refresh-interval` is positive; `--auth-refresh-interval 0s` is the
-explicit transient-service opt-out. Native service installation persists the
-same derived setting, so a stale legacy environment flag cannot silently
-disable lifecycle repair. The first probe is ordered after the coordinator's
+`--auth-refresh-interval` is positive. A zero interval is valid for a transient
+service or an explicitly external auth consumer; external mode rejects a
+positive local schedule. Native service installation persists the mode and
+derived setting, so a stale legacy environment flag cannot silently re-enable
+lifecycle repair. The first probe is ordered after the coordinator's
 initial auth/capability pass, and capabilities are refreshed only after that
 provider's auth refresh succeeds. A request also calls the same provider's
-freshness hook before dispatch or the first realtime chunk. Authenticated
-providers keep provider-specific refresh owners, so an expired session has both
-a scheduled and an on-demand self-healing path without a provider-specific cron
-job. Provider lifecycle work is serialized per provider with request
-cancellation. If a direct replay receives a typed auth rejection, the adapter
-runs one single-flight browser template refresh and then retries the direct
-transport once. It never transcribes through provider UI.
+freshness hook before dispatch or the first realtime chunk. In local mode,
+authenticated providers keep provider-specific browser refresh owners. In
+external mode, the same hook delegates to the configured authority helper and
+cannot select the local headed runtime. Provider lifecycle work is serialized
+per provider with request cancellation. If a direct replay receives a typed
+auth rejection, the adapter runs one single-flight auth repair and then retries
+the direct transport once: local mode refreshes its browser template, while
+external mode invokes the authority helper and reloads shared state. It never
+transcribes through provider UI.
 The shared retry policy is bounded at three total attempts with 1-second and
 2-second waits. Its 4-second slot is retained for policies with a larger
 future attempt budget. A stale-auth observation is therefore repaired and
@@ -516,10 +526,11 @@ The service is a normal Go CLI process and does not require macOS APIs. Build
 the binary for the target Linux architecture, create the dedicated `cdp`
 system account, and install the machine-wide unit with
 `cdp transcription service install --system`; the renderer places state under
-`/var/lib/cdp-cli` and runs the API and headed daemon as `cdp:cdp`, never as
-root. Authenticated ChatGPT, Claude, Gemini, and Microsoft 365 providers need
-the configured headed cdp-cli browser runtime only for auth/request-template
-refresh. Their transcription hot paths remain direct. The local
+`/var/lib/cdp-cli` and runs the API as `cdp:cdp`, never as root. A local auth
+owner separately supplies its headed cdp-cli runtime for bounded
+auth/request-template refresh. An external auth consumer instead uses a zero
+refresh interval and an authority helper and requires no local browser daemon
+or endpoint. Authenticated-provider transcription hot paths remain direct. The local
 OpenAI-compatible provider does not require a browser; file adapters may need
 `ffprobe`/`ffmpeg` when
 `duration_ms`, audio decoding, or Gemini WebM/Opus normalization cannot be

@@ -26,6 +26,31 @@
         }
       }
     },
+    "/v1/provider-auth/refresh": {
+      "post": {
+        "summary": "Request a cooldown-enforced auth refresh from the configured authority",
+        "description": "Available only when explicitly enabled on an auth-authority service. The server ignores requests while its provider state is newer than the configured minimum age and coalesces concurrent refreshes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["provider"],
+                "additionalProperties": false,
+                "properties": { "provider": { "type": "string", "enum": ["chatgpt-web", "claude-web", "gemini-web"] } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Refresh completed or suppressed by the minimum-age cooldown", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/ProviderFailure" },
+          "502": { "$ref": "#/components/responses/ProviderFailure" }
+        }
+      }
+    },
     "/v1/audio/transcriptions": {
       "post": {
         "summary": "Transcribe an audio file",

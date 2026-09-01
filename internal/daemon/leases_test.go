@@ -10,10 +10,11 @@ import (
 )
 
 type leaseTestClient struct {
-	mu       sync.Mutex
-	targets  map[string]bool
-	failures map[string]error
-	calls    []string
+	mu          sync.Mutex
+	targets     map[string]bool
+	failures    map[string]error
+	stickyClose map[string]bool
+	calls       []string
 }
 
 func (c *leaseTestClient) Call(_ context.Context, method string, params any, result any) error {
@@ -34,8 +35,12 @@ func (c *leaseTestClient) Call(_ context.Context, method string, params any, res
 		return errors.New("target not found")
 	}
 	if method == "Target.closeTarget" {
-		delete(c.targets, targetID)
+		if !c.stickyClose[targetID] {
+			delete(c.targets, targetID)
+		}
 		setBoolField(result, "Success", true)
+	} else {
+		setNestedStringField(result, "TargetInfo", "TargetID", targetID)
 	}
 	return nil
 }
@@ -61,6 +66,24 @@ func setBoolField(result any, fieldName string, value bool) {
 	field := reflected.Elem().FieldByName(fieldName)
 	if field.IsValid() && field.CanSet() && field.Kind() == reflect.Bool {
 		field.SetBool(value)
+	}
+}
+
+func setNestedStringField(result any, outerField, innerField, value string) {
+	if result == nil {
+		return
+	}
+	reflected := reflect.ValueOf(result)
+	if reflected.Kind() != reflect.Pointer || reflected.IsNil() {
+		return
+	}
+	outer := reflected.Elem().FieldByName(outerField)
+	if !outer.IsValid() {
+		return
+	}
+	inner := outer.FieldByName(innerField)
+	if inner.IsValid() && inner.CanSet() && inner.Kind() == reflect.String {
+		inner.SetString(value)
 	}
 }
 
@@ -128,6 +151,39 @@ func TestLeaseManagerRetainsFailedCleanupForRetry(t *testing.T) {
 		t.Fatalf("retry ReconcileExpired: %v", err)
 	}
 	if result.ClosedTargetCount != 1 || len(result.PendingTargetIDs) != 0 || client.hasTarget("owned-page") {
+		t.Fatalf("retry result = %+v; target remains=%v", result, client.hasTarget("owned-page"))
+	}
+}
+
+func TestLeaseManagerRetainsAcceptedCloseUntilTargetIsGone(t *testing.T) {
+	manager, err := newLeaseManager(context.Background(), t.TempDir(), "headed", time.Now)
+	if err != nil {
+		t.Fatalf("newLeaseManager: %v", err)
+	}
+	info, err := manager.Begin(context.Background(), time.Minute)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := manager.RegisterTarget(context.Background(), info.LeaseID, LeaseTarget{TargetID: "owned-page", Disposable: true}); err != nil {
+		t.Fatalf("RegisterTarget: %v", err)
+	}
+	client := &leaseTestClient{
+		targets:     map[string]bool{"owned-page": true},
+		failures:    map[string]error{},
+		stickyClose: map[string]bool{"owned-page": true},
+	}
+	if _, err := manager.End(context.Background(), client, info.LeaseID); err == nil {
+		t.Fatal("End returned nil before the accepted close removed the target")
+	}
+	if !client.hasTarget("owned-page") || !managerHasLeaseTarget(manager, info.LeaseID, "owned-page") {
+		t.Fatal("accepted close lost target ownership before target-gone confirmation")
+	}
+	delete(client.stickyClose, "owned-page")
+	result, err := manager.ReconcileExpired(context.Background(), client)
+	if err != nil {
+		t.Fatalf("retry ReconcileExpired: %v", err)
+	}
+	if result.ClosedTargetCount != 1 || client.hasTarget("owned-page") {
 		t.Fatalf("retry result = %+v; target remains=%v", result, client.hasTarget("owned-page"))
 	}
 }

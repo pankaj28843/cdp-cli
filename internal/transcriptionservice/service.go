@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
 )
 
 type Platform string
@@ -40,23 +42,27 @@ const (
 )
 
 type Config struct {
-	BinaryPath           string
-	StateDir             string
-	Address              string
-	HTTPAddress          string
-	Provider             string
-	AllowedProviders     []string
-	BrowserMode          string
-	BrowserURL           string
-	Display              string
-	XAuthority           string
-	AllowOverBudget      bool
-	LocalBaseURL         string
-	LocalRealtimeBaseURL string
-	LocalAPIKey          string
-	MaxAudioBytes        int64
-	AuthRefreshInterval  time.Duration
-	AuthRefreshOffset    time.Duration
+	BinaryPath                 string
+	StateDir                   string
+	Address                    string
+	HTTPAddress                string
+	Provider                   string
+	AllowedProviders           []string
+	BrowserMode                string
+	BrowserURL                 string
+	Display                    string
+	XAuthority                 string
+	AllowOverBudget            bool
+	LocalBaseURL               string
+	LocalRealtimeBaseURL       string
+	LocalAPIKey                string
+	MaxAudioBytes              int64
+	AuthRefreshMode            transcriptionapi.AuthRefreshMode
+	ExternalAuthRefreshCommand string
+	AuthRefreshInterval        time.Duration
+	AuthRefreshOffset          time.Duration
+	AuthRefreshAPIEnabled      bool
+	AuthRefreshRequestMinAge   time.Duration
 	// AuthRefreshEnabled is retained for renderer compatibility; the positive
 	// interval is the authoritative enablement switch.
 	AuthRefreshEnabled bool
@@ -145,6 +151,19 @@ func (c Config) Validate() error {
 	if c.AuthRefreshInterval < 0 {
 		return fmt.Errorf("transcription service auth refresh interval must be zero or positive")
 	}
+	if err := c.AuthRefreshMode.Validate(c.AuthRefreshInterval); err != nil {
+		return fmt.Errorf("transcription service %w", err)
+	}
+	if strings.TrimSpace(c.ExternalAuthRefreshCommand) != "" && !filepath.IsAbs(strings.TrimSpace(c.ExternalAuthRefreshCommand)) {
+		return fmt.Errorf("transcription service external auth refresh command must be an absolute path")
+	}
+	mode, _ := transcriptionapi.ParseAuthRefreshMode(string(c.AuthRefreshMode))
+	if c.AuthRefreshAPIEnabled && mode != transcriptionapi.AuthRefreshModeLocal {
+		return fmt.Errorf("transcription service auth refresh API requires local auth ownership")
+	}
+	if c.AuthRefreshAPIEnabled && c.AuthRefreshRequestMinAge <= 0 {
+		return fmt.Errorf("transcription service auth refresh API minimum age must be positive")
+	}
 	if c.AuthRefreshOffset < 0 || (c.AuthRefreshInterval == 0 && c.AuthRefreshOffset != 0) || (c.AuthRefreshInterval > 0 && c.AuthRefreshOffset >= c.AuthRefreshInterval) {
 		return fmt.Errorf("transcription service auth refresh offset must be non-negative and shorter than its interval")
 	}
@@ -158,21 +177,26 @@ func (c Config) Validate() error {
 }
 
 func (c Config) Environment() map[string]string {
+	authRefreshMode, _ := transcriptionapi.ParseAuthRefreshMode(string(c.AuthRefreshMode))
 	environment := map[string]string{
-		"CDP_STATE_DIR":                             c.StateDir,
-		"CDP_TRANSCRIPTION_ADDRESS":                 c.Address,
-		"CDP_TRANSCRIPTION_HTTP_ADDRESS":            c.HTTPAddress,
-		"CDP_TRANSCRIPTION_PROVIDER":                c.Provider,
-		"CDP_TRANSCRIPTION_PROVIDERS":               strings.Join(c.AllowedProviders, ","),
-		"CDP_BROWSER_MODE":                          c.BrowserMode,
-		"CDP_BROWSER_URL":                           c.BrowserURL,
-		"CDP_ALLOW_OVER_BUDGET":                     strconv.FormatBool(c.AllowOverBudget),
-		"CDP_TRANSCRIPTION_LOCAL_BASE_URL":          c.LocalBaseURL,
-		"CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL": c.LocalRealtimeBaseURL,
-		"CDP_TRANSCRIPTION_LOCAL_API_KEY":           c.LocalAPIKey,
-		"CDP_TRANSCRIPTION_MAX_AUDIO_BYTES":         strconv.FormatInt(c.MaxAudioBytes, 10),
-		"CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL":   c.AuthRefreshInterval.String(),
-		"CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET":     c.AuthRefreshOffset.String(),
+		"CDP_STATE_DIR":                                   c.StateDir,
+		"CDP_TRANSCRIPTION_ADDRESS":                       c.Address,
+		"CDP_TRANSCRIPTION_HTTP_ADDRESS":                  c.HTTPAddress,
+		"CDP_TRANSCRIPTION_PROVIDER":                      c.Provider,
+		"CDP_TRANSCRIPTION_PROVIDERS":                     strings.Join(c.AllowedProviders, ","),
+		"CDP_BROWSER_MODE":                                c.BrowserMode,
+		"CDP_BROWSER_URL":                                 c.BrowserURL,
+		"CDP_ALLOW_OVER_BUDGET":                           strconv.FormatBool(c.AllowOverBudget),
+		"CDP_TRANSCRIPTION_LOCAL_BASE_URL":                c.LocalBaseURL,
+		"CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL":       c.LocalRealtimeBaseURL,
+		"CDP_TRANSCRIPTION_LOCAL_API_KEY":                 c.LocalAPIKey,
+		"CDP_TRANSCRIPTION_MAX_AUDIO_BYTES":               strconv.FormatInt(c.MaxAudioBytes, 10),
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_MODE":             string(authRefreshMode),
+		"CDP_TRANSCRIPTION_EXTERNAL_AUTH_REFRESH_COMMAND": c.ExternalAuthRefreshCommand,
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL":         c.AuthRefreshInterval.String(),
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET":           c.AuthRefreshOffset.String(),
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_API_ENABLED":      strconv.FormatBool(c.AuthRefreshAPIEnabled),
+		"CDP_TRANSCRIPTION_AUTH_REFRESH_REQUEST_MIN_AGE":  c.AuthRefreshRequestMinAge.String(),
 		// The interval is the source of truth. Deriving this compatibility
 		// marker prevents a stale generated plist from disabling lifecycle
 		// repair while retaining the field for callers of the renderer.

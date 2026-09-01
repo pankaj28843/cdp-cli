@@ -69,8 +69,12 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	var localRealtimeBaseURL string
 	var localAPIKey string
 	var maxAudioBytes int64
+	var authRefreshMode string
+	var externalAuthRefreshCommand string
 	var authRefreshInterval time.Duration
 	var authRefreshOffset time.Duration
+	var authRefreshAPIEnabled bool
+	var authRefreshRequestMinAge time.Duration
 	var fixtureDir string
 	var probeInterval time.Duration
 	var persistAudio bool
@@ -104,6 +108,19 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			if authRefreshOffset < 0 || (authRefreshInterval == 0 && authRefreshOffset != 0) || (authRefreshInterval > 0 && authRefreshOffset >= authRefreshInterval) {
 				return commandError("transcription_auth_refresh_offset_invalid", "usage", "--auth-refresh-offset must be non-negative and shorter than its interval", ExitUsage, nil)
 			}
+			validatedAuthRefreshMode, err := validateTranscriptionAuthRefreshMode(authRefreshMode, authRefreshInterval)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(externalAuthRefreshCommand) != "" && !filepath.IsAbs(strings.TrimSpace(externalAuthRefreshCommand)) {
+				return commandError("transcription_external_auth_refresh_command_invalid", "usage", "--external-auth-refresh-command must be an absolute executable path", ExitUsage, nil)
+			}
+			if authRefreshAPIEnabled && validatedAuthRefreshMode != transcriptionapi.AuthRefreshModeLocal {
+				return commandError("transcription_auth_refresh_api_owner_invalid", "usage", "--auth-refresh-api requires --auth-refresh-mode local", ExitUsage, nil)
+			}
+			if authRefreshAPIEnabled && authRefreshRequestMinAge <= 0 {
+				return commandError("transcription_auth_refresh_request_min_age_invalid", "usage", "--auth-refresh-request-min-age must be positive when the refresh API is enabled", ExitUsage, nil)
+			}
 			if probeInterval < 0 {
 				return commandError("transcription_probe_interval_invalid", "usage", "--probe-interval must be zero or positive", ExitUsage, nil)
 			}
@@ -128,7 +145,7 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			registry, err := a.transcriptionRegistry(cmd.Context(), localBaseURL, localRealtimeBaseURL, localAPIKey, allowedProviders)
+			registry, err := a.transcriptionRegistry(cmd.Context(), localBaseURL, localRealtimeBaseURL, localAPIKey, allowedProviders, validatedAuthRefreshMode, externalAuthRefreshCommand)
 			if err != nil {
 				_ = store.Close()
 				return err
@@ -162,17 +179,19 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 				probeHealth = probeCoordinator.Health()
 			}
 			server, err := transcriptionapi.NewServer(transcriptionapi.ServerConfig{
-				Registry:         registry,
-				Store:            store,
-				DefaultProvider:  transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
-				Address:          strings.TrimSpace(address),
-				HTTPAddress:      strings.TrimSpace(httpAddress),
-				TLSCertFile:      tlsFiles.CertFile,
-				TLSKeyFile:       tlsFiles.KeyFile,
-				AuthCoordinator:  authCoordinator,
-				ProbeHealth:      probeHealth,
-				ProbeCoordinator: probeCoordinator,
-				Logger:           slog.New(slog.NewJSONHandler(a.err, nil)),
+				Registry:                 registry,
+				Store:                    store,
+				DefaultProvider:          transcriptionapi.ProviderID(strings.TrimSpace(defaultProvider)),
+				Address:                  strings.TrimSpace(address),
+				HTTPAddress:              strings.TrimSpace(httpAddress),
+				TLSCertFile:              tlsFiles.CertFile,
+				TLSKeyFile:               tlsFiles.KeyFile,
+				AuthCoordinator:          authCoordinator,
+				ProbeHealth:              probeHealth,
+				ProbeCoordinator:         probeCoordinator,
+				AuthRefreshAPIEnabled:    authRefreshAPIEnabled,
+				AuthRefreshRequestMinAge: authRefreshRequestMinAge,
+				Logger:                   slog.New(slog.NewJSONHandler(a.err, nil)),
 			})
 			if err != nil {
 				_ = store.Close()
@@ -181,24 +200,27 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 			if printReady {
 				tlsEnabled := strings.TrimSpace(tlsFiles.CertFile) != ""
 				ready := map[string]any{
-					"ok":                    true,
-					"address":               address,
-					"http_address":          httpAddress,
-					"contract_version":      transcriptionapi.ContractVersion,
-					"state_dir":             store.Root(),
-					"auth_refresh_interval": authRefreshInterval.String(),
-					"auth_refresh_offset":   authRefreshOffset.String(),
-					"auth_refresh_enabled":  authCoordinator != nil,
-					"probe_interval":        probeInterval.String(),
-					"probe_enabled":         probeCoordinator != nil,
-					"audio_persisted":       persistAudio,
-					"tls_enabled":           tlsEnabled,
-					"tls_cert_file":         tlsFiles.CertFile,
-					"tls_hosts":             tlsFiles.Hosts,
-					"tls_reused":            tlsFiles.Reused,
-					"demo_url":              preferredDemoURL(address, tlsEnabled, tlsFiles.Hosts),
-					"demo_urls":             demoURLs(address, tlsEnabled, tlsFiles.Hosts),
-					"providers":             registry.Capabilities(cmd.Context()),
+					"ok":                           true,
+					"address":                      address,
+					"http_address":                 httpAddress,
+					"contract_version":             transcriptionapi.ContractVersion,
+					"state_dir":                    store.Root(),
+					"auth_refresh_mode":            validatedAuthRefreshMode,
+					"auth_refresh_interval":        authRefreshInterval.String(),
+					"auth_refresh_offset":          authRefreshOffset.String(),
+					"auth_refresh_enabled":         authCoordinator != nil,
+					"auth_refresh_api_enabled":     authRefreshAPIEnabled,
+					"auth_refresh_request_min_age": authRefreshRequestMinAge.String(),
+					"probe_interval":               probeInterval.String(),
+					"probe_enabled":                probeCoordinator != nil,
+					"audio_persisted":              persistAudio,
+					"tls_enabled":                  tlsEnabled,
+					"tls_cert_file":                tlsFiles.CertFile,
+					"tls_hosts":                    tlsFiles.Hosts,
+					"tls_reused":                   tlsFiles.Reused,
+					"demo_url":                     preferredDemoURL(address, tlsEnabled, tlsFiles.Hosts),
+					"demo_urls":                    demoURLs(address, tlsEnabled, tlsFiles.Hosts),
+					"providers":                    registry.Capabilities(cmd.Context()),
 				}
 				if err := a.render(cmd.Context(), "transcription API ready", ready); err != nil {
 					return err
@@ -219,8 +241,12 @@ func (a *app) newTranscriptionServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional separate local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes; transcript records are retained independently")
+	cmd.Flags().StringVar(&authRefreshMode, "auth-refresh-mode", envDefault("CDP_TRANSCRIPTION_AUTH_REFRESH_MODE", string(transcriptionapi.AuthRefreshModeLocal)), "auth repair owner: local or external; external requires a zero local refresh interval")
+	cmd.Flags().StringVar(&externalAuthRefreshCommand, "external-auth-refresh-command", os.Getenv("CDP_TRANSCRIPTION_EXTERNAL_AUTH_REFRESH_COMMAND"), "absolute helper invoked as COMMAND refresh PROVIDER when externally managed state needs repair")
 	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers; use 0s to disable")
 	cmd.Flags().DurationVar(&authRefreshOffset, "auth-refresh-offset", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET", 0), "wall-clock phase offset for recurring auth refreshes; must be shorter than the interval")
+	cmd.Flags().BoolVar(&authRefreshAPIEnabled, "auth-refresh-api", envBool("CDP_TRANSCRIPTION_AUTH_REFRESH_API_ENABLED"), "allow cooldown-enforced provider auth refresh requests on this authority")
+	cmd.Flags().DurationVar(&authRefreshRequestMinAge, "auth-refresh-request-min-age", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_REQUEST_MIN_AGE", 45*time.Minute), "minimum authority-state age before the refresh API may open a provider tab")
 	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", os.Getenv("CDP_TRANSCRIPTION_FIXTURE_DIR"), "checked-in WebM corpus used by the bounded provider health probe; empty disables probe scheduling for transient runs")
 	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
@@ -240,7 +266,28 @@ func authRefreshScheduleEnabled(interval time.Duration) bool {
 	return interval > 0
 }
 
-func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string, allowedProviders []string) (*transcriptionapi.Registry, error) {
+func validateTranscriptionAuthRefreshMode(raw string, interval time.Duration) (transcriptionapi.AuthRefreshMode, error) {
+	mode, err := transcriptionapi.ParseAuthRefreshMode(raw)
+	if err != nil {
+		return "", commandError("transcription_auth_refresh_mode_invalid", "usage", "--auth-refresh-mode must be local or external", ExitUsage, nil)
+	}
+	if err := mode.Validate(interval); err != nil {
+		return "", commandError("transcription_external_auth_refresh_schedule_invalid", "usage", "--auth-refresh-mode external requires --auth-refresh-interval 0s", ExitUsage, nil)
+	}
+	return mode, nil
+}
+
+func externalAuthRefreshRunner(command string) func(context.Context, transcriptionapi.ProviderID) error {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil
+	}
+	return func(ctx context.Context, provider transcriptionapi.ProviderID) error {
+		return exec.CommandContext(ctx, command, "refresh", string(provider)).Run()
+	}
+}
+
+func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localRealtimeBaseURL, localAPIKey string, allowedProviders []string, authRefreshMode transcriptionapi.AuthRefreshMode, externalAuthRefreshCommand string) (*transcriptionapi.Registry, error) {
 	policy, err := a.providerPolicy()
 	if err != nil {
 		return nil, err
@@ -268,16 +315,17 @@ func (a *app) transcriptionRegistry(ctx context.Context, localBaseURL, localReal
 		return transcriptionapi.NewRegistryWithPolicy(policy, providers...), nil
 	}
 	chatStore, chatErr := chatgpt.NewStore(stateStore.Dir)
+	externalRefresh := externalAuthRefreshRunner(externalAuthRefreshCommand)
 	if chatErr == nil {
-		providers = append(providers, &chatGPTTranscriptionProvider{app: a, store: chatStore})
+		providers = append(providers, &chatGPTTranscriptionProvider{app: a, store: chatStore, externalAuth: authRefreshMode == transcriptionapi.AuthRefreshModeExternal, externalRefresh: externalRefresh})
 	}
 	claudeStore, claudeErr := claude.NewStore(stateStore.Dir)
 	if claudeErr == nil {
-		providers = append(providers, &claudeTranscriptionProvider{app: a, store: claudeStore})
+		providers = append(providers, &claudeTranscriptionProvider{app: a, store: claudeStore, externalAuth: authRefreshMode == transcriptionapi.AuthRefreshModeExternal, externalRefresh: externalRefresh})
 	}
 	geminiStore, geminiErr := gemini.NewStore(stateStore.Dir)
 	if geminiErr == nil {
-		providers = append(providers, &geminiTranscriptionProvider{app: a, store: geminiStore})
+		providers = append(providers, &geminiTranscriptionProvider{app: a, store: geminiStore, externalAuth: authRefreshMode == transcriptionapi.AuthRefreshModeExternal, externalRefresh: externalRefresh})
 	}
 	m365Store, m365Err := m365.NewStore(stateStore.Dir)
 	if m365Err == nil {
@@ -437,12 +485,14 @@ func (g *authRepairGroup) Do(ctx context.Context, generation string, refresh fun
 }
 
 type chatGPTTranscriptionProvider struct {
-	app        *app
-	store      *chatgpt.Store
-	authMu     contextMutex
-	authRepair authRepairGroup
-	refresh    func(context.Context) error
-	transcribe func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
+	app             *app
+	store           *chatgpt.Store
+	externalAuth    bool
+	externalRefresh func(context.Context, transcriptionapi.ProviderID) error
+	authMu          contextMutex
+	authRepair      authRepairGroup
+	refresh         func(context.Context) error
+	transcribe      func(context.Context, chatgpt.TranscribeConfig, string, int64) webagent.Result
 }
 
 func (p *chatGPTTranscriptionProvider) ID() transcriptionapi.ProviderID {
@@ -493,22 +543,6 @@ func (p *chatGPTTranscriptionProvider) ensureAuthFreshLocked(ctx context.Context
 	return nil
 }
 
-func (p *chatGPTTranscriptionProvider) EnsureCapabilitiesFresh(ctx context.Context) error {
-	if err := p.authMu.Lock(ctx); err != nil {
-		return err
-	}
-	defer p.authMu.Unlock()
-	if err := p.ensureAuthFreshLocked(ctx); err != nil {
-		return err
-	}
-	now := time.Now()
-	status := p.store.RuntimeStatus(ctx, now, chatgpt.DefaultCapabilitiesTTL)
-	if status.Ready && !authEvidenceExpiringSoon(status.ExpiresAt, now) {
-		return nil
-	}
-	return p.refreshCapabilitiesLocked(ctx)
-}
-
 func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request transcriptionapi.FileRequest) (transcriptionapi.Result, error) {
 	if request.Task == transcriptionapi.TaskTranslate {
 		return transcriptionapi.Result{}, transcriptionProviderError(501, "unsupported", "translation_unsupported", "ChatGPT web transcription adapter does not expose Whisper translation", false)
@@ -518,8 +552,10 @@ func (p *chatGPTTranscriptionProvider) Transcribe(ctx context.Context, request t
 		return transcriptionapi.Result{}, err
 	}
 	// File transcription deliberately uses the persisted request template and
-	// direct HTTP replay. Headed cdp is reserved for bounded auth/capability
-	// refresh, so a normal request never opens or attaches to a browser target.
+	// direct HTTP replay. Headed cdp is reserved for bounded auth refresh, so a
+	// normal request never opens or attaches to a browser target. Runtime
+	// capability discovery remains an explicit diagnostic workflow because the
+	// transcription contract does not consume it.
 	transcribe := p.transcribe
 	if transcribe == nil {
 		transcribe = chatgpt.Transcribe
@@ -564,6 +600,9 @@ func (p *chatGPTTranscriptionProvider) repairAuth(ctx context.Context, observedG
 }
 
 func (p *chatGPTTranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if p.externalAuth {
+		return requestExternalAuthRefresh(ctx, p.ID(), p.externalRefresh)
+	}
 	if p.refresh != nil {
 		return p.refresh(ctx)
 	}
@@ -584,31 +623,28 @@ func (p *chatGPTTranscriptionProvider) refreshAuthLocked(ctx context.Context) er
 	return nil
 }
 
-func (p *chatGPTTranscriptionProvider) refreshCapabilitiesLocked(ctx context.Context) error {
-	if !p.app.selectHeadedProviderRuntime() {
-		return fmt.Errorf("ChatGPT headed browser runtime is unavailable for capability repair")
+func (p *chatGPTTranscriptionProvider) AuthCapturedAt(ctx context.Context) (time.Time, bool) {
+	return parseAuthCapturedAt(p.store.AuthStatus(ctx, time.Now(), chatgpt.DefaultAuthTTL).CapturedAt)
+}
+
+func (p *chatGPTTranscriptionProvider) RefreshAuthNow(ctx context.Context, observed time.Time) (bool, error) {
+	before := p.store.AuthStatus(ctx, time.Now(), chatgpt.DefaultAuthTTL).CapturedAt
+	if err := p.repairAuth(ctx, formatAuthGeneration(observed)); err != nil {
+		return false, err
 	}
-	browserConfig, refreshedStore, unavailable := p.app.chatgptBrowserOperationConfig(ctx, webagent.OperationCapabilities)
-	if unavailable != nil {
-		if unavailable.Error != nil {
-			return fmt.Errorf("%s", unavailable.Error.Message)
-		}
-		return fmt.Errorf("ChatGPT headed browser capability repair is unavailable")
-	}
-	result := chatgpt.RefreshCapabilities(ctx, chatgpt.CapabilityRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
-	if !result.OK {
-		return webAgentProviderError(result)
-	}
-	return nil
+	after := p.store.AuthStatus(ctx, time.Now(), chatgpt.DefaultAuthTTL).CapturedAt
+	return after != "" && after != before, nil
 }
 
 type claudeTranscriptionProvider struct {
-	app        *app
-	store      *claude.Store
-	authMu     contextMutex
-	authRepair authRepairGroup
-	refresh    func(context.Context) error
-	transcribe func(context.Context, claude.TranscribeConfig, string, int64) webagent.Result
+	app             *app
+	store           *claude.Store
+	externalAuth    bool
+	externalRefresh func(context.Context, transcriptionapi.ProviderID) error
+	authMu          contextMutex
+	authRepair      authRepairGroup
+	refresh         func(context.Context) error
+	transcribe      func(context.Context, claude.TranscribeConfig, string, int64) webagent.Result
 }
 
 func (p *claudeTranscriptionProvider) ID() transcriptionapi.ProviderID {
@@ -706,6 +742,9 @@ func (p *claudeTranscriptionProvider) repairAuth(ctx context.Context, observedGe
 }
 
 func (p *claudeTranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if p.externalAuth {
+		return requestExternalAuthRefresh(ctx, p.ID(), p.externalRefresh)
+	}
 	if p.refresh != nil {
 		return p.refresh(ctx)
 	}
@@ -716,13 +755,28 @@ func (p *claudeTranscriptionProvider) refreshAuthLocked(ctx context.Context) err
 	return nil
 }
 
+func (p *claudeTranscriptionProvider) AuthCapturedAt(ctx context.Context) (time.Time, bool) {
+	return parseAuthCapturedAt(p.store.Status(ctx, time.Now(), claude.DefaultAuthTTL).CapturedAt)
+}
+
+func (p *claudeTranscriptionProvider) RefreshAuthNow(ctx context.Context, observed time.Time) (bool, error) {
+	before := p.store.Status(ctx, time.Now(), claude.DefaultAuthTTL).CapturedAt
+	if err := p.repairAuth(ctx, formatAuthGeneration(observed)); err != nil {
+		return false, err
+	}
+	after := p.store.Status(ctx, time.Now(), claude.DefaultAuthTTL).CapturedAt
+	return after != "" && after != before, nil
+}
+
 type geminiTranscriptionProvider struct {
-	app        *app
-	store      *gemini.Store
-	authMu     contextMutex
-	authRepair authRepairGroup
-	refresh    func(context.Context) error
-	transcribe func(context.Context, gemini.TranscribeConfig, string, int64) webagent.Result
+	app             *app
+	store           *gemini.Store
+	externalAuth    bool
+	externalRefresh func(context.Context, transcriptionapi.ProviderID) error
+	authMu          contextMutex
+	authRepair      authRepairGroup
+	refresh         func(context.Context) error
+	transcribe      func(context.Context, gemini.TranscribeConfig, string, int64) webagent.Result
 }
 
 func (p *geminiTranscriptionProvider) ID() transcriptionapi.ProviderID {
@@ -815,6 +869,9 @@ func (p *geminiTranscriptionProvider) repairAuth(ctx context.Context, observedGe
 }
 
 func (p *geminiTranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
+	if p.externalAuth {
+		return requestExternalAuthRefresh(ctx, p.ID(), p.externalRefresh)
+	}
 	if p.refresh != nil {
 		return p.refresh(ctx)
 	}
@@ -833,6 +890,54 @@ func (p *geminiTranscriptionProvider) refreshAuthLocked(ctx context.Context) err
 		return webAgentProviderError(result)
 	}
 	return nil
+}
+
+func (p *geminiTranscriptionProvider) AuthCapturedAt(ctx context.Context) (time.Time, bool) {
+	return parseAuthCapturedAt(p.store.TemplateStatus(ctx, time.Now(), gemini.DefaultAuthTTL).CapturedAt)
+}
+
+func (p *geminiTranscriptionProvider) RefreshAuthNow(ctx context.Context, observed time.Time) (bool, error) {
+	before := p.store.TemplateStatus(ctx, time.Now(), gemini.DefaultAuthTTL).CapturedAt
+	if err := p.repairAuth(ctx, formatAuthGeneration(observed)); err != nil {
+		return false, err
+	}
+	after := p.store.TemplateStatus(ctx, time.Now(), gemini.DefaultAuthTTL).CapturedAt
+	return after != "" && after != before, nil
+}
+
+func externalAuthRefreshRequired(provider transcriptionapi.ProviderID) error {
+	return transcriptionProviderError(
+		503,
+		"provider_unavailable",
+		"external_auth_refresh_required",
+		fmt.Sprintf("%s auth state is managed externally; retry after provider state synchronization", provider),
+		false,
+	)
+}
+
+func requestExternalAuthRefresh(ctx context.Context, provider transcriptionapi.ProviderID, refresh func(context.Context, transcriptionapi.ProviderID) error) error {
+	if refresh == nil {
+		return externalAuthRefreshRequired(provider)
+	}
+	if err := refresh(ctx, provider); err != nil {
+		return transcriptionProviderError(503, "provider_unavailable", "external_auth_refresh_failed", fmt.Sprintf("%s external auth refresh failed", provider), false)
+	}
+	return nil
+}
+
+func parseAuthCapturedAt(value string) (time.Time, bool) {
+	capturedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return capturedAt.UTC(), true
+}
+
+func formatAuthGeneration(capturedAt time.Time) string {
+	if capturedAt.IsZero() {
+		return ""
+	}
+	return capturedAt.UTC().Format(time.RFC3339Nano)
 }
 
 type m365TranscriptionProvider struct {

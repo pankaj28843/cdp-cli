@@ -45,6 +45,7 @@ func ValidateOpenAPISpec() error {
 		"/healthz",
 		"/openapi.json",
 		"/v1/models",
+		"/v1/provider-auth/refresh",
 		"/v1/audio/transcriptions",
 		"/v1/audio/translations",
 		"/v1/realtime",

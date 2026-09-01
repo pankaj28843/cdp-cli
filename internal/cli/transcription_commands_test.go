@@ -84,6 +84,25 @@ func TestAuthRefreshScheduleDefaultsOnAndAllowsExplicitDisable(t *testing.T) {
 	}
 }
 
+func TestExternalAuthRefreshModeRequiresDisabledLocalSchedule(t *testing.T) {
+	if _, err := validateTranscriptionAuthRefreshMode("external", 0); err != nil {
+		t.Fatalf("external mode with disabled local schedule: %v", err)
+	}
+	if _, err := validateTranscriptionAuthRefreshMode("external", time.Minute); err == nil {
+		t.Fatal("external mode accepted a local browser refresh schedule")
+	}
+	if _, err := validateTranscriptionAuthRefreshMode("unknown", 0); err == nil {
+		t.Fatal("unknown auth refresh mode was accepted")
+	}
+}
+
+func TestChatGPTTranscriptionRefreshDoesNotOpenCapabilityTabs(t *testing.T) {
+	provider := any(&chatGPTTranscriptionProvider{})
+	if _, ok := provider.(transcriptionapi.CapabilityRefresher); ok {
+		t.Fatal("ChatGPT transcription adapter registered recurring browser capability refresh")
+	}
+}
+
 func TestDefaultAuthRefreshCadencePrecedesM365ExpiryWindow(t *testing.T) {
 	refreshDeadline := m365.DefaultAuthTTL - 15*time.Minute
 	if refreshDeadline <= 0 {

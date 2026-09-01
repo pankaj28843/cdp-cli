@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/transcriptionapi"
 )
 
 func testConfig() Config {
@@ -107,6 +109,7 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	}
 	for _, want := range []string{
 		`CDP_TRANSCRIPTION_PROVIDERS="chatgpt-web"`,
+		`CDP_TRANSCRIPTION_AUTH_REFRESH_MODE="local"`,
 		`CDP_TRANSCRIPTION_AUTH_REFRESH_ENABLED="true"`,
 		`CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET="4m0s"`,
 		`CDP_TRANSCRIPTION_PROBE_INTERVAL="5m0s"`,
@@ -123,6 +126,27 @@ func TestRenderSystemdUnitSeparatesOwnerOnlyEnvironment(t *testing.T) {
 	}
 	if artifacts[1].Mode != 0o600 {
 		t.Fatalf("environment mode = %o, want 600", artifacts[1].Mode)
+	}
+}
+
+func TestExternalAuthModeRequiresAndRendersDisabledLocalRefresh(t *testing.T) {
+	paths, err := PathsForHome("/synthetic-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := testConfig()
+	config.AuthRefreshMode = transcriptionapi.AuthRefreshModeExternal
+	if err := config.Validate(); err == nil {
+		t.Fatal("external auth owner accepted a local refresh schedule")
+	}
+	config.AuthRefreshInterval = 0
+	config.AuthRefreshOffset = 0
+	artifacts, err := Render(PlatformLinux, config, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(artifacts[1].Data), `CDP_TRANSCRIPTION_AUTH_REFRESH_MODE="external"`) {
+		t.Fatalf("environment file omitted external auth ownership: %s", artifacts[1].Data)
 	}
 }
 

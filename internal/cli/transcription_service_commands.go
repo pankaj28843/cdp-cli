@@ -49,8 +49,12 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	var localRealtimeBaseURL string
 	var localAPIKey string
 	var maxAudioBytes int64
+	var authRefreshMode string
+	var externalAuthRefreshCommand string
 	var authRefreshInterval time.Duration
 	var authRefreshOffset time.Duration
+	var authRefreshAPIEnabled bool
+	var authRefreshRequestMinAge time.Duration
 	var fixtureDir string
 	var probeInterval time.Duration
 	var persistAudio bool
@@ -86,11 +90,24 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 			if authRefreshOffset < 0 || (authRefreshInterval == 0 && authRefreshOffset != 0) || (authRefreshInterval > 0 && authRefreshOffset >= authRefreshInterval) {
 				return fmt.Errorf("--auth-refresh-offset must be non-negative and shorter than its interval")
 			}
+			validatedAuthRefreshMode, err := validateTranscriptionAuthRefreshMode(authRefreshMode, authRefreshInterval)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(externalAuthRefreshCommand) != "" && !filepath.IsAbs(strings.TrimSpace(externalAuthRefreshCommand)) {
+				return fmt.Errorf("--external-auth-refresh-command must be an absolute executable path")
+			}
+			if authRefreshAPIEnabled && validatedAuthRefreshMode != transcriptionapi.AuthRefreshModeLocal {
+				return fmt.Errorf("--auth-refresh-api requires --auth-refresh-mode local")
+			}
+			if authRefreshAPIEnabled && authRefreshRequestMinAge <= 0 {
+				return fmt.Errorf("--auth-refresh-request-min-age must be positive when the refresh API is enabled")
+			}
 			if probeInterval == 0 {
 				probeInterval = transcriptionapi.DefaultProbeInterval
 			}
 			authRefreshEnabled := authRefreshInterval > 0
-			platform, paths, config, err := a.transcriptionServiceConfig(systemScope, binaryPath, address, httpAddress, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, authRefreshInterval, authRefreshOffset, authRefreshEnabled, fixtureDir, probeInterval, persistAudio, tlsCertFile, tlsKeyFile)
+			platform, paths, config, err := a.transcriptionServiceConfig(systemScope, binaryPath, address, httpAddress, provider, allowedProviders, localBaseURL, localRealtimeBaseURL, localAPIKey, maxAudioBytes, validatedAuthRefreshMode, externalAuthRefreshCommand, authRefreshInterval, authRefreshOffset, authRefreshEnabled, authRefreshAPIEnabled, authRefreshRequestMinAge, fixtureDir, probeInterval, persistAudio, tlsCertFile, tlsKeyFile)
 			if err != nil {
 				return err
 			}
@@ -126,24 +143,27 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 				}
 			}
 			return a.render(cmd.Context(), "transcription service installed", map[string]any{
-				"platform":             platform,
-				"service":              serviceName(platform),
-				"started":              start,
-				"address":              config.Address,
-				"http_address":         config.HTTPAddress,
-				"provider":             config.Provider,
-				"auth_refresh_enabled": authRefreshEnabled,
-				"auth_refresh_offset":  authRefreshOffset.String(),
-				"probe_interval":       config.ProbeInterval.String(),
-				"fixture_count":        fixtureCount,
-				"audio_persisted":      config.PersistAudio,
-				"tls_enabled":          strings.TrimSpace(config.TLSCertFile) != "",
-				"tls_cert_file":        tlsFiles.CertFile,
-				"tls_hosts":            tlsFiles.Hosts,
-				"tls_reused":           tlsFiles.Reused,
-				"demo_url":             preferredDemoURL(config.Address, strings.TrimSpace(config.TLSCertFile) != "", tlsFiles.Hosts),
-				"demo_urls":            demoURLs(config.Address, strings.TrimSpace(config.TLSCertFile) != "", tlsFiles.Hosts),
-				"artifacts":            artifactPaths(artifacts),
+				"platform":                     platform,
+				"service":                      serviceName(platform),
+				"started":                      start,
+				"address":                      config.Address,
+				"http_address":                 config.HTTPAddress,
+				"provider":                     config.Provider,
+				"auth_refresh_mode":            config.AuthRefreshMode,
+				"auth_refresh_api_enabled":     config.AuthRefreshAPIEnabled,
+				"auth_refresh_request_min_age": config.AuthRefreshRequestMinAge.String(),
+				"auth_refresh_enabled":         authRefreshEnabled,
+				"auth_refresh_offset":          authRefreshOffset.String(),
+				"probe_interval":               config.ProbeInterval.String(),
+				"fixture_count":                fixtureCount,
+				"audio_persisted":              config.PersistAudio,
+				"tls_enabled":                  strings.TrimSpace(config.TLSCertFile) != "",
+				"tls_cert_file":                tlsFiles.CertFile,
+				"tls_hosts":                    tlsFiles.Hosts,
+				"tls_reused":                   tlsFiles.Reused,
+				"demo_url":                     preferredDemoURL(config.Address, strings.TrimSpace(config.TLSCertFile) != "", tlsFiles.Hosts),
+				"demo_urls":                    demoURLs(config.Address, strings.TrimSpace(config.TLSCertFile) != "", tlsFiles.Hosts),
+				"artifacts":                    artifactPaths(artifacts),
 			})
 		},
 	}
@@ -155,8 +175,12 @@ func (a *app) newTranscriptionServiceInstallCommand() *cobra.Command {
 	cmd.Flags().StringVar(&localRealtimeBaseURL, "local-realtime-base-url", os.Getenv("CDP_TRANSCRIPTION_LOCAL_REALTIME_BASE_URL"), "optional local realtime provider base URL, usually ending in /v1")
 	cmd.Flags().StringVar(&localAPIKey, "local-api-key", os.Getenv("CDP_TRANSCRIPTION_LOCAL_API_KEY"), "API key for the configured local provider")
 	cmd.Flags().Int64Var(&maxAudioBytes, "max-audio-bytes", envInt64("CDP_TRANSCRIPTION_MAX_AUDIO_BYTES", transcriptionapi.DefaultMaxAudioBytes), "maximum retained audio-cache bytes")
+	cmd.Flags().StringVar(&authRefreshMode, "auth-refresh-mode", envDefault("CDP_TRANSCRIPTION_AUTH_REFRESH_MODE", string(transcriptionapi.AuthRefreshModeLocal)), "auth repair owner: local or external; external requires a zero local refresh interval")
+	cmd.Flags().StringVar(&externalAuthRefreshCommand, "external-auth-refresh-command", os.Getenv("CDP_TRANSCRIPTION_EXTERNAL_AUTH_REFRESH_COMMAND"), "absolute helper invoked as COMMAND refresh PROVIDER when externally managed state needs repair")
 	cmd.Flags().DurationVar(&authRefreshInterval, "auth-refresh-interval", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_INTERVAL", transcriptionapi.DefaultAuthRefreshInterval), "shared recurring freshness check for all online providers; use 0s to disable")
 	cmd.Flags().DurationVar(&authRefreshOffset, "auth-refresh-offset", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_OFFSET", 0), "wall-clock phase offset for recurring auth refreshes; must be shorter than the interval")
+	cmd.Flags().BoolVar(&authRefreshAPIEnabled, "auth-refresh-api", envBool("CDP_TRANSCRIPTION_AUTH_REFRESH_API_ENABLED"), "allow cooldown-enforced provider auth refresh requests on this authority")
+	cmd.Flags().DurationVar(&authRefreshRequestMinAge, "auth-refresh-request-min-age", envDuration("CDP_TRANSCRIPTION_AUTH_REFRESH_REQUEST_MIN_AGE", 45*time.Minute), "minimum authority-state age before the refresh API may open a provider tab")
 	cmd.Flags().StringVar(&fixtureDir, "fixture-dir", envDefault("CDP_TRANSCRIPTION_FIXTURE_DIR", defaultTranscriptionFixtureDir()), "checked-in WebM corpus used by the bounded provider health probe; explicitly empty disables scheduled probes")
 	cmd.Flags().DurationVar(&probeInterval, "probe-interval", envDuration("CDP_TRANSCRIPTION_PROBE_INTERVAL", transcriptionapi.DefaultProbeInterval), "interval between bounded synthetic provider health probes")
 	cmd.Flags().BoolVar(&persistAudio, "persist-audio", envBool("CDP_TRANSCRIPTION_PERSIST_AUDIO"), "retain uploaded audio under the state directory; default is ephemeral transaction media")
@@ -306,7 +330,7 @@ func (a *app) transcriptionServicePaths(systemScope bool) (transcriptionservice.
 	return platform, paths, nil
 }
 
-func (a *app) transcriptionServiceConfig(systemScope bool, binaryPath, address, httpAddress, provider string, allowedProviders []string, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshInterval, authRefreshOffset time.Duration, authRefreshEnabled bool, fixtureDir string, probeInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
+func (a *app) transcriptionServiceConfig(systemScope bool, binaryPath, address, httpAddress, provider string, allowedProviders []string, localBaseURL, localRealtimeBaseURL, localAPIKey string, maxAudioBytes int64, authRefreshMode transcriptionapi.AuthRefreshMode, externalAuthRefreshCommand string, authRefreshInterval, authRefreshOffset time.Duration, authRefreshEnabled, authRefreshAPIEnabled bool, authRefreshRequestMinAge time.Duration, fixtureDir string, probeInterval time.Duration, persistAudio bool, tlsCertFile, tlsKeyFile string) (transcriptionservice.Platform, transcriptionservice.Paths, transcriptionservice.Config, error) {
 	platform, paths, err := a.transcriptionServicePaths(systemScope)
 	if err != nil {
 		return "", transcriptionservice.Paths{}, transcriptionservice.Config{}, err
@@ -336,30 +360,34 @@ func (a *app) transcriptionServiceConfig(systemScope bool, binaryPath, address, 
 		}
 	}
 	config := transcriptionservice.Config{
-		BinaryPath:           binaryPath,
-		StateDir:             stateStore.Dir,
-		Address:              strings.TrimSpace(address),
-		HTTPAddress:          strings.TrimSpace(httpAddress),
-		Provider:             strings.TrimSpace(provider),
-		AllowedProviders:     append([]string(nil), allowedProviders...),
-		BrowserMode:          a.browserModeName(),
-		BrowserURL:           strings.TrimSpace(a.opts.browserURL),
-		Display:              strings.TrimSpace(os.Getenv("DISPLAY")),
-		XAuthority:           strings.TrimSpace(os.Getenv("XAUTHORITY")),
-		AllowOverBudget:      a.opts.allowOverBudget,
-		LocalBaseURL:         strings.TrimSpace(localBaseURL),
-		LocalRealtimeBaseURL: strings.TrimSpace(localRealtimeBaseURL),
-		LocalAPIKey:          strings.TrimSpace(localAPIKey),
-		MaxAudioBytes:        maxAudioBytes,
-		AuthRefreshInterval:  authRefreshInterval,
-		AuthRefreshOffset:    authRefreshOffset,
-		AuthRefreshEnabled:   authRefreshEnabled,
-		FixtureDir:           fixtureDir,
-		ProbeInterval:        probeInterval,
-		PersistAudio:         persistAudio,
-		TLSCertFile:          strings.TrimSpace(tlsCertFile),
-		TLSKeyFile:           strings.TrimSpace(tlsKeyFile),
-		Path:                 os.Getenv("PATH"),
+		BinaryPath:                 binaryPath,
+		StateDir:                   stateStore.Dir,
+		Address:                    strings.TrimSpace(address),
+		HTTPAddress:                strings.TrimSpace(httpAddress),
+		Provider:                   strings.TrimSpace(provider),
+		AllowedProviders:           append([]string(nil), allowedProviders...),
+		BrowserMode:                a.browserModeName(),
+		BrowserURL:                 strings.TrimSpace(a.opts.browserURL),
+		Display:                    strings.TrimSpace(os.Getenv("DISPLAY")),
+		XAuthority:                 strings.TrimSpace(os.Getenv("XAUTHORITY")),
+		AllowOverBudget:            a.opts.allowOverBudget,
+		LocalBaseURL:               strings.TrimSpace(localBaseURL),
+		LocalRealtimeBaseURL:       strings.TrimSpace(localRealtimeBaseURL),
+		LocalAPIKey:                strings.TrimSpace(localAPIKey),
+		MaxAudioBytes:              maxAudioBytes,
+		AuthRefreshMode:            authRefreshMode,
+		ExternalAuthRefreshCommand: strings.TrimSpace(externalAuthRefreshCommand),
+		AuthRefreshInterval:        authRefreshInterval,
+		AuthRefreshOffset:          authRefreshOffset,
+		AuthRefreshEnabled:         authRefreshEnabled,
+		AuthRefreshAPIEnabled:      authRefreshAPIEnabled,
+		AuthRefreshRequestMinAge:   authRefreshRequestMinAge,
+		FixtureDir:                 fixtureDir,
+		ProbeInterval:              probeInterval,
+		PersistAudio:               persistAudio,
+		TLSCertFile:                strings.TrimSpace(tlsCertFile),
+		TLSKeyFile:                 strings.TrimSpace(tlsKeyFile),
+		Path:                       os.Getenv("PATH"),
 	}
 	return platform, paths, config, nil
 }

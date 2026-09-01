@@ -20,12 +20,13 @@ func TestOpenAPISpecIsEmbeddedAndComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, method := range map[string]string{
-		"/healthz":                 "get",
-		"/openapi.json":            "get",
-		"/v1/models":               "get",
-		"/v1/audio/transcriptions": "post",
-		"/v1/audio/translations":   "post",
-		"/v1/realtime":             "get",
+		"/healthz":                  "get",
+		"/openapi.json":             "get",
+		"/v1/models":                "get",
+		"/v1/provider-auth/refresh": "post",
+		"/v1/audio/transcriptions":  "post",
+		"/v1/audio/translations":    "post",
+		"/v1/realtime":              "get",
 	} {
 		if _, ok := document.Paths[path][method]; !ok {
 			t.Fatalf("OpenAPI operation %s %s is missing", method, path)

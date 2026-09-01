@@ -22,6 +22,7 @@ type BrowserConfig struct {
 	Client      EventClient
 	Engine      *browserflow.Engine
 	Journal     browserflow.Journal
+	CloseClient func(context.Context) error
 	BuildCommit string
 }
 
@@ -53,6 +54,9 @@ func runOwned(
 			"ChatGPT exact-target browser transaction is not configured",
 			data, []string{"cdp workflow agent chatgpt doctor --json"},
 		)
+	}
+	if config.CloseClient != nil {
+		defer func() { _ = config.CloseClient(context.Background()) }()
 	}
 	lease, err := config.Engine.Acquire(ctx, browserflow.AcquireRequest{
 		RunID:      runID,

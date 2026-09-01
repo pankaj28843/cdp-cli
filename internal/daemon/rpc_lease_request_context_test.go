@@ -138,6 +138,39 @@ func TestHandleRPCDoesNotUnregisterTargetAfterRequestCancellation(t *testing.T) 
 	}
 }
 
+func TestHandleRPCKeepsTargetOwnedUntilCleanupConfirmsItGone(t *testing.T) {
+	manager := newRPCLeaseManager(t)
+	leaseID := firstRPCLeaseID(manager)
+	if err := manager.RegisterTarget(context.Background(), leaseID, LeaseTarget{TargetID: "existing-page", Disposable: true}); err != nil {
+		t.Fatalf("RegisterTarget returned error: %v", err)
+	}
+	client := &rpcLeaseClient{
+		call: func(_ context.Context, method string, _ any, result any) error {
+			if method == "Target.getTargetInfo" {
+				setNestedStringField(result, "TargetInfo", "TargetID", "existing-page")
+			}
+			return nil
+		},
+		callSession: func(_ context.Context, _ string, method string, _ any, result any) error {
+			if method == "Target.closeTarget" {
+				*result.(*json.RawMessage) = json.RawMessage(`{"success":true}`)
+			}
+			return nil
+		},
+	}
+	response := callLeaseRPC(t, context.Background(), client, manager, RPCRequest{
+		Method:  "Target.closeTarget",
+		OwnerID: leaseID,
+		Params:  json.RawMessage(`{"targetId":"existing-page"}`),
+	})
+	if !response.OK {
+		t.Fatalf("target close response = %+v, want browser result preserved", response)
+	}
+	if !managerHasLeaseTarget(manager, leaseID, "existing-page") {
+		t.Fatal("accepted close released ownership before target-gone confirmation")
+	}
+}
+
 func TestHandleRPCExplicitEndRetainsBoundedCleanupAfterRequestCancellation(t *testing.T) {
 	manager := newRPCLeaseManager(t)
 	leaseID := firstRPCLeaseID(manager)
@@ -164,11 +197,15 @@ func TestHandleRPCExplicitEndRetainsBoundedCleanupAfterRequestCancellation(t *te
 
 type rpcLeaseClient struct {
 	mu          sync.Mutex
+	call        func(context.Context, string, any, any) error
 	callSession func(context.Context, string, string, any, any) error
 	closeCount  int
 }
 
 func (c *rpcLeaseClient) Call(ctx context.Context, method string, params any, result any) error {
+	if c.call != nil {
+		return c.call(ctx, method, params, result)
+	}
 	if method == "Target.closeTarget" {
 		c.mu.Lock()
 		c.closeCount++

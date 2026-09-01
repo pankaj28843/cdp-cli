@@ -38,6 +38,9 @@ type fakeProvider struct {
 	requestMu      sync.Mutex
 	transcribeCall int
 	ensureCalls    int
+	authorityAt    time.Time
+	forceAuthCalls int
+	forceAuthErr   error
 }
 
 type synchronizedBuffer struct {
@@ -103,6 +106,143 @@ func (p *fakeProvider) EnsureAuthFresh(ctx context.Context) error {
 		return err
 	}
 	return p.ensureErr
+}
+
+func (p *fakeProvider) AuthCapturedAt(context.Context) (time.Time, bool) {
+	p.requestMu.Lock()
+	defer p.requestMu.Unlock()
+	return p.authorityAt, !p.authorityAt.IsZero()
+}
+
+func (p *fakeProvider) RefreshAuthNow(context.Context, time.Time) (bool, error) {
+	p.requestMu.Lock()
+	defer p.requestMu.Unlock()
+	p.forceAuthCalls++
+	if p.forceAuthErr != nil {
+		return false, p.forceAuthErr
+	}
+	p.authorityAt = time.Now().UTC()
+	return true, nil
+}
+
+func TestAuthorityRefreshAPICoolsDownFailedAttempts(t *testing.T) {
+	provider := &fakeProvider{
+		id: ProviderClaude, authorityAt: time.Now().UTC().Add(-time.Hour),
+		forceAuthErr: errors.New("synthetic provider failure"),
+	}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{
+		Registry: NewRegistry(provider), Store: store, DefaultProvider: ProviderClaude,
+		AuthRefreshAPIEnabled: true, AuthRefreshRequestMinAge: 30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+	post := func() (*http.Response, []byte) {
+		response, err := http.Post(httpServer.URL+"/v1/provider-auth/refresh", "application/json", strings.NewReader(`{"provider":"claude-web"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response, body
+	}
+	first, _ := post()
+	if first.StatusCode != http.StatusBadGateway {
+		t.Fatalf("first status = %d, want 502", first.StatusCode)
+	}
+	second, body := post()
+	if second.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"reason":"request_cooldown"`)) {
+		t.Fatalf("second status=%d body=%s", second.StatusCode, body)
+	}
+	provider.requestMu.Lock()
+	forceCalls := provider.forceAuthCalls
+	provider.requestMu.Unlock()
+	if forceCalls != 1 {
+		t.Fatalf("failed authority refresh calls = %d, want one", forceCalls)
+	}
+}
+
+func TestAuthorityRefreshAPIEnforcesMinimumAgeAndCoalesces(t *testing.T) {
+	provider := &fakeProvider{id: ProviderChatGPT, authorityAt: time.Now().UTC().Add(-5 * time.Minute)}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{
+		Registry:                 NewRegistry(provider),
+		Store:                    store,
+		DefaultProvider:          ProviderChatGPT,
+		AuthRefreshAPIEnabled:    true,
+		AuthRefreshRequestMinAge: 30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	post := func() map[string]any {
+		t.Helper()
+		response, err := http.Post(
+			httpServer.URL+"/v1/provider-auth/refresh",
+			"application/json",
+			strings.NewReader(`{"provider":"chatgpt-web"}`),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.StatusCode, body)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(body, &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	first := post()
+	if first["refreshed"] != false || first["reason"] != "minimum_age" {
+		t.Fatalf("fresh authority response = %#v", first)
+	}
+	provider.requestMu.Lock()
+	provider.authorityAt = time.Now().UTC().Add(-31 * time.Minute)
+	provider.requestMu.Unlock()
+
+	var wait sync.WaitGroup
+	wait.Add(2)
+	results := make(chan map[string]any, 2)
+	for range 2 {
+		go func() { defer wait.Done(); results <- post() }()
+	}
+	wait.Wait()
+	close(results)
+	refreshed := 0
+	for result := range results {
+		if result["refreshed"] == true {
+			refreshed++
+		}
+	}
+	provider.requestMu.Lock()
+	forceCalls := provider.forceAuthCalls
+	provider.requestMu.Unlock()
+	if refreshed != 1 || forceCalls != 1 {
+		t.Fatalf("refreshed responses=%d force calls=%d, want one", refreshed, forceCalls)
+	}
 }
 
 func TestEnsureProviderAuthRetriesWithinShortRequestBudget(t *testing.T) {

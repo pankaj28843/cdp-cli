@@ -266,6 +266,8 @@ func (m *LeaseManager) RegisterTarget(ctx context.Context, leaseID string, targe
 	return nil
 }
 
+// UnregisterTarget releases daemon ownership only after the caller has
+// independently confirmed that the exact target no longer exists.
 func (m *LeaseManager) UnregisterTarget(ctx context.Context, leaseID, targetID string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -297,6 +299,52 @@ func (m *LeaseManager) UnregisterTarget(ctx context.Context, leaseID, targetID s
 	if err := m.saveLocked(ctx); err != nil {
 		m.leases[leaseID] = previous
 		return fmt.Errorf("persist target release for lease %s: %w", leaseID, err)
+	}
+	return nil
+}
+
+// ReconcileTargetSnapshot releases ownership for targets proven absent from an
+// authoritative Target.getTargets response. Targets still present remain
+// available to the lease cleanup retry loop.
+func (m *LeaseManager) ReconcileTargetSnapshot(ctx context.Context, leaseID string, targets []cdp.TargetInfo) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return nil
+	}
+	live := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if targetID := strings.TrimSpace(target.TargetID); targetID != "" {
+			live[targetID] = struct{}{}
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, ok := m.leases[leaseID]
+	if !ok {
+		return nil
+	}
+	previous := record
+	previous.Targets = append([]LeaseTarget(nil), record.Targets...)
+	filtered := make([]LeaseTarget, 0, len(record.Targets))
+	for _, target := range record.Targets {
+		if _, ok := live[target.TargetID]; ok {
+			filtered = append(filtered, target)
+		}
+	}
+	if len(filtered) == len(record.Targets) {
+		return nil
+	}
+	record.Targets = filtered
+	m.leases[leaseID] = record
+	if err := m.saveLocked(ctx); err != nil {
+		m.leases[leaseID] = previous
+		return fmt.Errorf("persist target snapshot reconciliation for lease %s: %w", leaseID, err)
 	}
 	return nil
 }
@@ -609,13 +657,18 @@ func closeOwnedTarget(ctx context.Context, client cdp.CommandClient, targetID st
 		}
 		return fmt.Errorf("close owned target %s: %w", targetID, err)
 	}
-	if result.Success {
+	target, err := targetInfo(ctx, client, targetID)
+	if err != nil && targetGoneError(err) {
 		return nil
 	}
-	if target, err := targetInfo(ctx, client, targetID); err != nil && targetGoneError(err) {
+	if err != nil {
+		return fmt.Errorf("confirm owned target %s is gone: %w", targetID, err)
+	}
+	if target.TargetID == "" {
 		return nil
-	} else if err == nil && target.TargetID == "" {
-		return nil
+	}
+	if result.Success {
+		return fmt.Errorf("close owned target %s was accepted but target remains", targetID)
 	}
 	return fmt.Errorf("close owned target %s returned success=false", targetID)
 }

@@ -1116,7 +1116,7 @@ func (a *app) chatgptBrowserOperationConfig(
 		)
 		return chatgpt.BrowserConfig{}, nil, &result
 	}
-	client, _, err := a.browserEventCDPClient(ctx)
+	client, closeClient, err := a.browserEventCDPClient(ctx)
 	if err != nil {
 		if a.opts.debug {
 			_, _ = fmt.Fprintf(a.err, "chatgpt headed browser runtime unavailable: %v\n", err)
@@ -1136,6 +1136,7 @@ func (a *app) chatgptBrowserOperationConfig(
 		InputLockPath:   browserflow.HeadedInputLockPath(stateStore.Dir),
 	})
 	if err != nil {
+		_ = closeClient(context.Background())
 		result := chatgpt.UnavailableOperation(
 			a.build.Commit, operation,
 			"chatgpt_browserflow_unavailable", "internal",
@@ -1147,6 +1148,7 @@ func (a *app) chatgptBrowserOperationConfig(
 		Client:      client,
 		Engine:      engine,
 		Journal:     journal,
+		CloseClient: closeClient,
 		BuildCommit: a.build.Commit,
 	}, store, nil
 }

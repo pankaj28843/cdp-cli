@@ -2,6 +2,8 @@ package transcriptionapi
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,12 +19,54 @@ const (
 	DefaultRequestAuthTimeout = 45 * time.Second
 )
 
+// AuthRefreshMode determines who is allowed to repair browser-backed provider
+// state. External mode is for leaf services that receive owner-only state from
+// a separate authority and must never open a provider tab themselves.
+type AuthRefreshMode string
+
+const (
+	AuthRefreshModeLocal    AuthRefreshMode = "local"
+	AuthRefreshModeExternal AuthRefreshMode = "external"
+)
+
+func ParseAuthRefreshMode(raw string) (AuthRefreshMode, error) {
+	mode := AuthRefreshMode(strings.ToLower(strings.TrimSpace(raw)))
+	if mode == "" {
+		mode = AuthRefreshModeLocal
+	}
+	switch mode {
+	case AuthRefreshModeLocal, AuthRefreshModeExternal:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("auth refresh mode must be local or external")
+	}
+}
+
+func (m AuthRefreshMode) Validate(interval time.Duration) error {
+	parsed, err := ParseAuthRefreshMode(string(m))
+	if err != nil {
+		return err
+	}
+	if parsed == AuthRefreshModeExternal && interval != 0 {
+		return fmt.Errorf("external auth refresh mode requires a zero local refresh interval")
+	}
+	return nil
+}
+
 // AuthRefresher is an optional provider capability. Browser-backed providers
 // implement it; local providers do not need to. EnsureAuthFresh must be safe
 // to call concurrently with a transcription request and must own its
 // provider-specific freshness check and refresh operation.
 type AuthRefresher interface {
 	EnsureAuthFresh(context.Context) error
+}
+
+// AuthorityAuthRefresher is implemented only by a service allowed to own
+// browser-backed auth repair. AuthCapturedAt supplies the server-enforced
+// cooldown boundary; RefreshAuthNow performs one provider-specific refresh.
+type AuthorityAuthRefresher interface {
+	AuthCapturedAt(context.Context) (time.Time, bool)
+	RefreshAuthNow(context.Context, time.Time) (bool, error)
 }
 
 // AuthRefreshCoordinator owns the one service-level auth and capability
@@ -145,10 +189,12 @@ func (c *AuthRefreshCoordinator) markInitialDone() {
 }
 
 // RefreshAll refreshes auth and capability evidence for every configured online
-// provider independently. Auth runs before capabilities for each provider so
-// a capability observation never races a provider's own auth repair. The
-// method is exported for deterministic service tests and explicit maintenance
-// commands; normal serving uses Start.
+// provider sequentially. Auth runs before capabilities for each provider so a
+// capability observation never races a provider's own auth repair, and two
+// providers never compete for the single headed browser target budget. Errors
+// remain isolated: one failed provider does not prevent later providers from
+// being attempted. The method is exported for deterministic service tests and
+// explicit maintenance commands; normal serving uses Start.
 func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
 	if c == nil || len(c.targets) == 0 {
 		return
@@ -160,30 +206,24 @@ func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
 		return
 	}
 	defer c.runMu.Unlock()
-	var wait sync.WaitGroup
 	for _, target := range c.targets {
-		target := target
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			refreshContext := ctx
-			cancel := func() {}
-			if c.timeout > 0 {
-				refreshContext, cancel = context.WithTimeout(ctx, c.timeout)
+		refreshContext := ctx
+		cancel := func() {}
+		if c.timeout > 0 {
+			refreshContext, cancel = context.WithTimeout(ctx, c.timeout)
+		}
+		if target.auth != nil {
+			// Capability evidence is meaningful only after the provider's
+			// auth evidence is fresh. A failed provider stays isolated and
+			// will be retried on the next bounded cadence.
+			if err := target.auth.EnsureAuthFresh(refreshContext); err != nil {
+				cancel()
+				continue
 			}
-			defer cancel()
-			if target.auth != nil {
-				// Capability evidence is meaningful only after the provider's
-				// auth evidence is fresh. A failed provider stays isolated and
-				// will be retried on the next bounded cadence.
-				if err := target.auth.EnsureAuthFresh(refreshContext); err != nil {
-					return
-				}
-			}
-			if target.capabilities != nil {
-				_ = target.capabilities.EnsureCapabilitiesFresh(refreshContext)
-			}
-		}()
+		}
+		if target.capabilities != nil {
+			_ = target.capabilities.EnsureCapabilitiesFresh(refreshContext)
+		}
+		cancel()
 	}
-	wait.Wait()
 }

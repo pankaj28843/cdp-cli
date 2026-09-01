@@ -180,6 +180,98 @@ func TestLazyAuthRepairRetriesAfterTransientFailure(t *testing.T) {
 	}
 }
 
+func TestExternallyManagedAuthNeverInvokesBrowserRepair(t *testing.T) {
+	now := time.Now().UTC()
+	tests := []struct {
+		name   string
+		repair func(context.Context) error
+		calls  *atomic.Int32
+	}{
+		{name: "ChatGPT", calls: new(atomic.Int32)},
+		{name: "Claude", calls: new(atomic.Int32)},
+		{name: "Gemini", calls: new(atomic.Int32)},
+	}
+	chatGPTProvider := &chatGPTTranscriptionProvider{store: testChatGPTTranscriptionStore(t, now), externalAuth: true}
+	chatGPTProvider.refresh = func(context.Context) error { tests[0].calls.Add(1); return nil }
+	tests[0].repair = func(ctx context.Context) error {
+		return chatGPTProvider.repairAuth(ctx, now.Format(time.RFC3339Nano))
+	}
+	claudeProvider := &claudeTranscriptionProvider{store: testClaudeTranscriptionStore(t, now), externalAuth: true}
+	claudeProvider.refresh = func(context.Context) error { tests[1].calls.Add(1); return nil }
+	tests[1].repair = func(ctx context.Context) error {
+		return claudeProvider.repairAuth(ctx, now.Format(time.RFC3339Nano))
+	}
+	geminiProvider := &geminiTranscriptionProvider{store: testGeminiTranscriptionStore(t, now), externalAuth: true}
+	geminiProvider.refresh = func(context.Context) error { tests[2].calls.Add(1); return nil }
+	tests[2].repair = func(ctx context.Context) error {
+		return geminiProvider.repairAuth(ctx, now.Format(time.RFC3339Nano))
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.repair(context.Background())
+			var providerErr *transcriptionapi.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.APIError.Code != "external_auth_refresh_required" {
+				t.Fatalf("repair error = %#v, want external_auth_refresh_required", err)
+			}
+			if got := test.calls.Load(); got != 0 {
+				t.Fatalf("browser repairs = %d, want zero", got)
+			}
+		})
+	}
+}
+
+func TestExternallyManagedAuthRequestsAuthorityRepair(t *testing.T) {
+	now := time.Now().UTC()
+	var requests atomic.Int32
+	var browserRepairs atomic.Int32
+	provider := &chatGPTTranscriptionProvider{
+		store:        testChatGPTTranscriptionStore(t, now),
+		externalAuth: true,
+		externalRefresh: func(_ context.Context, id transcriptionapi.ProviderID) error {
+			if id != transcriptionapi.ProviderChatGPT {
+				t.Fatalf("provider = %s", id)
+			}
+			requests.Add(1)
+			return nil
+		},
+		refresh: func(context.Context) error {
+			browserRepairs.Add(1)
+			return nil
+		},
+	}
+	if err := provider.repairAuth(context.Background(), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 || browserRepairs.Load() != 0 {
+		t.Fatalf("authority requests=%d browser repairs=%d", requests.Load(), browserRepairs.Load())
+	}
+}
+
+func TestAuthorityRefreshSkipsAnAlreadyUpdatedGeneration(t *testing.T) {
+	now := time.Now().UTC().Add(-time.Hour)
+	store := testChatGPTTranscriptionStore(t, now)
+	var browserRepairs atomic.Int32
+	provider := &chatGPTTranscriptionProvider{
+		store: store,
+		refresh: func(ctx context.Context) error {
+			browserRepairs.Add(1)
+			return store.SaveTemplate(ctx, chatGPTTranscriptionTemplate(time.Now().UTC()))
+		},
+	}
+	refreshed, err := provider.RefreshAuthNow(context.Background(), now)
+	if err != nil || !refreshed {
+		t.Fatalf("first authority refresh = %v, %v", refreshed, err)
+	}
+	refreshed, err = provider.RefreshAuthNow(context.Background(), now)
+	if err != nil || refreshed {
+		t.Fatalf("second authority refresh = %v, %v; want already updated", refreshed, err)
+	}
+	if browserRepairs.Load() != 1 {
+		t.Fatalf("browser repairs = %d, want one", browserRepairs.Load())
+	}
+}
+
 func failOnceRefresh(calls *atomic.Int32) func(context.Context) error {
 	return func(context.Context) error {
 		if calls.Add(1) == 1 {
@@ -473,7 +565,7 @@ func TestGeminiTranscriptionUsesDirectWebChannelWithLazyAuthRepair(t *testing.T)
 
 func TestTranscriptionRegistryIncludesGeminiDirectProvider(t *testing.T) {
 	a := &app{opts: options{stateDir: t.TempDir()}}
-	registry, err := a.transcriptionRegistry(context.Background(), "", "", "", nil)
+	registry, err := a.transcriptionRegistry(context.Background(), "", "", "", nil, transcriptionapi.AuthRefreshModeLocal, "")
 	if err != nil {
 		t.Fatal(err)
 	}
