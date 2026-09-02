@@ -26,8 +26,13 @@ type googleMapsRoute struct {
 	Index           int                       `json:"index"`
 	DurationText    string                    `json:"duration_text"`
 	DurationMinutes int                       `json:"duration_minutes"`
-	DistanceText    string                    `json:"distance_text"`
-	DistanceKM      float64                   `json:"distance_km"`
+	DistanceText    string                    `json:"distance_text,omitempty"`
+	DistanceKM      float64                   `json:"distance_km,omitempty"`
+	TimeWindowText  string                    `json:"time_window_text,omitempty"`
+	DepartureTime   string                    `json:"departure_time,omitempty"`
+	DepartureDay    string                    `json:"departure_day,omitempty"`
+	ArrivalTime     string                    `json:"arrival_time,omitempty"`
+	ArrivalDay      string                    `json:"arrival_day,omitempty"`
 	Name            string                    `json:"route_name,omitempty"`
 	Summary         string                    `json:"summary"`
 	Incidents       []googleMapsRouteIncident `json:"incidents"`
@@ -76,6 +81,7 @@ type googleMapsDirectionsEvidence struct {
 var (
 	googleMapsDurationPattern       = regexp.MustCompile(`(?i)\b(?:(\d+)\s*(?:h|hr|hrs|hour|hours)\s*)?(?:(\d+)\s*(?:min|mins|minute|minutes))\b|\b(\d+)\s*(?:h|hr|hrs|hour|hours)\b`)
 	googleMapsDistancePattern       = regexp.MustCompile(`(?i)\b(\d+(?:[.,]\d+)?)\s*(km|mi|mile|miles)\b|\b(\d+(?:[.,]\d+)?)\s+m\b`)
+	googleMapsTimeWindowPattern     = regexp.MustCompile(`(?i)\b(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*\(([^)]+)\))?\s*[—–-]+\s*(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*\(([^)]+)\))?`)
 	googleMapsViaPattern            = regexp.MustCompile(`(?i)\bvia\s+(.+)$`)
 	googleMapsNameStopPattern       = regexp.MustCompile(`(?i)\b(?:Road closure|Fastest route|Details|Preview|Explore|Leave now|Options|Copy link|Send directions|Restaurants|Hotels|Gas stations|Parking Lots|More|New!)\b`)
 	googleMapsRoadClosurePattern    = regexp.MustCompile(`(?i)\b(?:road closure|road closed|closed road|partial closure)\b`)
@@ -83,6 +89,10 @@ var (
 )
 
 func parseGoogleMapsRouteCards(cards []googleMapsRouteCard) []googleMapsRoute {
+	return parseGoogleMapsRouteCardsForMode(cards, "driving")
+}
+
+func parseGoogleMapsRouteCardsForMode(cards []googleMapsRouteCard, travelMode string) []googleMapsRoute {
 	routes := make([]googleMapsRoute, 0, len(cards))
 	indexes := map[string]int{}
 	scores := []int{}
@@ -90,24 +100,42 @@ func parseGoogleMapsRouteCards(cards []googleMapsRouteCard) []googleMapsRoute {
 		text := strings.Join(strings.Fields(card.Text), " ")
 		durationMatch := googleMapsDurationPattern.FindStringSubmatch(text)
 		distanceMatch := googleMapsDistancePattern.FindStringSubmatch(text)
-		if len(durationMatch) == 0 || len(distanceMatch) == 0 {
+		timeWindowMatch := googleMapsTimeWindowPattern.FindStringSubmatch(text)
+		if len(durationMatch) == 0 || travelMode == "driving" && len(distanceMatch) == 0 || travelMode == "transit" && len(timeWindowMatch) == 0 {
 			continue
 		}
 		duration := parseGoogleMapsDuration(durationMatch)
-		distance := parseGoogleMapsDistance(distanceMatch)
-		if duration <= 0 || distance <= 0 {
+		distance, distanceText := 0.0, ""
+		if len(distanceMatch) > 0 {
+			distance = parseGoogleMapsDistance(distanceMatch)
+			distanceText = distanceMatch[0]
+		}
+		if duration <= 0 || travelMode == "driving" && distance <= 0 {
 			continue
 		}
 		name := ""
 		if via := googleMapsViaPattern.FindStringSubmatch(text); len(via) > 1 {
 			name = strings.TrimSpace(googleMapsNameStopPattern.Split(via[1], 2)[0])
 		}
-		key := fmt.Sprintf("%d/%.3f/%s", duration, distance, strings.ToLower(name))
+		timeWindow, departureTime, departureDay, arrivalTime, arrivalDay := "", "", "", "", ""
+		if len(timeWindowMatch) > 0 {
+			timeWindow = strings.TrimSpace(timeWindowMatch[0])
+			departureTime = strings.TrimSpace(timeWindowMatch[1])
+			departureDay = strings.TrimSpace(timeWindowMatch[2])
+			arrivalTime = strings.TrimSpace(timeWindowMatch[3])
+			arrivalDay = strings.TrimSpace(timeWindowMatch[4])
+		}
+		key := fmt.Sprintf("%d/%.3f/%s/%s", duration, distance, strings.ToLower(name), strings.ToLower(timeWindow))
 		candidate := googleMapsRoute{
 			DurationText:    durationMatch[0],
 			DurationMinutes: duration,
-			DistanceText:    distanceMatch[0],
+			DistanceText:    distanceText,
 			DistanceKM:      distance,
+			TimeWindowText:  timeWindow,
+			DepartureTime:   departureTime,
+			DepartureDay:    departureDay,
+			ArrivalTime:     arrivalTime,
+			ArrivalDay:      arrivalDay,
 			Name:            name,
 			Summary:         truncateGoogleMapsText(text, 260),
 			Incidents:       googleMapsIncidents(text),
@@ -323,12 +351,12 @@ func truncateGoogleMapsText(value string, limit int) string {
 	return value[:limit]
 }
 
-func googleMapsDirectionsURL(origin, destination string) string {
+func googleMapsDirectionsURL(origin, destination, travelMode string) string {
 	query := url.Values{}
 	query.Set("api", "1")
 	query.Set("origin", origin)
 	query.Set("destination", destination)
-	query.Set("travelmode", "driving")
+	query.Set("travelmode", travelMode)
 	query.Set("hl", "en")
 	return "https://www.google.com/maps/dir/?" + query.Encode()
 }
@@ -376,19 +404,24 @@ const googleMapsDirectionsExpression = `(() => {
     cards.push({text: raw.slice(0, 900), aria_label: aria.slice(0, 240), role: normalize(node.getAttribute && node.getAttribute("role"))});
     if (cards.length >= 40) break;
   }
-  const inputs = Array.from(document.querySelectorAll("input")).map(input => normalize(input.value)).filter(Boolean).slice(0, 4);
+  const inputs = Array.from(document.querySelectorAll("input")).map(input => ({
+    value: normalize(input.value),
+    aria: normalize(input.getAttribute("aria-label"))
+  })).filter(input => input.value);
+  const originInput = inputs.find(input => /^starting point\b/i.test(input.aria));
+  const destinationInput = inputs.find(input => /^destination\b/i.test(input.aria));
   return {
     title: normalize(document.title).slice(0, 300),
     url: String(location.href || "").slice(0, 2000),
     visible_text_length: bodyText.length,
     page_state: pageState,
-    origin_labels: inputs.length > 0 ? [inputs[0].slice(0, 300)] : [],
-    destination_labels: inputs.length > 1 ? [inputs[1].slice(0, 300)] : [],
+    origin_labels: originInput ? [originInput.value.slice(0, 300)] : [],
+    destination_labels: destinationInput ? [destinationInput.value.slice(0, 300)] : [],
     cards
   };
 })()`
 
-func collectGoogleMapsDirections(ctx context.Context, session *cdp.PageSession, wait time.Duration) (googleMapsDirectionsExtraction, []googleMapsRoute, int, time.Duration, error) {
+func collectGoogleMapsDirections(ctx context.Context, session *cdp.PageSession, wait time.Duration, travelMode string) (googleMapsDirectionsExtraction, []googleMapsRoute, int, time.Duration, error) {
 	if wait < 0 {
 		return googleMapsDirectionsExtraction{}, nil, 0, 0, commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow google-maps-directions <origin> <destination> --wait 15s --json"})
 	}
@@ -408,7 +441,7 @@ func collectGoogleMapsDirections(ctx context.Context, session *cdp.PageSession, 
 		if err := json.Unmarshal(result.Object.Value, &last); err != nil {
 			return last, nil, attempts, time.Since(started), commandError("invalid_workflow_result", "internal", fmt.Sprintf("decode Google Maps extraction: %v", err), ExitInternal, []string{"cdp doctor --json"})
 		}
-		routes := parseGoogleMapsRouteCards(last.Cards)
+		routes := parseGoogleMapsRouteCardsForMode(last.Cards, travelMode)
 		if len(routes) > 0 || last.PageState == "location_ambiguous" || last.PageState == "consent_required" || last.PageState == "blocked" || wait == 0 || time.Now().After(deadline) {
 			return last, routes, attempts, time.Since(started), nil
 		}
@@ -433,9 +466,10 @@ func googleMapsTitleEndpointLabels(title string) (origin, destination []string) 
 
 func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 	var wait time.Duration
+	var travelMode string
 	cmd := &cobra.Command{
 		Use:   "google-maps-directions <origin> <destination>",
-		Short: "Read visible Google Maps driving route cards with trust evidence",
+		Short: "Read visible Google Maps driving or public-transit route cards with trust evidence",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			origin, destination := strings.TrimSpace(args[0]), strings.TrimSpace(args[1])
@@ -445,13 +479,17 @@ func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 			if wait < 0 {
 				return commandError("usage", "usage", "--wait must be non-negative", ExitUsage, []string{"cdp workflow google-maps-directions <origin> <destination> --wait 15s --json"})
 			}
+			travelMode = strings.ToLower(strings.TrimSpace(travelMode))
+			if travelMode != "driving" && travelMode != "transit" {
+				return commandError("usage", "usage", "--travel-mode must be driving or transit", ExitUsage, []string{"cdp workflow google-maps-directions <origin> <destination> --travel-mode transit --json"})
+			}
 			ctx, cancel := a.commandContextWithDefault(cmd, wait+20*time.Second)
 			defer cancel()
 			client, closeClient, err := a.browserCDPClient(ctx)
 			if err != nil {
 				return commandError("connection_not_configured", "connection", err.Error(), ExitConnection, a.connectionRemediationCommands())
 			}
-			rawURL := googleMapsDirectionsURL(origin, destination)
+			rawURL := googleMapsDirectionsURL(origin, destination, travelMode)
 			targetID, err := a.createWorkflowPageTarget(ctx, client, rawURL, "google-maps-directions")
 			if err != nil {
 				_ = closeClient(ctx)
@@ -467,7 +505,7 @@ func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 			defer closeRenderedExtractSession(session, nil)
 			defer cleanupGuard.cleanup()
 
-			extraction, routes, attempts, elapsed, collectErr := collectGoogleMapsDirections(ctx, session, wait)
+			extraction, routes, attempts, elapsed, collectErr := collectGoogleMapsDirections(ctx, session, wait, travelMode)
 			originTitle, destinationTitle := googleMapsTitleEndpointLabels(extraction.Title)
 			if len(extraction.OriginLabels) == 0 {
 				extraction.OriginLabels = originTitle
@@ -494,7 +532,7 @@ func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 				return commandErrorWithData(extraction.PageState, "stop_state", "Google Maps did not expose a usable route because the visible page requires attention", ExitCheckFailed, []string{"cdp pages --json"}, map[string]any{"page_state": extraction.PageState, "cleanup": cleanup, "evidence": evidence})
 			}
 			payload := map[string]any{
-				"query":  map[string]string{"origin": origin, "destination": destination},
+				"query":  map[string]string{"origin": origin, "destination": destination, "travel_mode": travelMode},
 				"status": trust.Status, "trust": trust, "origin_identity": originIdentity, "destination_identity": destinationIdentity,
 				"routes": routes, "warnings": warnings, "evidence": evidence, "cleanup": cleanup,
 			}
@@ -502,7 +540,10 @@ func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 				return commandErrorWithData("route_not_ready", "check_failed", "no complete visible route card appeared before the wait deadline", ExitCheckFailed, []string{"cdp workflow google-maps-directions <origin> <destination> --wait 30s --json"}, payload)
 			}
 			selected, fastest, shortest := summarizeGoogleMapsRoutes(sortGoogleMapsRoutes(routes))
-			payload["selected_route"], payload["fastest_route"], payload["shortest_route"] = selected, fastest, shortest
+			payload["selected_route"], payload["fastest_route"] = selected, fastest
+			if travelMode == "driving" {
+				payload["shortest_route"] = shortest
+			}
 			if trust.Level == "untrusted" {
 				return commandErrorWithData(trust.Status, "check_failed", "Google Maps resolved an endpoint that does not match the requested place", ExitCheckFailed, []string{"Retry with an exact street address or coordinates."}, payload)
 			}
@@ -511,5 +552,6 @@ func (a *app) newWorkflowGoogleMapsDirectionsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "maximum time to wait for complete visible route cards")
+	cmd.Flags().StringVar(&travelMode, "travel-mode", "driving", "route mode: driving or transit")
 	return cmd
 }

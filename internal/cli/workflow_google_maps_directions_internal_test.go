@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,35 @@ func TestGoogleMapsDirectionsParseRouteCardsDoesNotTreatCompactHoursAsMetres(t *
 	routes := parseGoogleMapsRouteCards([]googleMapsRouteCard{{Text: "1h 23m via E47"}})
 	if len(routes) != 0 {
 		t.Fatalf("routes = %+v, compact duration fragment must not become a metre distance", routes)
+	}
+}
+
+func TestGoogleMapsDirectionsParsesPublicTransitWithoutDistance(t *testing.T) {
+	routes := parseGoogleMapsRouteCardsForMode([]googleMapsRouteCard{
+		{Text: "4 hr 8 min 9:35 AM—1:43 PM (Tuesday) Flybussen 200 then train 91", Role: "button"},
+		{Text: "4 hr 8 min 9:35 AM—1:43 PM (Tuesday) Flybussen 200 then train 91"},
+		{Text: "5 hr 2 min 10:15 AM—3:17 PM Bus and train", Role: "button"},
+	}, "transit")
+	if len(routes) != 2 {
+		t.Fatalf("routes = %+v, want two complete deduplicated transit routes", routes)
+	}
+	if routes[0].DurationMinutes != 248 || routes[0].DistanceKM != 0 || routes[0].DepartureTime != "9:35 AM" || routes[0].ArrivalTime != "1:43 PM" || routes[0].ArrivalDay != "Tuesday" {
+		t.Fatalf("first transit route = %+v", routes[0])
+	}
+	withDepartureDay := parseGoogleMapsRouteCardsForMode([]googleMapsRouteCard{{Text: "3 hr 40 min 1:01 PM (Wednesday)—4:41 PM Bus and train", Role: "button"}}, "transit")
+	if len(withDepartureDay) != 1 || withDepartureDay[0].DepartureDay != "Wednesday" || withDepartureDay[0].ArrivalTime != "4:41 PM" {
+		t.Fatalf("departure-day transit route = %+v", withDepartureDay)
+	}
+}
+
+func TestGoogleMapsDirectionsURLSelectsTravelMode(t *testing.T) {
+	raw := googleMapsDirectionsURL("Harstad/Narvik Airport, Evenes", "Abisko Östra", "transit")
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+	if got := parsed.Query().Get("travelmode"); got != "transit" {
+		t.Fatalf("travelmode = %q, want transit", got)
 	}
 }
 

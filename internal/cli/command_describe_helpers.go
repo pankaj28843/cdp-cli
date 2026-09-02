@@ -821,6 +821,7 @@ func commandExamples(path string) []string {
 		"cdp workflow google-maps-directions": {
 			"cdp --browser-mode headed workflow google-maps-directions 'Kongens Lyngby, Denmark' 'Stege, Denmark' --json",
 			"cdp --browser-mode headed workflow google-maps-directions 'Stege, Denmark' 'Møn Is, Hovgårdsvej 4, 4780 Stege, Denmark' --wait 30s --json",
+			"cdp --browser-mode headed workflow google-maps-directions 'Harstad/Narvik Airport, Evenes' 'Abisko Östra' --travel-mode transit --wait 30s --json",
 		},
 		"cdp workflow perf": {
 			"cdp workflow perf 'https://example.com' --wait 5s --json",

@@ -148,3 +148,19 @@ func TestWorkflowGoogleMapsDirectionsRejectsNegativeWaitBeforeBrowser(t *testing
 		t.Fatalf("output=%s error=%v", out.String(), err)
 	}
 }
+
+func TestWorkflowGoogleMapsDirectionsRejectsUnknownTravelModeBeforeBrowser(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := cli.Execute(context.Background(), []string{
+		"workflow", "google-maps-directions", "Origin", "Destination", "--travel-mode", "walking", "--json",
+	}, &out, &errOut, cli.BuildInfo{})
+	if code != cli.ExitUsage {
+		t.Fatalf("exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var got struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Code != "usage" {
+		t.Fatalf("output=%s error=%v", out.String(), err)
+	}
+}
