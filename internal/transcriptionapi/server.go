@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -331,8 +332,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	storageReady := s.config.Store.CheckWritable() == nil
+	statusCode := http.StatusOK
+	if !storageReady {
+		status = "degraded"
+		statusCode = http.StatusServiceUnavailable
+	}
+	writeJSON(w, statusCode, map[string]any{
 		"status":           status,
+		"storage_ready":    storageReady,
 		"contract_version": ContractVersion,
 		"transport":        requestTransport(r),
 		"default_provider": s.config.DefaultProvider,
@@ -462,6 +470,10 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	if requestID == "" {
 		requestID = NewRequestID()
 	}
+	if err := validateRequestID(requestID); err != nil {
+		writeValidationError(w, err)
+		return
+	}
 	defer func() {
 		_ = s.config.Store.RemoveAudio(context.Background(), requestID)
 	}()
@@ -504,10 +516,15 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	asset, err := s.config.Store.PersistAudio(r.Context(), requestID, header.Filename, header.Header.Get("Content-Type"), file)
 	if err != nil {
 		status := http.StatusBadRequest
+		errorType := "invalid_request_error"
+		var pathError *os.PathError
 		if errors.Is(err, ErrAudioTooLarge) {
 			status = http.StatusRequestEntityTooLarge
+		} else if errors.As(err, &pathError) {
+			status = http.StatusServiceUnavailable
+			errorType = "internal_error"
 		}
-		writeAPIError(w, status, APIError{Type: "invalid_request_error", Code: "audio_persist_failed", Param: "file", Message: safeStoreError(err)})
+		writeAPIError(w, status, APIError{Type: errorType, Code: "audio_persist_failed", Param: "file", Message: safeStoreError(err)})
 		return
 	}
 	asset.DurationMS = request.Audio.DurationMS

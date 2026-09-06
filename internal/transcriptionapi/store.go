@@ -79,6 +79,28 @@ func (s *Store) MaxAudioBytes() int64 {
 	return s.maxAudioBytes
 }
 
+// CheckWritable exercises local storage without audio or provider traffic.
+// Checking mode bits alone misses deleted mounts, full disks and read-only filesystems.
+func (s *Store) CheckWritable() error {
+	for _, directory := range []string{filepath.Join(s.root, "requests"), s.audioRoot} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return err
+		}
+		file, err := os.CreateTemp(directory, ".storage-check-*")
+		if err != nil {
+			return err
+		}
+		_, writeErr := file.Write([]byte{0})
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		removeErr := os.Remove(file.Name())
+		if err := errors.Join(writeErr, syncErr, closeErr, removeErr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func NewRequestID() string {
 	var raw [12]byte
 	if _, err := rand.Read(raw[:]); err == nil {
@@ -101,8 +123,8 @@ func (s *Store) PersistAudio(
 		return AudioAsset{}, err
 	}
 	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return AudioAsset{}, fmt.Errorf("request id is required")
+	if err := validateRequestID(requestID); err != nil {
+		return AudioAsset{}, err
 	}
 	if source == nil {
 		return AudioAsset{}, fmt.Errorf("audio source is required")
@@ -169,8 +191,8 @@ func (s *Store) RemoveAudio(ctx context.Context, requestID string) error {
 		return err
 	}
 	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return fmt.Errorf("request id is required")
+	if err := validateRequestID(requestID); err != nil {
+		return err
 	}
 	if err := os.RemoveAll(s.audioDirectory(requestID)); err != nil {
 		return fmt.Errorf("remove ephemeral transcription audio: %w", err)
@@ -218,8 +240,8 @@ func (s *Store) AppendAudio(
 		return AudioAsset{}, fmt.Errorf("audio chunk is empty")
 	}
 	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return AudioAsset{}, fmt.Errorf("request id is required")
+	if err := validateRequestID(requestID); err != nil {
+		return AudioAsset{}, err
 	}
 	directory := s.audioDirectory(requestID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -307,6 +329,9 @@ func (s *Store) SaveResult(ctx context.Context, record RequestRecord, result Res
 }
 
 func (s *Store) LoadRecord(ctx context.Context, requestID string) (RequestRecord, error) {
+	if err := validateRequestID(requestID); err != nil {
+		return RequestRecord{}, err
+	}
 	var record RequestRecord
 	if err := s.readJSON(ctx, filepath.Join(s.requestDirectory(requestID), "record.json"), &record); err != nil {
 		return RequestRecord{}, err

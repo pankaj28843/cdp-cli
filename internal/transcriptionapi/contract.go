@@ -101,8 +101,8 @@ func (r FileRequest) Normalized() FileRequest {
 
 func (r FileRequest) Validate() error {
 	r = r.Normalized()
-	if strings.TrimSpace(r.RequestID) == "" {
-		return invalid("request_id", "required", "request_id is required")
+	if err := validateRequestID(r.RequestID); err != nil {
+		return err
 	}
 	if r.Task != TaskTranscribe && r.Task != TaskTranslate {
 		return invalid("task", "unsupported", "task must be transcribe or translate")
@@ -160,6 +160,19 @@ func (e *ValidationError) Error() string {
 
 func invalid(field, code, message string) error {
 	return &ValidationError{Field: field, Code: code, Message: message}
+}
+
+// Request IDs name storage children; dot directories and separators must never
+// reach cleanup, including when the rest of an upload is invalid.
+func validateRequestID(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return invalid("request_id", "required", "request_id is required")
+	}
+	if id == "." || id == ".." || strings.ContainsAny(id, "/\\\x00") {
+		return invalid("request_id", "invalid_request_id", "request_id must not contain path separators, null bytes, or dot-directory names")
+	}
+	return nil
 }
 
 func validResponseFormat(format ResponseFormat) bool {
@@ -332,6 +345,9 @@ func (r RequestRecord) Validate() error {
 	}
 	if strings.TrimSpace(r.RequestID) == "" || strings.TrimSpace(r.Model) == "" {
 		return invalid("record", "identity_required", "record request_id and model are required")
+	}
+	if err := validateRequestID(r.RequestID); err != nil {
+		return err
 	}
 	if r.Audio.Bytes <= 0 || strings.TrimSpace(r.Audio.PersistedPath) == "" {
 		return invalid("audio", "not_durable", "record audio must be persisted before dispatch")
