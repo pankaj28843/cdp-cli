@@ -88,6 +88,11 @@ architecture is intentionally small: keep browser protocol mechanics in
   readiness check. A failed readiness path terminates and reaps only the
   command started by that invocation; successful readiness is the detach
   boundary, while unsupported window adapters preserve the existing behavior.
+- On macOS, an existing headed browser is reused without application-name
+  activation. Native approval repair resolves one default-profile browser PID
+  and addresses activation and URL events to that process; headless browsers,
+  helpers, and ambiguous owners are excluded. URL delivery never requests new
+  Automation consent in an unattended repair.
 - A detached daemon hold follows the same readiness boundary: its process
   group remains owned until the mode-scoped runtime socket is ready, failed
   startup is terminated and reaped before stale state is cleared, and only a

@@ -223,8 +223,7 @@ func chromeRemoteDebuggingEnabled(channel string) (enabled, known bool, err erro
 }
 
 func openRemoteDebuggingApprovalPage(ctx context.Context, processName string) error {
-	_, err := runOwnedBrowserCommand(ctx, "open", "-a", processName, RemoteDebuggingApprovalURL)
-	return err
+	return runHeadedChromeAction(ctx, processName, RemoteDebuggingApprovalURL)
 }
 
 func waitForRemoteDebuggingPage(ctx context.Context) error {
@@ -290,13 +289,8 @@ func enableRemoteDebuggingCheckbox(ctx context.Context, processName string) (boo
 	// AX can inspect Chrome while it is backgrounded, but Quartz input is
 	// delivered to the active application. Bring the headed browser forward
 	// before asking the native helper to click the exact checkbox.
-	_, openErr := runOwnedBrowserCommand(ctx, "open", "-a", processName)
-	activateCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	activateScript := fmt.Sprintf("tell application %q to activate", processName)
-	_, activateErr := runOwnedBrowserCommand(activateCtx, "osascript", "-e", activateScript)
-	cancel()
-	if openErr != nil && activateErr != nil {
-		return false, fmt.Errorf("activate headed Chrome: open: %v; AppleScript: %w", openErr, activateErr)
+	if err := runHeadedChromeAction(ctx, processName, ""); err != nil {
+		return false, fmt.Errorf("activate headed Chrome: %w", err)
 	}
 	select {
 	case <-ctx.Done():
