@@ -421,6 +421,12 @@ Supported file extensions are `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, and
 recording. `duration_ms` is an optional VoxInput field used by browser-backed
 providers when the capture layer already knows the duration.
 
+An optional `X-Request-ID` identifies a request. Reusing an ID while its file
+request or realtime session is active returns `409 request_id_in_use` before
+audio is changed. The ID becomes available after the owner finishes and its
+audio cleanup completes. Invalid uploads do not clean up another request’s
+audio. This is an overlap guard, not a persistent idempotency cache.
+
 The standard OpenAI client can point at the local service by changing only its
 base URL and API key:
 

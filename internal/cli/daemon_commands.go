@@ -2442,7 +2442,8 @@ func chromeProcessRunning(ctx context.Context, chromeCommand string) (bool, erro
 	if name == "" {
 		return false, nil
 	}
-	result, err := runBoundedExternalCommand(ctx, "ps", "-axo", "pid=,args=")
+	// A full process table can exceed the small-command diagnostic limit.
+	result, err := runExternalCommandWithOutputLimit(ctx, 4<<20, "ps", "-axo", "pid=,args=")
 	if err != nil {
 		return false, fmt.Errorf("run headed Chrome process probe: %w", err)
 	}

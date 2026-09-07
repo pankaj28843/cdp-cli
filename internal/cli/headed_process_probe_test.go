@@ -76,7 +76,14 @@ while :; do /bin/sleep 1; done
 
 func TestChromeProcessRunningMatchesCompleteBoundedTable(t *testing.T) {
 	binDir := t.TempDir()
-	writeHeadedProbeFixture(t, binDir, "#!/bin/sh\nprintf '%s\\n' '420 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome'\n")
+	writeHeadedProbeFixture(t, binDir, `#!/bin/sh
+i=0
+while [ "$i" -lt 7000 ]; do
+  printf '100 /synthetic/unrelated-process-with-arguments\n'
+  i=$((i + 1))
+done
+printf '%s\n' '420 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+`)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	running, err := chromeProcessRunning(context.Background(), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -89,7 +96,7 @@ func TestChromeProcessRunningRejectsOversizedTable(t *testing.T) {
 	binDir := t.TempDir()
 	writeHeadedProbeFixture(t, binDir, `#!/bin/sh
 i=0
-while [ "$i" -lt 7000 ]; do
+while [ "$i" -lt 500000 ]; do
   printf '0123456789'
   i=$((i + 1))
 done

@@ -19,6 +19,10 @@ type boundedExternalCommandResult struct {
 }
 
 func runBoundedExternalCommand(ctx context.Context, name string, args ...string) (boundedExternalCommandResult, error) {
+	return runExternalCommandWithOutputLimit(ctx, maxExternalProcessOutputBytes, name, args...)
+}
+
+func runExternalCommandWithOutputLimit(ctx context.Context, maxBytes int, name string, args ...string) (boundedExternalCommandResult, error) {
 	executable, err := exec.LookPath(name)
 	if err != nil {
 		return boundedExternalCommandResult{}, err
@@ -26,8 +30,8 @@ func runBoundedExternalCommand(ctx context.Context, name string, args ...string)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stdout := &boundedProcessOutput{maxBytes: maxExternalProcessOutputBytes, onTruncate: cancel}
-	stderr := &boundedProcessOutput{maxBytes: maxExternalProcessOutputBytes, onTruncate: cancel}
+	stdout := &boundedProcessOutput{maxBytes: maxBytes, onTruncate: cancel}
+	stderr := &boundedProcessOutput{maxBytes: maxBytes, onTruncate: cancel}
 	runErr := processgroup.Run(runCtx, executable, args, stdout, stderr)
 	result := boundedExternalCommandResult{
 		stdout:    stdout.buffer.String(),
@@ -38,7 +42,7 @@ func runBoundedExternalCommand(ctx context.Context, name string, args ...string)
 		return result, err
 	}
 	if result.truncated {
-		return result, fmt.Errorf("%w: limit=%d bytes", errExternalProcessOutputTooLarge, maxExternalProcessOutputBytes)
+		return result, fmt.Errorf("%w: limit=%d bytes", errExternalProcessOutputTooLarge, maxBytes)
 	}
 	return result, runErr
 }

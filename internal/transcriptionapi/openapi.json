@@ -56,6 +56,7 @@
       "post": {
         "summary": "Transcribe an audio file",
         "description": "OpenAI Whisper-compatible multipart request. The compatibility default is 25 MB and ten minutes. The service performs a conservative near-silence check on canonical mono PCM WAV input before provider dispatch. Set stream=true for SSE transcript events on providers that support completed-file streaming.",
+        "parameters": [{ "name": "X-Request-ID", "in": "header", "schema": { "type": "string" }, "description": "Optional request ID; must not overlap an active file request or realtime session." }],
         "requestBody": {
           "required": true,
           "content": {
@@ -80,6 +81,7 @@
           }
         },
         "responses": {
+          "409": { "description": "request_id_in_use: the ID belongs to an active request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
           "200": {
             "description": "Transcription result or SSE stream",
             "content": {
@@ -100,8 +102,10 @@
       "post": {
         "summary": "Translate an audio file into English",
         "description": "Whisper translation-compatible multipart request. The first implementation supports model=whisper-1.",
+        "parameters": [{ "$ref": "#/paths/~1v1~1audio~1transcriptions/post/parameters/0" }],
         "requestBody": { "$ref": "#/paths/~1v1~1audio~1transcriptions/post/requestBody" },
         "responses": {
+          "409": { "$ref": "#/paths/~1v1~1audio~1transcriptions/post/responses/409" },
           "200": { "description": "Translation result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TranscriptionResult" } }, "text/plain": { "schema": { "type": "string" } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "413": { "$ref": "#/components/responses/PayloadTooLarge" },
@@ -127,7 +131,7 @@
           "server_events": ["session.created", "session.updated", "input_audio_buffer.committed", "conversation.item.input_audio_transcription.delta", "conversation.item.input_audio_transcription.completed", "conversation.item.input_audio_transcription.failed", "error"],
           "audio_format": { "type": "audio/pcm", "rate": 24000 }
         },
-        "responses": { "101": { "description": "WebSocket protocol switch" }, "400": { "$ref": "#/components/responses/BadRequest" } }
+        "responses": { "409": { "$ref": "#/paths/~1v1~1audio~1transcriptions/post/responses/409" }, "101": { "description": "WebSocket protocol switch" }, "400": { "$ref": "#/components/responses/BadRequest" } }
       }
     }
   },

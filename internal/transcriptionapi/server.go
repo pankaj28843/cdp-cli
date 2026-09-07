@@ -50,6 +50,8 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	// A request owns its ID until provider work and audio cleanup finish.
+	activeRequests       sync.Map
 	config               ServerConfig
 	httpServer           *http.Server
 	availability         *availabilityTracker
@@ -474,9 +476,6 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		writeValidationError(w, err)
 		return
 	}
-	defer func() {
-		_ = s.config.Store.RemoveAudio(context.Background(), requestID)
-	}()
 	request := FileRequest{
 		RequestID:              requestID,
 		Task:                   task,
@@ -513,6 +512,14 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		return
 	}
 
+	if _, active := s.activeRequests.LoadOrStore(requestID, struct{}{}); active {
+		writeAPIError(w, http.StatusConflict, APIError{Type: "invalid_request_error", Code: "request_id_in_use", Message: "request ID is already active"})
+		return
+	}
+	defer s.activeRequests.Delete(requestID)
+	defer func() {
+		_ = s.config.Store.RemoveAudio(context.Background(), requestID)
+	}()
 	asset, err := s.config.Store.PersistAudio(r.Context(), requestID, header.Filename, header.Header.Get("Content-Type"), file)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -798,6 +805,11 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestID := NewRequestID()
+	if _, active := s.activeRequests.LoadOrStore(requestID, struct{}{}); active {
+		writeAPIError(w, http.StatusConflict, APIError{Type: "invalid_request_error", Code: "request_id_in_use", Message: "request ID is already active"})
+		return
+	}
+	defer s.activeRequests.Delete(requestID)
 	connection, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		s.trace(TraceEvent{
