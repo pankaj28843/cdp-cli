@@ -289,6 +289,15 @@ curl -k https://192.168.5.249:28765/healthz
 The API retains JSON request/result records but uses ephemeral transaction
 media by default. Use `--persist-audio` only when the API itself must retain
 audio for a later retry; VoxInput may still keep its own local retry copy.
+The service verifies both storage areas with a write, sync, and cleanup check.
+If the ephemeral transaction directory is deleted or becomes unavailable, it
+recreates or replaces that directory (falling back below the state directory
+when the system temporary directory is unavailable). Durable request storage
+remains fail-closed, so `/healthz` returns `503` only when it or that repair
+cannot be made writable.
+Active realtime streams keep their original audio file across directory
+replacement; if earlier chunks disappear, the stream fails instead of silently
+returning a truncated recording.
 
 ### Mostly-silent audio
 
