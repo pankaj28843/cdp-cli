@@ -29,6 +29,7 @@ func TestNormalizeSelectionPolicyAcceptsAscendingThinkingVocabulary(t *testing.T
 		{"extra-high", "Extra High"},
 		{"xhigh", "Extra High"},
 		{"pro", "Pro"},
+		{"middle", ThinkingMiddle},
 		{"highest", ThinkingHighest},
 	}
 	for _, test := range tests {
@@ -107,6 +108,75 @@ func TestThinkingSliderLabelsRetainsLegacySixStopSurface(t *testing.T) {
 	}
 	if _, ok := thinkingSliderTargetIndex("Instant", 4); ok {
 		t.Fatal("legacy Instant must not be selectable on current five-stop slider")
+	}
+}
+
+func TestThinkingSliderMappingUsesObservedNonZeroRange(t *testing.T) {
+	if got, ok := thinkingSliderTargetValue("Medium", 2, 6); !ok || got != 3 {
+		t.Fatalf("Medium target = (%d, %v), want (3, true)", got, ok)
+	}
+	if got, ok := thinkingSliderMinimumValue("Extra High", 2, 6); !ok || got != 5 {
+		t.Fatalf("Extra High minimum = (%d, %v), want (5, true)", got, ok)
+	}
+	if got, ok := thinkingSliderMiddleValue(2, 6); !ok || got != 4 {
+		t.Fatalf("middle target = (%d, %v), want (4, true)", got, ok)
+	}
+}
+
+func TestThinkingExpectationUsesNumericSliderProofAfterRelabel(t *testing.T) {
+	expectation := thinkingSelectionExpectation{
+		SliderMin:       10,
+		SliderMax:       14,
+		SliderTarget:    12,
+		HasSliderTarget: true,
+	}
+	surface := selectionSurface{
+		PickerCount:         1,
+		ThinkingMenuOpen:    true,
+		ThinkingSliderReady: true,
+		ThinkingSliderMin:   10,
+		ThinkingSliderMax:   14,
+		ThinkingSliderValue: 12,
+		SelectedThinking:    "Renamed reasoning level",
+	}
+	if !expectation.matches(surface, true) {
+		t.Fatal("numeric slider proof rejected a relabelled selected stop")
+	}
+	surface.ThinkingSliderMax++
+	if expectation.matches(surface, true) {
+		t.Fatal("numeric slider proof accepted a changed range")
+	}
+	surface.ThinkingSliderMax--
+	surface.ThinkingSliderValue++
+	if expectation.matches(surface, true) {
+		t.Fatal("numeric slider proof accepted a changed selected value")
+	}
+}
+
+func TestThinkingExpectationMapsMiddleAndMinimumToSliderValues(t *testing.T) {
+	surface := selectionSurface{
+		PickerCount:         1,
+		SelectedThinking:    "Extra High",
+		ThinkingSliderReady: true,
+		ThinkingSliderMin:   0,
+		ThinkingSliderMax:   4,
+		ThinkingSliderValue: 3,
+	}
+	expectation, err := thinkingExpectationForPolicy(SelectionPolicy{
+		Thinking:        ThinkingMiddle,
+		MinimumThinking: "Extra High",
+	}, surface)
+	if err != nil {
+		t.Fatalf("thinkingExpectationForPolicy: %v", err)
+	}
+	if !expectation.HasSliderTarget || expectation.SliderTarget != 2 {
+		t.Fatalf("middle expectation = %+v, want target 2", expectation)
+	}
+	if !expectation.HasMinimumSliderTarget || expectation.MinimumSliderTarget != 3 {
+		t.Fatalf("minimum expectation = %+v, want floor 3", expectation)
+	}
+	if expectation.Label != "" {
+		t.Fatalf("numeric expectation retained label %q", expectation.Label)
 	}
 }
 

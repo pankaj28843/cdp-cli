@@ -419,10 +419,18 @@ const capabilityProbeExpression = `(async () => {
   const intelligenceKnown = [
     'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
   ];
+  const accessibleName = (element) => normalize(
+    element && (
+      element.getAttribute('aria-label') ||
+      element.getAttribute('title') ||
+      element.textContent ||
+      ''
+    )
+  );
   const pageButtons = Array.from(document.querySelectorAll('button,[role="button"]')).filter(visible);
   const intelligencePickers = pageButtons.filter((button) => {
     if (button.getAttribute('aria-haspopup') !== 'menu') return false;
-    return button.classList.contains('__composer-pill') ||
+    return /reason|thinking|effort/i.test(accessibleName(button)) ||
       intelligenceKnown.some((candidate) =>
         candidate.toLowerCase() === textOf(button).toLowerCase()
       );

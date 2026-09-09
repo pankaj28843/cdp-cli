@@ -1211,7 +1211,45 @@ func closeReadyCleanupCandidates(ctx context.Context, client cdp.CommandClient, 
 	wg.Wait()
 }
 
+// closePageTargetSettled keeps cleanup daemon-backed even when cancellation
+// caused the daemon to reclaim the invocation lease before the CLI reached its
+// independent cleanup path. The retry is deliberately limited to the exact
+// target and the precise lease-not-found condition; ordinary failures retain
+// the original ownership boundary and error.
 func closePageTargetSettled(ctx context.Context, client cdp.CommandClient, target cdp.TargetInfo, opts pageCloseOptions) pageCloseReport {
+	report := closePageTargetSettledWithClient(ctx, client, target, opts)
+	if report.TargetGone || !daemon.IsInvocationLeaseNotFound(errors.New(report.LastError)) {
+		return report
+	}
+
+	ownerless, ok := invocationLeaseFreeClient(client)
+	if !ok {
+		return report
+	}
+	return closePageTargetSettledWithClient(ctx, ownerless, target, opts)
+}
+
+func invocationLeaseFreeClient(client cdp.CommandClient) (cdp.CommandClient, bool) {
+	switch typed := client.(type) {
+	case daemon.RuntimeClient:
+		if strings.TrimSpace(typed.LeaseID) == "" {
+			return nil, false
+		}
+		typed.LeaseID = ""
+		return typed, true
+	case *daemon.RuntimeClient:
+		if typed == nil || strings.TrimSpace(typed.LeaseID) == "" {
+			return nil, false
+		}
+		copy := *typed
+		copy.LeaseID = ""
+		return copy, true
+	default:
+		return nil, false
+	}
+}
+
+func closePageTargetSettledWithClient(ctx context.Context, client cdp.CommandClient, target cdp.TargetInfo, opts pageCloseOptions) pageCloseReport {
 	start := time.Now()
 	if opts.MaxAttempts <= 0 {
 		opts.MaxAttempts = 1

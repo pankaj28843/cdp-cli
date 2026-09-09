@@ -2021,6 +2021,7 @@ func TestDaemonRestartAutoConnectPermissionPendingJSON(t *testing.T) {
 }
 
 func TestDoctorReportsDaemonConnectedWhenBrowserIsAvailable(t *testing.T) {
+	stateDir := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/json/version" {
 			http.NotFound(w, r)
@@ -2035,7 +2036,7 @@ func TestDoctorReportsDaemonConnectedWhenBrowserIsAvailable(t *testing.T) {
 	defer server.Close()
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"doctor", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"doctor", "--browser-url", server.URL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("doctor exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}

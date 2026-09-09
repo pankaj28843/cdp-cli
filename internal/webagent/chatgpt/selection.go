@@ -13,6 +13,7 @@ import (
 
 const (
 	ThinkingCurrent = "current"
+	ThinkingMiddle  = "middle"
 	ThinkingHighest = "highest"
 	ModelCurrent    = "current"
 	ModelHighest    = "highest"
@@ -39,7 +40,7 @@ func NormalizeSelectionPolicy(policy SelectionPolicy) (SelectionPolicy, error) {
 	thinking, ok := normalizeThinkingPolicy(policy.Thinking, true)
 	if !ok {
 		return SelectionPolicy{}, fmt.Errorf(
-			"unsupported ChatGPT thinking policy %q; use current, instant, instant-5.5, medium, high, extra-high, pro, or highest",
+			"unsupported ChatGPT thinking policy %q; use current, middle, instant, instant-5.5, medium, high, extra-high, pro, or highest",
 			policy.Thinking,
 		)
 	}
@@ -90,6 +91,8 @@ func normalizeThinkingPolicy(value string, allowPolicy bool) (string, bool) {
 		switch normalized {
 		case ThinkingCurrent:
 			return ThinkingCurrent, true
+		case ThinkingMiddle:
+			return ThinkingMiddle, true
 		case ThinkingHighest:
 			return ThinkingHighest, true
 		}
@@ -121,21 +124,27 @@ func thinkingRank(label string) int {
 	return -1
 }
 
-func thinkingSliderLabels(max int) []string {
-	if max < 0 {
+func thinkingSliderLabelsForRange(min, max int) []string {
+	if min < 0 || max < min {
 		return nil
 	}
 	// ChatGPT's current composer omits the legacy Instant position from its
 	// five-stop slider. Keep the canonical six-label list for any surface that
-	// still exposes all stops, while mapping the observed max=4 surface to the
-	// five labels it actually renders.
-	if max+1 == len(thinkingLabelsAscending)-1 {
+	// still exposes all stops, while mapping the observed five-stop surface to
+	// the five labels it actually renders. The range may have a non-zero
+	// minimum, so reason from the number of stops rather than assuming 0.
+	stopCount := max - min + 1
+	if stopCount == len(thinkingLabelsAscending)-1 {
 		return append([]string(nil), thinkingLabelsAscending[1:]...)
 	}
-	if max >= len(thinkingLabelsAscending) {
+	if stopCount != len(thinkingLabelsAscending) {
 		return nil
 	}
-	return append([]string(nil), thinkingLabelsAscending[:max+1]...)
+	return append([]string(nil), thinkingLabelsAscending...)
+}
+
+func thinkingSliderLabels(max int) []string {
+	return thinkingSliderLabelsForRange(0, max)
 }
 
 func thinkingSliderTargetIndex(label string, max int) (int, bool) {
@@ -146,6 +155,48 @@ func thinkingSliderTargetIndex(label string, max int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func thinkingSliderTargetValue(label string, min, max int) (int, bool) {
+	index, ok := thinkingSliderTargetIndexForRange(label, min, max)
+	if !ok {
+		return 0, false
+	}
+	return min + index, true
+}
+
+func thinkingSliderTargetIndexForRange(label string, min, max int) (int, bool) {
+	labels := thinkingSliderLabelsForRange(min, max)
+	for index, candidate := range labels {
+		if strings.EqualFold(strings.TrimSpace(label), candidate) {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func thinkingSliderMinimumValue(label string, min, max int) (int, bool) {
+	labels := thinkingSliderLabelsForRange(min, max)
+	if len(labels) == 0 {
+		return 0, false
+	}
+	requestedRank := thinkingRank(label)
+	if requestedRank < 0 {
+		return 0, false
+	}
+	for index, candidate := range labels {
+		if thinkingRank(candidate) >= requestedRank {
+			return min + index, true
+		}
+	}
+	return 0, false
+}
+
+func thinkingSliderMiddleValue(min, max int) (int, bool) {
+	if min < 0 || max < min {
+		return 0, false
+	}
+	return min + (max-min)/2, true
 }
 
 func thinkingAtOrAbove(selected, minimum string) bool {
@@ -172,23 +223,232 @@ type selectableOption struct {
 }
 
 type selectionSurface struct {
-	Editor            selectionPoint     `json:"editor"`
-	ChatCount         int                `json:"chat_count"`
-	WorkCount         int                `json:"work_count"`
-	ChatSelected      bool               `json:"chat_selected"`
-	Chat              selectionPoint     `json:"chat"`
-	SpecializedCount  int                `json:"specialized_count"`
-	PickerCount       int                `json:"picker_count"`
-	Picker            selectionPoint     `json:"picker"`
-	SelectedThinking  string             `json:"selected_thinking"`
-	ThinkingMenuOpen  bool               `json:"thinking_menu_open"`
-	ThinkingOptions   []selectableOption `json:"thinking_options"`
-	ModelTriggerCount int                `json:"model_trigger_count"`
-	ModelTrigger      selectionPoint     `json:"model_trigger"`
-	ModelTriggerLabel string             `json:"model_trigger_label"`
-	ModelMenuOpen     bool               `json:"model_menu_open"`
-	ModelOptions      []selectableOption `json:"model_options_provider_order"`
-	SelectedModel     string             `json:"selected_model"`
+	Editor              selectionPoint     `json:"editor"`
+	ChatCount           int                `json:"chat_count"`
+	WorkCount           int                `json:"work_count"`
+	ChatSelected        bool               `json:"chat_selected"`
+	Chat                selectionPoint     `json:"chat"`
+	SpecializedCount    int                `json:"specialized_count"`
+	PickerCount         int                `json:"picker_count"`
+	Picker              selectionPoint     `json:"picker"`
+	SelectedThinking    string             `json:"selected_thinking"`
+	ThinkingMenuOpen    bool               `json:"thinking_menu_open"`
+	ThinkingOptions     []selectableOption `json:"thinking_options"`
+	ThinkingSliderReady bool               `json:"thinking_slider_ready"`
+	ThinkingSliderMin   int                `json:"thinking_slider_min"`
+	ThinkingSliderMax   int                `json:"thinking_slider_max"`
+	ThinkingSliderValue int                `json:"thinking_slider_value"`
+	ThinkingSliderLabel string             `json:"thinking_slider_label"`
+	ModelTriggerCount   int                `json:"model_trigger_count"`
+	ModelTrigger        selectionPoint     `json:"model_trigger"`
+	ModelTriggerLabel   string             `json:"model_trigger_label"`
+	ModelMenuOpen       bool               `json:"model_menu_open"`
+	ModelOptions        []selectableOption `json:"model_options_provider_order"`
+	SelectedModel       string             `json:"selected_model"`
+}
+
+// thinkingSelectionExpectation is the proof carried from reversible
+// selection into the action-pending boundary. A visible label is sufficient
+// for legacy menu controls; a slider/range control must retain its observed
+// bounds and numeric target so a relabelled surface cannot silently weaken
+// the Send guard.
+type thinkingSelectionExpectation struct {
+	Label                  string
+	Minimum                string
+	SliderMin              int
+	SliderMax              int
+	SliderTarget           int
+	HasSliderTarget        bool
+	MinimumSliderTarget    int
+	HasMinimumSliderTarget bool
+}
+
+func (expectation thinkingSelectionExpectation) requiresThinkingMenu() bool {
+	return expectation.HasSliderTarget || expectation.HasMinimumSliderTarget ||
+		strings.TrimSpace(expectation.Minimum) != ""
+}
+
+func (expectation thinkingSelectionExpectation) sliderProofRequired() bool {
+	return expectation.HasSliderTarget || expectation.HasMinimumSliderTarget
+}
+
+func (expectation thinkingSelectionExpectation) sliderRangeMatches(
+	surface selectionSurface,
+) bool {
+	return surface.ThinkingSliderReady &&
+		surface.ThinkingSliderMin == expectation.SliderMin &&
+		surface.ThinkingSliderMax == expectation.SliderMax
+}
+
+func (expectation thinkingSelectionExpectation) matches(
+	surface selectionSurface,
+	menuRequired bool,
+) bool {
+	if surface.PickerCount != 1 {
+		return false
+	}
+	if expectation.sliderProofRequired() {
+		if !expectation.sliderRangeMatches(surface) ||
+			(menuRequired && !surface.ThinkingMenuOpen) {
+			return false
+		}
+		if expectation.HasSliderTarget &&
+			surface.ThinkingSliderValue != expectation.SliderTarget {
+			return false
+		}
+		return !expectation.HasMinimumSliderTarget ||
+			surface.ThinkingSliderValue >= expectation.MinimumSliderTarget
+	}
+	if expectation.Label != "" && !strings.EqualFold(
+		strings.TrimSpace(surface.SelectedThinking),
+		strings.TrimSpace(expectation.Label),
+	) {
+		return false
+	}
+	if expectation.Minimum != "" {
+		return thinkingAtOrAbove(
+			surface.SelectedThinking,
+			expectation.Minimum,
+		) || thinkingAtOrAboveObserved(
+			surface.SelectedThinking,
+			expectation.Minimum,
+			surface.ThinkingOptions,
+		)
+	}
+	return true
+}
+
+func thinkingMenuReady(surface selectionSurface) bool {
+	return surface.ThinkingMenuOpen &&
+		(len(surface.ThinkingOptions) > 0 || surface.ThinkingSliderReady)
+}
+
+func thinkingExpectationForPolicy(
+	policy SelectionPolicy,
+	surface selectionSurface,
+) (thinkingSelectionExpectation, error) {
+	expectation := thinkingSelectionExpectation{
+		Label:   surface.SelectedThinking,
+		Minimum: policy.MinimumThinking,
+	}
+	if surface.ThinkingSliderReady {
+		expectation.SliderMin = surface.ThinkingSliderMin
+		expectation.SliderMax = surface.ThinkingSliderMax
+		if policy.MinimumThinking != "" {
+			minimum, ok := thinkingSliderMinimumValue(
+				policy.MinimumThinking,
+				surface.ThinkingSliderMin,
+				surface.ThinkingSliderMax,
+			)
+			if !ok {
+				return expectation, fmt.Errorf(
+					"ChatGPT thinking slider range cannot prove minimum %q",
+					policy.MinimumThinking,
+				)
+			}
+			expectation.MinimumSliderTarget = minimum
+			expectation.HasMinimumSliderTarget = true
+		}
+		switch policy.Thinking {
+		case ThinkingCurrent:
+			// Preserve the observed value only when a floor requires a
+			// numeric proof. Current by itself is intentionally observation-only.
+		case ThinkingHighest:
+			expectation.SliderTarget = surface.ThinkingSliderMax
+			expectation.HasSliderTarget = true
+		case ThinkingMiddle:
+			target, ok := thinkingSliderMiddleValue(
+				surface.ThinkingSliderMin,
+				surface.ThinkingSliderMax,
+			)
+			if !ok {
+				return expectation, fmt.Errorf(
+					"ChatGPT thinking slider midpoint is unavailable",
+				)
+			}
+			expectation.SliderTarget = target
+			expectation.HasSliderTarget = true
+		default:
+			target, ok := thinkingSliderTargetValue(
+				policy.Thinking,
+				surface.ThinkingSliderMin,
+				surface.ThinkingSliderMax,
+			)
+			if !ok {
+				return expectation, fmt.Errorf(
+					"ChatGPT thinking slider cannot map requested level %q",
+					policy.Thinking,
+				)
+			}
+			expectation.SliderTarget = target
+			expectation.HasSliderTarget = true
+		}
+		// A numeric proof is authoritative even when the product relabels
+		// the selected stop. Keep the label only for human-facing output.
+		if expectation.HasSliderTarget || expectation.HasMinimumSliderTarget {
+			expectation.Label = ""
+		}
+		return expectation, nil
+	}
+
+	switch policy.Thinking {
+	case ThinkingCurrent:
+		// The initial visible label is the current selection proof.
+	case ThinkingHighest:
+		option, ok := highestReadyThinkingOption(surface.ThinkingOptions)
+		if !ok {
+			return expectation, fmt.Errorf(
+				"highest ChatGPT thinking option is unavailable",
+			)
+		}
+		expectation.Label = option.Label
+	case ThinkingMiddle:
+		logical := logicalThinkingOptions(surface.ThinkingOptions)
+		if len(logical) == 0 {
+			return expectation, fmt.Errorf(
+				"ChatGPT thinking midpoint is unavailable",
+			)
+		}
+		expectation.Label = logical[(len(logical)-1)/2].Label
+	default:
+		expectation.Label = policy.Thinking
+	}
+	return expectation, nil
+}
+
+func selectedThinkingStable(
+	surface selectionSurface,
+	expectation thinkingSelectionExpectation,
+) bool {
+	if surface.PickerCount != 1 || strings.TrimSpace(surface.SelectedThinking) == "" {
+		return false
+	}
+	if expectation.Label == "" {
+		return true
+	}
+	return strings.EqualFold(
+		surface.SelectedThinking,
+		expectation.Label,
+	)
+}
+
+func verifyThinkingExpectation(
+	surface selectionSurface,
+	expectation thinkingSelectionExpectation,
+	menuRequired bool,
+) error {
+	if !expectation.matches(surface, menuRequired) {
+		if expectation.sliderProofRequired() {
+			return fmt.Errorf(
+				"ChatGPT thinking slider proof changed before Send",
+			)
+		}
+		return fmt.Errorf(
+			"ChatGPT selected thinking %q does not satisfy the requested proof",
+			expectation.Label,
+		)
+	}
+	return nil
 }
 
 func selectionSurfaceReady(
@@ -282,27 +542,51 @@ func selectChatGPT(
 			false,
 		)
 	}
-	requestedThinking := surface.SelectedThinking
-	switch policy.Thinking {
-	case ThinkingHighest:
-		option, ok := highestReadyThinkingOption(surface.ThinkingOptions)
-		if !ok {
-			return observation, fmt.Errorf("highest ChatGPT thinking option is unavailable")
-		}
-		requestedThinking = option.Label
-	case ThinkingCurrent:
-	default:
-		requestedThinking = policy.Thinking
+	expectation, err := thinkingExpectationForPolicy(policy, surface)
+	if err != nil {
+		return observation, err
 	}
-	if !strings.EqualFold(surface.SelectedThinking, requestedThinking) {
-		option, ok := exactOption(
-			surface.ThinkingOptions,
-			requestedThinking,
-		)
+	observation.expectation = expectation
+	if expectation.HasSliderTarget {
+		if surface.ThinkingSliderValue != expectation.SliderTarget {
+			if err := activateThinkingSlider(
+				ctx,
+				session,
+				expectation.SliderMin,
+				expectation.SliderMax,
+				expectation.SliderTarget,
+			); err != nil {
+				return observation, err
+			}
+			observation.IntelligenceAction = "selected"
+			if err := pollSelectionSurface(
+				ctx,
+				session,
+				deadline,
+				poll,
+				&surface,
+				func(current selectionSurface) bool {
+					return current.PickerCount == 1 &&
+						expectation.sliderRangeMatches(current) &&
+						current.ThinkingSliderValue == expectation.SliderTarget
+				},
+			); err != nil {
+				return observation, fmt.Errorf(
+					"ChatGPT thinking slider target %d was not proven: %w",
+					expectation.SliderTarget,
+					err,
+				)
+			}
+		}
+	} else if expectation.Label != "" && !strings.EqualFold(
+		surface.SelectedThinking,
+		expectation.Label,
+	) {
+		option, ok := exactOption(surface.ThinkingOptions, expectation.Label)
 		if !ok || !option.Ready {
 			return observation, fmt.Errorf(
 				"ChatGPT thinking option %q is unavailable",
-				requestedThinking,
+				expectation.Label,
 			)
 		}
 		if err := activateSelectionControl(
@@ -322,23 +606,18 @@ func selectChatGPT(
 			&surface,
 			func(current selectionSurface) bool {
 				return current.PickerCount == 1 &&
-					strings.EqualFold(
-						current.SelectedThinking,
-						requestedThinking,
-					)
+					expectation.matches(current, false)
 			},
 		); err != nil {
 			return observation, fmt.Errorf(
 				"ChatGPT thinking selection %q was not proven: %w",
-				requestedThinking,
+				expectation.Label,
 				err,
 			)
 		}
 	}
-	observation.Intelligence = surface.SelectedThinking
-
-	if policy.MinimumThinking != "" {
-		if len(observation.IntelligenceOptions) == 0 {
+	if expectation.requiresThinkingMenu() {
+		if !thinkingMenuReady(surface) {
 			if err := openThinkingMenu(
 				ctx,
 				session,
@@ -348,25 +627,21 @@ func selectChatGPT(
 			); err != nil {
 				return observation, err
 			}
-			observation.IntelligenceOptions = optionLabels(
-				logicalThinkingOptions(surface.ThinkingOptions),
-				false,
-			)
 		}
-		if !thinkingAtOrAbove(
-			observation.Intelligence,
-			policy.MinimumThinking,
-		) && !thinkingAtOrAboveObserved(
-			observation.Intelligence,
-			policy.MinimumThinking,
-			surface.ThinkingOptions,
-		) {
+		if err := verifyThinkingExpectation(surface, expectation, true); err != nil {
 			return observation, fmt.Errorf(
-				"selected ChatGPT thinking %q does not satisfy minimum %q",
-				observation.Intelligence,
-				policy.MinimumThinking,
+				"ChatGPT thinking minimum or selected value was not proven: %w",
+				err,
 			)
 		}
+	}
+	observation.Intelligence = surface.SelectedThinking
+	observation.ThinkingSelectionMode = policy.Thinking
+	if surface.ThinkingSliderReady {
+		observation.ThinkingSliderReady = true
+		observation.ThinkingSliderMin = surface.ThinkingSliderMin
+		observation.ThinkingSliderMax = surface.ThinkingSliderMax
+		observation.ThinkingSliderValue = surface.ThinkingSliderValue
 	}
 
 	if policy.Model != ModelCurrent {
@@ -445,11 +720,7 @@ func selectChatGPT(
 	if err := observeSelectionSurface(ctx, session, &surface); err != nil {
 		return observation, err
 	}
-	if surface.PickerCount != 1 ||
-		!strings.EqualFold(
-			surface.SelectedThinking,
-			observation.Intelligence,
-		) {
+	if !selectedThinkingStable(surface, expectation) {
 		return observation, fmt.Errorf("ChatGPT thinking changed after selection")
 	}
 	observation.OK = true
@@ -512,6 +783,24 @@ func verifySelectionAtSend(
 	timeout time.Duration,
 	poll time.Duration,
 ) error {
+	return verifySelectionAtSendWithExpectation(
+		ctx,
+		session,
+		thinkingSelectionExpectation{Label: expectedThinking},
+		expectedModel,
+		timeout,
+		poll,
+	)
+}
+
+func verifySelectionAtSendWithExpectation(
+	ctx context.Context,
+	session *cdp.PageSession,
+	expectation thinkingSelectionExpectation,
+	expectedModel string,
+	timeout time.Duration,
+	poll time.Duration,
+) error {
 	deadline := time.Now().Add(timeout)
 	var surface selectionSurface
 	// The current ChatGPT composer exposes the default/current effort as a
@@ -520,17 +809,14 @@ func verifySelectionAtSend(
 	// visible picker label is the authoritative selection proof, and opening
 	// it would make a valid fresh composer fail while looking for obsolete
 	// option nodes.
-	if strings.TrimSpace(expectedModel) == "" {
+	if strings.TrimSpace(expectedModel) == "" && !expectation.requiresThinkingMenu() {
 		if err := observeSelectionSurface(ctx, session, &surface); err != nil {
 			return err
 		}
-		if surface.PickerCount != 1 || !strings.EqualFold(
-			strings.TrimSpace(surface.SelectedThinking),
-			strings.TrimSpace(expectedThinking),
-		) {
+		if !selectedThinkingStable(surface, expectation) {
 			return fmt.Errorf(
 				"selected ChatGPT thinking changed from %q to %q",
-				expectedThinking,
+				expectation.Label,
 				surface.SelectedThinking,
 			)
 		}
@@ -545,15 +831,8 @@ func verifySelectionAtSend(
 	); err != nil {
 		return err
 	}
-	if !strings.EqualFold(
-		strings.TrimSpace(surface.SelectedThinking),
-		strings.TrimSpace(expectedThinking),
-	) {
-		return fmt.Errorf(
-			"selected ChatGPT thinking changed from %q to %q",
-			expectedThinking,
-			surface.SelectedThinking,
-		)
+	if err := verifyThinkingExpectation(surface, expectation, true); err != nil {
+		return err
 	}
 	if strings.TrimSpace(expectedModel) != "" {
 		if err := openModelMenu(
@@ -642,6 +921,24 @@ func prepareSelectionGuardAtSend(
 	timeout time.Duration,
 	poll time.Duration,
 ) error {
+	return prepareSelectionGuardAtSendWithExpectation(
+		ctx,
+		session,
+		thinkingSelectionExpectation{Label: intelligence},
+		model,
+		timeout,
+		poll,
+	)
+}
+
+func prepareSelectionGuardAtSendWithExpectation(
+	ctx context.Context,
+	session *cdp.PageSession,
+	expectation thinkingSelectionExpectation,
+	model string,
+	timeout time.Duration,
+	poll time.Duration,
+) error {
 	deadline := time.Now().Add(timeout)
 	var surface selectionSurface
 	if err := pollSelectionSurface(
@@ -651,11 +948,7 @@ func prepareSelectionGuardAtSend(
 		poll,
 		&surface,
 		func(current selectionSurface) bool {
-			return current.PickerCount == 1 &&
-				strings.EqualFold(
-					current.SelectedThinking,
-					intelligence,
-				)
+			return selectedThinkingStable(current, expectation)
 		},
 	); err != nil {
 		return fmt.Errorf(
@@ -663,7 +956,7 @@ func prepareSelectionGuardAtSend(
 			err,
 		)
 	}
-	if strings.TrimSpace(model) == "" {
+	if strings.TrimSpace(model) == "" && !expectation.requiresThinkingMenu() {
 		return nil
 	}
 	if err := openThinkingMenu(
@@ -677,6 +970,15 @@ func prepareSelectionGuardAtSend(
 			"ChatGPT final model guard could not open the thinking menu: %w",
 			err,
 		)
+	}
+	if err := verifyThinkingExpectation(surface, expectation, true); err != nil {
+		return fmt.Errorf("ChatGPT final thinking guard was not observed: %w", err)
+	}
+	if strings.TrimSpace(model) == "" {
+		// Leave the thinking menu open when the pending action needs a
+		// numeric/floor proof. The dispatcher can observe it without another
+		// reversible click immediately before Send.
+		return nil
 	}
 	if surface.ModelMenuOpen ||
 		surface.ModelTriggerCount != 1 ||
@@ -697,15 +999,33 @@ func observeSelectionGuardAtSend(
 	intelligence string,
 	model string,
 ) error {
+	return observeSelectionGuardAtSendWithExpectation(
+		ctx,
+		session,
+		thinkingSelectionExpectation{Label: intelligence},
+		model,
+	)
+}
+
+func observeSelectionGuardAtSendWithExpectation(
+	ctx context.Context,
+	session *cdp.PageSession,
+	expectation thinkingSelectionExpectation,
+	model string,
+) error {
 	var surface selectionSurface
 	if err := observeSelectionSurface(ctx, session, &surface); err != nil {
 		return err
 	}
-	if surface.PickerCount != 1 ||
-		!strings.EqualFold(surface.SelectedThinking, intelligence) {
-		return fmt.Errorf(
-			"ChatGPT final thinking guard changed before Send",
-		)
+	if expectation.requiresThinkingMenu() {
+		if err := verifyThinkingExpectation(surface, expectation, true); err != nil {
+			return fmt.Errorf(
+				"ChatGPT final thinking guard changed before Send: %w",
+				err,
+			)
+		}
+	} else if !selectedThinkingStable(surface, expectation) {
+		return fmt.Errorf("ChatGPT final thinking guard changed before Send")
 	}
 	if strings.TrimSpace(model) == "" {
 		return nil
@@ -789,8 +1109,7 @@ func openThinkingMenu(
 	for time.Now().Before(deadline) {
 		if err := observeSelectionSurface(ctx, session, surface); err != nil {
 			lastErr = err
-		} else if surface.ThinkingMenuOpen &&
-			len(surface.ThinkingOptions) > 0 {
+		} else if thinkingMenuReady(*surface) {
 			return nil
 		} else if !surface.ThinkingMenuOpen {
 			if surface.PickerCount != 1 || !surface.Picker.Ready {
@@ -812,8 +1131,7 @@ func openThinkingMenu(
 			poll,
 			surface,
 			func(current selectionSurface) bool {
-				return current.ThinkingMenuOpen &&
-					len(current.ThinkingOptions) > 0
+				return thinkingMenuReady(current)
 			},
 		); err == nil {
 			return nil
@@ -910,6 +1228,134 @@ func selectionAttemptDeadline(
 		return overall
 	}
 	return attempt
+}
+
+func activateThinkingSlider(
+	ctx context.Context,
+	session *cdp.PageSession,
+	expectedMin int,
+	expectedMax int,
+	target int,
+) error {
+	minJSON, err := json.Marshal(expectedMin)
+	if err != nil {
+		return fmt.Errorf("encode ChatGPT thinking slider minimum")
+	}
+	maxJSON, err := json.Marshal(expectedMax)
+	if err != nil {
+		return fmt.Errorf("encode ChatGPT thinking slider maximum")
+	}
+	targetJSON, err := json.Marshal(target)
+	if err != nil {
+		return fmt.Errorf("encode ChatGPT thinking slider target")
+	}
+	var activated struct {
+		OK        bool `json:"ok"`
+		Count     int  `json:"count"`
+		Activated bool `json:"activated"`
+	}
+	expression := fmt.Sprintf(`(async () => {
+  const expectedMin = %s;
+  const expectedMax = %s;
+  const target = %s;
+  const visible = element => {
+    if (!(element instanceof HTMLElement)) return false;
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      Number(style.opacity || '1') !== 0 && rect.width > 0 && rect.height > 0;
+  };
+  const numberAttribute = (element, name) => {
+    const value = Number(element.getAttribute(name));
+    return Number.isInteger(value) ? value : null;
+  };
+  const accessibleName = element => String(
+    element && (
+      element.getAttribute('aria-label') ||
+      element.getAttribute('aria-valuetext') ||
+      element.textContent || ''
+    ) || ''
+  ).replace(/\s+/g, ' ').trim();
+  const menus = Array.from(document.querySelectorAll('[role="menu"]'))
+    .filter(visible);
+  const semantic = menus.flatMap(menu => Array.from(
+    menu.querySelectorAll('[role="slider"]')
+  )).filter(slider => visible(slider) &&
+    numberAttribute(slider, 'aria-valuemin') !== null &&
+    numberAttribute(slider, 'aria-valuemax') !== null &&
+    numberAttribute(slider, 'aria-valuenow') !== null);
+  const named = semantic.filter(slider =>
+    /reason|thinking|effort/i.test(accessibleName(slider)) ||
+    Boolean(slider.closest('[data-model-reasoning-effort-slider]'))
+  );
+  const candidates = named.length > 0 ? named : semantic;
+  if (candidates.length !== 1 || target < expectedMin || target > expectedMax) {
+    return {ok: false, count: candidates.length, activated: false};
+  }
+  const initial = candidates[0];
+  if (numberAttribute(initial, 'aria-valuemin') !== expectedMin ||
+      numberAttribute(initial, 'aria-valuemax') !== expectedMax) {
+    return {ok: false, count: 1, activated: false};
+  }
+  const findSlider = () => {
+    const liveMenus = Array.from(document.querySelectorAll('[role="menu"]'))
+      .filter(visible);
+    const live = liveMenus.flatMap(menu => Array.from(
+      menu.querySelectorAll('[role="slider"]')
+    )).filter(slider => visible(slider) &&
+      numberAttribute(slider, 'aria-valuemin') !== null &&
+      numberAttribute(slider, 'aria-valuemax') !== null &&
+      numberAttribute(slider, 'aria-valuenow') !== null);
+    const liveNamed = live.filter(slider =>
+      /reason|thinking|effort/i.test(accessibleName(slider)) ||
+      Boolean(slider.closest('[data-model-reasoning-effort-slider]'))
+    );
+    const current = liveNamed.length > 0 ? liveNamed : live;
+    return current.length === 1 ? current[0] : null;
+  };
+  let current = numberAttribute(initial, 'aria-valuenow');
+  if (current === null || current < expectedMin || current > expectedMax) {
+    return {ok: false, count: 1, activated: false};
+  }
+  for (let step = 0; step <= expectedMax - expectedMin && current !== target; step++) {
+    const live = findSlider();
+    if (!live) break;
+    live.focus();
+    const key = target > current ? 'ArrowRight' : 'ArrowLeft';
+    live.dispatchEvent(new KeyboardEvent('keydown', {
+      key,
+      code: key,
+      bubbles: true,
+      cancelable: true
+    }));
+    // The product replaces the range node after a key press. Re-observe the
+    // semantic range after one render turn rather than retaining stale DOM.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const refreshed = findSlider();
+    current = refreshed ? numberAttribute(refreshed, 'aria-valuenow') : null;
+    if (current === null) break;
+  }
+  return {
+    ok: current === target,
+    count: 1,
+    activated: current === target,
+    slider: true,
+    min: expectedMin,
+    max: expectedMax,
+    value: current
+  };
+})()`, minJSON, maxJSON, targetJSON)
+	if err := evaluateInto(ctx, session, expression, &activated); err != nil {
+		return fmt.Errorf("activate ChatGPT thinking slider: %w", err)
+	}
+	if !activated.OK || !activated.Activated {
+		return fmt.Errorf(
+			"ChatGPT thinking slider target %d was not activated (count %d)",
+			target,
+			activated.Count,
+		)
+	}
+	return nil
 }
 
 func pollSelectionSurface(
@@ -1036,8 +1482,11 @@ func activateSelectionControl(
 	      'button[aria-haspopup="menu"]'
 	    )).filter(element =>
 	      enabled(element) &&
-	      element.classList.contains('__composer-pill') &&
-	      label(element).toLowerCase() === expected
+	      label(element).toLowerCase() === expected &&
+	      (/reason|thinking|effort/i.test(
+	        String(element.getAttribute('aria-label') || '')
+	      ) || ['Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro']
+	        .some(value => value.toLowerCase() === label(element).toLowerCase()))
 	    );
 	    break;
 	  case 'model-trigger':
@@ -1057,34 +1506,59 @@ func activateSelectionControl(
 	      label(element).toLowerCase() === expected
 	    );
 	    if (candidates.length === 0) {
-	      const sliders = Array.from(document.querySelectorAll(
-	        '[role="menu"] [data-model-reasoning-effort-slider] [role="slider"]'
-	      )).filter(element => {
-	        const menu = element.closest('[role="menu"]');
-	        return Boolean(menu) && visible(menu) &&
-	          visible(element.closest('[role="menuitem"]') || element);
-	      });
-	      if (sliders.length === 1) {
+	      const numberAttribute = (element, name) => {
+	        const value = Number(element.getAttribute(name));
+	        return Number.isInteger(value) ? value : null;
+	      };
+	      const accessibleName = element => String(
+	        element && (
+	          element.getAttribute('aria-label') ||
+	          element.getAttribute('aria-valuetext') ||
+	          element.textContent || ''
+	        ) || ''
+	      ).replace(/\s+/g, ' ').trim();
+	      const findSlider = () => {
+	        const semanticSliders = Array.from(document.querySelectorAll(
+	          '[role="menu"] [role="slider"]'
+	        )).filter(element => {
+	          const menu = element.closest('[role="menu"]');
+	          return Boolean(menu) && visible(menu) && visible(element) &&
+	            numberAttribute(element, 'aria-valuemin') !== null &&
+	            numberAttribute(element, 'aria-valuemax') !== null &&
+	            numberAttribute(element, 'aria-valuenow') !== null;
+	        });
+	        const markedSliders = semanticSliders.filter(element =>
+	          Boolean(element.closest('[data-model-reasoning-effort-slider]')) ||
+	          /reason|thinking|effort/i.test(accessibleName(element)) ||
+	          /reason|thinking|effort/i.test(
+	            accessibleName(element.closest('[role="menu"]'))
+	          )
+	        );
+	        const sliders = markedSliders.length > 0 ? markedSliders : semanticSliders;
+	        return sliders.length === 1 ? sliders[0] : null;
+      };
+      const slider = findSlider();
+      if (slider) {
 	        const canonical = [
 	          'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
 	        ];
-	        const slider = sliders[0];
-	        const maximum = Number(slider.getAttribute('aria-valuemax'));
-	        const values = maximum + 1 === canonical.length - 1 ?
+	        const minimum = numberAttribute(slider, 'aria-valuemin');
+	        const maximum = numberAttribute(slider, 'aria-valuemax');
+	        if (minimum === null || maximum === null) break;
+	        const values = maximum - minimum + 1 === canonical.length - 1 ?
 	          canonical.slice(1) : canonical.slice(0, maximum + 1);
 	        const target = values.findIndex(value =>
 	          value.toLowerCase() === expected
 	        );
-	        let current = Number(slider.getAttribute('aria-valuenow'));
+	        const targetValue = target + minimum;
+	        let current = numberAttribute(slider, 'aria-valuenow');
 	        if (target >= 0 && Number.isInteger(current) &&
-	            target <= maximum && current >= 0 && current <= maximum) {
-	          for (let step = 0; step < values.length && current !== target; step++) {
-	            const live = document.querySelector(
-	              '[role="menu"] [data-model-reasoning-effort-slider] [role="slider"]'
-	            );
+	            targetValue <= maximum && current >= minimum && current <= maximum) {
+	          for (let step = 0; step < values.length && current !== targetValue; step++) {
+	            const live = findSlider();
 	            if (!live) break;
 	            live.focus();
-	            const key = target > current ? 'ArrowRight' : 'ArrowLeft';
+	            const key = targetValue > current ? 'ArrowRight' : 'ArrowLeft';
 	            live.dispatchEvent(new KeyboardEvent('keydown', {
 	              key,
 	              code: key,
@@ -1094,17 +1568,16 @@ func activateSelectionControl(
 	            // ChatGPT replaces the slider node after each key press. Re-query
 	            // only after the replacement has had a render turn to commit.
 	            await new Promise(resolve => setTimeout(resolve, 50));
-	            const refreshed = document.querySelector(
-	              '[role="menu"] [data-model-reasoning-effort-slider] [role="slider"]'
-	            );
-	            current = refreshed ? Number(
-	              refreshed.getAttribute('aria-valuenow')
-	            ) : -1;
+	            const refreshed = findSlider();
+	            current = refreshed ? numberAttribute(
+	              refreshed,
+	              'aria-valuenow'
+	            ) : null;
 	          }
 	          return {
-	            ok: current === target,
+	            ok: current === targetValue,
 	            count: 1,
-	            activated: current === target,
+	            activated: current === targetValue,
 	            slider: true
 	          };
 	        }
@@ -1372,13 +1845,45 @@ func observeSelectionSurface(
       ''
     ) || ''
   ).replace(/\s+/g, ' ').trim();
-  const equal = (left, right) =>
-    String(left || '').toLowerCase() === String(right || '').toLowerCase();
-  const directItems = (menu, role) => menu ? Array.from(
-    menu.querySelectorAll('[role="' + role + '"]')
-  ).filter(item =>
-    visible(item) && item.closest('[role="menu"]') === menu
-  ) : [];
+	  const equal = (left, right) =>
+	    String(left || '').toLowerCase() === String(right || '').toLowerCase();
+	  const accessibleName = element => {
+	    if (!element) return '';
+	    const labelledBy = String(
+	      element.getAttribute('aria-labelledby') || ''
+	    ).split(/\s+/).filter(Boolean).map(id =>
+	      document.getElementById(id)?.innerText ||
+	      document.getElementById(id)?.textContent || ''
+	    ).join(' ');
+	    return String(
+	      element.getAttribute('aria-label') || labelledBy ||
+	      element.getAttribute('title') || ''
+	    ).replace(/\s+/g, ' ').trim();
+	  };
+	  const integerAttribute = (element, name) => {
+	    const value = Number(element?.getAttribute(name));
+	    return Number.isInteger(value) ? value : null;
+	  };
+	  const directItems = (menu, role) => menu ? Array.from(
+	    menu.querySelectorAll('[role="' + role + '"]')
+	  ).filter(item =>
+	    visible(item) && item.closest('[role="menu"]') === menu
+	  ) : [];
+	  const semanticSlider = menu => {
+	    if (!menu) return null;
+	    const sliders = Array.from(menu.querySelectorAll('[role="slider"]'))
+	      .filter(slider => visible(slider) &&
+        integerAttribute(slider, 'aria-valuemin') !== null &&
+        integerAttribute(slider, 'aria-valuemax') !== null &&
+        integerAttribute(slider, 'aria-valuenow') !== null);
+	    const named = sliders.filter(slider =>
+	      Boolean(slider.closest('[data-model-reasoning-effort-slider]')) ||
+	      /reason|thinking|effort/i.test(accessibleName(slider)) ||
+	      /reason|thinking|effort/i.test(accessibleName(menu))
+	    );
+	    const candidates = named.length > 0 ? named : sliders;
+	    return candidates.length === 1 ? candidates[0] : null;
+	  };
   const actionable = element => {
     if (!element || !visible(element) || element.disabled ||
         element.getAttribute('aria-disabled') === 'true') {
@@ -1407,27 +1912,25 @@ func observeSelectionSurface(
   const thinkingKnown = [
     'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
   ];
-  const pickers = () => Array.from(document.querySelectorAll(
-    'button[aria-haspopup="menu"]'
-  )).filter(button =>
-    visible(button) && (
-      button.classList.contains('__composer-pill') ||
-      thinkingKnown.some(item => equal(item, label(button)))
-    )
+	  const pickers = () => Array.from(document.querySelectorAll(
+	    'button[aria-haspopup="menu"]'
+	  )).filter(button =>
+	    visible(button) && (
+	      /reason|thinking|effort/i.test(accessibleName(button)) ||
+	      thinkingKnown.some(item => equal(item, label(button)))
+	    )
   );
   const picker = pickers().length === 1 ? pickers()[0] : null;
   const selectedThinking = picker ? label(picker) : '';
   const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible);
-  const thinkingMenus = menus.filter(menu => {
-    const legacyOptions = directItems(menu, 'menuitemradio').some(option =>
-      thinkingKnown.some(item =>
-        item.toLowerCase() === label(option).toLowerCase()
-      )
-    );
-    const slider = menu.querySelector(
-      '[data-model-reasoning-effort-slider] [role="slider"]'
-    );
-    return legacyOptions || Boolean(slider);
+	  const thinkingMenus = menus.filter(menu => {
+	    const legacyOptions = directItems(menu, 'menuitemradio').some(option =>
+	      thinkingKnown.some(item =>
+	        item.toLowerCase() === label(option).toLowerCase()
+	      )
+	    );
+	    const slider = semanticSlider(menu);
+	    return legacyOptions || Boolean(slider);
   });
   const thinkingMenu = thinkingMenus.length === 1 ? thinkingMenus[0] : null;
   const modelMenus = menus.filter(menu =>
@@ -1449,32 +1952,40 @@ func observeSelectionSurface(
     thinkingMenu,
     'menuitemradio'
   ).map(toOption);
-  const thinkingSlider = thinkingMenu?.querySelector(
-    '[data-model-reasoning-effort-slider] [role="slider"]'
-  );
-  const thinkingSliderMax = thinkingSlider ? Number(
-    thinkingSlider.getAttribute('aria-valuemax')
-  ) : -1;
-  const thinkingSliderValue = thinkingSlider ? Number(
-    thinkingSlider.getAttribute('aria-valuenow')
-  ) : -1;
-  const thinkingSliderLabels = thinkingSliderMax + 1 ===
-    thinkingKnown.length - 1 ? thinkingKnown.slice(1) :
-    thinkingKnown.slice(0, thinkingSliderMax + 1);
+	  const thinkingSlider = semanticSlider(thinkingMenu);
+	  const thinkingSliderMin = thinkingSlider ? integerAttribute(
+	    thinkingSlider, 'aria-valuemin'
+	  ) : null;
+	  const thinkingSliderMax = thinkingSlider ? integerAttribute(
+	    thinkingSlider, 'aria-valuemax'
+	  ) : null;
+	  const thinkingSliderValue = thinkingSlider ? integerAttribute(
+	    thinkingSlider, 'aria-valuenow'
+	  ) : null;
+  const thinkingSliderStopCount = thinkingSliderMin !== null &&
+	    thinkingSliderMax !== null ? thinkingSliderMax - thinkingSliderMin + 1 : 0;
+  const thinkingSliderLabels = thinkingSliderStopCount ===
+	    thinkingKnown.length - 1 ? thinkingKnown.slice(1) :
+	    thinkingSliderStopCount === thinkingKnown.length ? thinkingKnown : [];
   const thinkingSliderReady = Boolean(
     thinkingSlider &&
-    Number.isInteger(thinkingSliderMax) &&
-    thinkingSliderMax >= 0 &&
-    Number.isInteger(thinkingSliderValue) &&
-    thinkingSliderValue >= 0 &&
-    thinkingSliderValue <= thinkingSliderMax &&
-    visible(thinkingSlider.closest('[role="menuitem"]') || thinkingSlider)
+	    thinkingSliderMin !== null &&
+	    thinkingSliderMax !== null &&
+	    thinkingSliderMax >= thinkingSliderMin &&
+	    thinkingSliderValue !== null &&
+	    thinkingSliderValue >= thinkingSliderMin &&
+	    thinkingSliderValue <= thinkingSliderMax &&
+	    visible(thinkingSlider)
   );
+	  const thinkingSliderLabel = thinkingSlider ? String(
+	    thinkingSlider.getAttribute('aria-valuetext') ||
+	    label(thinkingSlider) || ''
+	  ).trim() : '';
   const thinkingOptions = legacyThinkingOptions.length > 0 ?
     legacyThinkingOptions : thinkingSliderReady ?
     thinkingSliderLabels.map((option, index) => ({
       label: option,
-      checked: index === thinkingSliderValue,
+	    checked: thinkingSliderMin + index === thinkingSliderValue,
       ready: true,
       x: -1,
       y: -1
@@ -1497,6 +2008,11 @@ func observeSelectionSurface(
     selected_thinking: selectedThinking,
     thinking_menu_open: Boolean(thinkingMenu),
     thinking_options: thinkingOptions,
+	    thinking_slider_ready: thinkingSliderReady,
+	    thinking_slider_min: thinkingSliderReady ? thinkingSliderMin : -1,
+	    thinking_slider_max: thinkingSliderReady ? thinkingSliderMax : -1,
+	    thinking_slider_value: thinkingSliderReady ? thinkingSliderValue : -1,
+	    thinking_slider_label: thinkingSliderLabel,
     model_trigger_count: modelTriggers.length,
     model_trigger: actionable(
       modelTriggers.length === 1 ? modelTriggers[0] : null

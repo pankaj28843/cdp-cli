@@ -52,6 +52,7 @@ type chatgptContinueDispatcher struct {
 	baselineAssistants int
 	intelligence       string
 	model              string
+	expectation        thinkingSelectionExpectation
 }
 
 func (d chatgptContinueDispatcher) Dispatch(
@@ -62,10 +63,10 @@ func (d chatgptContinueDispatcher) Dispatch(
 	// before MarkPrepared. After action_pending this dispatcher only observes
 	// the selection guard and composer, then emits at most one irreversible
 	// Send input.
-	if err := observeSelectionGuardAtSend(
+	if err := observeSelectionGuardAtSendWithExpectation(
 		ctx,
 		session,
-		d.intelligence,
+		d.selectionExpectation(),
 		d.model,
 	); err != nil {
 		return browserflow.DispatchOutcome{
@@ -92,6 +93,15 @@ func (d chatgptContinueDispatcher) Dispatch(
 		}, fmt.Errorf("exact ChatGPT continuation Send control was not actionable")
 	}
 	return pressChatGPTComposerEnter(ctx, session)
+}
+
+func (d chatgptContinueDispatcher) selectionExpectation() thinkingSelectionExpectation {
+	if d.expectation.Label == "" &&
+		!d.expectation.sliderProofRequired() &&
+		d.expectation.Minimum == "" {
+		return thinkingSelectionExpectation{Label: d.intelligence}
+	}
+	return d.expectation
 }
 
 func ContinueConversation(
@@ -367,12 +377,13 @@ func ContinueConversation(
 			data.Metadata["model_selection_action"] = selection.ModelAction
 			data.Metadata["available_models"] =
 				append([]string{}, selection.ModelOptions...)
+			recordSelectionExpectation(data.Metadata, selection)
 			data.Intelligence = selection.Intelligence
 			data.Model = selection.Model
 
 			dispatcher := config.Send
 			verifyAttempts, verified, verifyErr :=
-				prepareVerifiedContinuationPrompt(
+				prepareVerifiedContinuationPromptWithExpectation(
 					ctx,
 					session,
 					conversationID,
@@ -380,6 +391,7 @@ func ContinueConversation(
 					data.BaselineUserTurns,
 					data.BaselineAssistantTurns,
 					data.Intelligence,
+					selection.expectation,
 					data.Model,
 					config.ComposerTimeout,
 					config.PollInterval,
@@ -419,10 +431,10 @@ func ContinueConversation(
 				)
 			}
 			if dispatcher == nil {
-				guardErr := prepareSelectionGuardAtSend(
+				guardErr := prepareSelectionGuardAtSendWithExpectation(
 					ctx,
 					session,
-					data.Intelligence,
+					selection.expectation,
 					data.Model,
 					minDuration(
 						config.ComposerTimeout,
@@ -475,6 +487,7 @@ func ContinueConversation(
 					baselineAssistants: data.BaselineAssistantTurns,
 					intelligence:       data.Intelligence,
 					model:              data.Model,
+					expectation:        selection.expectation,
 				}
 			}
 			outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
@@ -673,6 +686,34 @@ func prepareVerifiedContinuationPrompt(
 	timeout time.Duration,
 	poll time.Duration,
 ) (int, composerObservation, error) {
+	return prepareVerifiedContinuationPromptWithExpectation(
+		ctx,
+		session,
+		conversationID,
+		prompt,
+		baselineUsers,
+		baselineAssistants,
+		intelligence,
+		thinkingSelectionExpectation{Label: intelligence},
+		model,
+		timeout,
+		poll,
+	)
+}
+
+func prepareVerifiedContinuationPromptWithExpectation(
+	ctx context.Context,
+	session *cdp.PageSession,
+	conversationID string,
+	prompt string,
+	baselineUsers int,
+	baselineAssistants int,
+	intelligence string,
+	expectation thinkingSelectionExpectation,
+	model string,
+	timeout time.Duration,
+	poll time.Duration,
+) (int, composerObservation, error) {
 	deadline := time.Now().Add(timeout)
 	var observation composerObservation
 	var lastErr error
@@ -681,10 +722,10 @@ func prepareVerifiedContinuationPrompt(
 		attempts = attempt
 		if err := prepareExactPrompt(ctx, session, prompt); err != nil {
 			lastErr = err
-		} else if err := verifySelectionAtSend(
+		} else if err := verifySelectionAtSendWithExpectation(
 			ctx,
 			session,
-			intelligence,
+			expectation,
 			model,
 			time.Until(deadline),
 			poll,
@@ -738,10 +779,10 @@ func prepareVerifiedContinuationPrompt(
 			)
 			attempts += waitAttempts
 			if waitErr == nil {
-				if err := verifySelectionAtSend(
+				if err := verifySelectionAtSendWithExpectation(
 					ctx,
 					session,
-					intelligence,
+					expectation,
 					model,
 					time.Until(deadline),
 					poll,

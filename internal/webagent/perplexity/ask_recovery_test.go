@@ -133,6 +133,225 @@ func TestAskUsesLiveSearchAndRenderedFallbackAfterPreMutationRecovery(
 	}
 }
 
+func TestAskUsesFingerprintVerifiedFinalRouteWithoutResending(t *testing.T) {
+	const (
+		prompt       = "Recover the final Perplexity route"
+		initialRoute = "pending-route"
+		finalRoute   = "final-route"
+		answer       = "The verified final route contains this answer."
+	)
+	stateDir := t.TempDir()
+	client := testsupport.NewBrowser("user-page")
+	conversationReads := 0
+	client.Evaluate = func(expression string, browser *testsupport.Browser) (any, error) {
+		switch {
+		case strings.Contains(expression, "search_selected"):
+			ready := len(browser.Reloads) >= 2
+			count := 0
+			if ready {
+				count = 1
+			}
+			return map[string]any{
+				"route_ready":     ready,
+				"editor_ready":    ready,
+				"editor_count":    count,
+				"prompt_matches":  ready && browser.InsertedText == prompt,
+				"search_count":    count,
+				"search_selected": ready,
+				"assistant_count": 0,
+				"conversation_id": "",
+				"submit_count":    count,
+				"submit_ready":    ready,
+				"submit_x":        100,
+				"submit_y":        100,
+			}, nil
+		case strings.Contains(expression, "range.selectNodeContents"):
+			return map[string]any{"ok": true}, nil
+		case strings.Contains(expression, "target_found"):
+			return map[string]any{
+				"target_found": true,
+				"focused":      true,
+			}, nil
+		case strings.Contains(expression, "conversation_id"):
+			if browser.SendCount == 0 {
+				return map[string]any{}, nil
+			}
+			conversationReads++
+			if conversationReads == 1 {
+				return map[string]any{
+					"route_matches":   true,
+					"conversation_id": initialRoute,
+					"prompt":          "",
+					"is_streaming":    true,
+					"answer_count":    0,
+				}, nil
+			}
+			return map[string]any{
+				"route_matches":   true,
+				"conversation_id": finalRoute,
+				"text":            answer,
+				"prompt":          prompt,
+				"is_streaming":    false,
+				"answer_count":    1,
+			}, nil
+		default:
+			return map[string]any{}, nil
+		}
+	}
+	engine, journal, err := testsupport.NewRuntime(stateDir, client)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	store, err := NewStore(stateDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	result := Ask(context.Background(), AskConfig{
+		BrowserConfig: BrowserConfig{
+			Client:      client,
+			Engine:      engine,
+			Journal:     journal,
+			BuildCommit: "test-commit",
+		},
+		Store:           store,
+		Timeout:         time.Second,
+		ComposerTimeout: time.Second,
+		PollInterval:    time.Millisecond,
+		Now:             testsupport.FixedNow,
+	}, prompt)
+	data, _ := result.Data.(AskData)
+	if !result.OK || result.State != webagent.StateTerminal ||
+		result.Action == nil || result.Action.RawInputCount != 1 ||
+		result.Conversation == nil || result.Conversation.ID != finalRoute ||
+		data.Text != answer {
+		t.Fatalf("Ask result=%+v error=%+v data=%+v", result, result.Error, data)
+	}
+	if got := data.Metadata["initial_conversation_id"]; got != initialRoute {
+		t.Fatalf("initial route metadata = %v, want %q", got, initialRoute)
+	}
+	if got := data.Metadata["final_conversation_id"]; got != finalRoute {
+		t.Fatalf("final route metadata = %v, want %q", got, finalRoute)
+	}
+	if transitioned, _ := data.Metadata["conversation_route_transition"].(bool); !transitioned {
+		t.Fatalf("route transition metadata = %v, want true", data.Metadata)
+	}
+	for _, command := range result.NextCommands {
+		if strings.Contains(command, initialRoute) ||
+			(strings.Contains(command, "conversations detail") &&
+				!strings.Contains(command, finalRoute)) {
+			t.Fatalf("next command used an unverified route: %q", command)
+		}
+	}
+	if client.SendCount != 1 {
+		t.Fatalf("send count = %d, want exactly one Send", client.SendCount)
+	}
+}
+
+func TestAskRejectsUnverifiedFinalRouteWithoutReadCommandOrResend(t *testing.T) {
+	const (
+		prompt       = "Reject a generic Perplexity route"
+		initialRoute = "pending-route"
+		otherRoute   = "same-title-route"
+	)
+	stateDir := t.TempDir()
+	client := testsupport.NewBrowser("user-page")
+	conversationReads := 0
+	client.Evaluate = func(expression string, browser *testsupport.Browser) (any, error) {
+		switch {
+		case strings.Contains(expression, "search_selected"):
+			ready := len(browser.Reloads) >= 2
+			count := 0
+			if ready {
+				count = 1
+			}
+			return map[string]any{
+				"route_ready":     ready,
+				"editor_ready":    ready,
+				"editor_count":    count,
+				"prompt_matches":  ready && browser.InsertedText == prompt,
+				"search_count":    count,
+				"search_selected": ready,
+				"assistant_count": 0,
+				"conversation_id": "",
+				"submit_count":    count,
+				"submit_ready":    ready,
+				"submit_x":        100,
+				"submit_y":        100,
+			}, nil
+		case strings.Contains(expression, "range.selectNodeContents"):
+			return map[string]any{"ok": true}, nil
+		case strings.Contains(expression, "target_found"):
+			return map[string]any{
+				"target_found": true,
+				"focused":      true,
+			}, nil
+		case strings.Contains(expression, "conversation_id"):
+			if browser.SendCount == 0 {
+				return map[string]any{}, nil
+			}
+			conversationReads++
+			if conversationReads == 1 {
+				return map[string]any{
+					"route_matches":   true,
+					"conversation_id": initialRoute,
+					"prompt":          "",
+					"is_streaming":    true,
+					"answer_count":    0,
+				}, nil
+			}
+			return map[string]any{
+				"route_matches":   true,
+				"conversation_id": otherRoute,
+				"text":            "A different conversation answer.",
+				"prompt":          "A generic repeated title",
+				"is_streaming":    false,
+				"answer_count":    1,
+			}, nil
+		default:
+			return map[string]any{}, nil
+		}
+	}
+	engine, journal, err := testsupport.NewRuntime(stateDir, client)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	store, err := NewStore(stateDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	result := Ask(context.Background(), AskConfig{
+		BrowserConfig: BrowserConfig{
+			Client:      client,
+			Engine:      engine,
+			Journal:     journal,
+			BuildCommit: "test-commit",
+		},
+		Store:           store,
+		Timeout:         30 * time.Millisecond,
+		ComposerTimeout: time.Second,
+		PollInterval:    time.Millisecond,
+		Now:             testsupport.FixedNow,
+	}, prompt)
+	data, _ := result.Data.(AskData)
+	if !result.OK || result.State != webagent.StateIncomplete ||
+		result.Action == nil || result.Action.RawInputCount != 1 ||
+		result.Conversation == nil || result.Conversation.ID != initialRoute {
+		t.Fatalf("Ask result=%+v error=%+v data=%+v", result, result.Error, data)
+	}
+	if data.CompletionState != "final_route_unverified" {
+		t.Fatalf("completion state = %q, want final_route_unverified", data.CompletionState)
+	}
+	if rejected, _ := data.Metadata["conversation_route_transition_rejected"].(bool); !rejected {
+		t.Fatalf("route rejection metadata = %v", data.Metadata)
+	}
+	if len(result.NextCommands) != 0 {
+		t.Fatalf("next commands = %v, want no unverified read command", result.NextCommands)
+	}
+	if client.SendCount != 1 {
+		t.Fatalf("send count = %d, want exactly one Send", client.SendCount)
+	}
+}
+
 func TestObserveAskStateIncludesCurrentQueryHeadingSelector(t *testing.T) {
 	client := testsupport.NewBrowser("conversation-target")
 	var expression string

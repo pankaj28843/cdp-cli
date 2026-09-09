@@ -549,6 +549,21 @@ func TestIsInvocationLeaseUnsupported(t *testing.T) {
 	}
 }
 
+func TestIsInvocationLeaseNotFound(t *testing.T) {
+	if !daemon.IsInvocationLeaseNotFound(errors.New("lease lease-123 was not found")) {
+		t.Fatal("reclaimed invocation lease was not recognized")
+	}
+	for _, err := range []error{
+		errors.New("lease lease-123 is closing"),
+		errors.New("target target-123 was not found"),
+		errors.New("daemon lease rejected: resource budget exceeded"),
+	} {
+		if daemon.IsInvocationLeaseNotFound(err) {
+			t.Fatalf("error %q was misclassified as a reclaimed lease", err)
+		}
+	}
+}
+
 func TestRuntimeClientReadsVeryLargeCDPResponsesAndStaysRunning(t *testing.T) {
 	server := newRuntimeRPCLargeFakeServer(t)
 	defer server.Close()

@@ -107,16 +107,22 @@ type composerObservation struct {
 }
 
 type selectionObservation struct {
-	OK                  bool     `json:"ok"`
-	ProductMode         string   `json:"product_mode"`
-	ProductAction       string   `json:"product_action"`
-	Intelligence        string   `json:"intelligence"`
-	IntelligenceAction  string   `json:"intelligence_action"`
-	IntelligenceOptions []string `json:"intelligence_options"`
-	Model               string   `json:"model"`
-	ModelAction         string   `json:"model_action"`
-	ModelOptions        []string `json:"model_options"`
-	Reason              string   `json:"reason"`
+	OK                    bool     `json:"ok"`
+	ProductMode           string   `json:"product_mode"`
+	ProductAction         string   `json:"product_action"`
+	Intelligence          string   `json:"intelligence"`
+	IntelligenceAction    string   `json:"intelligence_action"`
+	IntelligenceOptions   []string `json:"intelligence_options"`
+	ThinkingSelectionMode string   `json:"thinking_selection_mode"`
+	ThinkingSliderReady   bool     `json:"thinking_slider_ready"`
+	ThinkingSliderMin     int      `json:"thinking_slider_min,omitempty"`
+	ThinkingSliderMax     int      `json:"thinking_slider_max,omitempty"`
+	ThinkingSliderValue   int      `json:"thinking_slider_value,omitempty"`
+	Model                 string   `json:"model"`
+	ModelAction           string   `json:"model_action"`
+	ModelOptions          []string `json:"model_options"`
+	Reason                string   `json:"reason"`
+	expectation           thinkingSelectionExpectation
 }
 
 func recordSelectionReadiness(
@@ -130,6 +136,35 @@ func recordSelectionReadiness(
 	metadata["observed_selection_picker_count"] = surface.PickerCount
 	metadata["observed_selection_picker_ready"] = surface.Picker.Ready
 	metadata["observed_selected_thinking"] = surface.SelectedThinking
+	metadata["observed_thinking_slider_ready"] = surface.ThinkingSliderReady
+	if surface.ThinkingSliderReady {
+		metadata["observed_thinking_slider_min"] = surface.ThinkingSliderMin
+		metadata["observed_thinking_slider_max"] = surface.ThinkingSliderMax
+		metadata["observed_thinking_slider_value"] = surface.ThinkingSliderValue
+		if surface.ThinkingSliderLabel != "" {
+			metadata["observed_thinking_slider_label"] = surface.ThinkingSliderLabel
+		}
+	}
+}
+
+func recordSelectionExpectation(
+	metadata map[string]any,
+	selection selectionObservation,
+) {
+	metadata["thinking_selection_mode"] = selection.ThinkingSelectionMode
+	metadata["thinking_selection_proof"] = "verified_before_send"
+	if selection.expectation.Minimum != "" ||
+		selection.expectation.HasMinimumSliderTarget {
+		metadata["minimum_thinking_proof"] = "verified_before_send"
+	} else {
+		metadata["minimum_thinking_proof"] = "not_requested"
+	}
+	if !selection.ThinkingSliderReady {
+		return
+	}
+	metadata["selected_thinking_slider_min"] = selection.ThinkingSliderMin
+	metadata["selected_thinking_slider_max"] = selection.ThinkingSliderMax
+	metadata["selected_thinking_slider_value"] = selection.ThinkingSliderValue
 }
 
 type renderedObservation struct {
@@ -157,6 +192,7 @@ type chatgptSendDispatcher struct {
 	model        string
 	tool         string
 	attachment   *attachmentExpectation
+	expectation  thinkingSelectionExpectation
 }
 
 const chatGPTComposerSelector = "#prompt-textarea"
@@ -180,10 +216,10 @@ func (d chatgptSendDispatcher) Dispatch(
 	// before MarkPrepared. Once action_pending is durable this dispatcher must
 	// perform no reversible raw clicks: it passively observes the selection
 	// guard and composer, then emits at most the single irreversible Send input.
-	if err := observeSelectionGuardAtSend(
+	if err := observeSelectionGuardAtSendWithExpectation(
 		ctx,
 		session,
-		d.intelligence,
+		d.selectionExpectation(),
 		d.model,
 	); err != nil {
 		return browserflow.DispatchOutcome{
@@ -198,10 +234,10 @@ func (d chatgptSendDispatcher) Dispatch(
 		&attachment,
 	); err != nil || !attachment.OK {
 		return browserflow.DispatchOutcome{
-			Dispatch: browserflow.DispatchNotPerformed,
-		}, fmt.Errorf(
-			"exact ChatGPT attachment was not retained and ready at Send",
-		)
+				Dispatch: browserflow.DispatchNotPerformed,
+			}, fmt.Errorf(
+				"exact ChatGPT attachment was not retained and ready at Send",
+			)
 	}
 	// Keep the composer observation immediately before the one raw Send input.
 	// ChatGPT's current composer is a ProseMirror textbox whose Enter handler
@@ -253,6 +289,15 @@ func (d chatgptSendDispatcher) Dispatch(
 		}, fmt.Errorf("exact ChatGPT Send control was not actionable")
 	}
 	return pressChatGPTComposerEnter(ctx, session)
+}
+
+func (d chatgptSendDispatcher) selectionExpectation() thinkingSelectionExpectation {
+	if d.expectation.Label == "" &&
+		!d.expectation.sliderProofRequired() &&
+		d.expectation.Minimum == "" {
+		return thinkingSelectionExpectation{Label: d.intelligence}
+	}
+	return d.expectation
 }
 
 func Ask(
@@ -528,6 +573,7 @@ func Ask(
 			data.Metadata["model_selection_action"] = selection.ModelAction
 			data.Metadata["available_models"] =
 				append([]string{}, selection.ModelOptions...)
+			recordSelectionExpectation(data.Metadata, selection)
 			data.Intelligence = selection.Intelligence
 			data.Model = selection.Model
 			if tool != "" {
@@ -593,11 +639,12 @@ func Ask(
 				}
 			}
 			dispatcher := config.Send
-			verifyAttempts, composer, verifyErr := prepareVerifiedPromptWithTool(
+			verifyAttempts, composer, verifyErr := prepareVerifiedPromptWithExpectation(
 				ctx,
 				session,
 				prompt,
 				data.Intelligence,
+				selection.expectation,
 				data.Model,
 				data.Tool,
 				expectedAttachment,
@@ -659,10 +706,10 @@ func Ask(
 				)
 			}
 			if dispatcher == nil {
-				if err := prepareSelectionGuardAtSend(
+				if err := prepareSelectionGuardAtSendWithExpectation(
 					ctx,
 					session,
-					data.Intelligence,
+					selection.expectation,
 					data.Model,
 					minDuration(
 						config.ComposerTimeout,
@@ -696,6 +743,7 @@ func Ask(
 					model:        data.Model,
 					tool:         data.Tool,
 					attachment:   expectedAttachment,
+					expectation:  selection.expectation,
 				}
 			}
 			outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
@@ -1314,15 +1362,23 @@ func observeComposerWithTool(
 	    'Instant', 'Instant 5.5', 'Medium', 'High',
 	    'Extra High', 'Pro'
 	  ];
+	  const accessibleName = element => String(
+	    element && (
+	      element.getAttribute('aria-label') ||
+	      element.getAttribute('title') ||
+	      element.textContent || ''
+	    ) || ''
+	  ).replace(/\s+/g, ' ').trim();
 	  const intelligence = Array.from(document.querySelectorAll(
 	    'button[aria-haspopup="menu"]'
 	  )).filter(button =>
 	    visible(button) && (
 	      expectedThinking ?
 	        label(button).toLowerCase() === expectedThinking.toLowerCase() :
+	        /reason|thinking|effort/i.test(accessibleName(button)) ||
 	        knownThinking.some(item =>
 	          item.toLowerCase() === label(button).toLowerCase()
-	        ) || button.classList.contains('__composer-pill')
+	        )
 	    )
 	  );
 	  const sends = Array.from(document.querySelectorAll(
@@ -1542,6 +1598,32 @@ func prepareVerifiedPromptWithTool(
 	timeout time.Duration,
 	poll time.Duration,
 ) (int, composerObservation, error) {
+	return prepareVerifiedPromptWithExpectation(
+		ctx,
+		session,
+		prompt,
+		intelligence,
+		thinkingSelectionExpectation{Label: intelligence},
+		model,
+		tool,
+		attachment,
+		timeout,
+		poll,
+	)
+}
+
+func prepareVerifiedPromptWithExpectation(
+	ctx context.Context,
+	session *cdp.PageSession,
+	prompt string,
+	intelligence string,
+	expectation thinkingSelectionExpectation,
+	model string,
+	tool string,
+	attachment *attachmentExpectation,
+	timeout time.Duration,
+	poll time.Duration,
+) (int, composerObservation, error) {
 	deadline := time.Now().Add(timeout)
 	var observation composerObservation
 	var attachmentState attachmentObservation
@@ -1554,10 +1636,10 @@ func prepareVerifiedPromptWithTool(
 		attempts = attempt
 		if err := prepareExactPromptWithTool(ctx, session, prompt, tool); err != nil {
 			lastErr = err
-		} else if err := verifySelectionAtSend(
+		} else if err := verifySelectionAtSendWithExpectation(
 			ctx,
 			session,
-			intelligence,
+			expectation,
 			model,
 			time.Until(deadline),
 			poll,
@@ -1618,10 +1700,10 @@ func prepareVerifiedPromptWithTool(
 			)
 			attempts += waitAttempts
 			if waitErr == nil {
-				if err := verifySelectionAtSend(
+				if err := verifySelectionAtSendWithExpectation(
 					ctx,
 					session,
-					intelligence,
+					expectation,
 					model,
 					time.Until(deadline),
 					poll,

@@ -394,6 +394,9 @@ func Ask(
 			conversationID := observation.ConversationID
 			conversation := conversationRef(conversationID)
 			initialConversationID := conversationID
+			data.Metadata["initial_conversation_id"] = initialConversationID
+			data.Metadata["final_conversation_id"] = conversationID
+			data.Metadata["conversation_route_transition"] = false
 
 			renderedStable := 0
 			renderedCandidateReads := 0
@@ -420,6 +423,7 @@ func Ask(
 					data.Metadata["conversation_route_transition"] = true
 					data.Metadata["initial_conversation_id"] =
 						initialConversationID
+					data.Metadata["final_conversation_id"] = conversationID
 				}
 				if renderedAnswerCandidate(
 					observation,
@@ -481,6 +485,22 @@ func Ask(
 				)
 			}
 			action = actionEvidence(lease.Record())
+			if observation.RouteMatches &&
+				conversationIDPattern.MatchString(observation.ConversationID) &&
+				observation.ConversationID != conversationID {
+				_ = lease.MarkIncomplete(context.Background())
+				data.CompletionState = "final_route_unverified"
+				data.ReadMode = "not_started"
+				data.Metadata["conversation_route_transition_rejected"] = true
+				data.Metadata["unverified_conversation_id"] =
+					observation.ConversationID
+				return operationSuccess(
+					runID, config.BuildCommit, webagent.OperationAsk,
+					webagent.StateIncomplete, webagent.StageObserveTerminal,
+					data.ReadMode, target, pending, action, conversation, data,
+					nil,
+				)
+			}
 
 			renderedTerminal := renderedCandidateReads >= 2 &&
 				renderedAnswerCandidate(

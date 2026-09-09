@@ -48,8 +48,8 @@ func artifactDetail(text string, messageID string) map[string]any {
 
 func TestLocateArtifactRequiresOneFinishedExactNamedPath(t *testing.T) {
 	const (
-		fileName = "agent-cli-web-artifact.csv"
-		link     = "[download](sandbox:/mnt/data/agent-cli-web-artifact.csv)"
+		fileName = "cdp-cli-artifact.csv"
+		link     = "[download](sandbox:/mnt/data/cdp-cli-artifact.csv)"
 	)
 	detail := artifactDetail(link, "assistant-artifact")
 	locator, err := locateArtifact(detail, "conversation-id", fileName)

@@ -190,6 +190,17 @@ func IsInvocationLeaseUnsupported(err error) bool {
 		(strings.Contains(message, "-32601") || strings.Contains(message, "not found"))
 }
 
+// IsInvocationLeaseNotFound reports that a daemon has already reclaimed the
+// invocation lease used by a client. Callers may use this to distinguish an
+// ownership-lifecycle race from a browser or transport failure.
+func IsInvocationLeaseNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "lease ") && strings.Contains(message, " was not found")
+}
+
 type holdOptions struct {
 	fetchProtocolFallback func(context.Context) (cdp.Protocol, error)
 }

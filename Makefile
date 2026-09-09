@@ -1,4 +1,4 @@
-.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fixtures-generate fmt fmt-check install leak-check test verify vet
+.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-provider-surface-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fixtures-generate fmt fmt-check install install-aliases leak-check test verify vet
 
 BINARY := bin/cdp
 GUIDE := internal/cli/guide.md
@@ -43,6 +43,11 @@ install: build
 	install -m 0755 "$(BINARY)" "$(DESTDIR)$(PREFIX)/bin/cdp"
 	install -d "$(DESTDIR)$(PREFIX)/share/cdp-cli"
 	install -m 0644 "$(GUIDE)" "$(DESTDIR)$(PREFIX)/share/cdp-cli/guide.md"
+	"$(BINARY)" install-aliases --source "$(BINARY)" --bin-dir "$(DESTDIR)$(PREFIX)/bin" --json
+
+install-aliases: build
+	install -d "$(DESTDIR)$(PREFIX)/bin"
+	"$(BINARY)" install-aliases --source "$(BINARY)" --bin-dir "$(DESTDIR)$(PREFIX)/bin" --json
 
 e2e-installed:
 	@cdp_bin="$$(command -v cdp)"; \
@@ -55,6 +60,9 @@ e2e-installed:
 		exit 2; \
 	fi; \
 	bash scripts/e2e.sh "$$cdp_bin"
+
+e2e-provider-surface-installed:
+	go run ./cmd/e2e-installed
 
 e2e-openai-compat: build
 	bash scripts/e2e_openai_compat.sh ./$(BINARY)
