@@ -38,15 +38,19 @@ Run the non-mutating checks first:
 
 ```bash
 cdp --browser-mode headed pages --json
-cdp meta doctor --json
-ask-chatgpt capabilities status --json
+cdp workflow agent providers --json
+cdp workflow agent chatgpt capabilities --json
 ```
 
-If the headed page check is healthy, an alias failure is usually a translation,
-installation, or provider-auth problem rather than a reason to create another
-browser target. Reinstall the managed binary and aliases with `make install`,
-then rerun `make e2e-provider-surface-installed`. `cdp meta repair <provider>
---json` is the explicit bounded repair path; it never submits a prompt.
+If the headed page check is healthy, a provider failure is usually a workflow
+or provider-auth problem rather than a reason to create another browser target.
+Reinstall the managed binary with `make install`, then rerun
+`make e2e-agent-workflows-installed`. Provider-specific `doctor`, `auth refresh`,
+or `capabilities refresh` commands are explicit workflow operations; run only
+the operation shown as supported by the capability contract. If a new site
+change is not covered, file a focused feature request with a synthetic
+reproduction, semantic target evidence, and the smallest failing contract
+rather than adding a speculative selector framework.
 
 ## Headless suspended environments
 

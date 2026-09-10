@@ -1176,17 +1176,17 @@ selected cdp state directory. Its JSON includes reclaimed PIDs and safety checks
 make verify
 make install
 make e2e-installed
-make e2e-provider-surface-installed
+make e2e-agent-workflows-installed
 ```
 
-`make install` publishes the daemon-backed `cdp` binary and the source-compatible
-`ask-*` provider aliases into the same bin directory. The aliases are thin
-argument translators; provider behavior remains owned by cdp-cli. Verify an
-installed alias without submitting a prompt with, for example,
-`ask-chatgpt capabilities status --json`. The provider-surface gate runs these
-capability checks sequentially and proves that the headed tab set is unchanged.
-Use `cdp meta doctor --json` for metadata-only provider diagnostics and
-`cdp meta repair <provider> --json` for one bounded, explicit repair.
+`make install` publishes the daemon-backed `cdp` binary and its guide. Discover
+the provider contract with `cdp workflow agent providers --json`, then verify a
+provider without submitting a prompt with, for example,
+`cdp workflow agent chatgpt capabilities --json`. The agent-workflow gate runs
+these capability checks sequentially and proves that the headed tab set is
+unchanged. Use `cdp workflow agent chatgpt doctor --json` for metadata-only
+provider diagnostics and run only provider operations marked supported by the
+capability contract.
 
 The public-web extraction lane is intentionally opt-in and is not part of
 default CI. It exercises the installed binary against 12 real documentation
@@ -1216,10 +1216,9 @@ merge gate.
 `make install` copies the binary to `$(HOME)/.local/bin` by default. Override
 with `PREFIX=/usr/local` or another install prefix.
 
-The compatibility aliases are regular executable files, not symlinks, and are
-published atomically with `make install`. To republish them after replacing a
-managed binary, run `make install-aliases PREFIX=<prefix>`; the destination
-directory must already be a real directory.
+The installation contains one executable, `cdp`, and is published atomically.
+After replacing a managed binary, rerun `make install PREFIX=<prefix>`; the
+destination directory must already be a real directory.
 
 Supported `make build`, `make install`, and cross-build paths inject a semantic
 version, the full source commit, a reproducible RFC3339 source timestamp, and

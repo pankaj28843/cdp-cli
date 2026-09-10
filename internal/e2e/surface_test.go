@@ -18,7 +18,7 @@ func TestSurfaceGateChecksEveryProviderAndPreservesExactTabSet(t *testing.T) {
 		_ time.Duration,
 	) commandOutcome {
 		commands = append(commands, slices.Clone(command))
-		if command[0] == "cdp" {
+		if isPagesCommand(command) {
 			pageCalls++
 			return commandOutcome{
 				payload: map[string]any{
@@ -64,6 +64,23 @@ func TestSurfaceGateChecksEveryProviderAndPreservesExactTabSet(t *testing.T) {
 			t.Fatalf("provider %s was not checked", provider)
 		}
 	}
+	for index, provider := range []string{
+		"alex",
+		"chatgpt",
+		"gemini",
+		"perplexity",
+		"claude",
+		"grok",
+		"tripadvisor",
+	} {
+		want := []string{
+			"cdp", "--browser-mode", "headed", "workflow", "agent",
+			provider, "capabilities", "--json",
+		}
+		if !slices.Equal(commands[index+1], want) {
+			t.Fatalf("provider command %s = %v, want %v", provider, commands[index+1], want)
+		}
+	}
 }
 
 func TestSurfaceGateReportsExactLeakWithoutMaskingCommandHealth(t *testing.T) {
@@ -73,7 +90,7 @@ func TestSurfaceGateReportsExactLeakWithoutMaskingCommandHealth(t *testing.T) {
 		command []string,
 		_ time.Duration,
 	) commandOutcome {
-		if command[0] != "cdp" {
+		if !isPagesCommand(command) {
 			return commandOutcome{payload: map[string]any{"ok": true}}
 		}
 		pageCalls++
@@ -105,7 +122,7 @@ func TestSurfaceGateRequiresAnOpenHeadedTab(t *testing.T) {
 		command []string,
 		_ time.Duration,
 	) commandOutcome {
-		if command[0] == "cdp" {
+		if isPagesCommand(command) {
 			return commandOutcome{payload: map[string]any{
 				"ok":    true,
 				"pages": []any{},
@@ -117,6 +134,10 @@ func TestSurfaceGateRequiresAnOpenHeadedTab(t *testing.T) {
 	if _, err := run(context.Background(), runner); err == nil {
 		t.Fatal("surface gate accepted headed CDP with no open tabs")
 	}
+}
+
+func isPagesCommand(command []string) bool {
+	return len(command) > 3 && command[0] == "cdp" && command[3] == "pages"
 }
 
 func TestTimedOutCommandInterruptsAndReapsOwnedProcess(t *testing.T) {

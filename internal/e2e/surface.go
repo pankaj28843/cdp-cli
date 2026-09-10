@@ -72,7 +72,7 @@ func run(ctx context.Context, runner commandRunner) (Report, error) {
 			errorType, _ := outcome.payload["error_type"].(string)
 			results = append(results, SurfaceResult{
 				Provider:   provider.id,
-				Command:    slices.Clone(command[1 : len(command)-1]),
+				Command:    slices.Clone(command[1:]),
 				ReturnCode: outcome.returnCode,
 				JSONObject: outcome.payload != nil,
 				OK:         ok,
@@ -123,11 +123,10 @@ func providerSurfaces() []providerSurface {
 }
 
 func standardSurface(provider string) providerSurface {
-	command := "ask-" + provider
 	return providerSurface{
 		id: provider,
 		commands: [][]string{
-			{command, "capabilities", "status", "--json"},
+			{"cdp", "--browser-mode", "headed", "workflow", "agent", provider, "capabilities", "--json"},
 		},
 	}
 }
