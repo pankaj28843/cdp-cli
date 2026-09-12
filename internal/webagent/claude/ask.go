@@ -308,7 +308,15 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			authRefreshNextCommands(runID, pendingCleanup),
 		)
 	}
-	if err := prepareExactPrompt(ctx, session, prompt); err != nil {
+	verifyAttempts, promptErr := prepareVerifiedPrompt(
+		ctx,
+		session,
+		prompt,
+		config.ComposerTimeout,
+		config.PollInterval,
+	)
+	baseData.Metadata["prompt_verify_attempts"] = verifyAttempts
+	if promptErr != nil {
 		_ = lease.MarkIncomplete(context.Background())
 		return askFailure(
 			runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup,
@@ -596,6 +604,48 @@ func prepareExactPrompt(ctx context.Context, session *cdp.PageSession, prompt st
 		return fmt.Errorf("verify exact composer")
 	}
 	return nil
+}
+
+func prepareVerifiedPrompt(
+	ctx context.Context,
+	session *cdp.PageSession,
+	prompt string,
+	timeout time.Duration,
+	poll time.Duration,
+) (int, error) {
+	if timeout <= 0 {
+		timeout = defaultComposerTimeout
+	}
+	if poll <= 0 {
+		poll = defaultAskPollInterval
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	attempts := 0
+	for attempt := 1; attempt <= 8; attempt++ {
+		attempts = attempt
+		if err := prepareExactPrompt(ctx, session, prompt); err == nil {
+			return attempt, nil
+		} else {
+			lastErr = err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		delay := 2 * poll
+		if delay > 500*time.Millisecond {
+			delay = 500 * time.Millisecond
+		}
+		if !waitRenderedPoll(ctx, delay, remaining) {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("exact Claude prompt preparation attempts were exhausted")
+	}
+	return attempts, lastErr
 }
 
 func waitForAcknowledgement(

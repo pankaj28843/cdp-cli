@@ -174,6 +174,30 @@ func TestAskRecoversLiveComposerAfterHardReloadBeforePromptMutation(t *testing.T
 	}
 }
 
+func TestAskRetriesTransientComposerVerificationBeforeSend(t *testing.T) {
+	const prompt = "Review after a delayed Claude composer update"
+	stateDir := t.TempDir()
+	client := newAuthFakeClient("user-page")
+	client.promptVerifyFailures = 1
+	client.ackConversationID = "conversation-delayed-composer"
+	config := newAskTestConfig(t, stateDir, client)
+	config.ComposerTimeout = 250 * time.Millisecond
+	config.PollInterval = time.Millisecond
+	config.HTTPClient = terminalDetailClient(prompt)
+
+	result := Ask(context.Background(), config, prompt)
+	if !result.OK ||
+		result.Action == nil ||
+		result.Action.Dispatch != webagent.DispatchPerformed ||
+		client.callCount("Input.insertText") < 2 {
+		t.Fatalf(
+			"result=%+v counts=%+v",
+			result,
+			client.countSnapshot(),
+		)
+	}
+}
+
 func TestAskPreSendFailureAndPromptBudgetNeverDispatch(t *testing.T) {
 	t.Run("composer unavailable", func(t *testing.T) {
 		stateDir := t.TempDir()

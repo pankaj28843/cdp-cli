@@ -363,6 +363,7 @@ type authFakeClient struct {
 	ackConversationID        string
 	ackStreaming             bool
 	insertedPrompt           string
+	promptVerifyFailures     int
 	deleteRoute              bool
 	deleteStage              int
 	renderedSidebarExpanded  bool
@@ -551,7 +552,12 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 		case strings.Contains(expression, "range.selectNodeContents"):
 			value = map[string]any{"ok": true}
 		case strings.Contains(expression, "matches:"):
-			value = map[string]any{"ok": true, "matches": c.insertedPrompt != ""}
+			matches := c.insertedPrompt != ""
+			if matches && c.promptVerifyFailures > 0 {
+				c.promptVerifyFailures--
+				matches = false
+			}
+			value = map[string]any{"ok": true, "matches": matches}
 		case strings.Contains(expression, "conversation_id"):
 			value = map[string]any{
 				"conversation_id": c.ackConversationID,
