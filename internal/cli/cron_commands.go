@@ -1761,7 +1761,12 @@ func cronFlockOwnerFromProcLocks(ctx context.Context, path string) (cronFlockOwn
 			continue
 		}
 		lockRef := strings.Split(fields[5], ":")
-		if len(lockRef) != 3 || lockRef[0]+":"+lockRef[1] != device || lockRef[2] != inode {
+		if len(lockRef) != 3 || lockRef[2] != inode {
+			continue
+		}
+		major, majorErr := strconv.ParseUint(lockRef[0], 16, 32)
+		minor, minorErr := strconv.ParseUint(lockRef[1], 16, 32)
+		if majorErr != nil || minorErr != nil || fmt.Sprintf("%x:%02x", major, minor) != device {
 			continue
 		}
 		pid, err := strconv.Atoi(fields[4])

@@ -217,7 +217,12 @@ func procLocksLineForMarker(t *testing.T, path string) string {
 	if !ok {
 		t.Fatalf("marker stat type = %T, want syscall.Stat_t", info.Sys())
 	}
-	return fmt.Sprintf("1: FLOCK ADVISORY WRITE %d %s:%d 0 EOF\n", os.Getpid(), procLocksDevice(uint64(stat.Dev)), stat.Ino)
+	// Kernel device fields may be zero-padded; do not copy the production
+	// formatter into the fixture and hide string-formatting mismatches.
+	dev := uint64(stat.Dev)
+	major := (dev >> 8) & 0xfff
+	minor := (dev & 0xff) | ((dev >> 12) & 0xfff00)
+	return fmt.Sprintf("1: FLOCK ADVISORY WRITE %d %04X:%04X:%d 0 EOF\n", os.Getpid(), major, minor, stat.Ino)
 }
 
 type cronLockSlowReader struct {
