@@ -51,6 +51,75 @@ func TestActivateSelectionControlUsesOneIdentityBoundEvaluation(t *testing.T) {
 	}
 }
 
+func TestActivateSelectionControlRecognizesOpenLinkedThinkingPicker(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(
+			`{"ok":true,"count":1,"activated":true}`,
+		),
+	}
+	session := newSelectionActivationSession(t, client)
+
+	if err := activateSelectionControl(
+		context.Background(),
+		session,
+		"picker",
+		"Medium",
+	); err != nil {
+		t.Fatalf("activateSelectionControl: %v", err)
+	}
+	evaluation := string(client.calls[0].params)
+	for _, required := range []string{
+		"aria-expanded",
+		"aria-controls",
+		"aria-valuemin",
+		"aria-valuemax",
+		"aria-valuenow",
+		"getAttribute('role') !== 'menu'",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("open picker activation expression missing %q: %s", required, evaluation)
+		}
+	}
+}
+
+func TestObserveSelectionSurfaceUsesVisibleIntersectionForLargeEditor(
+	t *testing.T,
+) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(`{
+			"editor": {"ready": true, "x": 1, "y": 1},
+			"picker_count": 1,
+			"picker": {"ready": true, "x": 1, "y": 1},
+			"selected_thinking": "Medium",
+			"thinking_options": [],
+			"thinking_slider_ready": false
+		}`),
+	}
+	session := newSelectionActivationSession(t, client)
+	var surface selectionSurface
+	if err := observeSelectionSurface(
+		context.Background(),
+		session,
+		&surface,
+	); err != nil {
+		t.Fatalf("observeSelectionSurface: %v", err)
+	}
+	if len(client.calls) != 1 || client.calls[0].method != "Runtime.evaluate" {
+		t.Fatalf("calls = %+v, want one selection observation", client.calls)
+	}
+	evaluation := string(client.calls[0].params)
+	for _, required := range []string{
+		"Math.max(0, rect.left)",
+		"Math.min(window.innerWidth, rect.right)",
+		"Math.max(0, rect.top)",
+		"Math.min(window.innerHeight, rect.bottom)",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("viewport-intersection observation missing %q", required)
+		}
+	}
+}
+
 func TestActivateSelectionControlDoesNotDispatchOnIdentityMiss(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluation: json.RawMessage(

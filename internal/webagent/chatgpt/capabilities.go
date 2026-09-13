@@ -416,10 +416,61 @@ const capabilityProbeExpression = `(async () => {
     productKnown.some((candidate) => candidate.toLowerCase() === textOf(button).toLowerCase())
   );
 
-  const intelligenceKnown = [
-    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
-  ];
-  const accessibleName = (element) => normalize(
+	  const intelligenceKnown = [
+	    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
+	  ];
+	  const openThinkingPicker = (button) => {
+	    if (!button || button.getAttribute('aria-expanded') !== 'true') {
+	      return false;
+	    }
+	    const controls = button.getAttribute('aria-controls');
+	    const menu = controls ? document.getElementById(controls) : null;
+	    if (!menu || menu.getAttribute('role') !== 'menu' || !visible(menu)) {
+	      return false;
+	    }
+	    const hasKnownLegacyOption = Array.from(
+	      menu.querySelectorAll('[role="menuitemradio"]')
+	    ).some((option) => intelligenceKnown.some((candidate) =>
+	      candidate.toLowerCase() === textOf(option).toLowerCase()
+	    ));
+	    const hasSemanticSlider = Array.from(
+	      menu.querySelectorAll('[role="slider"]')
+	    ).some((slider) =>
+	      visible(slider) &&
+	      slider.getAttribute('aria-valuemin') !== null &&
+	      slider.getAttribute('aria-valuemax') !== null &&
+	      slider.getAttribute('aria-valuenow') !== null
+	    );
+	    return hasKnownLegacyOption || hasSemanticSlider;
+	  };
+	  const selectedThinkingFromOpenMenu = (button) => {
+	    if (!openThinkingPicker(button)) return '';
+	    const controls = button.getAttribute('aria-controls');
+	    const menu = controls ? document.getElementById(controls) : null;
+	    const slider = menu && Array.from(menu.querySelectorAll('[role="slider"]'))
+	      .find((candidate) =>
+	        visible(candidate) &&
+	        candidate.getAttribute('aria-valuemin') !== null &&
+	        candidate.getAttribute('aria-valuemax') !== null &&
+	        candidate.getAttribute('aria-valuenow') !== null
+	      );
+	    if (slider) {
+	      const minimum = Number(slider.getAttribute('aria-valuemin'));
+	      const maximum = Number(slider.getAttribute('aria-valuemax'));
+	      const current = Number(slider.getAttribute('aria-valuenow'));
+	      const labels = maximum - minimum + 1 === intelligenceKnown.length - 1 ?
+	        intelligenceKnown.slice(1) : intelligenceKnown;
+	      const selected = labels[current - minimum];
+	      if (Number.isInteger(minimum) && Number.isInteger(maximum) &&
+	          Number.isInteger(current) && selected) {
+	        return selected;
+	      }
+	    }
+	    const checked = Array.from(menu.querySelectorAll('[role="menuitemradio"]'))
+	      .find((option) => option.getAttribute('aria-checked') === 'true');
+	    return checked ? textOf(checked) : '';
+	  };
+	  const accessibleName = (element) => normalize(
     element && (
       element.getAttribute('aria-label') ||
       element.getAttribute('title') ||
@@ -428,15 +479,16 @@ const capabilityProbeExpression = `(async () => {
     )
   );
   const pageButtons = Array.from(document.querySelectorAll('button,[role="button"]')).filter(visible);
-  const intelligencePickers = pageButtons.filter((button) => {
-    if (button.getAttribute('aria-haspopup') !== 'menu') return false;
-    return /reason|thinking|effort/i.test(accessibleName(button)) ||
-      intelligenceKnown.some((candidate) =>
-        candidate.toLowerCase() === textOf(button).toLowerCase()
-      );
-  });
-  const intelligencePicker = intelligencePickers.length === 1 ? intelligencePickers[0] : null;
-  const selectedIntelligence = intelligencePicker ? textOf(intelligencePicker) : '';
+	  const intelligencePickers = pageButtons.filter((button) => {
+	    if (button.getAttribute('aria-haspopup') !== 'menu') return false;
+	    return /reason|thinking|effort/i.test(accessibleName(button)) ||
+	      intelligenceKnown.some((candidate) =>
+	        candidate.toLowerCase() === textOf(button).toLowerCase()
+	      ) || openThinkingPicker(button);
+	  });
+	  const intelligencePicker = intelligencePickers.length === 1 ? intelligencePickers[0] : null;
+	  const selectedIntelligence = intelligencePicker ?
+	    (selectedThinkingFromOpenMenu(intelligencePicker) || textOf(intelligencePicker)) : '';
   const intelligenceOptions = selectedIntelligence ? [selectedIntelligence] : [];
   const modelOptions = [];
   const selectedModel = '';

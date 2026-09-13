@@ -144,7 +144,7 @@ func collectNetworkRequests(ctx context.Context, client browserEventClient, sess
 		}
 		mergeNetworkRequest(existing, req)
 	}
-	events, err := client.DrainEvents(ctx)
+	events, err := client.DrainSessionEvents(ctx, sessionID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -155,7 +155,7 @@ func collectNetworkRequests(ctx context.Context, client browserEventClient, sess
 		eventCtx, cancel := context.WithTimeout(ctx, wait)
 		defer cancel()
 		for {
-			event, err := client.ReadEvent(eventCtx)
+			event, err := client.ReadSessionEvent(eventCtx, sessionID)
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) || errors.Is(eventCtx.Err(), context.DeadlineExceeded) {
 					break
@@ -164,6 +164,16 @@ func collectNetworkRequests(ctx context.Context, client browserEventClient, sess
 			}
 			addEvent(event)
 		}
+	}
+	// A timed daemon read can return its deadline while the browser read loop
+	// is still moving events into the daemon buffer. Recover that already
+	// observed tail without extending the caller's requested wait window.
+	events, err = client.DrainSessionEvents(ctx, sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, event := range events {
+		addEvent(event)
 	}
 
 	requests := make([]networkRequest, 0, len(order))
@@ -259,7 +269,7 @@ func collectNetworkCapture(ctx context.Context, client browserEventClient, sessi
 			}
 		}
 	}
-	events, err := client.DrainEvents(ctx)
+	events, err := client.DrainSessionEvents(ctx, sessionID)
 	if err != nil {
 		return nil, false, nil, err
 	}
@@ -270,7 +280,7 @@ func collectNetworkCapture(ctx context.Context, client browserEventClient, sessi
 		eventCtx, cancel := context.WithTimeout(ctx, opts.Wait)
 		defer cancel()
 		for {
-			event, err := client.ReadEvent(eventCtx)
+			event, err := client.ReadSessionEvent(eventCtx, sessionID)
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) || errors.Is(eventCtx.Err(), context.DeadlineExceeded) {
 					break
@@ -279,6 +289,16 @@ func collectNetworkCapture(ctx context.Context, client browserEventClient, sessi
 			}
 			addEvent(event)
 		}
+	}
+	// The final timed RPC may race the daemon's browser-event reader. Drain
+	// the exact session once more so events that arrived during that boundary
+	// are retained without consuming another target's events.
+	events, err = client.DrainSessionEvents(ctx, sessionID)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	for _, event := range events {
+		addEvent(event)
 	}
 
 	for _, id := range order {

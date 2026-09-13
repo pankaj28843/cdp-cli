@@ -53,6 +53,49 @@ func TestObserveComposerRecognizesCurrentSemanticSendButton(t *testing.T) {
 	}
 }
 
+func TestObserveComposerRecognizesOpenLinkedThinkingPicker(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(`{
+			"route_ready":true,
+			"editor_ready":true,
+			"editor_count":1,
+			"prompt_matches":true,
+			"chat_count":1,
+			"work_count":1,
+			"chat_selected":true,
+			"intelligence_count":1,
+			"selected_intelligence":"Medium",
+			"send_count":1,
+			"send_ready":true,
+			"assistant_count":0,
+			"user_message_count":0,
+			"conversation_id":""
+		}`),
+	}
+	session := newSelectionActivationSession(t, client)
+	var observation composerObservation
+	if err := observeComposer(
+		context.Background(),
+		session,
+		"review the current screen",
+		"Medium",
+		&observation,
+	); err != nil {
+		t.Fatalf("observeComposer: %v", err)
+	}
+	evaluation := string(client.calls[0].params)
+	for _, required := range []string{
+		"aria-expanded",
+		"aria-controls",
+		`[role=\"slider\"]`,
+		"selectedThinkingFromOpenMenu",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("open picker observation missing %q: %s", required, evaluation)
+		}
+	}
+}
+
 func TestSendDispatcherFailsClosedWhenAttachmentDropsBeforeSend(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluations: []json.RawMessage{

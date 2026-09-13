@@ -1369,18 +1369,62 @@ func observeComposerWithTool(
 	      element.textContent || ''
 	    ) || ''
 	  ).replace(/\s+/g, ' ').trim();
+	  const openThinkingPicker = button => {
+	    if (!button || button.getAttribute('aria-expanded') !== 'true') {
+	      return null;
+	    }
+	    const controls = button.getAttribute('aria-controls');
+	    const menu = controls ? document.getElementById(controls) : null;
+	    if (!menu || menu.getAttribute('role') !== 'menu' || !visible(menu)) {
+	      return null;
+	    }
+	    const slider = Array.from(menu.querySelectorAll('[role="slider"]'))
+	      .find(candidate =>
+	        visible(candidate) &&
+	        candidate.getAttribute('aria-valuemin') !== null &&
+	        candidate.getAttribute('aria-valuemax') !== null &&
+	        candidate.getAttribute('aria-valuenow') !== null
+	      ) || null;
+	    const hasKnownLegacyOption = Array.from(
+	      menu.querySelectorAll('[role="menuitemradio"]')
+	    ).some(option => knownThinking.some(item =>
+	      item.toLowerCase() === label(option).toLowerCase()
+	    ));
+	    if (!slider && !hasKnownLegacyOption) return null;
+	    return {menu, slider};
+	  };
+	  const selectedThinkingFromOpenMenu = button => {
+	    const picker = openThinkingPicker(button);
+	    if (!picker) return label(button);
+	    if (picker.slider) {
+	      const minimum = Number(picker.slider.getAttribute('aria-valuemin'));
+	      const maximum = Number(picker.slider.getAttribute('aria-valuemax'));
+	      const current = Number(picker.slider.getAttribute('aria-valuenow'));
+	      const labels = maximum - minimum + 1 === knownThinking.length - 1 ?
+	        knownThinking.slice(1) : knownThinking;
+	      const selected = labels[current - minimum];
+	      if (Number.isInteger(minimum) && Number.isInteger(maximum) &&
+	          Number.isInteger(current) && selected) {
+	        return selected;
+	      }
+	    }
+	    const checked = Array.from(
+	      picker.menu.querySelectorAll('[role="menuitemradio"]')
+	    ).find(option => option.getAttribute('aria-checked') === 'true');
+	    return checked ? label(checked) : label(button);
+	  };
 	  const intelligence = Array.from(document.querySelectorAll(
 	    'button[aria-haspopup="menu"]'
 	  )).filter(button =>
 	    visible(button) && (
 	      expectedThinking ?
-	        label(button).toLowerCase() === expectedThinking.toLowerCase() :
+	        selectedThinkingFromOpenMenu(button).toLowerCase() === expectedThinking.toLowerCase() :
 	        /reason|thinking|effort/i.test(accessibleName(button)) ||
 	        knownThinking.some(item =>
-	          item.toLowerCase() === label(button).toLowerCase()
-	        )
-	    )
-	  );
+	          item.toLowerCase() === selectedThinkingFromOpenMenu(button).toLowerCase()
+	        ) || Boolean(openThinkingPicker(button))
+    )
+  );
 	  const sends = Array.from(document.querySelectorAll(
 	    'button[data-testid="send-button"],button#composer-submit-button,' +
 	    'button[aria-label="Send prompt"]'
@@ -1440,7 +1484,7 @@ func observeComposerWithTool(
 	      chats[0].getAttribute('aria-checked') === 'true',
 	    intelligence_count: intelligence.length,
 	    selected_intelligence: intelligence.length === 1 ?
-	      label(intelligence[0]) : '',
+	      selectedThinkingFromOpenMenu(intelligence[0]) : '',
 	    send_count: sends.length,
 	    send_ready: sendAction.ready,
 	    send_x: sendAction.x,

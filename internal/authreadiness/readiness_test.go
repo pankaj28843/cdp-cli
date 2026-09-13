@@ -13,6 +13,8 @@ type recordingReloader struct {
 	err         error
 }
 
+const authReadinessTestWait = 300 * time.Millisecond
+
 func (r *recordingReloader) Reload(_ context.Context, ignoreCache bool) error {
 	r.ignoreCache = append(r.ignoreCache, ignoreCache)
 	return r.err
@@ -116,7 +118,7 @@ func TestWaitForEvidenceGivesHardReloadAFinalGraceWindow(t *testing.T) {
 		context.Background(),
 		reloader,
 		3,
-		30*time.Millisecond,
+		authReadinessTestWait,
 		time.Millisecond,
 		func(context.Context) (bool, error) {
 			observations++
@@ -184,7 +186,7 @@ func TestWaitForEvidenceUsesOneOverallBudget(t *testing.T) {
 		context.Background(),
 		reloader,
 		3,
-		30*time.Millisecond,
+		authReadinessTestWait,
 		time.Millisecond,
 		func(context.Context) (bool, error) {
 			return false, nil
@@ -193,7 +195,7 @@ func TestWaitForEvidenceUsesOneOverallBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WaitForEvidence: %v", err)
 	}
-	if elapsed := time.Since(started); elapsed > 150*time.Millisecond {
+	if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
 		t.Fatalf("elapsed = %s, want one bounded total wait", elapsed)
 	}
 	if !result.EvidenceAbsent() || result.ObservationFailed() {
@@ -242,7 +244,7 @@ func TestWaitForEvidenceKeepsTerminalObservationErrorsInconclusive(t *testing.T)
 		context.Background(),
 		reloader,
 		3,
-		30*time.Millisecond,
+		authReadinessTestWait,
 		time.Millisecond,
 		func(context.Context) (bool, error) {
 			if len(reloader.ignoreCache) == 2 {
@@ -269,7 +271,7 @@ func TestWaitForEvidenceClearsRecoveredObservationErrors(t *testing.T) {
 		context.Background(),
 		reloader,
 		3,
-		30*time.Millisecond,
+		authReadinessTestWait,
 		time.Millisecond,
 		func(context.Context) (bool, error) {
 			if len(reloader.ignoreCache) == 2 && !failedOnce {
@@ -297,7 +299,7 @@ func TestWaitForEvidenceDoesNotClearErrorWithPostExpiryResult(t *testing.T) {
 		context.Background(),
 		reloader,
 		3,
-		30*time.Millisecond,
+		authReadinessTestWait,
 		time.Millisecond,
 		func(observationCtx context.Context) (bool, error) {
 			if len(reloader.ignoreCache) < 2 {

@@ -174,11 +174,11 @@ func TestAskRecoversLiveComposerAfterHardReloadBeforePromptMutation(t *testing.T
 	}
 }
 
-func TestAskRetriesTransientComposerVerificationBeforeSend(t *testing.T) {
+func TestAskRetriesTransientComposerVerificationPastLegacyAttemptCap(t *testing.T) {
 	const prompt = "Review after a delayed Claude composer update"
 	stateDir := t.TempDir()
 	client := newAuthFakeClient("user-page")
-	client.promptVerifyFailures = 1
+	client.promptVerifyFailures = 9
 	client.ackConversationID = "conversation-delayed-composer"
 	config := newAskTestConfig(t, stateDir, client)
 	config.ComposerTimeout = 250 * time.Millisecond
@@ -186,10 +186,15 @@ func TestAskRetriesTransientComposerVerificationBeforeSend(t *testing.T) {
 	config.HTTPClient = terminalDetailClient(prompt)
 
 	result := Ask(context.Background(), config, prompt)
+	data, ok := result.Data.(AskData)
 	if !result.OK ||
 		result.Action == nil ||
 		result.Action.Dispatch != webagent.DispatchPerformed ||
-		client.callCount("Input.insertText") < 2 {
+		result.Action.RawInputCount != 1 ||
+		!ok ||
+		data.Metadata["prompt_verify_attempts"] != 10 ||
+		client.callCount("Input.insertText") != 10 ||
+		client.callCount("Input.dispatchKeyEvent") != 2 {
 		t.Fatalf(
 			"result=%+v counts=%+v",
 			result,

@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestCapabilityProbeRecognizesOpenLinkedThinkingPicker(t *testing.T) {
+	for _, required := range []string{
+		"aria-expanded",
+		"aria-controls",
+		"[role=\"slider\"]",
+		"getAttribute('role') !== 'menu'",
+		"selectedThinkingFromOpenMenu",
+	} {
+		if !strings.Contains(capabilityProbeExpression, required) {
+			t.Fatalf("capability probe expression missing %q", required)
+		}
+	}
+}
+
 func TestCapabilityMessageDoesNotClaimMissingModelCatalog(t *testing.T) {
 	probe := capabilityProbe{
 		OK:                   true,

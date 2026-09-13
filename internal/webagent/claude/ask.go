@@ -461,7 +461,9 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 
 	baseData.Text = detail.Text
 	baseData.CompletionState = detail.CompletionState
-	baseData.Metadata = detail.Metadata
+	for key, value := range detail.Metadata {
+		baseData.Metadata[key] = value
+	}
 	if detail.CompletionState == "terminal" {
 		if err := lease.MarkTerminal(ctx); err != nil {
 			return askFailure(
@@ -622,7 +624,7 @@ func prepareVerifiedPrompt(
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	attempts := 0
-	for attempt := 1; attempt <= 8; attempt++ {
+	for attempt := 1; ; attempt++ {
 		attempts = attempt
 		if err := prepareExactPrompt(ctx, session, prompt); err == nil {
 			return attempt, nil

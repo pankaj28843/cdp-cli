@@ -625,6 +625,9 @@ their final raw input; a single-Send ask releases it before answer polling.
 
 Claude reads through its browser-observed stable HTTP shape and lazily uses one
 exact-owned rendered fallback only for a typed browser-context rejection.
+Its fresh ask reapplies and verifies the exact prompt through the configured
+composer deadline when a transient rerender causes a mismatch; this preparation
+remains before the single Send boundary.
 Claude auth refresh observes the organization/list request and keeps the
 private replay template only in owner-only cdp state:
 

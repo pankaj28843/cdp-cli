@@ -5,6 +5,20 @@ provider bugs. It records the observable symptom, the bounded response, and
 the smallest code area to change. It does not contain browser state, captures,
 or provider conversation data.
 
+## Claude transient composer verification
+
+Claude can rerender its composer after the editor is visible. If an exact
+prompt readback temporarily disagrees, `ask` reapplies and verifies the prompt
+until the configured composer deadline or context deadline expires. The retry
+loop is bounded by that deadline, not by a fixed attempt count, and it remains
+before the prepared/Send boundary. A failed final verification returns
+`DispatchNotPerformed`; it must not press Send or retry an ambiguous dispatch.
+
+The regression is
+`TestAskRetriesTransientComposerVerificationPastLegacyAttemptCap` in
+`internal/webagent/claude/ask_test.go`. It crosses the former eight-attempt
+ceiling and proves one raw dispatch after the exact prompt is verified.
+
 ## ChatGPT thinking controls
 
 If ChatGPT exposes a reasoning slider whose range, accessible meaning, or

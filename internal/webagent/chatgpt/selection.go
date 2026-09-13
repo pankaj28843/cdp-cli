@@ -1063,7 +1063,16 @@ func inspectChatGPTSelectionOptions(
 				strings.TrimSpace(current.SelectedThinking) != ""
 		},
 	); err != nil {
-		return surface, err
+		return surface, fmt.Errorf(
+			"selection surface was not ready (editor_ready=%t picker_count=%d picker_ready=%t selected_thinking=%q thinking_menu_open=%t thinking_slider_ready=%t): %w",
+			surface.Editor.Ready,
+			surface.PickerCount,
+			surface.Picker.Ready,
+			surface.SelectedThinking,
+			surface.ThinkingMenuOpen,
+			surface.ThinkingSliderReady,
+			err,
+		)
 	}
 	if err := openThinkingMenu(
 		ctx,
@@ -1478,15 +1487,44 @@ func activateSelectionControl(
 	    );
 	    break;
 	  case 'picker':
+	    const openThinkingPicker = element => {
+	      if (!element || element.getAttribute('aria-expanded') !== 'true') {
+	        return false;
+	      }
+	      const controls = element.getAttribute('aria-controls');
+	      const menu = controls ? document.getElementById(controls) : null;
+	      if (!menu || menu.getAttribute('role') !== 'menu' || !visible(menu)) {
+	        return false;
+	      }
+	      const known = [
+	        'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
+	      ];
+	      const hasKnownLegacyOption = Array.from(
+	        menu.querySelectorAll('[role="menuitemradio"]')
+	      ).some(option => known.some(value =>
+	        value.toLowerCase() === label(option).toLowerCase()
+	      ));
+	      const hasSemanticSlider = Array.from(
+	        menu.querySelectorAll('[role="slider"]')
+	      ).some(slider =>
+	        visible(slider) &&
+	        slider.getAttribute('aria-valuemin') !== null &&
+	        slider.getAttribute('aria-valuemax') !== null &&
+	        slider.getAttribute('aria-valuenow') !== null
+	      );
+	      return hasKnownLegacyOption || hasSemanticSlider;
+	    };
 	    candidates = Array.from(document.querySelectorAll(
 	      'button[aria-haspopup="menu"]'
 	    )).filter(element =>
-	      enabled(element) &&
-	      label(element).toLowerCase() === expected &&
-	      (/reason|thinking|effort/i.test(
-	        String(element.getAttribute('aria-label') || '')
-	      ) || ['Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro']
-	        .some(value => value.toLowerCase() === label(element).toLowerCase()))
+	      enabled(element) && (
+	        (label(element).toLowerCase() === expected &&
+	          (/reason|thinking|effort/i.test(
+	            String(element.getAttribute('aria-label') || '')
+	          ) || ['Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro']
+	            .some(value => value.toLowerCase() === label(element).toLowerCase()))) ||
+	        openThinkingPicker(element)
+	      )
 	    );
 	    break;
 	  case 'model-trigger':
@@ -1597,7 +1635,7 @@ func activateSelectionControl(
 	  if (right <= left || bottom <= topEdge) {
 	    return {ok: false, count: 1, activated: false};
 	  }
-	  const fractions = [0.5, 0.75, 0.25, 0.9, 0.1];
+	  const fractions = [0.5, 0.75, 0.25, 0.9, 0.1, 0.99, 0.01];
 	  for (const yFraction of fractions) {
 	    for (const xFraction of fractions) {
 	      const x = left + (right - left) * xFraction;
@@ -1884,21 +1922,39 @@ func observeSelectionSurface(
 	    const candidates = named.length > 0 ? named : sliders;
 	    return candidates.length === 1 ? candidates[0] : null;
 	  };
-  const actionable = element => {
-    if (!element || !visible(element) || element.disabled ||
-        element.getAttribute('aria-disabled') === 'true') {
-      return {ready: false, x: -1, y: -1};
-    }
-    const rect = element.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    const top = document.elementFromPoint(x, y);
-    return {
-      ready: Boolean(top && (top === element || element.contains(top))),
-      x,
-      y
-    };
-  };
+	  const actionable = element => {
+	    if (!element || !visible(element) || element.disabled ||
+	        element.getAttribute('aria-disabled') === 'true') {
+	      return {ready: false, x: -1, y: -1};
+	    }
+	    const rect = element.getBoundingClientRect();
+	    // A long persisted draft can make the contenteditable taller than the
+	    // viewport. Test the center of its visible intersection instead of the
+	    // off-screen geometric center.
+	    const left = Math.max(0, rect.left);
+	    const right = Math.min(window.innerWidth, rect.right);
+	    const topEdge = Math.max(0, rect.top);
+	    const bottom = Math.min(window.innerHeight, rect.bottom);
+	    if (right <= left || bottom <= topEdge) {
+	      return {ready: false, x: -1, y: -1};
+	    }
+	    const centerX = left + (right - left) / 2;
+	    const centerY = topEdge + (bottom - topEdge) / 2;
+	    const points = [
+	      [centerX, centerY],
+	      [centerX, Math.max(topEdge, bottom - 1)],
+	      [centerX, Math.min(bottom, topEdge + 1)],
+	      [Math.max(left, right - 1), centerY],
+	      [Math.min(right, left + 1), centerY]
+	    ];
+	    for (const [x, y] of points) {
+	      const top = document.elementFromPoint(x, y);
+	      if (top && (top === element || element.contains(top))) {
+	        return {ready: true, x, y};
+	      }
+	    }
+	    return {ready: false, x: -1, y: -1};
+	  };
   const productRadios = Array.from(document.querySelectorAll(
     'button[role="radio"]'
   )).filter(visible);
@@ -1909,29 +1965,58 @@ func observeSelectionSurface(
     '[data-testid*="deep-research"][aria-pressed="true"],' +
     '[data-testid*="agent"][aria-pressed="true"]'
   ));
-  const thinkingKnown = [
-    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
-  ];
+	  const thinkingKnown = [
+	    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
+	  ];
+	  const openThinkingPicker = element => {
+	    if (!element || element.getAttribute('aria-expanded') !== 'true') {
+	      return false;
+	    }
+	    const controls = element.getAttribute('aria-controls');
+	    const menu = controls ? document.getElementById(controls) : null;
+	    if (!menu || menu.getAttribute('role') !== 'menu' || !visible(menu)) {
+	      return false;
+	    }
+	    const hasKnownLegacyOption = Array.from(
+	      menu.querySelectorAll('[role="menuitemradio"]')
+	    ).some(option => thinkingKnown.some(item => equal(item, label(option))));
+	    const hasSemanticSlider = Array.from(
+	      menu.querySelectorAll('[role="slider"]')
+	    ).some(slider =>
+	      visible(slider) &&
+	      integerAttribute(slider, 'aria-valuemin') !== null &&
+	      integerAttribute(slider, 'aria-valuemax') !== null &&
+	      integerAttribute(slider, 'aria-valuenow') !== null
+	    );
+	    return hasKnownLegacyOption || hasSemanticSlider;
+	  };
 	  const pickers = () => Array.from(document.querySelectorAll(
 	    'button[aria-haspopup="menu"]'
 	  )).filter(button =>
 	    visible(button) && (
 	      /reason|thinking|effort/i.test(accessibleName(button)) ||
-	      thinkingKnown.some(item => equal(item, label(button)))
+	      thinkingKnown.some(item => equal(item, label(button))) ||
+	      openThinkingPicker(button)
 	    )
-  );
+	  );
   const picker = pickers().length === 1 ? pickers()[0] : null;
-  const selectedThinking = picker ? label(picker) : '';
-  const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible);
-	  const thinkingMenus = menus.filter(menu => {
+	  const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible);
+	  const legacyThinkingMenus = menus.filter(menu => {
 	    const legacyOptions = directItems(menu, 'menuitemradio').some(option =>
 	      thinkingKnown.some(item =>
 	        item.toLowerCase() === label(option).toLowerCase()
 	      )
 	    );
-	    const slider = semanticSlider(menu);
-	    return legacyOptions || Boolean(slider);
-  });
+	    return legacyOptions;
+	  });
+	  const thinkingMenusWithSlider = menus.filter(menu =>
+	    Boolean(semanticSlider(menu))
+	  );
+	  // A current ChatGPT menu nests model radio options beside the effort
+	  // slider. Prefer the semantic slider surface so model labels cannot be
+	  // mistaken for thinking levels.
+	  const thinkingMenus = thinkingMenusWithSlider.length > 0 ?
+	    thinkingMenusWithSlider : legacyThinkingMenus;
   const thinkingMenu = thinkingMenus.length === 1 ? thinkingMenus[0] : null;
   const modelMenus = menus.filter(menu =>
     menu !== thinkingMenu &&
@@ -1948,10 +2033,6 @@ func observeSelectionSurface(
       y: action.y
     };
   };
-  const legacyThinkingOptions = directItems(
-    thinkingMenu,
-    'menuitemradio'
-  ).map(toOption);
 	  const thinkingSlider = semanticSlider(thinkingMenu);
 	  const thinkingSliderMin = thinkingSlider ? integerAttribute(
 	    thinkingSlider, 'aria-valuemin'
@@ -1962,6 +2043,12 @@ func observeSelectionSurface(
 	  const thinkingSliderValue = thinkingSlider ? integerAttribute(
 	    thinkingSlider, 'aria-valuenow'
 	  ) : null;
+	  // When a slider is present, its numeric range is the authoritative
+	  // selection proof; sibling radio options belong to the model picker.
+	  const legacyThinkingOptions = thinkingSlider ? [] : directItems(
+	    thinkingMenu,
+	    'menuitemradio'
+	  ).map(toOption);
   const thinkingSliderStopCount = thinkingSliderMin !== null &&
 	    thinkingSliderMax !== null ? thinkingSliderMax - thinkingSliderMin + 1 : 0;
   const thinkingSliderLabels = thinkingSliderStopCount ===
@@ -1981,7 +2068,7 @@ func observeSelectionSurface(
 	    thinkingSlider.getAttribute('aria-valuetext') ||
 	    label(thinkingSlider) || ''
 	  ).trim() : '';
-  const thinkingOptions = legacyThinkingOptions.length > 0 ?
+	  const thinkingOptions = legacyThinkingOptions.length > 0 ?
     legacyThinkingOptions : thinkingSliderReady ?
     thinkingSliderLabels.map((option, index) => ({
       label: option,
@@ -1990,6 +2077,18 @@ func observeSelectionSurface(
       x: -1,
       y: -1
     })) : [];
+	  let selectedThinking = picker ? label(picker) : '';
+	  if (thinkingMenu && thinkingSliderReady) {
+	    const sliderIndex = thinkingSliderValue - thinkingSliderMin;
+	    selectedThinking = thinkingSliderLabels[sliderIndex] ||
+	      thinkingSliderLabel || selectedThinking;
+	  }
+	  const selectedLegacyThinking = legacyThinkingOptions.find(option =>
+	    option.checked
+	  );
+	  if (thinkingMenu && selectedLegacyThinking) {
+	    selectedThinking = selectedLegacyThinking.label;
+	  }
   const modelTriggers = directItems(thinkingMenu, 'menuitem');
   const modelOptions = directItems(modelMenu, 'menuitemradio').map(toOption);
   const selectedModels = modelOptions.filter(option => option.checked);
