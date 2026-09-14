@@ -1553,7 +1553,13 @@ func prepareExactPromptWithTool(
 	  if (!selection) return {ok: false};
 	  const range = document.createRange();
 	  range.selectNodeContents(editor);
-	  if (%s !== '') range.collapse(false);
+	  if (%s !== '') {
+	    const pills = editor.querySelectorAll('[data-inline-selection-pill][data-keyword]');
+	    if (pills.length !== 1) return {ok: false};
+	    // Preserve the selected tool, but replace the entire previous draft.
+	    // Collapsing at the end would append another prompt on every retry.
+	    range.setStartAfter(pills[0]);
+	  }
 	  selection.removeAllRanges();
 	  selection.addRange(range);
 	  return {ok: document.activeElement === editor};

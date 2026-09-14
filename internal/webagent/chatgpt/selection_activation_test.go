@@ -297,11 +297,15 @@ func TestPrepareExactPromptWithToolActivatesSelectedEditorBeforeTextInput(t *tes
 	for _, required := range []string{
 		"data-inline-selection-pill",
 		"Create image",
-		"range.collapse(false)",
+		"range.setStartAfter(pills[0])",
+		"pills.length !== 1",
 	} {
 		if !strings.Contains(evaluation, required) {
 			t.Fatalf("tool editor expression missing %q: %s", required, evaluation)
 		}
+	}
+	if strings.Contains(evaluation, "range.collapse(false)") {
+		t.Fatal("tool preparation must replace the prior draft, not append on retries")
 	}
 }
 
