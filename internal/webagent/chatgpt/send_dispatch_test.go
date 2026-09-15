@@ -96,6 +96,51 @@ func TestObserveComposerRecognizesOpenLinkedThinkingPicker(t *testing.T) {
 	}
 }
 
+func TestObserveComposerCanonicalizesCompactComposerThinkingLabel(t *testing.T) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(`{
+			"route_ready":true,
+			"editor_ready":true,
+			"editor_count":1,
+			"prompt_matches":true,
+			"chat_count":1,
+			"work_count":1,
+			"chat_selected":true,
+			"intelligence_count":1,
+			"selected_intelligence":"Pro",
+			"send_count":1,
+			"send_ready":true,
+			"send_x":100,
+			"send_y":200,
+			"assistant_count":0,
+			"user_message_count":0,
+			"conversation_id":""
+		}`),
+	}
+	session := newSelectionActivationSession(t, client)
+	var observation composerObservation
+	if err := observeComposer(
+		context.Background(),
+		session,
+		"review the current screen",
+		"Pro",
+		&observation,
+	); err != nil {
+		t.Fatalf("observeComposer: %v", err)
+	}
+	evaluation := string(client.calls[0].params)
+	for _, required := range []string{
+		"canonicalThinkingLabel",
+		"normalized.endsWith(' ' + known)",
+		"right.length - left.length",
+		"isComposerTrigger",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("compact-label composer verification missing %q: %s", required, evaluation)
+		}
+	}
+}
+
 func TestSendDispatcherFailsClosedWhenAttachmentDropsBeforeSend(t *testing.T) {
 	client := &selectionActivationClient{
 		evaluations: []json.RawMessage{

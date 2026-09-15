@@ -82,6 +82,37 @@ func TestActivateSelectionControlRecognizesOpenLinkedThinkingPicker(t *testing.T
 	}
 }
 
+func TestActivateSelectionControlCanonicalizesCompactComposerThinkingLabel(
+	t *testing.T,
+) {
+	client := &selectionActivationClient{
+		evaluation: json.RawMessage(
+			`{"ok":true,"count":1,"activated":true}`,
+		),
+	}
+	session := newSelectionActivationSession(t, client)
+
+	if err := activateSelectionControl(
+		context.Background(),
+		session,
+		"picker",
+		"Pro",
+	); err != nil {
+		t.Fatalf("activateSelectionControl: %v", err)
+	}
+	evaluation := string(client.calls[0].params)
+	for _, required := range []string{
+		"canonicalThinkingLabel",
+		"normalized.endsWith(' ' + known)",
+		"right.length - left.length",
+		"isComposerTrigger",
+	} {
+		if !strings.Contains(evaluation, required) {
+			t.Fatalf("compact-label activation missing %q: %s", required, evaluation)
+		}
+	}
+}
+
 func TestObserveSelectionSurfaceUsesVisibleIntersectionForLargeEditor(
 	t *testing.T,
 ) {

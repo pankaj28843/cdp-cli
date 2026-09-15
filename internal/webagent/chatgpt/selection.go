@@ -1487,6 +1487,18 @@ func activateSelectionControl(
 	    );
 	    break;
 	  case 'picker':
+	    const knownThinking = [
+	      'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
+	    ];
+	    const canonicalThinkingLabel = value => {
+	      const normalized = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+	      return knownThinking.slice().sort((left, right) =>
+	        right.length - left.length
+	      ).find(candidate => {
+	        const known = candidate.toLowerCase();
+	        return normalized === known || normalized.endsWith(' ' + known);
+	      }) || '';
+	    };
 	    const openThinkingPicker = element => {
 	      if (!element || element.getAttribute('aria-expanded') !== 'true') {
 	        return false;
@@ -1516,16 +1528,26 @@ func activateSelectionControl(
 	    };
 	    candidates = Array.from(document.querySelectorAll(
 	      'button[aria-haspopup="menu"]'
-	    )).filter(element =>
-	      enabled(element) && (
-	        (label(element).toLowerCase() === expected &&
-	          (/reason|thinking|effort/i.test(
-	            String(element.getAttribute('aria-label') || '')
-	          ) || ['Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro']
-	            .some(value => value.toLowerCase() === label(element).toLowerCase()))) ||
-	        openThinkingPicker(element)
-	      )
-	    );
+	    )).filter(element => {
+	      if (!enabled(element)) return false;
+	      const openPicker = openThinkingPicker(element);
+	      const rawLabel = label(element);
+	      const selectedThinking = canonicalThinkingLabel(rawLabel);
+	      const exactThinking = knownThinking.some(candidate =>
+	        candidate.toLowerCase() === rawLabel.toLowerCase()
+	      );
+	      const isComposerTrigger = Boolean(
+	        element.closest('form')?.querySelector(
+          '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+        )
+	      );
+	      const hasThinkingName = /reason|thinking|effort/i.test(
+        String(element.getAttribute('aria-label') || '')
+      );
+	      const matchesExpected = selectedThinking.toLowerCase() === expected &&
+	        (isComposerTrigger || hasThinkingName || exactThinking || Boolean(openPicker));
+	      return matchesExpected || Boolean(openPicker);
+	    });
 	    break;
 	  case 'model-trigger':
 	    candidates = Array.from(document.querySelectorAll(
@@ -1968,6 +1990,21 @@ func observeSelectionSurface(
 	  const thinkingKnown = [
 	    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
 	  ];
+	  // The current composer renders the selected model family and effort as a
+	  // compact label such as "6 Pro". Treat only a known trailing effort label
+	  // as the selection; never expose the model-family prefix as intelligence.
+	  const canonicalThinkingLabel = value => {
+	    const normalized = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+	    return thinkingKnown.slice().sort((left, right) =>
+	      right.length - left.length
+	    ).find(candidate => {
+	      const known = candidate.toLowerCase();
+      return normalized === known || normalized.endsWith(' ' + known);
+	    }) || '';
+	  };
+	  const editor = document.querySelector('#prompt-textarea') ||
+	    document.querySelector('[contenteditable="true"][role="textbox"]');
+	  const composerForm = editor ? editor.closest('form') : null;
 	  const openThinkingPicker = element => {
 	    if (!element || element.getAttribute('aria-expanded') !== 'true') {
 	      return false;
@@ -1994,9 +2031,19 @@ func observeSelectionSurface(
 	    'button[aria-haspopup="menu"]'
 	  )).filter(button =>
 	    visible(button) && (
+	      (() => {
+	        const compactThinking = canonicalThinkingLabel(label(button));
+	        const isComposerTrigger = composerForm && button.closest('form') === composerForm;
+	        const exactThinking = thinkingKnown.some(item =>
+	          equal(item, label(button))
+	        );
+	        return (
 	      /reason|thinking|effort/i.test(accessibleName(button)) ||
-	      thinkingKnown.some(item => equal(item, label(button))) ||
-	      openThinkingPicker(button)
+	          exactThinking ||
+	          (isComposerTrigger && Boolean(compactThinking)) ||
+          openThinkingPicker(button)
+	        );
+	      })()
 	    )
 	  );
   const picker = pickers().length === 1 ? pickers()[0] : null;
@@ -2077,7 +2124,8 @@ func observeSelectionSurface(
       x: -1,
       y: -1
     })) : [];
-	  let selectedThinking = picker ? label(picker) : '';
+	  let selectedThinking = picker ?
+	    (canonicalThinkingLabel(label(picker)) || label(picker)) : '';
 	  if (thinkingMenu && thinkingSliderReady) {
 	    const sliderIndex = thinkingSliderValue - thinkingSliderMin;
 	    selectedThinking = thinkingSliderLabels[sliderIndex] ||
@@ -2092,8 +2140,6 @@ func observeSelectionSurface(
   const modelTriggers = directItems(thinkingMenu, 'menuitem');
   const modelOptions = directItems(modelMenu, 'menuitemradio').map(toOption);
   const selectedModels = modelOptions.filter(option => option.checked);
-  const editor = document.querySelector('#prompt-textarea') ||
-    document.querySelector('[contenteditable="true"][role="textbox"]');
   return {
     editor: actionable(editor),
     chat_count: chats.length,

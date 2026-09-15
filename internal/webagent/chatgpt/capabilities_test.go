@@ -19,6 +19,20 @@ func TestCapabilityProbeRecognizesOpenLinkedThinkingPicker(t *testing.T) {
 	}
 }
 
+func TestCapabilityProbeCanonicalizesCompactComposerThinkingLabel(t *testing.T) {
+	for _, required := range []string{
+		"canonicalThinkingLabel",
+		"normalized.endsWith(' ' + known)",
+		"right.length - left.length",
+		"isComposerTrigger",
+		"canonicalThinkingLabel(textOf(intelligencePicker))",
+	} {
+		if !strings.Contains(capabilityProbeExpression, required) {
+			t.Fatalf("capability probe expression missing compact-label guard %q", required)
+		}
+	}
+}
+
 func TestCapabilityMessageDoesNotClaimMissingModelCatalog(t *testing.T) {
 	probe := capabilityProbe{
 		OK:                   true,

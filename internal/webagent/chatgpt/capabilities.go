@@ -419,6 +419,18 @@ const capabilityProbeExpression = `(async () => {
 	  const intelligenceKnown = [
 	    'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
 	  ];
+	  // The current composer renders the selected model family and effort as a
+	  // compact label such as "6 Pro". Treat only a known trailing effort label
+	  // as the selection; never expose the model-family prefix as intelligence.
+	  const canonicalThinkingLabel = (value) => {
+	    const normalized = normalize(value).toLowerCase();
+	    return intelligenceKnown.slice().sort((left, right) =>
+	      right.length - left.length
+	    ).find((candidate) => {
+	      const known = candidate.toLowerCase();
+	      return normalized === known || normalized.endsWith(' ' + known);
+	    }) || '';
+	  };
 	  const openThinkingPicker = (button) => {
 	    if (!button || button.getAttribute('aria-expanded') !== 'true') {
 	      return false;
@@ -481,14 +493,20 @@ const capabilityProbeExpression = `(async () => {
   const pageButtons = Array.from(document.querySelectorAll('button,[role="button"]')).filter(visible);
 	  const intelligencePickers = pageButtons.filter((button) => {
 	    if (button.getAttribute('aria-haspopup') !== 'menu') return false;
+	    const compactThinking = canonicalThinkingLabel(textOf(button));
+	    const isComposerTrigger = form && button.closest('form') === form;
+	    const exactThinking = intelligenceKnown.some((candidate) =>
+	      candidate.toLowerCase() === textOf(button).toLowerCase()
+	    );
 	    return /reason|thinking|effort/i.test(accessibleName(button)) ||
-	      intelligenceKnown.some((candidate) =>
-	        candidate.toLowerCase() === textOf(button).toLowerCase()
-	      ) || openThinkingPicker(button);
+	      exactThinking ||
+	      (isComposerTrigger && Boolean(compactThinking)) ||
+	      openThinkingPicker(button);
 	  });
 	  const intelligencePicker = intelligencePickers.length === 1 ? intelligencePickers[0] : null;
 	  const selectedIntelligence = intelligencePicker ?
-	    (selectedThinkingFromOpenMenu(intelligencePicker) || textOf(intelligencePicker)) : '';
+	    (selectedThinkingFromOpenMenu(intelligencePicker) ||
+	      canonicalThinkingLabel(textOf(intelligencePicker)) || textOf(intelligencePicker)) : '';
   const intelligenceOptions = selectedIntelligence ? [selectedIntelligence] : [];
   const modelOptions = [];
   const selectedModel = '';

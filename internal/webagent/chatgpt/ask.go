@@ -1362,6 +1362,18 @@ func observeComposerWithTool(
 	    'Instant', 'Instant 5.5', 'Medium', 'High',
 	    'Extra High', 'Pro'
 	  ];
+	  // ChatGPT currently compresses the model family and thinking effort into
+	  // labels such as "6 Pro". Keep only a known trailing effort label so the
+	  // model-family prefix cannot be mistaken for the selected intelligence.
+	  const canonicalThinkingLabel = value => {
+	    const normalized = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+	    return knownThinking.slice().sort((left, right) =>
+	      right.length - left.length
+	    ).find(candidate => {
+	      const known = candidate.toLowerCase();
+      return normalized === known || normalized.endsWith(' ' + known);
+	    }) || '';
+	  };
 	  const accessibleName = element => String(
 	    element && (
 	      element.getAttribute('aria-label') ||
@@ -1395,7 +1407,7 @@ func observeComposerWithTool(
 	  };
 	  const selectedThinkingFromOpenMenu = button => {
 	    const picker = openThinkingPicker(button);
-	    if (!picker) return label(button);
+	    if (!picker) return canonicalThinkingLabel(label(button)) || label(button);
 	    if (picker.slider) {
 	      const minimum = Number(picker.slider.getAttribute('aria-valuemin'));
 	      const maximum = Number(picker.slider.getAttribute('aria-valuemax'));
@@ -1411,19 +1423,31 @@ func observeComposerWithTool(
 	    const checked = Array.from(
 	      picker.menu.querySelectorAll('[role="menuitemradio"]')
 	    ).find(option => option.getAttribute('aria-checked') === 'true');
-	    return checked ? label(checked) : label(button);
-	  };
+	    return checked ? label(checked) :
+	      canonicalThinkingLabel(label(button)) || label(button);
+  };
+	  const composerForm = editor ? editor.closest('form') : null;
 	  const intelligence = Array.from(document.querySelectorAll(
 	    'button[aria-haspopup="menu"]'
-	  )).filter(button =>
-	    visible(button) && (
-	      expectedThinking ?
-	        selectedThinkingFromOpenMenu(button).toLowerCase() === expectedThinking.toLowerCase() :
-	        /reason|thinking|effort/i.test(accessibleName(button)) ||
-	        knownThinking.some(item =>
-	          item.toLowerCase() === selectedThinkingFromOpenMenu(button).toLowerCase()
-	        ) || Boolean(openThinkingPicker(button))
-    )
+	  )).filter(button => {
+	    if (!visible(button)) return false;
+	    const openPicker = openThinkingPicker(button);
+	    const selectedThinking = selectedThinkingFromOpenMenu(button);
+	    const compactThinking = canonicalThinkingLabel(selectedThinking);
+	    const exactThinking = knownThinking.some(item =>
+	      item.toLowerCase() === label(button).toLowerCase()
+	    );
+	    const isComposerTrigger = composerForm && button.closest('form') === composerForm;
+	    const hasThinkingName = /reason|thinking|effort/i.test(accessibleName(button));
+	    if (expectedThinking) {
+	      return selectedThinking.toLowerCase() === expectedThinking.toLowerCase() &&
+	        (hasThinkingName || isComposerTrigger || exactThinking || Boolean(openPicker));
+	    }
+	    return hasThinkingName ||
+	      exactThinking ||
+	      (isComposerTrigger && Boolean(compactThinking)) ||
+	      Boolean(openPicker);
+	  })
   );
 	  const sends = Array.from(document.querySelectorAll(
 	    'button[data-testid="send-button"],button#composer-submit-button,' +
