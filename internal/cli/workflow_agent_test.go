@@ -493,6 +493,7 @@ func TestWebAgentSchemaCommands(t *testing.T) {
 		"webagent-conversation",
 		"webagent-target",
 		"webagent-evidence",
+		"webagent-operation-failure",
 		"webagent-cleanup",
 	} {
 		var out, errOut bytes.Buffer

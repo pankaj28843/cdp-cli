@@ -130,11 +130,31 @@ type TargetEvidence struct {
 }
 
 type Evidence struct {
-	RunID       string          `json:"run_id"`
-	BuildCommit string          `json:"build_commit"`
-	BrowserMode string          `json:"browser_mode"`
-	ReadMode    string          `json:"read_mode"`
-	Target      *TargetEvidence `json:"target,omitempty"`
+	RunID            string                    `json:"run_id"`
+	BuildCommit      string                    `json:"build_commit"`
+	BrowserMode      string                    `json:"browser_mode"`
+	ReadMode         string                    `json:"read_mode"`
+	Target           *TargetEvidence           `json:"target,omitempty"`
+	OperationFailure *OperationFailureEvidence `json:"operation_failure,omitempty"`
+}
+
+// OperationFailureEvidence retains only diagnostic identifiers, never provider
+// messages or raw browser errors, when a later cleanup failure takes precedence.
+type OperationFailureEvidence struct {
+	Code     string `json:"code"`
+	ErrClass string `json:"err_class"`
+	Stage    Stage  `json:"stage"`
+}
+
+// PreserveOperationFailure snapshots the original error identity before cleanup
+// replaces the terminal error. Repeated calls preserve the first cause.
+func (r *Result) PreserveOperationFailure() {
+	if r.Error == nil || r.Evidence.OperationFailure != nil {
+		return
+	}
+	r.Evidence.OperationFailure = &OperationFailureEvidence{
+		Code: r.Error.Code, ErrClass: r.Error.ErrClass, Stage: r.Stage,
+	}
 }
 
 type CleanupEvidence struct {

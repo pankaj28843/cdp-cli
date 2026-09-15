@@ -90,16 +90,21 @@ func runOwnedAction(
 			errClass = "resource"
 			message = "Gemini workflow was blocked by the headed browser resource budget"
 		}
+		originalFailure := &webagent.OperationFailureEvidence{Code: code, ErrClass: errClass, Stage: webagent.StagePlanned}
 		if cleanup.State == webagent.CleanupFailed {
 			code = "gemini_exact_target_cleanup_failed"
 			errClass = "cleanup"
 			message = "Gemini workflow could not prove exact target cleanup"
 		}
-		return operationFailure(
+		result := operationFailure(
 			runID, config.BuildCommit, operation, stage, readMode,
 			target, cleanup, nil, nil, code, errClass, message, "",
 			data, cleanupCommands(runID, cleanup),
 		)
+		if cleanup.State == webagent.CleanupFailed {
+			result.Evidence.OperationFailure = originalFailure
+		}
+		return result
 	}
 
 	target := &webagent.TargetEvidence{
@@ -116,6 +121,7 @@ func runOwnedAction(
 	defer func() {
 		cleanup, closeErr := lease.Close(context.Background())
 		if closeErr != nil || cleanup.State != browserflow.CleanupClosed || !cleanup.TargetGone {
+			result.PreserveOperationFailure()
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{

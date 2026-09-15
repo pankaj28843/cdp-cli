@@ -113,6 +113,9 @@ func TestRunOwnedCleanupFailurePreservesPerformedActionSafety(t *testing.T) {
 	if err := result.Validate(); err != nil {
 		t.Fatalf("cleanup failure result is invalid: %v; result=%+v", err, result)
 	}
+	if original := result.Evidence.OperationFailure; original == nil || original.Code != "chatgpt_rate_limited" || original.Stage != webagent.StageObserveTerminal {
+		t.Fatalf("original operation failure was lost: %+v", original)
+	}
 }
 
 func TestRunOwnedPreservesTargetCloseProofWhenJournalFinalizationFails(

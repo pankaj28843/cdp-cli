@@ -422,6 +422,13 @@ engine/query/page combination.
 
 ### Authenticated Provider Workflows
 
+If a ChatGPT or Gemini operation fails and exact-target cleanup also fails,
+the terminal error remains the cleanup failure. `evidence.operation_failure`
+retains the original error code, class, and stage, without provider messages or
+raw browser errors. Inspect it before diagnosing authentication or retrying;
+the existing dispatch/retry-safety evidence remains authoritative.
+Use `cdp schema webagent-operation-failure --json` for its field contract.
+
 `cdp workflow agent providers --json` is the executable capability catalog for
 authenticated web-agent providers. Each provider also exposes a browser-free
 `capabilities` command. An operation is callable only when its capability has

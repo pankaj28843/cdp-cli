@@ -76,16 +76,21 @@ func runOwned(
 			errClass = "resource"
 			message = "ChatGPT workflow was blocked by the headed browser resource budget"
 		}
+		originalFailure := &webagent.OperationFailureEvidence{Code: code, ErrClass: errClass, Stage: webagent.StagePlanned}
 		if cleanup.State == webagent.CleanupFailed {
 			code = "chatgpt_exact_target_cleanup_failed"
 			errClass = "cleanup"
 			message = "ChatGPT workflow could not prove exact target cleanup"
 		}
-		return operationFailure(
+		result := operationFailure(
 			runID, config.BuildCommit, operation, stage, readMode,
 			target, cleanup, code, errClass, message, data,
 			cleanupCommands(runID, cleanup),
 		)
+		if cleanup.State == webagent.CleanupFailed {
+			result.Evidence.OperationFailure = originalFailure
+		}
+		return result
 	}
 
 	target := &webagent.TargetEvidence{
@@ -102,6 +107,7 @@ func runOwned(
 	defer func() {
 		cleanup, _ := lease.Close(context.Background())
 		if cleanup.State != browserflow.CleanupClosed || !cleanup.TargetGone {
+			result.PreserveOperationFailure()
 			target.Closed = false
 			result.Evidence.Target = target
 			result.Cleanup = webagent.CleanupEvidence{

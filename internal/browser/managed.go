@@ -1900,6 +1900,7 @@ func StopManagedChrome(ctx context.Context, stateDir string, opts ManagedStopOpt
 				return result, err
 			}
 		}
+		trackedPIDs = uniqueSortedPIDs(append(trackedPIDs, remaining...))
 		remaining, endpointLive, verifyErr = waitForManagedChromeStopped(ctx, metadata, opts, trackedPIDs)
 		result.PIDs = uniqueSortedPIDs(append(result.PIDs, remaining...))
 		result.RemainingPIDs = remaining
@@ -1945,16 +1946,16 @@ func waitForManagedChromeStopped(ctx context.Context, metadata ManagedMetadata, 
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	var lastPIDs []int
+	// Retain known ownership until a complete observation proves absence. A
+	// timed-out first observation (including a second verification pass) is not
+	// evidence that the process tree or debugging endpoint has disappeared.
+	lastPIDs := uniqueSortedPIDs(trackedPIDs)
 	for {
 		pids, err := processLister(checkCtx, profile)
 		if len(pids) > 0 {
 			lastPIDs = uniqueSortedPIDs(pids)
 		}
 		if err != nil {
-			if ctx.Err() == nil && checkCtx.Err() != nil {
-				return lastPIDs, false, nil
-			}
 			return lastPIDs, false, fmt.Errorf("list managed Chrome processes during shutdown: %w", err)
 		}
 		endpointLive := false
@@ -1962,10 +1963,7 @@ func waitForManagedChromeStopped(ctx context.Context, metadata ManagedMetadata, 
 			endpointLive = endpointReachable(checkCtx, managedEndpointURL(metadata.DebuggingPort))
 		}
 		if err := checkCtx.Err(); err != nil {
-			if ctx.Err() == nil {
-				return lastPIDs, endpointLive, nil
-			}
-			return lastPIDs, endpointLive, err
+			return lastPIDs, endpointLive, fmt.Errorf("observe managed Chrome shutdown: %w", err)
 		}
 		if len(pids) == 0 && !endpointLive {
 			return nil, false, nil

@@ -192,6 +192,14 @@ func (a ActionEvidence) Validate() error {
 }
 
 func (e Evidence) Validate() error {
+	if failure := e.OperationFailure; failure != nil {
+		if !validStage(failure.Stage) {
+			return fmt.Errorf("invalid operation failure stage %q", failure.Stage)
+		}
+		if err := (OperationError{Code: failure.Code, ErrClass: failure.ErrClass, Message: "operation failed"}).Validate(); err != nil {
+			return fmt.Errorf("invalid operation failure evidence: %w", err)
+		}
+	}
 	for name, value := range map[string]string{
 		"evidence.run_id":       e.RunID,
 		"evidence.build_commit": e.BuildCommit,

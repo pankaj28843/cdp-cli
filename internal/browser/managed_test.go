@@ -793,7 +793,9 @@ func TestStopManagedChromeDoesNotClaimSuccessWhileOwnedTreeRemains(t *testing.T)
 		VerificationPollInterval: time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("StopManagedChrome returned error: %v", err)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("StopManagedChrome returned unexpected error: %v", err)
+		}
 	}
 	if result.Stopped || result.Reason == "" || len(result.RemainingPIDs) != 2 {
 		t.Fatalf("StopManagedChrome = %+v, want stopped=false with remaining PIDs", result)

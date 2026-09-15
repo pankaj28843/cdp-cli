@@ -208,11 +208,21 @@ func schemaCatalog() map[string]schemaInfo {
 			Name:        "webagent-evidence",
 			Description: "Privacy-safe operation provenance and target lifecycle evidence.",
 			Fields: []schemaField{
+				{Name: "operation_failure", Type: "webagent_operation_failure", Required: false, Description: "Original operation error identifiers and stage when cleanup subsequently fails; excludes messages and raw browser errors."},
 				{Name: "run_id", Type: "string", Required: true, Description: "Opaque unique operation identity."},
 				{Name: "build_commit", Type: "string", Required: true, Description: "cdp-cli build source revision or unknown for an unmanaged build."},
 				{Name: "browser_mode", Type: "string", Required: true, Description: "none, headed, or headless."},
 				{Name: "read_mode", Type: "string", Required: true, Description: "Provider-specific read path such as local_metadata or rendered_same_target."},
 				{Name: "target", Type: "webagent_target", Required: false, Description: "Exact target/session evidence when browser work occurred."},
+			},
+		},
+		"webagent-operation-failure": {
+			Name:        "webagent-operation-failure",
+			Description: "Original operation failure retained when exact-target cleanup also fails.",
+			Fields: []schemaField{
+				{Name: "code", Type: "string", Required: true, Description: "Stable original operation error code."},
+				{Name: "err_class", Type: "string", Required: true, Description: "Original operation error class."},
+				{Name: "stage", Type: "string", Required: true, Description: "Operation stage before cleanup took precedence."},
 			},
 		},
 		"webagent-cleanup": {

@@ -62,6 +62,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"webagent-conversation",
 		"webagent-target",
 		"webagent-evidence",
+		"webagent-operation-failure",
 		"webagent-cleanup",
 		"transcription-server",
 		"error-envelope",
