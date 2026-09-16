@@ -22,7 +22,10 @@ fi
 
 state_dir="$(mktemp -d)"
 service_pid=""
-service_url=""
+service_url="${CDP_TRANSCRIPTION_E2E_URL:-}"
+providers="${CDP_TRANSCRIPTION_E2E_PROVIDERS:-chatgpt-web,claude-web,gemini-web,microsoft-365-web,bing-web}"
+IFS=, read -r -a provider_ids <<<"$providers"
+expected_providers="$(printf '%s\n' "${provider_ids[@]}" | jq -Rsc 'split("\n") | map(select(length > 0)) | sort')"
 config_path="$state_dir/config.json"
 
 # The provider gate must exercise every provider named by this invocation.
@@ -42,6 +45,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+if [[ -z "$service_url" ]]; then
 port="$(python3 - <<'PY'
 import socket
 
@@ -65,30 +69,31 @@ env -u CDP_STATE_DIR \
   --address "127.0.0.1:$port" \
   --http-address "" \
   --default-provider chatgpt-web \
-  --providers chatgpt-web,claude-web,gemini-web,microsoft-365-web,bing-web \
+  --providers "$providers" \
   --auth-refresh-interval 0s \
   --max-audio-bytes 1073741824 \
   --print-ready >"$state_dir/service-ready.json" 2>"$state_dir/service.stderr" &
 service_pid=$!
+fi
 
 health=""
 for _ in $(seq 1 120); do
-  if ! kill -0 "$service_pid" 2>/dev/null; then
+  if [[ -n "$service_pid" ]] && ! kill -0 "$service_pid" 2>/dev/null; then
     printf 'transient transcription service exited before health became ready\n' >&2
     exit 1
   fi
   health="$(curl -sS --max-time 2 "$service_url/healthz" 2>/dev/null || true)"
-  if jq -e '([.providers[]] | length == 5)' <<<"$health" >/dev/null 2>&1; then
+  if jq -e --argjson expected "$expected_providers" '([.providers[].provider] | sort == $expected)' <<<"$health" >/dev/null 2>&1; then
     break
   fi
   sleep 0.25
 done
-jq -e '([.providers[].provider] | sort == ["bing-web", "chatgpt-web", "claude-web", "gemini-web", "microsoft-365-web"])' <<<"$health" >/dev/null || {
+jq -e --argjson expected "$expected_providers" '([.providers[].provider] | sort == $expected)' <<<"$health" >/dev/null || {
   printf 'transient transcription service did not expose all requested providers\n' >&2
   exit 1
 }
 
-for provider in chatgpt-web claude-web gemini-web microsoft-365-web bing-web; do
+for provider in "${provider_ids[@]}"; do
   if ! jq -e --arg provider "$provider" \
     'any(.providers[]; .provider == $provider and .file == true)' \
     <<<"$health" >/dev/null; then
@@ -133,18 +138,18 @@ assert_provider() {
     "$provider" "${#response}"
 }
 
-for provider in chatgpt-web claude-web gemini-web microsoft-365-web bing-web; do
+for provider in "${provider_ids[@]}"; do
   assert_provider "$provider"
 done
 
 health="$(curl -sS --max-time 5 "$service_url/healthz")"
-jq -e '
+jq -e --argjson expected "$expected_providers" '
   .status == "ok" and
-  ([.providers[].provider] | sort == ["bing-web", "chatgpt-web", "claude-web", "gemini-web", "microsoft-365-web"]) and
+  ([.providers[].provider] | sort == $expected) and
   all(.providers[]; .ready == true)
 ' <<<"$health" >/dev/null || {
   printf 'provider health was not ready after the sequential live requests\n' >&2
   exit 1
 }
 
-printf 'live provider transcription e2e passed: five sequential file-upload API providers\n'
+printf 'live provider transcription e2e passed: %d sequential file-upload API providers\n' "${#provider_ids[@]}"

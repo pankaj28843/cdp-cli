@@ -51,12 +51,11 @@ type ServerConfig struct {
 
 type Server struct {
 	// A request owns its ID until provider work and audio cleanup finish.
-	activeRequests       sync.Map
-	config               ServerConfig
-	httpServer           *http.Server
-	availability         *availabilityTracker
-	authorityRefreshMu   sync.Mutex
-	authorityLastAttempt map[ProviderID]time.Time
+	activeRequests sync.Map
+	config         ServerConfig
+	httpServer     *http.Server
+	availability   *availabilityTracker
+	storageHealth  *storageHealthProbe
 }
 
 func NewServer(config ServerConfig) (*Server, error) {
@@ -86,10 +85,13 @@ func NewServer(config ServerConfig) (*Server, error) {
 	if config.Logger == nil {
 		config.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	if config.AuthCoordinator == nil {
+		config.AuthCoordinator = NewAuthRefreshCoordinator(config.Registry, 0)
+	}
 	server := &Server{
-		config:               config,
-		availability:         newAvailabilityTracker(filepath.Join(config.Store.Root(), "availability.json"), time.Now, config.Logger),
-		authorityLastAttempt: make(map[ProviderID]time.Time),
+		config:        config,
+		availability:  newAvailabilityTracker(filepath.Join(config.Store.Root(), "availability.json"), time.Now, config.Logger),
+		storageHealth: &storageHealthProbe{check: config.Store.CheckWritable, now: time.Now},
 	}
 	server.httpServer = &http.Server{
 		Addr:              config.Address,
@@ -124,7 +126,8 @@ func (s *Server) Handler() http.Handler {
 }
 
 type authorityAuthRefreshRequest struct {
-	Provider ProviderID `json:"provider"`
+	Provider           ProviderID `json:"provider"`
+	ObservedCapturedAt string     `json:"observed_captured_at,omitempty"`
 }
 
 func (s *Server) handleAuthorityAuthRefresh(w http.ResponseWriter, r *http.Request) {
@@ -154,44 +157,69 @@ func (s *Server) handleAuthorityAuthRefresh(w http.ResponseWriter, r *http.Reque
 	// One authority-wide lock prevents simultaneous provider tabs when several
 	// leaves detect stale state together. Freshness is checked after taking the
 	// lock, so followers become cooldown no-ops after the leader succeeds.
-	s.authorityRefreshMu.Lock()
-	defer s.authorityRefreshMu.Unlock()
+	coordinator := s.config.AuthCoordinator
+	waitContext, stopWaiting := context.WithTimeout(r.Context(), s.config.AuthTimeout)
+	defer stopWaiting()
+	if err := coordinator.lockRequest(waitContext); err != nil {
+		writeAPIError(w, http.StatusGatewayTimeout, APIError{Type: "provider_unavailable", Code: "auth_refresh_timeout", Message: "timed out waiting for auth recovery"})
+		return
+	}
+	defer coordinator.runMu.Unlock()
+	if r.Context().Err() != nil {
+		return
+	}
 	now := time.Now().UTC()
 	capturedAt, hasState := authority.AuthCapturedAt(r.Context())
+	minimumAge := s.config.AuthRefreshRequestMinAge
+	if request.ObservedCapturedAt != "" {
+		observed, err := time.Parse(time.RFC3339Nano, request.ObservedCapturedAt)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, APIError{Type: "invalid_request_error", Code: "invalid_auth_generation", Message: "observed auth generation must be an RFC3339 timestamp"})
+			return
+		}
+		if hasState && !observed.Equal(capturedAt) {
+			writeJSON(w, http.StatusOK, map[string]any{"provider": request.Provider, "refreshed": false, "reason": "authority_newer"})
+			return
+		}
+		// A leaf already tried this exact generation. Permit bounded repair
+		// of early expiry without allowing a refresh per incoming request.
+		minimumAge = time.Minute
+		if since := now.Sub(coordinator.lastAttempt[request.Provider]); since < time.Minute {
+			writeJSON(w, http.StatusOK, map[string]any{"provider": request.Provider, "refreshed": false, "reason": "request_cooldown", "retry_after_seconds": int64((time.Minute - since + time.Second - 1) / time.Second)})
+			return
+		}
+	}
 	stateAge := time.Duration(0)
 	if hasState {
 		stateAge = now.Sub(capturedAt)
 		if stateAge < 0 {
 			stateAge = 0
 		}
-		if stateAge < s.config.AuthRefreshRequestMinAge {
+		if stateAge < minimumAge {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"provider":            request.Provider,
 				"refreshed":           false,
 				"reason":              "minimum_age",
-				"minimum_age_seconds": int64(s.config.AuthRefreshRequestMinAge / time.Second),
-				"retry_after_seconds": int64((s.config.AuthRefreshRequestMinAge - stateAge + time.Second - 1) / time.Second),
+				"minimum_age_seconds": int64(minimumAge / time.Second),
+				"retry_after_seconds": int64((minimumAge - stateAge + time.Second - 1) / time.Second),
 			})
 			return
 		}
 	}
-	if lastAttempt := s.authorityLastAttempt[request.Provider]; !lastAttempt.IsZero() {
-		elapsed := now.Sub(lastAttempt)
-		if elapsed < s.config.AuthRefreshRequestMinAge {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"provider":            request.Provider,
-				"refreshed":           false,
-				"reason":              "request_cooldown",
-				"minimum_age_seconds": int64(s.config.AuthRefreshRequestMinAge / time.Second),
-				"retry_after_seconds": int64((s.config.AuthRefreshRequestMinAge - elapsed + time.Second - 1) / time.Second),
-			})
-			return
-		}
+	if retry := coordinator.retries[request.Provider]; now.Before(retry.next) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"provider":            request.Provider,
+			"refreshed":           false,
+			"reason":              "request_cooldown",
+			"minimum_age_seconds": int64(s.config.AuthRefreshRequestMinAge / time.Second),
+			"retry_after_seconds": int64((retry.next.Sub(now) + time.Second - 1) / time.Second),
+		})
+		return
 	}
-	s.authorityLastAttempt[request.Provider] = now
 	refreshContext, cancel := context.WithTimeout(r.Context(), s.config.AuthTimeout)
 	defer cancel()
 	refreshed, err := authority.RefreshAuthNow(refreshContext, capturedAt)
+	coordinator.recordAttempt(request.Provider, err, time.Now())
 	if err != nil {
 		s.config.Logger.Warn("authority auth refresh failed", "event", "transcription.auth_refresh.request_failed", "provider", request.Provider)
 		writeAPIError(w, http.StatusBadGateway, APIError{Type: "provider_unavailable", Code: "auth_refresh_failed", Message: "provider auth refresh failed"})
@@ -314,6 +342,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+func (s *Server) saveRecord(ctx context.Context, record RequestRecord) error {
+	err := s.config.Store.SaveRecord(ctx, record)
+	if err != nil {
+		s.storageHealth.invalidate()
+	}
+	return err
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, APIError{Type: "invalid_request_error", Message: "method not allowed"})
@@ -334,7 +370,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	storageReady := s.config.Store.CheckWritable() == nil
+	storage := s.storageHealth.snapshot(r.Context())
+	storageReady := storage.Ready
 	statusCode := http.StatusOK
 	if !storageReady {
 		status = "degraded"
@@ -343,6 +380,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, statusCode, map[string]any{
 		"status":           status,
 		"storage_ready":    storageReady,
+		"storage_check":    storage,
 		"contract_version": ContractVersion,
 		"transport":        requestTransport(r),
 		"default_provider": s.config.DefaultProvider,
@@ -528,6 +566,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		if errors.Is(err, ErrAudioTooLarge) {
 			status = http.StatusRequestEntityTooLarge
 		} else if errors.As(err, &pathError) {
+			s.storageHealth.invalidate()
 			status = http.StatusServiceUnavailable
 			errorType = "internal_error"
 		}
@@ -543,7 +582,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 
 	provider, providerErr := s.config.Registry.Select(request.Provider, s.config.DefaultProvider)
 	record := newRequestRecord(request, providerID(provider), PhasePersisted)
-	if err := s.config.Store.SaveRecord(r.Context(), record); err != nil {
+	if err := s.saveRecord(r.Context(), record); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, APIError{Type: "internal_error", Code: "record_persist_failed", Message: "transcription request could not be persisted"})
 		return
 	}
@@ -566,7 +605,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		writeAPIError(w, contentErr.Status, apiErrorFrom(contentErr))
 		return
 	}
-	if err := ensureProviderAuth(r.Context(), provider, s.config.AuthTimeout); err != nil {
+	if err := s.ensureProviderAuth(r.Context(), provider); err != nil {
 		s.recordObservedFileFailure(provider, err)
 		s.failRecord(r.Context(), &record, err)
 		s.traceFile("file.failed", transport, record, err)
@@ -574,7 +613,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		return
 	}
 	record.Phase = PhaseDispatched
-	_ = s.config.Store.SaveRecord(r.Context(), record)
+	_ = s.saveRecord(r.Context(), record)
 	s.traceFile("file.dispatched", transport, record, nil)
 
 	result, runErr, attempts := runFileProvider(r.Context(), provider, request)
@@ -594,7 +633,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	record.Phase = PhaseCompleted
 	record.Text = result.Text
 	record.UpdatedAt = time.Now().UTC()
-	if err := s.config.Store.SaveRecord(r.Context(), record); err != nil {
+	if err := s.saveRecord(r.Context(), record); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, APIError{Type: "internal_error", Code: "record_save_failed", Message: "transcription result could not be persisted"})
 		return
 	}
@@ -667,7 +706,7 @@ func (s *Server) failRecord(ctx context.Context, record *RequestRecord, err erro
 	record.UpdatedAt = time.Now().UTC()
 	apiError := apiErrorFrom(err)
 	record.Error = &apiError
-	_ = s.config.Store.SaveRecord(ctx, *record)
+	_ = s.saveRecord(ctx, *record)
 }
 
 func (s *Server) traceFile(event, transport string, record RequestRecord, err error) {
@@ -852,7 +891,7 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 		if client.audioBytes > 0 && client.record.Phase != PhaseCompleted && client.record.Phase != PhaseFailed {
 			client.record.Phase = PhaseCancelled
 			client.record.UpdatedAt = time.Now().UTC()
-			_ = s.config.Store.SaveRecord(context.Background(), client.record)
+			_ = s.saveRecord(context.Background(), client.record)
 			client.trace("realtime.cancelled", PhaseCancelled, nil)
 		}
 	}()
@@ -959,7 +998,7 @@ func (c *realtimeConnection) initialize(ctx context.Context, event realtimeClien
 	if err != nil {
 		return err
 	}
-	if err := ensureProviderAuth(ctx, provider, c.server.config.AuthTimeout); err != nil {
+	if err := c.server.ensureProviderAuth(ctx, provider); err != nil {
 		return err
 	}
 	session, attempts, err := runRealtimeProvider(ctx, provider, config)
@@ -1018,6 +1057,7 @@ func (c *realtimeConnection) append(ctx context.Context, connection *websocket.C
 	}
 	asset, err := c.server.config.Store.AppendAudio(ctx, c.requestID, "realtime.pcm", "audio/pcm", audio)
 	if err != nil {
+		c.server.storageHealth.invalidate()
 		return err
 	}
 	c.audioBytes = asset.Bytes
@@ -1027,7 +1067,7 @@ func (c *realtimeConnection) append(ctx context.Context, connection *websocket.C
 		c.record.Audio = asset
 		c.record.Phase = PhasePersisted
 		c.record.UpdatedAt = time.Now().UTC()
-		if err := c.server.config.Store.SaveRecord(ctx, c.record); err != nil {
+		if err := c.server.saveRecord(ctx, c.record); err != nil {
 			return err
 		}
 	}
@@ -1053,7 +1093,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 	c.record.Audio = c.request.Audio
 	c.record.Phase = PhaseCommitting
 	c.record.UpdatedAt = time.Now().UTC()
-	_ = c.server.config.Store.SaveRecord(ctx, c.record)
+	_ = c.server.saveRecord(ctx, c.record)
 	if err := connection.Write(ctx, websocket.MessageText, marshalRealtime(map[string]any{
 		"type":     "input_audio_buffer.committed",
 		"event_id": NewRequestID(),
@@ -1067,7 +1107,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Phase = PhaseFailed
 		c.record.Error = apiErrorPtr(apiErrorFrom(err))
 		c.record.UpdatedAt = time.Now().UTC()
-		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		_ = c.server.saveRecord(context.Background(), c.record)
 		c.trace("realtime.commit_failed", PhaseFailed, err)
 		return err
 	}
@@ -1075,7 +1115,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Phase = PhaseFailed
 		c.record.Error = apiErrorPtr(apiErrorFrom(err))
 		c.record.UpdatedAt = time.Now().UTC()
-		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		_ = c.server.saveRecord(context.Background(), c.record)
 		c.trace("realtime.send_failed", PhaseFailed, err)
 		return err
 	}
@@ -1083,7 +1123,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Phase = PhaseFailed
 		c.record.Error = apiErrorPtr(APIError{Type: "provider_error", Message: c.state.FailureReason})
 		c.record.UpdatedAt = time.Now().UTC()
-		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		_ = c.server.saveRecord(context.Background(), c.record)
 		c.trace("realtime.provider_failed", PhaseFailed, errors.New(c.state.FailureReason))
 		return fmt.Errorf("realtime provider failed: %s", c.state.FailureReason)
 	}
@@ -1091,7 +1131,7 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Phase = PhaseFailed
 		c.record.Error = apiErrorPtr(APIError{Type: "provider_error", Code: "final_transcript_missing", Message: "realtime provider did not return a final transcription"})
 		c.record.UpdatedAt = time.Now().UTC()
-		_ = c.server.config.Store.SaveRecord(context.Background(), c.record)
+		_ = c.server.saveRecord(context.Background(), c.record)
 		c.trace("realtime.final_missing", PhaseFailed, errors.New("realtime provider did not return a final transcription"))
 		return errors.New("realtime provider did not return a final transcription")
 	}
@@ -1099,13 +1139,39 @@ func (c *realtimeConnection) commit(ctx context.Context, connection *websocket.C
 		c.record.Phase = PhaseCompleted
 		c.record.Text = c.state.Text(c.itemID)
 		c.record.UpdatedAt = time.Now().UTC()
-		if err := c.server.config.Store.SaveRecord(ctx, c.record); err != nil {
+		if err := c.server.saveRecord(ctx, c.record); err != nil {
 			return err
 		}
 		_ = c.server.config.Store.SaveResult(ctx, c.record, Result{Task: TaskTranscribe, Text: c.record.Text})
 		c.trace("realtime.completed", PhaseCompleted, nil)
 	}
 	return nil
+}
+
+func (s *Server) ensureProviderAuth(ctx context.Context, provider Provider) error {
+	if provider.Capabilities(ctx).Ready {
+		return nil
+	}
+	coordinator := s.config.AuthCoordinator
+	ctx, cancel := context.WithTimeout(ctx, s.config.AuthTimeout)
+	defer cancel()
+	if err := coordinator.lockRequest(ctx); err != nil {
+		return providerError(504, "provider_unavailable", "auth_refresh_timeout", "timed out waiting for auth recovery", true)
+	}
+	defer coordinator.runMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A concurrent refresh may have repaired state while this request waited.
+	if provider.Capabilities(ctx).Ready {
+		return nil
+	}
+	if time.Now().Before(coordinator.retries[provider.ID()].next) {
+		return providerError(503, "provider_unavailable", "auth_refresh_cooldown", "provider auth recovery is waiting for its retry window", true)
+	}
+	err := ensureProviderAuth(ctx, provider, s.config.AuthTimeout)
+	coordinator.recordAttempt(provider.ID(), err, time.Now())
+	return err
 }
 
 func ensureProviderAuth(ctx context.Context, provider Provider, timeout time.Duration) error {
@@ -1125,28 +1191,7 @@ func ensureProviderAuth(ctx context.Context, provider Provider, timeout time.Dur
 	}
 	authContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	_, _, err := resilience.Run(
-		authContext,
-		resilience.Policy{MaxAttempts: 3, Backoff: []time.Duration{250 * time.Millisecond, 500 * time.Millisecond}},
-		resilience.Hooks[struct{}]{
-			Attempt: func(attemptContext context.Context, _ int) (struct{}, error) {
-				return struct{}{}, refresher.EnsureAuthFresh(attemptContext)
-			},
-			Classify: func(attemptErr error) resilience.Decision {
-				if errors.Is(attemptErr, context.Canceled) || errors.Is(attemptErr, context.DeadlineExceeded) {
-					return resilience.Decision{}
-				}
-				var providerErr *ProviderError
-				if errors.As(attemptErr, &providerErr) && providerErr != nil {
-					return resilience.Decision{Retry: providerErr.Retryable}
-				}
-				// Auth evidence can be transiently unavailable while the headed
-				// browser repairs a session or sheds a stale target. Keep the
-				// request alive for the short bounded repair budget.
-				return resilience.Decision{Retry: true}
-			},
-		},
-	)
+	err := refresher.EnsureAuthFresh(authContext)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return providerError(http.StatusGatewayTimeout, "provider_unavailable", "auth_refresh_timeout", "transcription provider auth refresh timed out", true)

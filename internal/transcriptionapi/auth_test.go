@@ -73,6 +73,54 @@ func TestAuthRefreshCoordinatorRefreshesAllProvidersIndependently(t *testing.T) 
 	}
 }
 
+func TestAuthRefreshCoordinatorDoesNotHammerFailedProvider(t *testing.T) {
+	provider := &authRefreshTestProvider{id: ProviderChatGPT, err: &ProviderError{Status: 503, Retryable: true}}
+	coordinator := NewAuthRefreshCoordinator(NewRegistry(provider), 15*time.Minute)
+	coordinator.RefreshAll(context.Background())
+	coordinator.RefreshAll(context.Background())
+	if got := provider.calls.Load(); got != 1 {
+		t.Fatalf("back-to-back failed refresh calls = %d, want one bounded attempt", got)
+	}
+}
+
+func TestAuthRefreshFailureRetriesAreBoundedAndSuccessResetsThem(t *testing.T) {
+	provider := &authRefreshTestProvider{id: ProviderChatGPT, err: &ProviderError{Status: 503, Retryable: true}}
+	c := NewAuthRefreshCoordinator(NewRegistry(provider), 15*time.Minute)
+	for _, want := range []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 5 * time.Minute} {
+		previous := c.retries[provider.id]
+		previous.next = time.Now().Add(-time.Second)
+		c.retries[provider.id] = previous
+		before := time.Now()
+		c.RefreshAll(context.Background())
+		delay := c.retries[provider.id].next.Sub(before)
+		if delay < want || delay > want+time.Second {
+			t.Fatalf("retry delay = %s, want %s", delay, want)
+		}
+		if next := c.nextDelay(time.Now()); next > want+time.Second {
+			t.Fatalf("scheduler sleeps %s past retry budget %s", next, want)
+		}
+	}
+	provider.err = nil
+	retry := c.retries[provider.id]
+	retry.next = time.Now().Add(-time.Second)
+	c.retries[provider.id] = retry
+	c.RefreshAll(context.Background())
+	if len(c.retries) != 0 {
+		t.Fatal("successful repair did not resume the ordinary freshness cadence")
+	}
+}
+
+func TestAuthRefreshDoesNotFastRetryAuthRejectionOrRateLimit(t *testing.T) {
+	for _, status := range []int{401, 403, 429} {
+		c := NewAuthRefreshCoordinator(nil, 15*time.Minute)
+		now := time.Now()
+		c.recordAttempt(ProviderChatGPT, &ProviderError{Status: status, Retryable: true}, now)
+		if delay := c.retries[ProviderChatGPT].next.Sub(now); delay < 15*time.Minute {
+			t.Fatalf("status %d got unsafe fast retry %s", status, delay)
+		}
+	}
+}
+
 func TestAuthRefreshCoordinatorSerializesProviders(t *testing.T) {
 	var active atomic.Int32
 	var maxActive atomic.Int32
@@ -239,5 +287,59 @@ func TestNextAlignedScheduleDelayUsesWallClockOffset(t *testing.T) {
 				t.Fatalf("delay = %s, want %s", got, test.want)
 			}
 		})
+	}
+}
+
+// A stale provider becomes ready only after its one request-owned repair.
+type onDemandAuthProvider struct {
+	fakeProvider
+	ready atomic.Bool
+	calls atomic.Int32
+}
+
+func (p *onDemandAuthProvider) Capabilities(context.Context) ProviderCapability {
+	return ProviderCapability{Provider: p.id, File: true, Ready: p.ready.Load()}
+}
+
+func (p *onDemandAuthProvider) EnsureAuthFresh(ctx context.Context) error {
+	p.calls.Add(1)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Millisecond):
+		p.ready.Store(true)
+		return nil
+	}
+}
+
+func TestStaleRequestAuthRefreshesImmediatelyAndConcurrentRequestsJoin(t *testing.T) {
+	p := &onDemandAuthProvider{fakeProvider: fakeProvider{id: ProviderChatGPT}}
+	s := &Server{config: ServerConfig{AuthTimeout: time.Second, AuthCoordinator: NewAuthRefreshCoordinator(NewRegistry(p), 15*time.Minute)}}
+	results := make(chan error, 8)
+	for range 8 {
+		go func() { results <- s.ensureProviderAuth(context.Background(), p) }()
+	}
+	for range 8 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p.calls.Load() != 1 || !p.ready.Load() {
+		t.Fatalf("calls=%d ready=%v", p.calls.Load(), p.ready.Load())
+	}
+}
+
+func TestRequestAuthWaitHonorsDeadline(t *testing.T) {
+	p := &onDemandAuthProvider{fakeProvider: fakeProvider{id: ProviderChatGPT}}
+	c := NewAuthRefreshCoordinator(NewRegistry(p), 0)
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+	s := &Server{config: ServerConfig{AuthTimeout: 20 * time.Millisecond, AuthCoordinator: c}}
+	start := time.Now()
+	if err := s.ensureProviderAuth(context.Background(), p); err == nil {
+		t.Fatal("expected bounded wait failure")
+	}
+	if time.Since(start) > time.Second || p.calls.Load() != 0 {
+		t.Fatal("wait ignored deadline or started another refresh")
 	}
 }

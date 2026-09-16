@@ -451,16 +451,19 @@ type authRepairFlight struct {
 	generation string
 	done       chan struct{}
 	err        error
+	retryAt    time.Time
+	failures   int
 }
 
 type authRepairGroup struct {
-	mu     sync.Mutex
-	flight *authRepairFlight
+	mu          sync.Mutex
+	flight      *authRepairFlight
+	nextAttempt time.Time
 }
 
 func (g *authRepairGroup) Do(ctx context.Context, generation string, refresh func(context.Context) error) error {
 	g.mu.Lock()
-	if flight := g.flight; flight != nil && flight.generation == generation {
+	if flight := g.flight; flight != nil && flight.generation == generation && (flight.retryAt.IsZero() || time.Now().Before(flight.retryAt)) {
 		g.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -469,16 +472,28 @@ func (g *authRepairGroup) Do(ctx context.Context, generation string, refresh fun
 			return flight.err
 		}
 	}
+	if time.Now().Before(g.nextAttempt) {
+		g.mu.Unlock()
+		return transcriptionProviderError(503, "provider_unavailable", "auth_refresh_cooldown", "auth recovery is waiting for its retry window", true)
+	}
 	flight := &authRepairFlight{generation: generation, done: make(chan struct{})}
+	if previous := g.flight; previous != nil && previous.generation == generation {
+		flight.failures = previous.failures
+	}
 	g.flight = flight
 	g.mu.Unlock()
 
 	err := refresh(ctx)
 	g.mu.Lock()
 	flight.err = err
-	if g.flight == flight {
-		g.flight = nil
+	if err != nil {
+		flight.failures++
+		flight.retryAt = time.Now().Add(transcriptionapi.AuthRefreshRetryDelay(err, flight.failures))
+	} else {
+		flight.failures = 0
+		flight.retryAt = time.Now().Add(time.Minute)
 	}
+	g.nextAttempt = flight.retryAt
 	close(flight.done)
 	g.mu.Unlock()
 	return err
@@ -607,14 +622,11 @@ func (p *chatGPTTranscriptionProvider) refreshAuthLocked(ctx context.Context) er
 		return p.refresh(ctx)
 	}
 	if !p.app.selectHeadedProviderRuntime() {
-		return fmt.Errorf("ChatGPT headed browser runtime is unavailable for auth repair")
+		return transcriptionProviderError(503, "provider_unavailable", "browser_unavailable", "ChatGPT headed browser runtime is unavailable for auth repair", true)
 	}
 	browserConfig, refreshedStore, unavailable := p.app.chatgptBrowserOperationConfig(ctx, webagent.OperationTranscribe)
 	if unavailable != nil {
-		if unavailable.Error != nil {
-			return fmt.Errorf("%s", unavailable.Error.Message)
-		}
-		return fmt.Errorf("ChatGPT headed browser auth repair is unavailable")
+		return webAgentProviderError(*unavailable)
 	}
 	result := chatgpt.RefreshAuth(ctx, chatgpt.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
 	if !result.OK {
@@ -876,14 +888,11 @@ func (p *geminiTranscriptionProvider) refreshAuthLocked(ctx context.Context) err
 		return p.refresh(ctx)
 	}
 	if !p.app.selectHeadedProviderRuntime() {
-		return fmt.Errorf("Gemini headed browser runtime is unavailable for auth repair")
+		return transcriptionProviderError(503, "provider_unavailable", "browser_unavailable", "Gemini headed browser runtime is unavailable for auth repair", true)
 	}
 	browserConfig, refreshedStore, unavailable := p.app.geminiBrowserOperationConfig(ctx, webagent.OperationAuthRefresh)
 	if unavailable != nil {
-		if unavailable.Error != nil {
-			return fmt.Errorf("%s", unavailable.Error.Message)
-		}
-		return fmt.Errorf("Gemini headed browser auth repair is unavailable")
+		return webAgentProviderError(*unavailable)
 	}
 	result := gemini.RefreshAuth(ctx, gemini.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
 	if !result.OK {
@@ -1070,14 +1079,11 @@ func (p *m365TranscriptionProvider) refreshAuth(ctx context.Context) error {
 
 func (p *m365TranscriptionProvider) refreshAuthLocked(ctx context.Context) error {
 	if !p.app.selectHeadedProviderRuntime() {
-		return fmt.Errorf("Microsoft 365 headed browser runtime is unavailable for auth repair")
+		return transcriptionProviderError(503, "provider_unavailable", "browser_unavailable", "Microsoft 365 headed browser runtime is unavailable for auth repair", true)
 	}
 	browserConfig, refreshedStore, unavailable := p.app.m365BrowserOperationConfig(ctx, webagent.OperationTranscribe)
 	if unavailable != nil {
-		if unavailable.Error != nil {
-			return fmt.Errorf("%s", unavailable.Error.Message)
-		}
-		return fmt.Errorf("Microsoft 365 headed browser auth repair is unavailable")
+		return webAgentProviderError(*unavailable)
 	}
 	result := m365.RefreshAuth(ctx, m365.AuthRefreshConfig{BrowserConfig: browserConfig, Store: refreshedStore})
 	if !result.OK {
@@ -1202,6 +1208,8 @@ func webAgentProviderError(result webagent.Result) error {
 		status = 504
 	case "connection":
 		status = 503
+	case "rate_limit":
+		status = 429
 	}
 	code := result.Error.Code
 	message := result.Error.Message

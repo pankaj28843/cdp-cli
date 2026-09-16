@@ -1595,11 +1595,8 @@ func handleRPC(ctx context.Context, conn net.Conn, client runtimeRPCClient, opts
 	}
 	err := client.CallSession(callCtx, req.SessionID, req.Method, params, &result)
 	if err != nil {
-		if ownerID != "" && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			if _, cleanupErr := endRPCInvocationLeaseAfterCancellation(leases, client, ownerID); cleanupErr != nil {
-				appendLogForMode(context.Background(), os.Getenv("CDP_DAEMON_STATE_DIR"), runtimeModeName(os.Getenv("CDP_DAEMON_BROWSER_MODE")), LogEntry{Level: "warn", Event: "lease_cleanup_failed", Message: cleanupErr.Error(), PID: os.Getpid()})
-			}
-		}
+		// A request deadline may bound one observation inside a longer workflow.
+		// Only explicit end or lease expiry owns whole-invocation cleanup.
 		_ = writeRPCResponse(responseCtx, conn, rpcErrorResponseForError("rpc_call_failed", "connection", err))
 		return
 	}

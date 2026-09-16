@@ -245,20 +245,42 @@ func TestAuthorityRefreshAPIEnforcesMinimumAgeAndCoalesces(t *testing.T) {
 	}
 }
 
-func TestEnsureProviderAuthRetriesWithinShortRequestBudget(t *testing.T) {
+func TestRequestAuthFailureSharesCooldownWithScheduledRefresh(t *testing.T) {
+	provider := &fakeProvider{id: ProviderChatGPT, notReady: true, ensureErr: &ProviderError{Status: 503, Retryable: true}}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(ServerConfig{Registry: NewRegistry(provider), Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ensureProviderAuth(context.Background(), provider); err == nil {
+		t.Fatal("initial failure was lost")
+	}
+	if err := server.ensureProviderAuth(context.Background(), provider); err == nil {
+		t.Fatal("cooldown was lost")
+	}
+	server.config.AuthCoordinator.RefreshAll(context.Background())
+	if provider.ensureCalls != 1 {
+		t.Fatalf("request/schedule performed %d attempts during one failure window", provider.ensureCalls)
+	}
+}
+
+func TestEnsureProviderAuthMakesOneAttemptPerRequest(t *testing.T) {
 	provider := &fakeProvider{
 		id:             ProviderChatGPT,
 		notReady:       true,
 		ensureSequence: []error{errors.New("headed browser is still repairing"), errors.New("auth evidence is not ready")},
 	}
-	if err := ensureProviderAuth(context.Background(), provider, 2*time.Second); err != nil {
-		t.Fatalf("ensureProviderAuth() error = %v", err)
+	if err := ensureProviderAuth(context.Background(), provider, 2*time.Second); err == nil {
+		t.Fatal("initial auth failure was hidden by repeated provider attempts")
 	}
 	provider.requestMu.Lock()
 	calls := provider.ensureCalls
 	provider.requestMu.Unlock()
-	if calls != 3 {
-		t.Fatalf("ensure auth calls = %d, want three bounded attempts", calls)
+	if calls != 1 {
+		t.Fatalf("ensure auth calls = %d, want one bounded attempt", calls)
 	}
 }
 
@@ -1467,5 +1489,45 @@ func TestServerWritesStructuredLifecycleLogsWithoutRequestContent(t *testing.T) 
 	}
 	if strings.Contains(logged, "request_id") || strings.Contains(logged, "audio_bytes") {
 		t.Fatalf("lifecycle logs contain request content markers: %s", logged)
+	}
+}
+
+func TestAuthorityRepairsRejectedCurrentGenerationWithoutLongFreshnessWait(t *testing.T) {
+	p := &fakeProvider{id: ProviderGemini, authorityAt: time.Now().UTC().Add(-5 * time.Minute)}
+	store, err := NewEphemeralStore(t.TempDir(), 8<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewServer(ServerConfig{Registry: NewRegistry(p), Store: store, AuthRefreshAPIEnabled: true, AuthRefreshRequestMinAge: 45 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(generation string) map[string]any {
+		t.Helper()
+		data, _ := json.Marshal(map[string]any{"provider": ProviderGemini, "observed_captured_at": generation})
+		req := httptest.NewRequest(http.MethodPost, "/v1/provider-auth/refresh", bytes.NewReader(data))
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status=%d", w.Code)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	old := p.authorityAt.Format(time.RFC3339Nano)
+	if response := post(old); response["refreshed"] != true {
+		t.Fatalf("current rejected generation not repaired: %v", response)
+	}
+	if response := post(old); response["reason"] != "authority_newer" {
+		t.Fatalf("older generation caused more work: %v", response)
+	}
+	if response := post(p.authorityAt.Format(time.RFC3339Nano)); response["reason"] != "request_cooldown" {
+		t.Fatalf("new generation lacks anti-hammering guard: %v", response)
+	}
+	if p.forceAuthCalls != 1 {
+		t.Fatalf("refresh calls=%d", p.forceAuthCalls)
 	}
 }

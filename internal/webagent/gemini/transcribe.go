@@ -68,6 +68,8 @@ type transcribeFailure struct {
 	auth     bool
 }
 
+func (f *transcribeFailure) Error() string { return f.message }
+
 func Transcribe(ctx context.Context, config TranscribeConfig, filePath string, durationMS int64) webagent.Result {
 	runID := webagent.NewRunID()
 	data := TranscriptionData{
@@ -344,6 +346,10 @@ func receiveGeminiTranscript(ctx context.Context, client *http.Client, template 
 		}
 		transcript, final, frameAID, err := parseGeminiReceivePayload(payload)
 		if err != nil {
+			var failure *transcribeFailure
+			if errors.As(err, &failure) {
+				return receiveResult{failure: failure}
+			}
 			return receiveResult{failure: providerTranscriptionFailure("Gemini dictation response shape changed")}
 		}
 		if frameAID >= 0 {
@@ -466,6 +472,26 @@ func parseGeminiReceivePayload(payload []byte) (string, bool, int64, error) {
 		latestAID = frameAID
 		var values []string
 		if err := json.Unmarshal(frame[1], &values); err != nil {
+			// The receive stream can carry an HTTP-style error inside a
+			// successful HTTP response. Preserve its typed recovery contract.
+			var envelope struct {
+				Message struct {
+					Status [][]struct {
+						Error struct {
+							Code int `json:"code"`
+						} `json:"error"`
+					} `json:"status"`
+				} `json:"__sm__"`
+			}
+			if json.Unmarshal(frame[1], &envelope) == nil {
+				for _, group := range envelope.Message.Status {
+					for _, status := range group {
+						if status.Error.Code >= 400 {
+							return "", false, latestAID, geminiHTTPFailure(status.Error.Code)
+						}
+					}
+				}
+			}
 			return "", false, latestAID, err
 		}
 		for _, value := range values {
@@ -750,6 +776,9 @@ func geminiHTTPFailure(status int) *transcribeFailure {
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return &transcribeFailure{code: "gemini_auth_rejected", errClass: "auth", message: "Gemini dictation requires refreshed browser auth state", auth: true}
+	}
+	if status == http.StatusTooManyRequests {
+		return &transcribeFailure{code: "gemini_rate_limited", errClass: "rate_limit", message: "Gemini dictation rate limit requires a later retry"}
 	}
 	return &transcribeFailure{code: "gemini_dictation_http_failed", errClass: "provider", message: "Gemini dictation returned an unsuccessful HTTP status"}
 }

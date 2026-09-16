@@ -76,6 +76,12 @@ page check only when a human-approved headed session is already available.
 
 ## Invocation-lease cancellation cleanup
 
+A browser RPC timeout ends that request, not the enclosing invocation lease.
+Auth readiness uses short observation windows before reload and hard reload;
+reclaiming the whole lease on one timeout closes the page before those stages
+can run. Explicit lease end and expiry still clean up owned targets. The
+regression is `TestHandleRPCTimeoutPreservesInvocationForNextObservation`.
+
 A timed-out workflow can race the daemon's independent lease reclamation. If
 the lease is already gone when cleanup starts, the CLI now retries the exact
 workflow-owned target through the same daemon without that expired lease and
@@ -96,3 +102,25 @@ boundary and preserve the daemon as the browser ownership boundary.
 
 Do not add a general self-healing selector framework. Keep locator fallbacks
 semantic, bounded, and fail-closed when identity is ambiguous.
+
+Gemini WebChannel can carry a typed error in an `__sm__.status` object inside
+an HTTP 200 receive stream. A string-array-only parser misclassified an embedded
+401 as a response change, bypassing single-flight auth repair. The parser now
+preserves embedded authentication and rate-limit status: 401 permits one repair
+and direct retry, while 429 returns a rate limit without opening a provider tab.
+Synthetic transport tests cover successful repair and repeated rejection.
+
+## Health probes and storage latency
+
+Creating or flushing a disposable storage probe can stall `/healthz` behind
+filesystem journal I/O; live profiles observed a 6.4-second `fsync` and a
+9.2-second probe-file creation. One shared background probe now refreshes after
+10 seconds. Its result expires after 30 seconds, and real request persistence
+failures invalidate it immediately. Health reports the check timestamp and
+pending state. Initial or expired checks wait at most 250 ms before reporting
+unavailable; a stuck probe cannot create additional workers.
+
+Disposable probes do not flush their files. Actual audio and request records
+still sync and fail closed. Storage tests cover blocked-probe concurrency,
+expiry, invalidation races, rejected uploads and recovery. Dependency chaos
+retains strict availability checks rather than extending response deadlines.

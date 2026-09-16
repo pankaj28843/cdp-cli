@@ -2,6 +2,7 @@ package transcriptionapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -82,6 +83,14 @@ type AuthRefreshCoordinator struct {
 	initialDone   chan struct{}
 	initialDoneMu sync.Once
 	runMu         sync.Mutex
+	retries       map[ProviderID]authRefreshRetry
+	lastAttempt   map[ProviderID]time.Time
+	wake          chan struct{}
+}
+
+type authRefreshRetry struct {
+	failures int
+	next     time.Time
 }
 
 // SetScheduleOffset aligns recurring refreshes to a stable wall-clock phase.
@@ -113,6 +122,9 @@ func NewAuthRefreshCoordinator(registry *Registry, interval time.Duration) *Auth
 		interval:    interval,
 		timeout:     DefaultAuthRefreshTimeout,
 		initialDone: initialDone,
+		retries:     make(map[ProviderID]authRefreshRetry),
+		lastAttempt: make(map[ProviderID]time.Time),
+		wake:        make(chan struct{}, 1),
 	}
 }
 
@@ -132,17 +144,88 @@ func (c *AuthRefreshCoordinator) Start(ctx context.Context) {
 			c.RefreshAll(ctx)
 			c.markInitialDone()
 			for {
-				timer := time.NewTimer(nextAlignedScheduleDelay(time.Now().UTC(), c.interval, c.offset))
+				timer := time.NewTimer(c.nextDelay(time.Now().UTC()))
 				select {
 				case <-ctx.Done():
 					timer.Stop()
 					return
 				case <-timer.C:
 					c.RefreshAll(ctx)
+				case <-c.wake:
+					timer.Stop()
 				}
 			}
 		}()
 	})
+}
+
+// lockRequest lets on-demand callers join lifecycle work within their own deadline.
+func (c *AuthRefreshCoordinator) lockRequest(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if c.runMu.TryLock() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (c *AuthRefreshCoordinator) nextDelay(now time.Time) time.Duration {
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+	delay := nextAlignedScheduleDelay(now, c.interval, c.offset)
+	for _, retry := range c.retries {
+		if remaining := retry.next.Sub(now); remaining < delay {
+			delay = remaining
+			if delay < time.Millisecond {
+				delay = time.Millisecond
+			}
+		}
+	}
+	return delay
+}
+
+// recordAttempt runs under runMu for both scheduled and authority API work.
+// Success resumes the ordinary cadence; failures cannot multiply across callers.
+func (c *AuthRefreshCoordinator) recordAttempt(id ProviderID, err error, now time.Time) {
+	c.lastAttempt[id] = now
+	if err == nil {
+		delete(c.retries, id)
+		return
+	}
+	retry := c.retries[id]
+	retry.failures++
+	delay := AuthRefreshRetryDelay(err, retry.failures)
+	retry.next = now.Add(delay)
+	c.retries[id] = retry
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// AuthRefreshRetryDelay bounds failed refreshes across scheduled and direct repair paths.
+func AuthRefreshRetryDelay(err error, failures int) time.Duration {
+	delay := time.Minute
+	if failures == 2 {
+		delay = 2 * time.Minute
+	} else if failures > 2 {
+		delay = 5 * time.Minute
+	}
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) && (providerErr.Status == 401 || providerErr.Status == 403 || providerErr.Status == 429) {
+		// Explicit auth rejection/rate limiting is not an infrastructure outage.
+		delay = 15 * time.Minute
+	}
+	return delay
 }
 
 func nextAlignedScheduleDelay(now time.Time, interval, offset time.Duration) time.Duration {
@@ -207,6 +290,12 @@ func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
 	}
 	defer c.runMu.Unlock()
 	for _, target := range c.targets {
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Now().Before(c.retries[target.id].next) {
+			continue
+		}
 		refreshContext := ctx
 		cancel := func() {}
 		if c.timeout > 0 {
@@ -217,13 +306,16 @@ func (c *AuthRefreshCoordinator) RefreshAll(ctx context.Context) {
 			// auth evidence is fresh. A failed provider stays isolated and
 			// will be retried on the next bounded cadence.
 			if err := target.auth.EnsureAuthFresh(refreshContext); err != nil {
+				c.recordAttempt(target.id, err, time.Now())
 				cancel()
 				continue
 			}
 		}
+		var err error
 		if target.capabilities != nil {
-			_ = target.capabilities.EnsureCapabilitiesFresh(refreshContext)
+			err = target.capabilities.EnsureCapabilitiesFresh(refreshContext)
 		}
+		c.recordAttempt(target.id, err, time.Now())
 		cancel()
 	}
 }

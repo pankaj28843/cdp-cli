@@ -138,10 +138,13 @@ func checkWritableDirectory(directory string) error {
 		return err
 	}
 	_, writeErr := file.Write([]byte{0})
-	syncErr := file.Sync()
+	// This disposable probe checks writability, not crash durability. Syncing
+	// it makes health requests wait for unrelated filesystem journal I/O (over
+	// six seconds on slow storage). Actual audio and request records retain
+	// their own Sync calls and fail closed if persistence fails.
 	closeErr := file.Close()
 	removeErr := os.Remove(file.Name())
-	return errors.Join(writeErr, syncErr, closeErr, removeErr)
+	return errors.Join(writeErr, closeErr, removeErr)
 }
 
 func (s *Store) audioRootPath() string {

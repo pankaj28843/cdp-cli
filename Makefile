@@ -19,6 +19,7 @@ cross-build:
 
 test:
 	go test ./...
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_chaos_dependency.py'
 
 vet:
 	go vet ./...

@@ -51,22 +51,22 @@ func (a *app) runHeadedRemoteDebuggingRepair(ctx context.Context) (browser.Probe
 	a.opts.activeProbe = true
 	if _, err := browser.PrepareRemoteDebuggingApproval(repairCtx, a.opts.channel); err != nil {
 		return browser.ProbeResult{
-				State:               "permission_pending",
-				Message:             "headed Chrome remote-debugging permission could not be prepared",
-				ConnectionMode:      "auto_connect",
-				Channel:             a.opts.channel,
-				RemediationCommands: permissionRemediationCommands(),
-			}, browser.RemoteDebuggingApprovalResult{
-				Supported:          true,
-				Platform:           "darwin",
-				Adapter:            "macos-accessibility",
-				BrowserApplication: "Google Chrome",
-				ApprovalURL:        browser.RemoteDebuggingApprovalURL,
-				QueueDrained:       false,
-				Action:             "failed",
-				Message:            "could not re-enable Chrome remote-debugging permission",
-				Detail:             err.Error(),
-			}, err
+			State:               "permission_pending",
+			Message:             "headed Chrome remote-debugging permission could not be prepared",
+			ConnectionMode:      "auto_connect",
+			Channel:             a.opts.channel,
+			RemediationCommands: permissionRemediationCommands(),
+		}, browser.RemoteDebuggingApprovalResult{
+			Supported:          true,
+			Platform:           "darwin",
+			Adapter:            "macos-accessibility",
+			BrowserApplication: "Google Chrome",
+			ApprovalURL:        browser.RemoteDebuggingApprovalURL,
+			QueueDrained:       false,
+			Action:             "failed",
+			Message:            "could not re-enable Chrome remote-debugging permission",
+			Detail:             err.Error(),
+		}, err
 	}
 	endpoint, err := a.browserEndpoint(repairCtx)
 	if err != nil {

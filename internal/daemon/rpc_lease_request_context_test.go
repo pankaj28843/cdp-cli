@@ -195,6 +195,45 @@ func TestHandleRPCExplicitEndRetainsBoundedCleanupAfterRequestCancellation(t *te
 	}
 }
 
+func TestHandleRPCTimeoutPreservesInvocationForNextObservation(t *testing.T) {
+	manager := newRPCLeaseManager(t)
+	leaseID := firstRPCLeaseID(manager)
+	if err := manager.RegisterTarget(context.Background(), leaseID, LeaseTarget{TargetID: "auth-page", Disposable: true}); err != nil {
+		t.Fatal(err)
+	}
+	client := &rpcLeaseClient{
+		callSession: func(ctx context.Context, _ string, method string, _ any, result any) error {
+			if method == "Runtime.evaluate" {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			*result.(*json.RawMessage) = json.RawMessage(`{}`)
+			return nil
+		},
+	}
+	response := callLeaseRPC(t, context.Background(), client, manager, RPCRequest{
+		Method: "Runtime.evaluate", OwnerID: leaseID, TimeoutMillis: 10,
+	})
+	if response.OK || response.ErrorEnvelope == nil || response.ErrorEnvelope.Code != "timeout" {
+		t.Fatalf("observation response = %+v, want timeout", response)
+	}
+	if client.closeCalls() != 0 || !managerHasLeaseTarget(manager, leaseID, "auth-page") {
+		t.Fatal("one observation timeout reclaimed the enclosing workflow target")
+	}
+	response = callLeaseRPC(t, context.Background(), client, manager, RPCRequest{
+		Method: "Page.reload", OwnerID: leaseID,
+	})
+	if !response.OK {
+		t.Fatalf("next readiness stage cannot use its lease: %+v", response)
+	}
+	response = callLeaseRPC(t, context.Background(), client, manager, RPCRequest{
+		Method: RPCMethodEndInvocationLease, OwnerID: leaseID,
+	})
+	if !response.OK || client.closeCalls() != 1 {
+		t.Fatalf("explicit workflow cleanup = %+v, close calls = %d", response, client.closeCalls())
+	}
+}
+
 type rpcLeaseClient struct {
 	mu          sync.Mutex
 	call        func(context.Context, string, any, any) error

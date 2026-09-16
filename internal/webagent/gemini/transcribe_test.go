@@ -217,6 +217,8 @@ type fakeGeminiWebChannel struct {
 	mu               sync.Mutex
 	transcript       string
 	rejectBootstraps int
+	rejectReceives   int
+	receiveStatus    int
 	bootstraps       int
 	sawInitial       bool
 	sawStop          bool
@@ -257,6 +259,17 @@ func (f *fakeGeminiWebChannel) RoundTrip(request *http.Request) (*http.Response,
 		return fakeHTTPResponse(http.StatusOK, webChannelFrame(`[[0,["c","test-sid","",8,14,30000]]]`), header), nil
 	}
 	if request.Method == http.MethodGet {
+		f.mu.Lock()
+		attempt := f.bootstraps
+		f.mu.Unlock()
+		if attempt <= f.rejectReceives {
+			status := f.receiveStatus
+			if status == 0 {
+				status = 401
+			}
+			payload := fmt.Sprintf(`[[1,{"__sm__":{"status":[[{"error":{"code":%d}}]]}}]]`, status)
+			return fakeHTTPResponse(http.StatusOK, webChannelFrame(payload), nil), nil
+		}
 		reader, writer := io.Pipe()
 		finalReady := f.finalSignal()
 		go func() {
@@ -380,4 +393,33 @@ func writeGeminiAudio(t *testing.T, audio []byte) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestTranscribeHandlesTypedReceiveStatus(t *testing.T) {
+	for _, test := range []struct {
+		name                       string
+		status, rejects, refreshes int
+		success                    bool
+	}{
+		{"auth repairs once", 401, 1, 1, true},
+		{"second auth rejection returns", 401, 2, 1, false},
+		{"rate limit does not refresh", 429, 1, 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			store := testTranscriptionStore(t, now)
+			transport := &fakeGeminiWebChannel{transcript: "synthetic recovered", rejectReceives: test.rejects, receiveStatus: test.status}
+			refreshes := 0
+			result := Transcribe(context.Background(), TranscribeConfig{Store: store, HTTPClient: &http.Client{Transport: transport}, Now: func() time.Time { return now }, RefreshAuth: func(context.Context, string) error { refreshes++; return nil }}, writeGeminiAudio(t, []byte("webm")), 100)
+			if result.OK != test.success || refreshes != test.refreshes {
+				t.Fatalf("success=%v refreshes=%d error=%+v", result.OK, refreshes, result.Error)
+			}
+			if !test.success && test.status == 401 && result.Error.ErrClass != "auth" {
+				t.Fatalf("lost typed auth: %+v", result.Error)
+			}
+			if !test.success && test.status == 429 && result.Error.ErrClass != "rate_limit" {
+				t.Fatalf("lost rate limit: %+v", result.Error)
+			}
+		})
+	}
 }

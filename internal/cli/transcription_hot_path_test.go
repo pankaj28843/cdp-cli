@@ -129,7 +129,7 @@ func TestChatGPTTranscriptionUsesDirectTransportByDefault(t *testing.T) {
 	}
 }
 
-func TestLazyAuthRepairRetriesAfterTransientFailure(t *testing.T) {
+func TestLazyAuthRepairSuppressesImmediateRetryAfterTransientFailure(t *testing.T) {
 	now := time.Now().UTC()
 	tests := []struct {
 		name   string
@@ -170,11 +170,11 @@ func TestLazyAuthRepairRetriesAfterTransientFailure(t *testing.T) {
 			if err := test.repair(context.Background()); err == nil {
 				t.Fatal("first transient refresh unexpectedly succeeded")
 			}
-			if err := test.repair(context.Background()); err != nil {
-				t.Fatalf("second refresh did not retry: %v", err)
+			if err := test.repair(context.Background()); err == nil {
+				t.Fatal("failed generation unexpectedly retried before cooldown")
 			}
-			if got := test.calls.Load(); got != 2 {
-				t.Fatalf("refresh calls = %d, want 2", got)
+			if got := test.calls.Load(); got != 1 {
+				t.Fatalf("refresh calls = %d, want 1", got)
 			}
 		})
 	}

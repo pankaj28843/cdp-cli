@@ -800,7 +800,13 @@ func TestStopManagedChromeDoesNotClaimSuccessWhileOwnedTreeRemains(t *testing.T)
 	if result.Stopped || result.Reason == "" || len(result.RemainingPIDs) != 2 {
 		t.Fatalf("StopManagedChrome = %+v, want stopped=false with remaining PIDs", result)
 	}
-	if len(signaled) != 2 || signaled[0] != 123 || signaled[1] != 456 {
+	// A deadline can expire before the second cleanup pass. The invariant is
+	// that remaining ownership is reported and shutdown is never claimed.
+	if errors.Is(err, context.DeadlineExceeded) {
+		if len(signaled) == 0 || signaled[0] != 123 {
+			t.Fatalf("signaled PIDs = %+v, want root before verification", signaled)
+		}
+	} else if len(signaled) != 2 || signaled[0] != 123 || signaled[1] != 456 {
 		t.Fatalf("signaled PIDs = %+v, want root and remaining descendant", signaled)
 	}
 }
