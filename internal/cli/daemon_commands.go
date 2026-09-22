@@ -1446,7 +1446,7 @@ func (a *app) newDaemonKeepaliveCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "keepalive",
 		Short: "Idempotently keep the daemon healthy for cron",
-		Long:  "Idempotently keep the daemon healthy for cron. Launch-capable Auto Heal checks internet reachability and a persisted awake observation before it can activate headed Chrome, request remote-debugging approval, or start managed headless Chrome; offline and post-wake hosts return a safe structured skip. Headless --repair inventories and safely reclaims exact superseded detached daemon holds; superseded hold generations retire without poisoning current health, and transient endpoint failures remain retryable.",
+		Long:  "Idempotently keep the daemon healthy for cron. Launch-capable Auto Heal checks internet reachability and a persisted awake observation before it can activate headed Chrome, request remote-debugging approval, or start managed headless Chrome; offline and post-wake hosts return a safe structured skip. On macOS, headed repair also skips locked or inactive sessions, a closed lid, or unknown desktop state. Headless --repair inventories and safely reclaims exact superseded detached daemon holds; superseded hold generations retire without poisoning current health, and transient endpoint failures remain retryable.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reconnect < 0 || lockTimeout < 0 || staleLockAfter < 0 {
 				return commandError(

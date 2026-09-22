@@ -103,3 +103,33 @@ func TestHeadlessMaintenanceSkipsAllMutatingPhasesWhenEnvironmentIsUnavailable(t
 		}
 	}
 }
+
+func TestHeadedKeepaliveRequiresDesktopBeforeApprovalRepair(t *testing.T) {
+	for _, reason := range []string{"screen_locked", "lid_closed", "desktop_state_unknown"} {
+		t.Run(reason, func(t *testing.T) {
+			previous := autoHealEnvironmentCheck
+			checks := 0
+			autoHealEnvironmentCheck = func(_ context.Context, opts availability.Options) (availability.Result, error) {
+				checks++
+				if !opts.RequireDesktop {
+					t.Fatal("headed repair did not require an available desktop")
+				}
+				return availability.Result{State: "unavailable", Reason: reason, Network: "not_checked"}, nil
+			}
+			t.Cleanup(func() { autoHealEnvironmentCheck = previous })
+			var stdout, stderr bytes.Buffer
+			code := Execute(context.Background(), []string{"--browser-mode", "headed", "--state-dir", t.TempDir(), "daemon", "keepalive", "--auto-connect", "--repair", "--probe", "active", "--macos-self-heal-approval", "--chrome-command", "/synthetic-must-not-launch", "--json"}, &stdout, &stderr, BuildInfo{})
+			var got struct {
+				State       string              `json:"state"`
+				Action      string              `json:"action"`
+				Environment availability.Result `json:"environment"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if code != ExitOK || checks != 1 || got.State != "environment_unavailable" || got.Action != "skipped" || got.Environment.Reason != reason {
+				t.Fatalf("code=%d checks=%d result=%+v stderr=%s", code, checks, got, stderr.String())
+			}
+		})
+	}
+}

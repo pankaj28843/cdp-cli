@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/availability"
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/config"
 	"github.com/pankaj28843/cdp-cli/internal/daemon"
@@ -29,6 +30,9 @@ func (a *app) runHeadedRemoteDebuggingRepair(ctx context.Context) (browser.Probe
 			ExitUsage,
 			[]string{"cdp --browser-mode headed --auto-connect daemon approve --json"},
 		)
+	}
+	if err := requireHeadedDesktop(ctx); err != nil {
+		return browser.ProbeResult{}, browser.RemoteDebuggingApprovalResult{}, err
 	}
 	repairCtx, cancel := context.WithTimeout(ctx, headedRemoteDebuggingRepairLease)
 	defer cancel()
@@ -118,6 +122,9 @@ func (a *app) newDaemonApproveCommand() *cobra.Command {
 			if err := a.applySelectedConnection(ctx); err != nil {
 				return err
 			}
+			if err := requireHeadedDesktop(ctx); err != nil {
+				return err
+			}
 			if _, err := ensureChromeForKeepalive(ctx, "", defaultChromeCommand(), nil); err != nil {
 				return commandError(
 					"chrome_start_failed",
@@ -177,4 +184,14 @@ func remoteDebuggingApprovalMessage(approval browser.RemoteDebuggingApprovalResu
 		return approval.Message + ": " + approval.Detail
 	}
 	return approval.Message
+}
+
+func requireHeadedDesktop(ctx context.Context) error {
+	if desktop := availability.CheckDesktop(ctx); !desktop.Allowed {
+		return commandErrorWithData("desktop_unavailable", "connection",
+			"headed browser repair deferred: "+desktop.Reason, ExitConnection,
+			[]string{"cdp --browser-mode headed daemon status --json"},
+			map[string]any{"environment": desktop})
+	}
+	return nil
 }

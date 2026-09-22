@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/pankaj28843/cdp-cli/internal/availability"
 	"nhooyr.io/websocket"
 )
 
@@ -218,6 +219,10 @@ func fetchVersion(ctx context.Context, rawURL string) (versionResponse, error) {
 }
 
 func probeAutoConnect(ctx context.Context, opts ProbeOptions) (ProbeResult, error) {
+	return probeAutoConnectWithDesktop(ctx, opts, availability.CheckDesktop)
+}
+
+func probeAutoConnectWithDesktop(ctx context.Context, opts ProbeOptions, checkDesktop func(context.Context) availability.Result) (ProbeResult, error) {
 	channel := opts.Channel
 	if channel == "" {
 		channel = "stable"
@@ -233,6 +238,15 @@ func probeAutoConnect(ctx context.Context, opts ProbeOptions) (ProbeResult, erro
 		}, nil
 	}
 
+	if desktop := checkDesktop(ctx); !desktop.Allowed {
+		return ProbeResult{
+			State:               "permission_pending",
+			Message:             "Chrome auto-connect probe deferred: " + desktop.Reason,
+			ConnectionMode:      "auto_connect",
+			Channel:             channel,
+			RemediationCommands: []string{"cdp --browser-mode headed daemon status --json"},
+		}, nil
+	}
 	status, err := websocketProbe(ctx, port, path)
 	if err != nil {
 		return ProbeResult{

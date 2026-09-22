@@ -81,6 +81,48 @@ version_plain="$("$binary" version)"
 grep -q 'managed build; commit ' <<<"$version_plain"
 test "$("$binary" --version)" = "$version_plain"
 test "$("$binary" -V)" = "$version_plain"
+# A denied headed handshake must not become an endless approval retry loop.
+# The fixture never contacts Chrome. A locked/unknown macOS desktop must skip
+# even this synthetic connection; both paths prove bounded installed behavior.
+python3 - "$binary" "$state_dir/approval-rejection" <<'PY_APPROVAL'
+import http.server, json, os, pathlib, subprocess, sys, threading
+
+class Reject(http.server.BaseHTTPRequestHandler):
+    requests = 0
+    def do_GET(self):
+        Reject.requests += 1
+        self.send_response(403)
+        self.end_headers()
+    def log_message(self, *_):
+        pass
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Reject)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+state = pathlib.Path(sys.argv[2])
+env = dict(os.environ, CDP_DAEMON_BROWSER_MODE="headed",
+           CDP_DAEMON_CONNECTION_MODE="auto_connect",
+           CDP_DAEMON_STATE_DIR=str(state), CDP_DAEMON_SOCKET=str(state / "daemon.sock"),
+           CDP_DAEMON_RECONNECT="1ms",
+           CDP_DAEMON_HOLD_ENDPOINT=f"ws://127.0.0.1:{server.server_port}/synthetic")
+try:
+    result = subprocess.run([sys.argv[1], "daemon", "hold"], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=5)
+    assert result.returncode != 0, "rejected hold unexpectedly succeeded"
+    events = [json.loads(line)["event"] for path in state.glob("*.log")
+              for line in path.read_text().splitlines()]
+    if "desktop_unavailable" in events:
+        assert Reject.requests == 0, "unavailable desktop attempted approval"
+    else:
+        assert "approval_rejected" in events, events
+        assert Reject.requests == 1, f"repeated approval requests: {Reject.requests}"
+finally:
+    server.shutdown()
+    server.server_close()
+    thread.join()
+PY_APPROVAL
+
 "$binary" describe --json | jq -e '.ok == true and (.commands.children | length > 5)' >/dev/null
 "$binary" describe --json | jq -e '.ok == true and (.commands.examples | any(contains("cdp Runtime.evaluate"))) and (.commands.examples | any(contains("--target 2 Runtime.evaluate")))' >/dev/null
 "$binary" describe --jq '.globals | index("--json") != null' >/dev/null
@@ -115,6 +157,7 @@ grep -Fq -- '--fingerprint-profile' "$guide_path"
 keepalive_help="$("$binary" daemon keepalive --help)"
 grep -Fq 'superseded hold generations' <<<"$keepalive_help"
 grep -Fq 'transient endpoint failures remain retryable' <<<"$keepalive_help"
+grep -Fq 'headed repair also skips locked or inactive sessions' <<<"$keepalive_help"
 "$binary" describe --command "daemon maintenance" --json | jq -e '.ok == true and .commands.name == "maintenance" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--dry-run"))) and (.commands.flags[] | select(.name == "dry-run")) and (.commands.flags[] | select(.name == "profile-seed-strategy")) and (.commands.flags[] | select(.name == "cleanup-close"))' >/dev/null
 "$binary" describe --command "daemon health-check" --json | jq -e '.ok == true and .commands.name == "health-check" and (.commands.examples | any(contains("--browser-mode headless"))) and (.commands.examples | any(contains("--repair"))) and (.commands.examples | any(contains("--require-healthy"))) and (.commands.flags[] | select(.name == "repair")) and (.commands.flags[] | select(.name == "require-healthy")) and (.commands.flags[] | select(.name == "out-dir"))' >/dev/null
 health_check_help="$("$binary" daemon health-check --help)"

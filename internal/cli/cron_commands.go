@@ -528,7 +528,7 @@ func (a *app) newCronHealHeadedCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "headed",
 		Short: "Heal the headed daemon keepalive path for scheduled tasks",
-		Long:  "Heal the headed daemon keepalive path for scheduled tasks. Auto Heal checks internet reachability and a persisted awake observation before Chrome lifecycle or remote-debugging approval work; offline and post-wake hosts return a safe structured skip.",
+		Long:  "Heal the headed daemon keepalive path for scheduled tasks. Auto Heal checks internet reachability and a persisted awake observation before Chrome lifecycle or remote-debugging approval work; offline and post-wake hosts return a safe structured skip. On macOS, headed repair also skips locked or inactive sessions, a closed lid, or unknown desktop state.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reconnect < 0 || lockTimeout < 0 || staleLockAfter < 0 {

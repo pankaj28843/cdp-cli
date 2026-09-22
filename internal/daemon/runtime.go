@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pankaj28843/cdp-cli/internal/availability"
 	"github.com/pankaj28843/cdp-cli/internal/browser"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/processgroup"
@@ -202,6 +204,7 @@ func IsInvocationLeaseNotFound(err error) bool {
 }
 
 type holdOptions struct {
+	checkDesktop          func(context.Context) availability.Result
 	fetchProtocolFallback func(context.Context) (cdp.Protocol, error)
 }
 
@@ -835,6 +838,9 @@ func Hold(ctx context.Context, stateDir, endpoint, connectionMode string, reconn
 }
 
 func holdWithOptions(ctx context.Context, stateDir, endpoint, connectionMode string, reconnect time.Duration, opts holdOptions) error {
+	if opts.checkDesktop == nil {
+		opts.checkDesktop = availability.CheckDesktop
+	}
 	if opts.fetchProtocolFallback == nil {
 		opts.fetchProtocolFallback = cdp.FetchOfficialProtocol
 	}
@@ -864,6 +870,12 @@ func holdWithOptions(ctx context.Context, stateDir, endpoint, connectionMode str
 			})
 			return nil
 		}
+		if browserMode == "headed" && connectionMode == "auto_connect" {
+			if desktop := opts.checkDesktop(ctx); !desktop.Allowed {
+				appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "desktop_unavailable", Message: desktop.Reason, PID: pid})
+				return fmt.Errorf("headed browser connection deferred: %s", desktop.Reason)
+			}
+		}
 		client, err := cdp.Dial(ctx, endpoint)
 		if err == nil {
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "browser_connected", Message: "connected to browser endpoint", PID: pid})
@@ -874,6 +886,13 @@ func holdWithOptions(ctx context.Context, stateDir, endpoint, connectionMode str
 			_ = ClearRuntimeForMode(context.Background(), stateDir, browserMode, pid)
 		} else {
 			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "warn", Event: "browser_dial_failed", Message: err.Error(), PID: pid})
+		}
+		var handshakeErr *cdp.HandshakeError
+		if browserMode == "headed" && connectionMode == "auto_connect" &&
+			errors.As(err, &handshakeErr) &&
+			(handshakeErr.StatusCode == http.StatusForbidden || handshakeErr.StatusCode == http.StatusUnauthorized) {
+			appendLogForMode(context.Background(), stateDir, browserMode, LogEntry{Level: "info", Event: "approval_rejected", Message: "headed approval rejected; automatic reconnect stopped", PID: pid})
+			return err
 		}
 		if reconnect <= 0 {
 			return err
@@ -1326,7 +1345,7 @@ func holdConnection(ctx context.Context, stateDir, socketPath string, client *cd
 		}
 	})
 	go serveRPC(cycleCtx, listener, client, opts, leases, marker)
-	return keepAlive(cycleCtx, client, reconnect)
+	return keepAlive(cycleCtx, client, reconnect, browserMode == "headed" && connectionMode == "auto_connect")
 }
 
 func managedBrowserFromEnv() *browser.ManagedStatus {
@@ -1735,7 +1754,7 @@ func rpcErrorResponse(code, class, message string) RPCResponse {
 	}
 }
 
-func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration) error {
+func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration, preserveApprovedTransport bool) error {
 	defer client.Close(websocket.StatusNormalClosure, "done")
 	tick := 30 * time.Second
 	if reconnect > 0 && reconnect < tick {
@@ -1769,9 +1788,12 @@ func keepAlive(ctx context.Context, client *cdp.Client, reconnect time.Duration)
 					return fmt.Errorf("browser heartbeat failed: %w", transportErr)
 				}
 				heartbeatFailures++
-				if heartbeatFailures >= 3 {
+				if !preserveApprovedTransport && heartbeatFailures >= 3 {
 					return fmt.Errorf("browser heartbeat failed %d consecutive times: %w", heartbeatFailures, err)
 				}
+				// A sleeping or locked desktop can leave Chrome unresponsive
+				// without ending its approved transport. Only a terminal transport
+				// error warrants replacing that connection (and another prompt).
 				continue
 			}
 			heartbeatFailures = 0

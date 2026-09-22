@@ -61,6 +61,8 @@ type Result struct {
 // production defaults small and cross-platform.
 type Options struct {
 	StateDir          string
+	RequireDesktop    bool
+	DesktopProbe      func(context.Context) Result
 	Now               func() time.Time
 	InternetProbe     func(context.Context) ProbeResult
 	ConnectivityURL   string
@@ -82,6 +84,16 @@ func Check(ctx context.Context, opts Options) (Result, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{State: "unknown", Network: "unknown", Reason: "availability_check_cancelled"}, err
+	}
+
+	if opts.RequireDesktop {
+		probe := opts.DesktopProbe
+		if probe == nil {
+			probe = CheckDesktop
+		}
+		if desktop := probe(ctx); !desktop.Allowed {
+			return desktop, nil
+		}
 	}
 
 	now := time.Now

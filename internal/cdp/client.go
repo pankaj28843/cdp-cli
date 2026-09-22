@@ -85,9 +85,22 @@ type pendingResponse struct {
 	err  error
 }
 
+// HandshakeError preserves the HTTP status needed to distinguish approval
+// rejection from a transient transport failure. Callers can unwrap the cause.
+type HandshakeError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *HandshakeError) Error() string { return fmt.Sprintf("connect websocket: %v", e.Err) }
+func (e *HandshakeError) Unwrap() error { return e.Err }
+
 func Dial(ctx context.Context, endpoint string) (*Client, error) {
-	conn, _, err := websocket.Dial(ctx, endpoint, nil)
+	conn, response, err := websocket.Dial(ctx, endpoint, nil)
 	if err != nil {
+		if response != nil {
+			return nil, &HandshakeError{StatusCode: response.StatusCode, Err: err}
+		}
 		return nil, fmt.Errorf("connect websocket: %w", err)
 	}
 	conn.SetReadLimit(maxReadBytes)

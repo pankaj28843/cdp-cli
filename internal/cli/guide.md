@@ -646,3 +646,25 @@ the binary from PATH:
 For browser-facing changes, also run the synthetic installed browser loop. A
 managed build should report its commit, verification state, and clean/dirty
 source state so the tested binary is unambiguous.
+
+### Headed approval while macOS is locked
+
+Headed Auto Heal skips repair when the screen is locked, the session is
+inactive, the lid is closed, or native desktop state cannot be determined.
+The JSON result uses `state: environment_unavailable`, `action: skipped`,
+and an `environment.reason` such as `screen_locked` or `lid_closed`.
+Headless repair does not require an unlocked desktop.
+
+The headed auto-connect daemon checks desktop availability before every
+WebSocket connection attempt. Unanswered heartbeat calls leave a live approved
+transport intact; a terminal transport failure can still require reconnection.
+An HTTP 401 or 403 approval rejection stops that daemon’s automatic retry loop.
+A later scheduled repair can recover after the desktop becomes available and
+the existing post-wake cooldown has elapsed.
+
+Use passive diagnostics while unattended:
+
+```bash
+cdp --browser-mode headed daemon status --json
+cdp --browser-mode headed daemon keepalive --auto-connect --probe passive --json
+```

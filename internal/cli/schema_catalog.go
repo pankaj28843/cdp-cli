@@ -1043,7 +1043,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "daemon", Type: "daemon_status", Required: false, Description: "Daemon status when checked or after repair."},
 				{Name: "start", Type: "daemon_start", Required: false, Description: "Daemon start metadata when keepalive started or repaired it."},
 				{Name: "chrome", Type: "chrome_keepalive", Required: false, Description: "Chrome launch/check metadata for auto-connect repair."},
-				{Name: "environment", Type: "auto_heal_environment", Required: false, Description: "Host availability gate used before launch-capable Auto Heal; offline and post-wake results are safe skips."},
+				{Name: "environment", Type: "auto_heal_environment", Required: false, Description: "Host availability gate used before launch-capable Auto Heal; offline, post-wake, and unavailable macOS headed desktop results are safe skips. Desktop reasons include screen_locked, lid_closed, desktop_session_inactive, and desktop_state_unknown."},
 				{Name: "daemon_hold_reconciliation", Type: "daemon-hold-reconcile", Required: false, Description: "Headless repair inventory and exact reclamation evidence for superseded detached daemon holds."},
 				{Name: "lock", Type: "lock_metadata", Required: true, Description: "Keepalive lock metadata."},
 			},

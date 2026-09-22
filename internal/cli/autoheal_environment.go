@@ -12,7 +12,7 @@ import (
 var autoHealEnvironmentCheck = availability.Check
 
 func (a *app) checkAutoHealEnvironment(ctx context.Context, stateDir string) (availability.Result, error) {
-	return autoHealEnvironmentCheck(ctx, availability.Options{StateDir: stateDir})
+	return autoHealEnvironmentCheck(ctx, availability.Options{StateDir: stateDir, RequireDesktop: a.browserModeName() == "headed"})
 }
 
 func (a *app) checkAndAcquireAutoHealEnvironment(ctx context.Context, stateDir string) (availability.Result, func() error, error) {
