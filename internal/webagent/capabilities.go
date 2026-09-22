@@ -210,7 +210,7 @@ var operationSpecs = []operationSpec{
 	{
 		operation:  OperationResearchExport,
 		path:       "conversations export-research",
-		sideEffect: "none",
+		sideEffect: "local_file_write",
 		browser:    "headed",
 		summary:    "Export one exact completed Deep Research report only through a proven rendered target.",
 		providers:  []Provider{ProviderChatGPT},
@@ -356,7 +356,8 @@ func providerOperationImplemented(
 		return provider != ProviderAlex
 	case OperationConversationsContinue:
 		return provider == ProviderChatGPT
-	case OperationArtifactDownload, OperationAttachmentsDownload:
+	case OperationArtifactDownload, OperationAttachmentsDownload,
+		OperationResearchExport:
 		return provider == ProviderChatGPT
 	case OperationAsk:
 		return true

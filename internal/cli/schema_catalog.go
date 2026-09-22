@@ -149,6 +149,19 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "items", Type: "array<chatgpt_attachment_export_item>", Required: true, Description: "Relative filenames, hashes, verified MIME/dimensions, or stable failure codes only."},
 			},
 		},
+		"chatgpt-research-export": {
+			Name:        "chatgpt-research-export",
+			Description: "Privacy-safe result for exporting one rendered ChatGPT Deep Research report to an explicit local file; report text is never embedded in JSON.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Stable export schema, currently chatgpt-research-export/v1."},
+				{Name: "conversation_id", Type: "string", Required: true, Description: "Exact ChatGPT conversation identity requested for export."},
+				{Name: "output_path", Type: "string", Required: true, Description: "Explicit caller-local report destination."},
+				{Name: "exported_bytes", Type: "integer", Required: true, Description: "UTF-8 bytes atomically written when export succeeds."},
+				{Name: "sha256", Type: "string", Required: true, Description: "SHA-256 of the written report bytes when export succeeds."},
+				{Name: "read_mode", Type: "string", Required: true, Description: "Rendered report read path used or attempted."},
+				{Name: "metadata", Type: "object", Required: true, Description: "Bounded report provenance with no report text."},
+			},
+		},
 		"webagent-operation-capability": {
 			Name:        "webagent-operation-capability",
 			Description: "One installed, planned, or unsupported authenticated provider operation.",
@@ -157,7 +170,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "command", Type: "string", Required: true, Description: "Intended full cdp workflow agent command path."},
 				{Name: "status", Type: "string", Required: true, Description: "implemented, planned, or unsupported."},
 				{Name: "supported", Type: "boolean", Required: true, Description: "True only when the installed command is callable beyond capability metadata."},
-				{Name: "side_effect", Type: "string", Required: true, Description: "none, auth_observation, conversation, destructive, or validation_mutation."},
+				{Name: "side_effect", Type: "string", Required: true, Description: "none, auth_observation, conversation, local_file_write, destructive, or validation_mutation."},
 				{Name: "browser", Type: "string", Required: true, Description: "none, headed, or provider_defined."},
 				{Name: "summary", Type: "string", Required: true, Description: "Provider-independent intent of the operation."},
 				{Name: "unavailable_by", Type: "string", Required: false, Description: "Why a planned or unsupported operation is not callable."},

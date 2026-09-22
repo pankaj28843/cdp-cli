@@ -56,6 +56,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"webagent-provider-catalog",
 		"chatgpt-attachment-batch",
 		"chatgpt-attachment-manifest",
+		"chatgpt-research-export",
 		"webagent-operation-capability",
 		"webagent-action",
 		"webagent-error",
@@ -145,6 +146,24 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		if _, ok := catalog[name]; !ok {
 			t.Fatalf("schemaCatalog() missing critical schema %q", name)
 		}
+	}
+}
+
+func TestSchemaCatalogChatGPTResearchExportOmitsReportText(t *testing.T) {
+	info, ok := schemaCatalog()["chatgpt-research-export"]
+	if !ok {
+		t.Fatal("schemaCatalog() missing chatgpt-research-export")
+	}
+	for _, fieldName := range []string{
+		"schema_version", "conversation_id", "output_path", "exported_bytes",
+		"sha256", "read_mode", "metadata",
+	} {
+		if !catalogSchemaHasField(info, fieldName) {
+			t.Fatalf("schemaCatalog()[%q] missing field %q", info.Name, fieldName)
+		}
+	}
+	if catalogSchemaHasField(info, "report") {
+		t.Fatalf("schemaCatalog()[%q] must not embed report text", info.Name)
 	}
 }
 

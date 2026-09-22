@@ -28,6 +28,22 @@ func TestChatGPTAttachmentBatchCommandIsDiscoverable(t *testing.T) {
 	}
 }
 
+func TestChatGPTResearchExportCommandIsDiscoverable(t *testing.T) {
+	root := (&app{out: &bytes.Buffer{}, err: &bytes.Buffer{}}).newRoot()
+	command, _, err := root.Find([]string{
+		"workflow", "agent", "chatgpt", "conversations",
+		"export-research",
+	})
+	if err != nil || command == nil {
+		t.Fatalf("export-research command not found: %v", err)
+	}
+	if command.Flag("output") == nil || command.Flag("overwrite") == nil ||
+		!strings.Contains(command.Use, "CONVERSATION_ID") ||
+		!strings.Contains(command.Long, "isolated frame world") {
+		t.Fatalf("research export command = %+v", command)
+	}
+}
+
 func TestSelectHeadedProviderRuntimeOverridesAmbientDefaultOnly(t *testing.T) {
 	t.Run("ambient default", func(t *testing.T) {
 		a := &app{opts: options{}}

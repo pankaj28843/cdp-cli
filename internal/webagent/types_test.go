@@ -124,6 +124,7 @@ func TestChatGPTAdvertisesOnlyLiveProvenMutationSurface(t *testing.T) {
 		OperationConversationsDelete:   true,
 		OperationArtifactDownload:      true,
 		OperationAttachmentsDownload:   true,
+		OperationResearchExport:        true,
 	}
 	for _, capability := range capabilities.Operations {
 		if wantImplemented[capability.Operation] {

@@ -421,8 +421,40 @@ func readConversationUntil(
 			}
 			renderedNoAnswerProbe :=
 				direct.OK && terminalNoAnswerCandidateData(direct.Data)
-			if direct.OK && !renderedNoAnswerProbe {
+			embeddedResearchProbe :=
+				!await && direct.OK && embeddedResearchControlData(direct.Data)
+			if direct.OK && !renderedNoAnswerProbe && !embeddedResearchProbe {
 				return direct
+			}
+			if embeddedResearchProbe {
+				browserConfig, fallbackFailure := resolveBrowserFallback(
+					ctx,
+					config,
+				)
+				if fallbackFailure != nil {
+					return recordEmbeddedResearchProbeUnavailable(direct)
+				}
+				data, ok := direct.Data.(ConversationDetailData)
+				if !ok {
+					return recordEmbeddedResearchProbeUnavailable(direct)
+				}
+				browserResult := detailEmbeddedResearchViaBrowser(
+					ctx,
+					*browserConfig,
+					direct.Evidence.RunID,
+					conversationID,
+					data,
+				)
+				if browserResult.OK ||
+					browserResult.Cleanup.State == webagent.CleanupFailed {
+					return browserResult
+				}
+				merged := recordEmbeddedResearchProbeUnavailable(direct)
+				merged.Stage = browserResult.Stage
+				merged.Evidence.BrowserMode = browserResult.Evidence.BrowserMode
+				merged.Evidence.Target = browserResult.Evidence.Target
+				merged.Cleanup = browserResult.Cleanup
+				return merged
 			}
 			if !renderedNoAnswerProbe && !browserReadFallbackEligible(direct) {
 				return direct
@@ -984,6 +1016,26 @@ func terminalNoAnswerCandidateData(value any) bool {
 	return candidate
 }
 
+func embeddedResearchControlData(value any) bool {
+	var data ConversationDetailData
+	switch candidate := value.(type) {
+	case ConversationDetailData:
+		data = candidate
+	case *ConversationDetailData:
+		if candidate == nil {
+			return false
+		}
+		data = *candidate
+	default:
+		return false
+	}
+	if data.Metadata == nil {
+		return false
+	}
+	control, _ := data.Metadata["embedded_research_control"].(bool)
+	return control
+}
+
 func terminalConversationCompletion(completionState string) bool {
 	return completionState == conversationCompletionTerminal ||
 		completionState == conversationCompletionTerminalNoAnswer
@@ -1000,6 +1052,21 @@ func recordRenderedNoAnswerProbeUnavailable(
 		data.Metadata = map[string]any{}
 	}
 	data.Metadata["rendered_terminal_no_answer_confirmation"] = "unavailable"
+	result.Data = data
+	return result
+}
+
+func recordEmbeddedResearchProbeUnavailable(
+	result webagent.Result,
+) webagent.Result {
+	data, ok := result.Data.(ConversationDetailData)
+	if !ok {
+		return result
+	}
+	if data.Metadata == nil {
+		data.Metadata = map[string]any{}
+	}
+	data.Metadata["embedded_research_rendered_read"] = "unavailable"
 	result.Data = data
 	return result
 }
@@ -1023,6 +1090,9 @@ func parseConversationDetailPayload(
 	data.Text = extracted.text
 	data.Attachments = extracted.attachments
 	data.CompletionState = extracted.completionState
+	if extracted.embeddedResearch {
+		data.Metadata["embedded_research_control"] = true
+	}
 	for key, value := range extracted.metadata {
 		data.Metadata[key] = value
 	}
@@ -1050,10 +1120,11 @@ func providerConversationIdentityMatches(
 }
 
 type extractedConversation struct {
-	text            string
-	attachments     []ConversationAttachment
-	completionState string
-	metadata        map[string]any
+	text             string
+	attachments      []ConversationAttachment
+	completionState  string
+	embeddedResearch bool
+	metadata         map[string]any
 }
 
 type conversationActivityState string
@@ -1115,6 +1186,10 @@ func extractConversationText(payload map[string]any) extractedConversation {
 	for index, node := range nodes {
 		message, _ := node.raw["message"].(map[string]any)
 		role := messageRole(message)
+		if (role == "assistant" || role == "tool") &&
+			deepResearchControlPayload(messageText(message, true)) {
+			result.embeddedResearch = true
+		}
 		if role != "assistant" && role != "tool" {
 			continue
 		}

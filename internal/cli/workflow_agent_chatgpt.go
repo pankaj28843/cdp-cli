@@ -327,30 +327,83 @@ func (a *app) newWorkflowAgentChatGPTResearchCommand() *cobra.Command {
 }
 
 func (a *app) newWorkflowAgentChatGPTConversationsExportResearchCommand() *cobra.Command {
-	return &cobra.Command{
+	var outputPath string
+	var overwrite bool
+	cmd := &cobra.Command{
 		Use:   "export-research CONVERSATION_ID",
-		Short: "Report the live ChatGPT research-export boundary",
-		Long: "Rendered Deep Research export remains unavailable because the report is hosted in an embedded sandbox whose completed readable surface and export control are not exposed through the current cdp page/frame boundary. " +
-			"No guessed DOM action or replay is attempted.",
-		Example: "  cdp workflow agent chatgpt conversations export-research CONVERSATION_ID --json",
+		Short: "Export one rendered ChatGPT Deep Research report",
+		Long: "Open one fresh owned target on the exact conversation, identify one semantic Deep Research iframe, read its completed report in an isolated frame world, and atomically write rendered text to an explicit local destination. " +
+			"The command never clicks an export control or replays an iframe endpoint.",
+		Example: "  cdp workflow agent chatgpt conversations export-research CONVERSATION_ID --output ./research.txt --json",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
+			ctx, cancel := a.commandContextWithDefault(cmd, 2*time.Minute)
 			defer cancel()
-			_ = args
-			result := chatgpt.UnsupportedOperation(
-				a.build.Commit,
+			if !a.selectHeadedProviderRuntime() {
+				result := chatgpt.UnavailableOperation(
+					a.build.Commit,
+					webagent.OperationResearchExport,
+					"chatgpt_headed_browser_required",
+					"usage",
+					"ChatGPT research export requires the headed browser runtime",
+				)
+				return a.renderWebAgentResult(
+					ctx,
+					"chatgpt research export: headed browser required",
+					result,
+				)
+			}
+			browserConfig, _, unavailable := a.chatgptBrowserOperationConfig(
+				ctx,
 				webagent.OperationResearchExport,
-				"chatgpt_research_export_unproven",
-				"ChatGPT research export is unavailable because the embedded Deep Research report and export control are not readable through the current cdp page/frame boundary",
 			)
+			if unavailable != nil {
+				return a.renderWebAgentResult(
+					ctx,
+					"chatgpt research export: unavailable",
+					*unavailable,
+				)
+			}
+			timeout := a.opts.timeout
+			if timeout <= 0 {
+				timeout = 2 * time.Minute
+			}
+			result := chatgpt.ExportResearch(
+				ctx,
+				chatgpt.ResearchExportConfig{
+					BrowserConfig: browserConfig,
+					OutputPath:    outputPath,
+					Overwrite:     overwrite,
+					Timeout:       timeout,
+				},
+				args[0],
+			)
+			human := fmt.Sprintf("chatgpt research export: %v", result.State)
+			if data, ok := result.Data.(chatgpt.ResearchExportData); ok &&
+				data.OutputPath != "" && result.OK {
+				human = data.OutputPath
+			}
 			return a.renderWebAgentResult(
 				ctx,
-				"chatgpt research export: unsupported",
+				human,
 				result,
 			)
 		},
 	}
+	cmd.Flags().StringVar(
+		&outputPath,
+		"output",
+		"",
+		"explicit local destination for rendered report text",
+	)
+	cmd.Flags().BoolVar(
+		&overwrite,
+		"overwrite",
+		false,
+		"atomically replace an existing regular destination",
+	)
+	_ = cmd.MarkFlagRequired("output")
+	return cmd
 }
 
 func (a *app) newWorkflowAgentChatGPTConversationsDownloadArtifactCommand() *cobra.Command {
