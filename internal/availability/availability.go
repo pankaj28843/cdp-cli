@@ -85,6 +85,11 @@ func Check(ctx context.Context, opts Options) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{State: "unknown", Network: "unknown", Reason: "availability_check_cancelled"}, err
 	}
+	now := time.Now
+	if opts.Now != nil {
+		now = opts.Now
+	}
+	checkedAt := now().UTC()
 
 	if opts.RequireDesktop {
 		probe := opts.DesktopProbe
@@ -92,15 +97,11 @@ func Check(ctx context.Context, opts Options) (Result, error) {
 			probe = CheckDesktop
 		}
 		if desktop := probe(ctx); !desktop.Allowed {
+			desktop.CheckedAt = checkedAt.Format(time.RFC3339)
 			return desktop, nil
 		}
 	}
 
-	now := time.Now
-	if opts.Now != nil {
-		now = opts.Now
-	}
-	checkedAt := now().UTC()
 	gapThreshold := opts.SleepGapThreshold
 	if gapThreshold <= 0 {
 		gapThreshold = DefaultSleepGapThreshold

@@ -1053,7 +1053,7 @@ func schemaCatalog() map[string]schemaInfo {
 			Description: "Privacy-safe host availability decision for launch-capable Auto Heal work.",
 			Fields: []schemaField{
 				{Name: "allowed", Type: "boolean", Required: true, Description: "True only when Auto Heal may proceed with launch-capable browser work."},
-				{Name: "state", Type: "string", Required: true, Description: "Environment state: ready, offline, suspended, cooldown, or unknown."},
+				{Name: "state", Type: "string", Required: true, Description: "Environment state: ready, unavailable, offline, suspended, cooldown, or unknown."},
 				{Name: "network", Type: "string", Required: true, Description: "Connectivity state: online, offline, not_checked, or unknown."},
 				{Name: "sleep_gap_detected", Type: "boolean", Required: true, Description: "True when the persisted observation gap conservatively indicates a wake/suspend or scheduler pause."},
 				{Name: "sleep_gap_seconds", Type: "number", Required: false, Description: "Observed wall-clock gap in seconds when a wake/suspend gap was detected."},
