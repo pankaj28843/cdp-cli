@@ -69,6 +69,28 @@ func TestCronInstallIsIdempotentAndPreservesUserEntries(t *testing.T) {
 	}
 }
 
+func TestCronInstallIntoMissingCrontabIgnoresManagerDiagnostics(t *testing.T) {
+	crontabPath, crontabBin := fakeCrontab(t, "")
+	if err := os.Remove(crontabPath); err != nil {
+		t.Fatalf("remove fake crontab store: %v", err)
+	}
+	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
+	stateDir := shortCLIStateDir(t)
+
+	var result cronInstallResult
+	executeCronJSON(t, []string{"cron", "install", "--state-dir", stateDir, "--json"}, &result)
+	if !result.OK || !result.Installed {
+		t.Fatalf("cron install into missing crontab = %+v, want installed", result)
+	}
+	installed := readFileString(t, crontabPath)
+	if strings.Contains(installed, "no crontab") {
+		t.Fatalf("crontab install copied crontab -l stderr into the new crontab:\n%s", installed)
+	}
+	if !strings.HasPrefix(installed, "# cdp-cli managed browser runtime tasks\n") {
+		t.Fatalf("crontab install into missing crontab should start with the managed block:\n%s", installed)
+	}
+}
+
 func TestCronInstallUsesPersistedHeadedConnectionURL(t *testing.T) {
 	_, crontabBin := fakeCrontab(t, "")
 	t.Setenv("CDP_CRONTAB_BIN", crontabBin)
@@ -982,6 +1004,10 @@ func fakeCrontab(t *testing.T, initial string) (string, string) {
 set -eu
 store="$CDP_FAKE_CRONTAB"
 if [ "$#" -eq 1 ] && [ "$1" = "-l" ]; then
+  if [ ! -e "$store" ]; then
+    echo "crontab: no crontab for fake-user" >&2
+    exit 1
+  fi
   cat "$store"
   exit 0
 fi

@@ -1190,7 +1190,9 @@ func cronValue(value string) string {
 
 func readUserCrontab(ctx context.Context) (string, error) {
 	result, err := runBoundedExternalCommand(ctx, crontabBinary(), "-l")
-	return result.combinedOutput(), err
+	// Only stdout is crontab content; stderr carries manager diagnostics such
+	// as "no crontab for <user>" that must never be written back as entries.
+	return result.stdout, err
 }
 
 func writeUserCrontab(ctx context.Context, content string) error {
