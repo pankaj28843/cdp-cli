@@ -62,7 +62,8 @@ CDP_CHAOS_SERVICE_LABEL, CDP_CHAOS_SYSTEMD_UNIT, CDP_CHAOS_SYSTEM_SCOPE,
 CDP_CHAOS_HEALTH_TIMEOUT, CDP_CHAOS_REQUEST_TIMEOUT, CDP_CHAOS_DURATION_MS.
 
 State-expired backs up the exact provider state required by transcription,
-changes only captured_at, and restores it if repair cannot be proven. Unrelated
+ages captured_at and gives ChatGPT a synthetic expired bearer, and restores
+the original state if repair cannot be proven. Unrelated
 provider UI capability state is out of scope. No credentials, audio, or
 unrelated process is deleted.
 EOF
@@ -378,11 +379,17 @@ prepare_state() {
   done
 }
 expire_state() {
-  local path temporary_file mode_bits owner index=0
+  local path temporary_file mode_bits owner provider_name index=0
   for path in "${state_files[@]}"; do
     [[ -f "$path" && ! -L "$path" ]] || die "state path changed before expiration: $path"
     temporary_file="$temp/state-expired-$index.json"
-    jq --arg captured_at "$old_time" '.captured_at = $captured_at' "$path" > "$temporary_file" || die "could not expire state: $path"
+    provider_name="$(basename "$(dirname "$path")")"
+    jq --arg captured_at "$old_time" --arg provider "$provider_name" '
+      .captured_at = $captured_at |
+      if $provider == "chatgpt" then
+        .headers.authorization = "Bearer synthetic.eyJleHAiOjB9.synthetic"
+      else . end
+    ' "$path" > "$temporary_file" || die "could not expire state: $path"
     mode_bits="$(state_mode "$path")"; owner="$(state_owner "$path")"
     chmod "$mode_bits" "$temporary_file" || die "could not preserve state mode: $path"
     if [[ "$(id -u)" == 0 ]]; then chown "$owner" "$temporary_file"; elif [[ "${owner%%:*}" != "$(id -u)" ]]; then die "state owner changed: $path"; fi

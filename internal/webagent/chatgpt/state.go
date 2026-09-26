@@ -3,6 +3,7 @@ package chatgpt
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -162,8 +163,40 @@ func (s *Store) LoadTemplateStatus(
 		return RequestTemplate{}, status, err
 	}
 	capturedAt, _ := time.Parse(time.RFC3339Nano, template.CapturedAt)
+	// A successfully observed bearer supplies its own lifetime. This is a
+	// scheduling hint, not signature verification; provider rejection still
+	// triggers repair. Opaque credentials retain the evidence TTL.
+	if expiresAt, ok := bearerExpiresAt(template.Headers["authorization"]); ok {
+		ttl = expiresAt.Sub(capturedAt)
+	}
 	status = authStatusFromCapturedAt(status, capturedAt, now, ttl)
 	return template, status, nil
+}
+
+func bearerExpiresAt(authorization string) (time.Time, bool) {
+	fields := strings.Fields(authorization)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return time.Time{}, false
+	}
+	parts := strings.Split(fields[1], ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	var claims struct {
+		ExpiresAt json.Number `json:"exp"`
+	}
+	if json.Unmarshal(payload, &claims) != nil || claims.ExpiresAt == "" {
+		return time.Time{}, false
+	}
+	expiresAt, err := claims.ExpiresAt.Int64()
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(expiresAt, 0).UTC(), true
 }
 
 func (s *Store) SaveRuntime(ctx context.Context, runtime RuntimeCapabilities) error {

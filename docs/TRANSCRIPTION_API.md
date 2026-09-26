@@ -102,7 +102,8 @@ green `/healthz`, and a non-empty real transcription. `all` runs the bounded
 matrix sequentially. `state-expired` is for an actual provider host only: it
 requires an explicit provider allowlist, backs up the exact auth/capability
 JSON for ChatGPT, Claude, Gemini, or Microsoft 365, backdates only
-`captured_at`, and proves the service refreshes the selected files;
+`captured_at`, replaces ChatGPT's bearer with a synthetic expired token, and
+proves the service refreshes the selected files;
 failed runs restore the backups. The script has bounded polling and an exit
 trap for recovery. It removes only its own temporary directory, never service
 state, credentials, audio history, or unrelated processes. Use `--health-url`,
@@ -195,6 +196,12 @@ cannot launch browser repair: when configured, it invokes the absolute
 operator-owned helper to request authority repair and synchronize state.
 The default cadence is ten minutes, which stays ahead of Microsoft 365's
 45-minute auth-evidence TTL and its 15-minute proactive refresh margin.
+ChatGPT reuses successfully captured native auth until the bearer's JWT expiry,
+with the same 15-minute proactive margin; opaque credentials retain a one-hour
+evidence TTL. Reading the expiry is a scheduling hint, not signature verification
+or proof against revocation. A provider auth rejection still triggers the
+existing bounded repair and direct retry, without advancing the capture time
+when no fresh authenticated request was observed.
 `--auth-refresh-offset` phases recurring refreshes against the wall clock and
 must be shorter than the interval. Startup refresh remains immediate.
 Independent local authorities should use distinct offsets. Externally managed

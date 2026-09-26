@@ -2,7 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +19,39 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/webagent/gemini"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
 )
+
+func TestChatGPTAuthReusesMultiHourBearerWithoutRefresh(t *testing.T) {
+	now := time.Now().UTC()
+	store := testChatGPTTranscriptionStore(t, now.Add(-6*time.Hour))
+	template, err := store.LoadTemplate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template.Headers["authorization"] = "Bearer synthetic." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, now.Add(2*time.Hour).Unix()))) + ".synthetic"
+	if err := store.SaveTemplate(context.Background(), template); err != nil {
+		t.Fatal(err)
+	}
+	provider := &chatGPTTranscriptionProvider{
+		store: store,
+		refresh: func(context.Context) error {
+			t.Fatal("valid multi-hour bearer triggered browser refresh")
+			return nil
+		},
+	}
+	if err := provider.EnsureAuthFresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !provider.Capabilities(context.Background()).Ready {
+		t.Fatal("valid multi-hour bearer was not ready")
+	}
+	after, err := store.LoadTemplate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(template, after) {
+		t.Fatal("reusing valid auth changed the captured request template")
+	}
+}
 
 func TestChatGPTAuthUsesValidTemplateWhileBackgroundRefreshIsBusy(t *testing.T) {
 	store, err := chatgpt.NewStore(t.TempDir())

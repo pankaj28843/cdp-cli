@@ -20,6 +20,7 @@ const (
 	AuthRefreshSchemaVersion   = "chatgpt-auth-refresh/v1"
 	DoctorSchemaVersion        = "chatgpt-doctor/v1"
 	defaultObservationTimeout  = 12 * time.Second
+	defaultAuthReadTimeout     = 45 * time.Second
 	defaultObservationAttempts = 3
 )
 
@@ -92,8 +93,12 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 			data, []string{"cdp doctor --json"},
 		)
 	}
+	readTimeout := config.ObservationTimeout
 	if config.ObservationTimeout <= 0 {
 		config.ObservationTimeout = defaultObservationTimeout
+		// WaitForEvidence divides this total across three load stages. Leave
+		// each stage time for slow native reads before interrupting with reload.
+		readTimeout = defaultAuthReadTimeout
 	}
 	if config.ObservationAttempts < defaultObservationAttempts {
 		config.ObservationAttempts = defaultObservationAttempts
@@ -184,13 +189,12 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 				)
 			}
 
-			existing := loadExistingTemplate(ctx, config.Store)
 			observation, found, err := observeReadRequest(
 				ctx,
 				config.Client,
 				session,
 				config.ObservationAttempts,
-				config.ObservationTimeout,
+				readTimeout,
 			)
 			if err != nil {
 				_ = lease.MarkIncomplete(context.Background())
@@ -208,6 +212,20 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 			capturedAt := now().UTC().Format(time.RFC3339Nano)
 			template := RequestTemplate{}
 			if found {
+				// Navigation and the observed read can rotate session cookies.
+				// Replay overlays this snapshot onto the literal captured header.
+				cookies, err = readCookies(ctx, session)
+				data.CookieCount = len(cookies)
+				data.SessionCookieObserved = hasSessionCookie(cookies)
+				if err != nil || !data.SessionCookieObserved {
+					_ = lease.MarkIncomplete(context.Background())
+					return authFailure(
+						runID, config, webagent.StageObserveTerminal, target, pending,
+						"chatgpt_auth_cookie_observation_failed", "auth",
+						"ChatGPT current session cookies could not be observed after the authenticated read",
+						data,
+					)
+				}
 				observation.Headers["user-agent"] = userAgent
 				template = RequestTemplate{
 					SchemaVersion:    AuthTemplateSchemaVersion,
@@ -221,14 +239,6 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 					Source:           "headed-cdp-observed-read-request",
 				}
 				data.RequestShape = "observed_read"
-			} else if existing != nil {
-				template = *existing
-				template.Cookies = cookies
-				template.BrowserUserAgent = userAgent
-				template.Headers["user-agent"] = userAgent
-				template.CapturedAt = capturedAt
-				template.Source = "headed-cdp-retained-read-shape"
-				data.RequestShape = "retained_observed_read"
 			} else {
 				_ = lease.MarkIncomplete(context.Background())
 				data.AuthState = "request_not_observed"
@@ -378,6 +388,14 @@ func observeReadRequest(
 ) (readObservation, bool, error) {
 	observer := authNetworkObserver{records: map[string]*authRequestRecord{}}
 	var selected readObservation
+	readEvent := client.ReadEvent
+	if scoped, ok := client.(interface {
+		ReadSessionEvent(context.Context, string) (cdp.Event, error)
+	}); ok {
+		readEvent = func(ctx context.Context) (cdp.Event, error) {
+			return scoped.ReadSessionEvent(ctx, session.SessionID)
+		}
+	}
 	readiness, err := authreadiness.WaitForEvidence(
 		ctx,
 		session,
@@ -393,29 +411,29 @@ func observeReadRequest(
 			if sliceErr != nil {
 				return false, sliceErr
 			}
-			event, readErr := client.ReadEvent(readCtx)
-			readExpired := readCtx.Err() != nil
-			stageExpired := observationCtx.Err() != nil
-			cancelRead()
-			if readErr != nil {
-				if readExpired && !stageExpired {
+			defer cancelRead()
+			// Drain each bounded slice without a readiness poll delay between
+			// network events; page-load bursts otherwise outpace observation.
+			for {
+				if readCtx.Err() != nil {
 					return false, nil
 				}
-				if stageExpired ||
-					errors.Is(readErr, context.DeadlineExceeded) {
-					return false, nil
+				event, readErr := readEvent(readCtx)
+				if readErr != nil {
+					if readCtx.Err() != nil || errors.Is(readErr, context.DeadlineExceeded) {
+						return false, nil
+					}
+					return false, readErr
 				}
-				return false, readErr
+				if event.SessionID != session.SessionID {
+					continue
+				}
+				observer.add(event)
+				if observation, ok := observer.selectRead(); ok {
+					selected = observation
+					return true, nil
+				}
 			}
-			if event.SessionID != session.SessionID {
-				return false, nil
-			}
-			observer.add(event)
-			observation, ok := observer.selectRead()
-			if ok {
-				selected = observation
-			}
-			return ok, nil
 		},
 	)
 	if err != nil {

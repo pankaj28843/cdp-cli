@@ -863,9 +863,10 @@ func TestStopManagedChromeVerifiesDescendantsWithoutRootChromeFlags(t *testing.T
 			signaled = append(signaled, pid)
 			return nil
 		},
-		EndpointReachable:        func(context.Context, string) bool { return false },
-		VerificationTimeout:      500 * time.Millisecond,
-		VerificationPollInterval: time.Second,
+		EndpointReachable: func(context.Context, string) bool { return false },
+		// Use the production verification budget for real process enumeration;
+		// this test checks descendant ownership, not subsecond scan latency.
+		VerificationPollInterval: 10 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("StopManagedChrome returned error: %v", err)

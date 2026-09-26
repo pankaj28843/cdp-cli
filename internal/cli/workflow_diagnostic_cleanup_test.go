@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/cli"
 )
@@ -249,10 +250,39 @@ func TestDiagnosticWorkflowCancellationStillCleansOwnedPage(t *testing.T) {
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
+	// Cancel after attachment and collector setup, so slow setup cannot turn
+	// this into the separately covered attach-failure cleanup case.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	navigations := fakePageNavigateCount.Load()
+	cancelDone := make(chan struct{})
+	go func() {
+		defer close(cancelDone)
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if fakePageNavigateCount.Load() > navigations {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	defer func() {
+		cancel()
+		<-cancelDone
+	}()
+
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{
-		"--timeout", "100ms", "workflow", "verify", "https://example.test/app", "--wait", "500ms", "--json",
+	code := cli.Execute(ctx, []string{
+		"workflow", "verify", "https://example.test/app", "--wait", "30s", "--json",
 	}, &out, &errOut, cli.BuildInfo{})
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("verify context error=%v, want cancellation after navigation", ctx.Err())
+	}
 	if code != cli.ExitOK {
 		t.Fatalf("verify cancellation exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
