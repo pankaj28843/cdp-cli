@@ -823,7 +823,9 @@ func managedCronTasks(opts cronRenderOptions) []managedCronTask {
 		maxLogSize = artifacts.FormatByteSize(artifacts.DefaultMaxLogSizeBytes)
 	}
 	var tasks []managedCronTask
-	if opts.BrowserMode == "all" || opts.BrowserMode == "headed" {
+	// A persistent headed daemon already reconnects. On macOS, a scheduled
+	// repair can activate Chrome and interfere with the user's desktop.
+	if runtime.GOOS != "darwin" && (opts.BrowserMode == "all" || opts.BrowserMode == "headed") {
 		browserURLArg := ""
 		if browserURL != "" {
 			browserURLArg = " --browser-url " + cronValue(browserURL)

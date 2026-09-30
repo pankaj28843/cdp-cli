@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,7 +43,11 @@ while :; do sleep 1; done
 	t.Cleanup(func() { cronRunExecutable = previousExecutable })
 
 	opts := defaultCronRenderOptions()
-	task, ok := managedCronTaskByID(opts, cronTaskHeadedDaemonKeepalive)
+	taskID := cronTaskHeadedDaemonKeepalive
+	if runtime.GOOS == "darwin" {
+		taskID = cronTaskHeadlessMaintenance
+	}
+	task, ok := managedCronTaskByID(opts, taskID)
 	if !ok {
 		t.Fatal("headed managed task is missing")
 	}

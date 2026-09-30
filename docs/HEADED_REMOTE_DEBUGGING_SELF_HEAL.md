@@ -14,9 +14,12 @@ The normal path is deliberately not UI automation. Before launching a new
 headed default-profile Chrome process, cdp-cli atomically sets Chrome's
 persisted `devtools.remote_debugging.user-enabled` preference in `Local State`
 when no default-profile Chrome process is using the file. This is the cheap,
-deterministic path and is safe to skip when Chrome is already running. The
-native approval-sheet adapter is only the fallback for an already-running
-profile; it is never treated as proof on its own.
+deterministic path and is safe to skip when Chrome is already running. On
+macOS, a disabled preference in a running profile requires a human to enable
+it in Chrome. Background repair does not inject mouse events or activate
+Chrome to toggle the checkbox. An explicit approval command may use the exact
+accessibility action for an already-visible sheet; it is never treated as
+transport proof on its own.
 
 The repair loop is intentionally bounded and narrow:
 
@@ -24,8 +27,8 @@ The repair loop is intentionally bounded and narrow:
    connection.
 2. If the default profile is not running, enable the persisted preference and
    launch one headed default-profile window with the exact inspect page.
-3. If the profile is already running and the preference is disabled, inspect
-   every Chrome window.
+3. If the profile is already running and the preference is disabled on macOS,
+   report that human action is required.
 4. In each window, act only on a sheet whose exact title is `Allow remote
    debugging?` and whose exact button is an enabled `Allow` action.
 5. Repeat the scan for newly queued sheets. This handles a daemon that is
@@ -48,7 +51,9 @@ drains at most 20 queued prompts. The Ubuntu package `python3-pyatspi` must be
 installed; missing desktop accessibility support returns a structured failed
 repair rather than an unverified success.
 
-The scheduled healthy path is deliberately cheaper: when the selected headed
+On macOS, `cdp cron install` omits headed repair entirely. The long-lived daemon
+handles transport reconnects without a minute-by-minute scheduler. On Linux,
+the scheduled healthy path is deliberately cheaper: when the selected headed
 runtime already has a ready RPC socket and a successful target probe, cron
 returns `healthy/action=none` without opening Chrome, changing the preference,
 or starting another hold. Only an unhealthy runtime enters repair. That repair
@@ -98,14 +103,11 @@ when no repair was needed.
 
 ## Ownership rule for rescue scripts
 
-The headed cdp cron task is the single owner of headed readiness. The dotfiles
-Chrome/Edge rescue scripts therefore leave cdp cron entries and cdp daemon
-processes active by default. They may still force-stop and reopen a browser,
-after which the cdp task repairs the connection.
+On Linux, the headed cdp cron task owns scheduled headed readiness. On macOS,
+the daemon holds the transport and no headed cron task is installed.
 
-Use their explicit `--pause-cron` option only when emergency isolation is
-needed. This prevents a manual rescue script from silently pausing the
-one-minute self-healing job and leaving headed CDP unavailable.
+Use a rescue script's `--pause-cron` option when its installed cron jobs need
+to be paused independently of the daemon.
 
 ## Failure behavior
 
@@ -126,7 +128,7 @@ The queue-drain and verification contract is shared across platforms.
 
 | Platform | Adapter | Current behavior | Next implementation |
 | --- | --- | --- | --- |
-| macOS | `Local State` preference path plus native ApplicationServices/Quartz fallback | Implemented; enables the preference before a new default-profile launch, otherwise activates headed Chrome, finds the exact checkbox through AX, posts one Quartz session click, scans all Chrome windows, and drains exact approval sheets. | Keep the CDP probe verification as the gate |
+| macOS | `Local State` preference path plus explicit native accessibility approval | Enables the preference only while the default profile is closed. A running profile with the preference disabled requires human action. No headed cron task or synthetic pointer click is installed; passive scans do not foreground Chrome. | Keep the CDP probe verification as the gate |
 | Ubuntu/Linux | Embedded AT-SPI helper | Scans all whitelisted Chrome application windows, drains only the exact approval sheet within bounded wait/pass limits, then relies on the real CDP probe for success | Keep the installed `python3-pyatspi` prerequisite and rerun live approval/transport proof on each supported Ubuntu desktop image |
 | Other desktop platforms | Placeholder | Reports unsupported with a structured remediation result | Add the platform accessibility adapter, then reuse the same shared contract |
 

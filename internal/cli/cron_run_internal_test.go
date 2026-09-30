@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,9 @@ import (
 )
 
 func TestRunManagedCronTaskCapturesPassiveFirstHeadedChildInBoundedLog(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS does not schedule unattended headed repair")
+	}
 	stateDir := t.TempDir()
 	script := filepath.Join(t.TempDir(), "fake-cdp")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\"\n"), 0o700); err != nil {
@@ -70,7 +74,11 @@ func TestChromeProcessLineMatchesNormalChromeButNotHeadlessHelpers(t *testing.T)
 
 func TestCronRunReportsAlreadyRunningWithoutLaunchingChild(t *testing.T) {
 	stateDir := t.TempDir()
-	task, ok := managedCronTaskByID(defaultCronRenderOptions(), cronTaskHeadedDaemonKeepalive)
+	taskID := cronTaskHeadedDaemonKeepalive
+	if runtime.GOOS == "darwin" {
+		taskID = cronTaskHeadlessMaintenance
+	}
+	task, ok := managedCronTaskByID(defaultCronRenderOptions(), taskID)
 	if !ok {
 		t.Fatal("headed managed task is missing")
 	}
@@ -84,7 +92,7 @@ func TestCronRunReportsAlreadyRunningWithoutLaunchingChild(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Execute(
 		context.Background(),
-		[]string{"--state-dir", stateDir, "cron", "run", cronTaskHeadedDaemonKeepalive, "--json"},
+		[]string{"--state-dir", stateDir, "cron", "run", taskID, "--json"},
 		&stdout,
 		&stderr,
 		BuildInfo{},
@@ -101,7 +109,7 @@ func TestCronRunReportsAlreadyRunningWithoutLaunchingChild(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("decode busy cron run: %v\n%s", err, stdout.String())
 	}
-	if !got.OK || got.Task != cronTaskHeadedDaemonKeepalive || got.State != "already_running" || got.Executed {
+	if !got.OK || got.Task != taskID || got.State != "already_running" || got.Executed {
 		t.Fatalf("busy cron run = %+v, want non-mutating typed skip", got)
 	}
 }

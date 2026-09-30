@@ -12,8 +12,12 @@ import (
 func TestManagedCronTasksBoundLogsAndScheduleDailyArtifactPrune(t *testing.T) {
 	opts := defaultCronRenderOptions()
 	tasks := managedCronTasks(opts)
-	if len(tasks) != 3 {
-		t.Fatalf("managed cron tasks = %d, want headed, headless, and daily artifact prune", len(tasks))
+	wantCount := 3
+	if runtime.GOOS == "darwin" {
+		wantCount = 2
+	}
+	if len(tasks) != wantCount {
+		t.Fatalf("managed cron tasks = %d, want %d", len(tasks), wantCount)
 	}
 	if opts.ArtifactRetention != artifacts.DefaultRetention || opts.MaxLogSizeBytes != artifacts.DefaultMaxLogSizeBytes {
 		t.Fatalf("default artifact policy = %s/%d, want %s/%d", opts.ArtifactRetention, opts.MaxLogSizeBytes, artifacts.DefaultRetention, artifacts.DefaultMaxLogSizeBytes)
@@ -28,7 +32,16 @@ func TestManagedCronTasksBoundLogsAndScheduleDailyArtifactPrune(t *testing.T) {
 			t.Fatalf("task %q entry is %d bytes, portable maximum is %d", task.ID, len(task.CronEntry), cronMaxEntryBytes)
 		}
 	}
-	for _, id := range []string{cronTaskHeadedDaemonKeepalive, cronTaskHeadlessMaintenance} {
+	if runtime.GOOS == "darwin" {
+		if _, exists := byID[cronTaskHeadedDaemonKeepalive]; exists {
+			t.Fatal("macOS must not install unattended headed approval repair")
+		}
+	}
+	launchTasks := []string{cronTaskHeadlessMaintenance}
+	if runtime.GOOS != "darwin" {
+		launchTasks = append(launchTasks, cronTaskHeadedDaemonKeepalive)
+	}
+	for _, id := range launchTasks {
 		entry := byID[id].CronEntry
 		if !strings.Contains(entry, "cron run "+id) || !strings.Contains(entry, "--max-log-size 64MiB") || strings.Contains(entry, "flock") || strings.Contains(entry, "sh -c") {
 			t.Fatalf("task %q entry = %q, want short Go-owned cron runner", id, entry)

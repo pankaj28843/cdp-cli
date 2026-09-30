@@ -505,11 +505,17 @@ EOF_CRONTAB
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" doctor --check scheduled-tasks --state-dir "$state_dir" --json | jq -e '.checks | length == 1 and .[0].status == "warn" and (.[0].message | contains("cdp pages polling")) and .[0].details.has_pages_polling_keepalive == true and .[0].details.has_headed_pages_polling == true and .[0].details.pages_polling_count == 1' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and (.warnings | any(contains("unmanaged cdp pages polling")))' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron migrate pages-polling --state-dir "$state_dir" --json | jq -e '.ok == true and .action == "would_remove" and .dry_run == true and .applied == false and .candidate_count == 1 and .removed_count == 0 and .managed_keepalive_installed == false and (.warnings | any(contains("managed daemon keepalive is not installed")))' >/dev/null
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and .artifact_policy.retention_seconds == 604800 and .artifact_policy.max_log_size_bytes == 67108864 and (.warnings | any(contains("unmanaged cdp pages polling"))) and (.managed_block.entries | length == 3) and (.tasks | map(.id) | index("artifact-prune"))' >/dev/null
+managed_entry_count=3
+if [[ "$(uname -s)" == Darwin ]]; then managed_entry_count=2; fi
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e --argjson count "$managed_entry_count" '.ok == true and .changed == true and .artifact_policy.retention_seconds == 604800 and .artifact_policy.max_log_size_bytes == 67108864 and (.warnings | any(contains("unmanaged cdp pages polling"))) and (.managed_block.entries | length == $count) and (.tasks | map(.id) | index("artifact-prune"))' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron migrate pages-polling --apply --state-dir "$state_dir" --json | jq -e '.ok == true and .action == "removed" and .dry_run == false and .applied == true and .candidate_count == 1 and .removed_count == 1 and .managed_keepalive_installed == true and (.removed_entries | length == 1)' >/dev/null
 rg -q '^0 0 \* \* \* /usr/local/bin/backup$' "$fake_crontab_store"
 rg -q 'cdp-cli managed browser runtime tasks' "$fake_crontab_store"
-rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
+if [[ "$(uname -s)" == Darwin ]]; then
+  ! rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
+else
+  rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
+fi
 rg -q -- 'cron run headless-maintenance --profile-seed-strategy managed --profile-seed-if-older-than 6h' "$fake_crontab_store"
 rg -q -- 'cron run artifact-prune --artifact-retention 168h --max-log-size 64MiB' "$fake_crontab_store"
 ! rg -q -e 'flock' -e 'sh -c' -e 'artifacts run-managed' "$fake_crontab_store"
@@ -521,7 +527,7 @@ cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup
 EOF_CRONTAB
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e '.ok == true and .state == "not_installed" and .health.state == "not_installed" and .health.status == "warn" and .health.recommended_command == "cdp cron install --json" and .installed == false and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and .artifact_policy.retention_seconds == 604800 and .artifact_policy.max_log_size_bytes == 67108864 and (.last_cleanup | type == "object") and (.intended_block.entries | length == 3) and (.locks | type == "object") and (.daemon_locks | type == "object")' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron status --state-dir "$state_dir" --json | jq -e --argjson count "$managed_entry_count" '.ok == true and .state == "not_installed" and .health.state == "not_installed" and .health.status == "warn" and .health.recommended_command == "cdp cron install --json" and .installed == false and .profile_seed.strategy == "managed" and .profile_seed.if_older_than == "6h" and .profile_seed.schedule == "0 * * * *" and .artifact_policy.retention_seconds == 604800 and .artifact_policy.max_log_size_bytes == 67108864 and (.last_cleanup | type == "object") and (.intended_block.entries | length == $count) and (.locks | type == "object") and (.daemon_locks | type == "object")' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron diff --state-dir "$state_dir" --json | jq -e '.ok == true and .installed == false and .actions[0].action == "append_managed_block"' >/dev/null
 cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
@@ -547,16 +553,24 @@ cat >"$fake_crontab_store" <<'EOF_CRONTAB'
 SHELL=/bin/sh
 0 0 * * * /usr/local/bin/backup
 EOF_CRONTAB
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 2) and (.intended_block.entries | any(contains("cron run headed-daemon-keepalive"))) and (.intended_block.entries | any(contains("cron run artifact-prune")))' >/dev/null
+if [[ "$(uname -s)" == Darwin ]]; then
+  CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 1) and (.intended_block.entries | all(contains("cron run artifact-prune")))' >/dev/null
+else
+  CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --browser-mode headed cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .changed == true and .installed == false and (.intended_block.entries | length == 2) and (.intended_block.entries | any(contains("cron run headed-daemon-keepalive"))) and (.intended_block.entries | any(contains("cron run artifact-prune")))' >/dev/null
+fi
 cron_seed_config="$state_dir/cron-seed-config.json"
 cat >"$cron_seed_config" <<'EOF_CRON_SEED_CONFIG'
 {"browser":{"headless":{"profile_seed_strategy":"copy-default","profile_refresh_after":"30m"}},"artifacts":{"retention":"336h","max_log_size":"8MiB"}}
 EOF_CRON_SEED_CONFIG
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" --config "$cron_seed_config" cron install --dry-run --state-dir "$state_dir" --json | jq -e '.ok == true and .dry_run == true and .profile_seed.strategy == "copy-default" and .profile_seed.if_older_than == "30m" and .profile_seed.if_older_than_seconds == 1800 and .profile_seed.schedule == "*/15 * * * *" and .artifact_policy.retention_seconds == 1209600 and .artifact_policy.max_log_size_bytes == 8388608 and (.intended_block.entries | any(contains("cron run headless-maintenance --profile-seed-strategy copy-default --profile-seed-if-older-than 30m"))) and (.intended_block.entries | any(contains("cron run artifact-prune --artifact-retention 336h --max-log-size 8MiB")))' >/dev/null
-CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == true and (.managed_block.entries | length == 3)' >/dev/null
+CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e --argjson count "$managed_entry_count" '.ok == true and .changed == true and (.managed_block.entries | length == $count)' >/dev/null
 CDP_FAKE_CRONTAB="$fake_crontab_store" CDP_CRONTAB_BIN="$fake_crontab_bin" "$binary" cron install --state-dir "$state_dir" --json | jq -e '.ok == true and .changed == false and .action == "unchanged"' >/dev/null
 rg -q '^SHELL=/bin/sh$' "$fake_crontab_store"
-rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
+if [[ "$(uname -s)" == Darwin ]]; then
+  ! rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
+else
+  rg -q -- 'cron run headed-daemon-keepalive' "$fake_crontab_store"
+fi
 ! rg -q 'cron heal headed' "$fake_crontab_store"
 ! rg -q -e 'flock' -e 'sh -c' "$fake_crontab_store"
 rg -q -- '--profile-seed-strategy managed' "$fake_crontab_store"

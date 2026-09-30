@@ -82,7 +82,6 @@ cdp daemon status --json
 cdp doctor --check scheduled-tasks --json
 cdp doctor --check browser-health --json
 cdp doctor --check headless-security --json
-cdp --browser-mode headed daemon keepalive --auto-connect --repair --probe active --macos-self-heal-approval --display :0 --json
 cdp --browser-mode headless browser profile seed --strategy managed --json
 cdp --browser-mode headless daemon keepalive --repair --json
 cdp --browser-mode headless daemon maintenance --json
@@ -1017,16 +1016,15 @@ owner-only lease while the operation runs. Override the default connectivity
 endpoint with `CDP_AUTO_HEAL_CONNECTIVITY_URL` when a network uses an approved
 internal reachability URL.
 
-For headed auto-connect, the managed cron task uses `--probe auto` and, on
-macOS, `--macos-self-heal-approval`: it passively checks the existing runtime
-first and only enters the bounded active repair path when health is not proven.
-Repair starts or reuses the real daemon transport and drains only Chrome's exact
-`Allow remote debugging?` sheet across all windows. The daemon becoming ready is
-the transport proof; the accessibility click alone is never treated as success.
-On Ubuntu/Linux the same bounded exact-title/action contract uses the embedded
-AT-SPI helper and requires the distro `python3-pyatspi` package. Headless
-keepalive remains fully unattended and starts or reuses the managed headless
-Chrome runtime.
+On macOS, `cdp cron install` does not schedule headed repair. The long-lived
+headed daemon reconnects on its own, while unattended approval repair could
+bring Chrome to the foreground and disturb the user's desktop. A disabled
+remote-debugging preference in a running Chrome profile requires a human to
+enable it in Chrome. The macOS native adapter no longer injects mouse events;
+its read-only approval scan does not activate Chrome. On Ubuntu/Linux the
+managed headed task retains bounded repair through the AT-SPI helper and
+requires the distro `python3-pyatspi` package. Headless maintenance remains
+unattended.
 
 The managed path is available through first-class cron commands:
 
@@ -1082,8 +1080,10 @@ cdp --config cdp.json cron install --dry-run --json
 cdp cron install --artifact-retention 168h --max-log-size 64MiB --dry-run --json
 ```
 
-When `--browser-mode headed` is explicit, cron status/install reuse the
-selected headed connection's persisted browser URL if `--browser-url` and
+On macOS, the headed dry run contains only the daily artifact prune task;
+the persistent daemon handles headed reconnects. When `--browser-mode headed`
+is explicit on Linux, cron status/install reuse the selected headed
+connection's persisted browser URL if `--browser-url` and
 `CDP_BROWSER_URL` are absent. This keeps a configured headed deployment stable
 across scheduled invocations; an auto-connect connection remains URL-less.
 

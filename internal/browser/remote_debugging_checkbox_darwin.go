@@ -17,8 +17,7 @@ import (
 
 // EnableRemoteDebuggingPreference updates Chrome's persisted opt-in before a
 // headed launch when the default profile is not in use. This is the cheap,
-// deterministic path; the native checkbox remains a fallback for an already
-// running headed browser.
+// deterministic path. A running profile requires a human to enable it.
 func EnableRemoteDebuggingPreference(ctx context.Context, channel string) (bool, error) {
 	processName, ok := chromeApplicationName(channel)
 	if !ok {
@@ -142,11 +141,10 @@ func chromeCommandUsesDefaultProfile(command, userDataDir string) bool {
 }
 
 // PrepareRemoteDebuggingApproval re-enables Chrome's explicit remote-
-// debugging checkbox when the default profile has been revoked. The native
-// approval sheet is still drained separately and is never treated as
-// approved without a verified CDP probe.
+// debugging preference only while Chrome is closed. A running browser
+// requires a human action; background repair must not take desktop focus.
 func PrepareRemoteDebuggingApproval(ctx context.Context, channel string) (bool, error) {
-	processName, ok := chromeApplicationName(channel)
+	_, ok := chromeApplicationName(channel)
 	if !ok {
 		return false, nil
 	}
@@ -161,37 +159,7 @@ func PrepareRemoteDebuggingApproval(ctx context.Context, channel string) (bool, 
 	if err != nil || !known || enabled {
 		return false, err
 	}
-
-	clicked, err := enableRemoteDebuggingCheckbox(ctx, processName)
-	if err != nil {
-		return false, err
-	}
-	if clicked {
-		if err := waitForRemoteDebuggingEnabled(ctx, channel); err == nil {
-			return true, nil
-		}
-	}
-
-	// Finding the control is not proof that the input event changed Chrome's
-	// profile. If the first attempt was ignored by macOS input policy, bring
-	// the exact inspect page forward and retry once before reporting failure.
-	if err := openRemoteDebuggingApprovalPage(ctx, processName); err != nil {
-		return false, fmt.Errorf("open Chrome remote-debugging approval page: %w", err)
-	}
-	if err := waitForRemoteDebuggingPage(ctx); err != nil {
-		return false, err
-	}
-	clicked, err = enableRemoteDebuggingCheckbox(ctx, processName)
-	if err != nil {
-		return false, err
-	}
-	if !clicked {
-		return false, fmt.Errorf("Chrome remote-debugging checkbox was not found in a headed window")
-	}
-	if err := waitForRemoteDebuggingEnabled(ctx, channel); err != nil {
-		return false, err
-	}
-	return true, nil
+	return false, fmt.Errorf("Chrome remote debugging is disabled for the running profile; enable it in Chrome")
 }
 
 func chromeRemoteDebuggingEnabled(channel string) (enabled, known bool, err error) {
@@ -222,42 +190,6 @@ func chromeRemoteDebuggingEnabled(channel string) (enabled, known bool, err erro
 	return *state.Devtools.RemoteDebugging.UserEnabled, true, nil
 }
 
-func openRemoteDebuggingApprovalPage(ctx context.Context, processName string) error {
-	return runHeadedChromeAction(ctx, processName, RemoteDebuggingApprovalURL)
-}
-
-func waitForRemoteDebuggingPage(ctx context.Context) error {
-	timer := time.NewTimer(500 * time.Millisecond)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func waitForRemoteDebuggingEnabled(ctx context.Context, channel string) error {
-	// Chrome may persist the setting asynchronously while it tears down the
-	// just-authorized DevTools connection. Keep this bounded below the repair
-	// lease instead of treating a slow write as a failed click.
-	for attempt := 0; attempt < 20; attempt++ {
-		enabled, known, err := chromeRemoteDebuggingEnabled(channel)
-		if err != nil {
-			return err
-		}
-		if known && enabled {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("Chrome remote-debugging checkbox click did not enable the profile")
-}
-
 func parseChromeProcessIDs(output string) []int {
 	var pids []int
 	for _, line := range strings.Split(output, "\n") {
@@ -283,32 +215,6 @@ func nativeChromeProcessIDs(ctx context.Context, processName string) ([]int, err
 		return nil, fmt.Errorf("find Chrome processes: %w", err)
 	}
 	return parseChromeProcessIDs(string(result.stdout)), nil
-}
-
-func enableRemoteDebuggingCheckbox(ctx context.Context, processName string) (bool, error) {
-	// AX can inspect Chrome while it is backgrounded, but Quartz input is
-	// delivered to the active application. Bring the headed browser forward
-	// before asking the native helper to click the exact checkbox.
-	if err := runHeadedChromeAction(ctx, processName, ""); err != nil {
-		return false, fmt.Errorf("activate headed Chrome: %w", err)
-	}
-	select {
-	case <-ctx.Done():
-		return false, ctx.Err()
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	output, err := runRemoteDebuggingNativeHelper(ctx, "--internal-macos-remote-debugging-checkbox", "--process-name", processName)
-	if err != nil {
-		return false, err
-	}
-	var result struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return false, fmt.Errorf("parse macOS remote-debugging checkbox helper: %w", err)
-	}
-	return result.Enabled, nil
 }
 
 func drainRemoteDebuggingApprovalQueueNative(ctx context.Context, processName string) (nativeRemoteDebuggingApprovalResult, bool, error) {
