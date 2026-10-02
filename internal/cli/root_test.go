@@ -401,7 +401,7 @@ func TestWaitNetworkIdleJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "network-idle", "--idle", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("wait network-idle exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -435,7 +435,7 @@ func TestWaitNetworkIdleJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("wait network-idle output is invalid JSON: %v", err)
 	}
-	if !got.OK || got.Wait.Kind != "network-idle" || !got.Wait.Matched || got.Wait.Idle != "10ms" || got.Wait.MaxInflight != 0 || got.Wait.EventCount == 0 || got.Wait.RequestCount != 2 || got.Wait.CompletedCount != 1 || got.Wait.FailedCount != 1 || got.Wait.InFlightCount != 0 || len(got.Wait.InFlight) != 0 || got.Wait.LastEvent.Kind != "loading-failed" || got.Wait.LastEvent.CDPMethod != "Network.loadingFailed" || got.Wait.LastEvent.RequestID != "request-failed" {
+	if !got.OK || got.Wait.Kind != "network-idle" || !got.Wait.Matched || got.Wait.Idle != "250ms" || got.Wait.MaxInflight != 0 || got.Wait.EventCount == 0 || got.Wait.RequestCount != 2 || got.Wait.CompletedCount != 1 || got.Wait.FailedCount != 1 || got.Wait.InFlightCount != 0 || len(got.Wait.InFlight) != 0 || got.Wait.LastEvent.Kind != "loading-failed" || got.Wait.LastEvent.CDPMethod != "Network.loadingFailed" || got.Wait.LastEvent.RequestID != "request-failed" {
 		t.Fatalf("wait network-idle output = %+v, want quiet network evidence", got)
 	}
 	if len(got.Wait.Warnings) == 0 || !strings.Contains(got.Wait.Warnings[0], "not proof") {
@@ -879,7 +879,7 @@ func TestWaitPopupTimeoutJSON(t *testing.T) {
 	// Popup discovery includes target listing, event subscription, and the
 	// first event drain; leave scheduler margin for the fixture to observe the
 	// non-matching popup before timing out.
-	code := cli.Execute(context.Background(), []string{"wait", "popup", "--match-url", "/missing", "--timeout", "250ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "popup", "--match-url", "/missing", "--timeout", "2s", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait popup timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}
@@ -1043,8 +1043,9 @@ func TestWaitDownloadTimeoutJSON(t *testing.T) {
 	defer server.Close()
 	startFakeDaemon(t, server, "browser_url")
 
+	// The deadline must cover daemon setup as well as the unmatched event wait.
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"wait", "download", "--match-url", "/missing", "--download-dir", t.TempDir(), "--timeout", "50ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"wait", "download", "--match-url", "/missing", "--download-dir", t.TempDir(), "--timeout", "2s", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("wait download timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}

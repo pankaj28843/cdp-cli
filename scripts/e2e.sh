@@ -377,6 +377,8 @@ grep -q -- '--overwrite' <<<"$chatgpt_research_export_help"
 "$binary" schema browser-window-marker --json | jq -e '.ok == true and .schema.name == "browser-window-marker" and (.schema.fields | map(.name) | index("marker"))' >/dev/null
 "$binary" schema window-marker --json | jq -e '.ok == true and .schema.name == "window-marker" and (.schema.fields | map(.name) | index("active_session_count")) and (.schema.fields | map(.name) | index("host_id_present")) and ([.schema.fields[] | select(.name == "host_id")] | length == 0)' >/dev/null
 "$binary" schema webagent-operation --json | jq -e '.ok == true and .schema.name == "webagent-operation" and (.schema.fields | map(.name) | index("cleanup")) and (.schema.fields | map(.name) | index("evidence"))' >/dev/null
+"$binary" schema chatgpt-ask --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("input_attachments")) and (.schema.description | contains("one batch"))' >/dev/null
+"$binary" workflow agent chatgpt ask --help | grep -Fq -- '--file mobile.png --file desktop.png --file contract.md'
 "$binary" schema webagent-capabilities --json | jq -e '.ok == true and .schema.name == "webagent-capabilities" and (.schema.fields | map(.name) | index("operations"))' >/dev/null
 "$binary" schema webagent-evidence --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("operation_failure"))' >/dev/null
 "$binary" schema webagent-operation-failure --json | jq -e '.ok == true and (.schema.fields | map(.name) | sort) == ["code", "err_class", "stage"]' >/dev/null

@@ -629,8 +629,7 @@ func observeSignedInUI(
 	}
 	err := evaluateInto(ctx, session, `(() => {
 	  const text = String(document.body && document.body.innerText || '');
-	  const composer = document.querySelector('#prompt-textarea') ||
-	    document.querySelector('[contenteditable="true"][role="textbox"]');
+	  const composer = document.querySelector('[contenteditable="true"][role="textbox"]');
 	  const visible = element => {
 	    const rect = element.getBoundingClientRect();
 	    const style = getComputedStyle(element);

@@ -628,12 +628,7 @@ func ContinueConversation(
 					data.BaselineAssistantTurns+1 &&
 				!rendered.Streaming &&
 				rendered.TerminalControl &&
-				len(strings.TrimSpace(rendered.Text)) >=
-					minimumUsefulAnswerChars(prompt) &&
-				terminalAnswerTextValid(
-					rendered.Text,
-					map[string]any{},
-				)
+				renderedTextAnswerReady(rendered, prompt)
 			if terminal {
 				data.Text = strings.TrimSpace(rendered.Text)
 				data.CompletionState = "terminal"
@@ -902,8 +897,7 @@ func waitRenderedContinuationAnswer(
 					fingerprintPrompt(prompt),
 				) &&
 				!observation.Streaming &&
-				len(text) >= minimumUsefulAnswerChars(prompt) &&
-				terminalAnswerTextValid(text, map[string]any{})
+				renderedTextAnswerReady(observation, prompt)
 			if valid {
 				if text == lastText {
 					stable++

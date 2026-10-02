@@ -98,16 +98,12 @@ func TestThinkingSliderLabelsMatchesCurrentFiveStopComposer(t *testing.T) {
 	}
 }
 
-func TestThinkingSliderLabelsRetainsLegacySixStopSurface(t *testing.T) {
-	got := thinkingSliderLabels(5)
-	want := []string{
-		"Instant", "Instant 5.5", "Medium", "High", "Extra High", "Pro",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("thinkingSliderLabels(5) = %v, want %v", got, want)
+func TestThinkingSliderLabelsRejectsObsoleteSixStopSurface(t *testing.T) {
+	if got := thinkingSliderLabels(5); got != nil {
+		t.Fatalf("obsolete six-stop slider labels = %v, want no mapping", got)
 	}
 	if _, ok := thinkingSliderTargetIndex("Instant", 4); ok {
-		t.Fatal("legacy Instant must not be selectable on current five-stop slider")
+		t.Fatal("obsolete Instant must not be selectable on current five-stop slider")
 	}
 }
 
@@ -276,5 +272,16 @@ func TestHighestModelSkipsDisabledProviderLeader(t *testing.T) {
 	highest, ok := highestReadyModelOption(providerDescending)
 	if !ok || highest.Label != "GPT-5.5" {
 		t.Fatalf("highest ready model = %+v, ok=%v", highest, ok)
+	}
+}
+
+func TestNormalizeSelectionPolicyRejectsExplicitThinkingBelowMinimum(t *testing.T) {
+	if _, err := NormalizeSelectionPolicy(SelectionPolicy{Thinking: "Medium", MinimumThinking: "Extra High"}); err == nil {
+		t.Fatal("accepted an explicit selection below its minimum")
+	}
+	for _, thinking := range []string{"current", "highest", "middle", "Extra High", "Pro"} {
+		if _, err := NormalizeSelectionPolicy(SelectionPolicy{Thinking: thinking, MinimumThinking: "Extra High"}); err != nil {
+			t.Fatalf("%s: %v", thinking, err)
+		}
 	}
 }

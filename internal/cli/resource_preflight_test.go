@@ -203,3 +203,15 @@ func resourcePreflightTestContains(values []string, want string) bool {
 	}
 	return false
 }
+
+// Synthetic browser fixtures exercise protocol and lifecycle behavior rather
+// than the host's fluctuating load. Resource-policy tests set their own budgets.
+func writeSyntheticResourceConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"browser":{"resource_budget":{"min_free_memory_mb":1,"min_free_disk_mb":1,"max_load_per_cpu":999999}}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write synthetic resource config: %v", err)
+	}
+	return path
+}

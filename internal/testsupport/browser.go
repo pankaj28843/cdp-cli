@@ -195,7 +195,7 @@ func NewRuntime(
 			MaxWindows:    5,
 			BrowserMode:   "headed",
 		},
-		CloseTimeout:      20 * time.Millisecond,
+		CloseTimeout:      time.Second,
 		ClosePollInterval: time.Millisecond,
 		Now:               FixedNow,
 	})

@@ -27,7 +27,7 @@ func TestBrowserPreflightReadinessReportsSettledCleanup(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"browser", "preflight", "--open-readiness", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", writeSyntheticResourceConfig(t), "browser", "preflight", "--open-readiness", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("browser preflight readiness exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -76,7 +76,7 @@ func TestBrowserPreflightReadinessKeepOpenReportsRetention(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"browser", "preflight", "--open-readiness", "--keep-open-readiness-tab", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", writeSyntheticResourceConfig(t), "browser", "preflight", "--open-readiness", "--keep-open-readiness-tab", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("browser preflight keep-open exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -108,7 +108,7 @@ func TestBrowserPreflightReadinessCleanupFailureIsVisible(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"browser", "preflight", "--open-readiness", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", writeSyntheticResourceConfig(t), "browser", "preflight", "--open-readiness", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code == cli.ExitOK {
 		t.Fatalf("browser preflight cleanup failure exit=%d, want failure; stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
@@ -143,7 +143,7 @@ func TestBrowserPreflightReadinessPreservesPrimaryWhenCleanupFails(t *testing.T)
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"browser", "preflight", "--open-readiness", "--open-url", "https://example.test/attach-error", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", writeSyntheticResourceConfig(t), "browser", "preflight", "--open-readiness", "--open-url", "https://example.test/attach-error", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code == cli.ExitOK {
 		t.Fatalf("browser preflight primary failure exit=%d, want failure; stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
@@ -168,7 +168,7 @@ func TestDaemonHealthCheckReportsSettledOwnedCleanup(t *testing.T) {
 	startHeadlessFakeDaemon(t, server)
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", writeSyntheticResourceConfig(t), "--browser-mode", "headless", "daemon", "health-check", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon health-check exit=%d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -216,7 +216,7 @@ func TestDaemonHealthCheckCleanupFailureIsVisible(t *testing.T) {
 	startHeadlessFakeDaemon(t, server)
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", writeSyntheticResourceConfig(t), "--browser-mode", "headless", "daemon", "health-check", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code == cli.ExitOK {
 		t.Fatalf("daemon health-check cleanup failure exit=%d, want failure; stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
@@ -248,7 +248,7 @@ func TestDaemonHealthCheckPreservesPrimaryWhenCleanupFails(t *testing.T) {
 	startHeadlessFakeDaemon(t, server)
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--health-url", "https://example.test/attach-error", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", writeSyntheticResourceConfig(t), "--browser-mode", "headless", "daemon", "health-check", "--health-url", "https://example.test/attach-error", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code == cli.ExitOK {
 		t.Fatalf("daemon health-check primary failure exit=%d, want failure; stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}

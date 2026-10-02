@@ -59,6 +59,13 @@ func NormalizeSelectionPolicy(policy SelectionPolicy) (SelectionPolicy, error) {
 		}
 	}
 	model := strings.TrimSpace(policy.Model)
+	if minimum != "" && thinkingRank(thinking) >= 0 && !thinkingAtOrAbove(thinking, minimum) {
+		return SelectionPolicy{}, fmt.Errorf(
+			"ChatGPT thinking %q is below minimum %q",
+			thinking,
+			minimum,
+		)
+	}
 	if model == "" {
 		model = ModelCurrent
 	}
@@ -128,19 +135,11 @@ func thinkingSliderLabelsForRange(min, max int) []string {
 	if min < 0 || max < min {
 		return nil
 	}
-	// ChatGPT's current composer omits the legacy Instant position from its
-	// five-stop slider. Keep the canonical six-label list for any surface that
-	// still exposes all stops, while mapping the observed five-stop surface to
-	// the five labels it actually renders. The range may have a non-zero
-	// minimum, so reason from the number of stops rather than assuming 0.
-	stopCount := max - min + 1
-	if stopCount == len(thinkingLabelsAscending)-1 {
-		return append([]string(nil), thinkingLabelsAscending[1:]...)
-	}
-	if stopCount != len(thinkingLabelsAscending) {
+	// The current composer exposes five stops; unknown ranges fail closed.
+	if max-min+1 != len(thinkingLabelsAscending)-1 {
 		return nil
 	}
-	return append([]string(nil), thinkingLabelsAscending...)
+	return append([]string(nil), thinkingLabelsAscending[1:]...)
 }
 
 func thinkingSliderLabels(max int) []string {
@@ -223,6 +222,7 @@ type selectableOption struct {
 }
 
 type selectionSurface struct {
+	DefaultChatSurface  bool               `json:"default_chat_surface"`
 	Editor              selectionPoint     `json:"editor"`
 	ChatCount           int                `json:"chat_count"`
 	WorkCount           int                `json:"work_count"`
@@ -248,10 +248,9 @@ type selectionSurface struct {
 }
 
 // thinkingSelectionExpectation is the proof carried from reversible
-// selection into the action-pending boundary. A visible label is sufficient
-// for legacy menu controls; a slider/range control must retain its observed
-// bounds and numeric target so a relabelled surface cannot silently weaken
-// the Send guard.
+// selection into the action-pending boundary. An opened effort slider must
+// retain its observed bounds and numeric target so a relabelled surface cannot
+// silently weaken the Send guard.
 type thinkingSelectionExpectation struct {
 	Label                  string
 	Minimum                string
@@ -457,7 +456,7 @@ func selectionSurfaceReady(
 ) bool {
 	productsReady := current.ChatCount == 0 &&
 		current.WorkCount == 0 &&
-		continuation
+		(continuation || (current.DefaultChatSurface && current.SpecializedCount == 0))
 	if current.ChatCount == 1 && current.WorkCount == 1 {
 		productsReady = current.Chat.Ready
 	}
@@ -1442,7 +1441,7 @@ func activateSelectionControl(
 	  switch (kind) {
 	  case 'editor': {
 	    const editors = Array.from(document.querySelectorAll(
-	      '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+	      '[contenteditable="true"][role="textbox"]'
 	    )).filter((element, index, values) =>
 	      values.indexOf(element) === index &&
 	      element.isContentEditable &&
@@ -1453,7 +1452,7 @@ func activateSelectionControl(
 	  }
 	  case 'editor-tool': {
 	    const editors = Array.from(document.querySelectorAll(
-	      '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+	      '[contenteditable="true"][role="textbox"]'
 	    )).filter((element, index, values) =>
 	      values.indexOf(element) === index &&
 	      element.isContentEditable && enabled(element) &&
@@ -1508,14 +1507,6 @@ func activateSelectionControl(
 	      if (!menu || menu.getAttribute('role') !== 'menu' || !visible(menu)) {
 	        return false;
 	      }
-	      const known = [
-	        'Instant', 'Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'
-	      ];
-	      const hasKnownLegacyOption = Array.from(
-	        menu.querySelectorAll('[role="menuitemradio"]')
-	      ).some(option => known.some(value =>
-	        value.toLowerCase() === label(option).toLowerCase()
-	      ));
 	      const hasSemanticSlider = Array.from(
 	        menu.querySelectorAll('[role="slider"]')
 	      ).some(slider =>
@@ -1524,7 +1515,7 @@ func activateSelectionControl(
 	        slider.getAttribute('aria-valuemax') !== null &&
 	        slider.getAttribute('aria-valuenow') !== null
 	      );
-	      return hasKnownLegacyOption || hasSemanticSlider;
+	      return hasSemanticSlider;
 	    };
 	    candidates = Array.from(document.querySelectorAll(
 	      'button[aria-haspopup="menu"]'
@@ -1538,7 +1529,7 @@ func activateSelectionControl(
 	      );
 	      const isComposerTrigger = Boolean(
 	        element.closest('form')?.querySelector(
-          '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+          '[contenteditable="true"][role="textbox"]'
         )
 	      );
 	      const hasThinkingName = /reason|thinking|effort/i.test(
@@ -1606,7 +1597,7 @@ func activateSelectionControl(
 	        const maximum = numberAttribute(slider, 'aria-valuemax');
 	        if (minimum === null || maximum === null) break;
 	        const values = maximum - minimum + 1 === canonical.length - 1 ?
-	          canonical.slice(1) : canonical.slice(0, maximum + 1);
+	          canonical.slice(1) : [];
 	        const target = values.findIndex(value =>
 	          value.toLowerCase() === expected
 	        );
@@ -2002,8 +1993,7 @@ func observeSelectionSurface(
       return normalized === known || normalized.endsWith(' ' + known);
 	    }) || '';
 	  };
-	  const editor = document.querySelector('#prompt-textarea') ||
-	    document.querySelector('[contenteditable="true"][role="textbox"]');
+	  const editor = document.querySelector('[contenteditable="true"][role="textbox"]');
 	  const composerForm = editor ? editor.closest('form') : null;
 	  const openThinkingPicker = element => {
 	    if (!element || element.getAttribute('aria-expanded') !== 'true') {
@@ -2014,9 +2004,6 @@ func observeSelectionSurface(
 	    if (!menu || menu.getAttribute('role') !== 'menu' || !visible(menu)) {
 	      return false;
 	    }
-	    const hasKnownLegacyOption = Array.from(
-	      menu.querySelectorAll('[role="menuitemradio"]')
-	    ).some(option => thinkingKnown.some(item => equal(item, label(option))));
 	    const hasSemanticSlider = Array.from(
 	      menu.querySelectorAll('[role="slider"]')
 	    ).some(slider =>
@@ -2025,7 +2012,7 @@ func observeSelectionSurface(
 	      integerAttribute(slider, 'aria-valuemax') !== null &&
 	      integerAttribute(slider, 'aria-valuenow') !== null
 	    );
-	    return hasKnownLegacyOption || hasSemanticSlider;
+	    return hasSemanticSlider;
 	  };
 	  const pickers = () => Array.from(document.querySelectorAll(
 	    'button[aria-haspopup="menu"]'
@@ -2048,22 +2035,8 @@ func observeSelectionSurface(
 	  );
   const picker = pickers().length === 1 ? pickers()[0] : null;
 	  const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible);
-	  const legacyThinkingMenus = menus.filter(menu => {
-	    const legacyOptions = directItems(menu, 'menuitemradio').some(option =>
-	      thinkingKnown.some(item =>
-	        item.toLowerCase() === label(option).toLowerCase()
-	      )
-	    );
-	    return legacyOptions;
-	  });
-	  const thinkingMenusWithSlider = menus.filter(menu =>
-	    Boolean(semanticSlider(menu))
-	  );
-	  // A current ChatGPT menu nests model radio options beside the effort
-	  // slider. Prefer the semantic slider surface so model labels cannot be
-	  // mistaken for thinking levels.
-	  const thinkingMenus = thinkingMenusWithSlider.length > 0 ?
-	    thinkingMenusWithSlider : legacyThinkingMenus;
+	  const thinkingMenus = menus.filter(menu => Boolean(semanticSlider(menu)));
+  // Model radio options share this menu; the effort slider identifies it.
   const thinkingMenu = thinkingMenus.length === 1 ? thinkingMenus[0] : null;
   const modelMenus = menus.filter(menu =>
     menu !== thinkingMenu &&
@@ -2092,15 +2065,10 @@ func observeSelectionSurface(
 	  ) : null;
 	  // When a slider is present, its numeric range is the authoritative
 	  // selection proof; sibling radio options belong to the model picker.
-	  const legacyThinkingOptions = thinkingSlider ? [] : directItems(
-	    thinkingMenu,
-	    'menuitemradio'
-	  ).map(toOption);
-  const thinkingSliderStopCount = thinkingSliderMin !== null &&
+	  const thinkingSliderStopCount = thinkingSliderMin !== null &&
 	    thinkingSliderMax !== null ? thinkingSliderMax - thinkingSliderMin + 1 : 0;
   const thinkingSliderLabels = thinkingSliderStopCount ===
-	    thinkingKnown.length - 1 ? thinkingKnown.slice(1) :
-	    thinkingSliderStopCount === thinkingKnown.length ? thinkingKnown : [];
+	    thinkingKnown.length - 1 ? thinkingKnown.slice(1) : [];
   const thinkingSliderReady = Boolean(
     thinkingSlider &&
 	    thinkingSliderMin !== null &&
@@ -2115,8 +2083,7 @@ func observeSelectionSurface(
 	    thinkingSlider.getAttribute('aria-valuetext') ||
 	    label(thinkingSlider) || ''
 	  ).trim() : '';
-	  const thinkingOptions = legacyThinkingOptions.length > 0 ?
-    legacyThinkingOptions : thinkingSliderReady ?
+	  const thinkingOptions = thinkingSliderReady ?
     thinkingSliderLabels.map((option, index) => ({
       label: option,
 	    checked: thinkingSliderMin + index === thinkingSliderValue,
@@ -2131,17 +2098,18 @@ func observeSelectionSurface(
 	    selectedThinking = thinkingSliderLabels[sliderIndex] ||
 	      thinkingSliderLabel || selectedThinking;
 	  }
-	  const selectedLegacyThinking = legacyThinkingOptions.find(option =>
-	    option.checked
-	  );
-	  if (thinkingMenu && selectedLegacyThinking) {
-	    selectedThinking = selectedLegacyThinking.label;
-	  }
-  const modelTriggers = directItems(thinkingMenu, 'menuitem');
+	  const modelTriggers = directItems(thinkingMenu, 'menuitem');
   const modelOptions = directItems(modelMenu, 'menuitemradio').map(toOption);
   const selectedModels = modelOptions.filter(option => option.checked);
   return {
     editor: actionable(editor),
+    default_chat_surface: chats.length === 0 && works.length === 0 &&
+      Boolean(editor) && specialized.length === 0 &&
+      location.origin === 'https://chatgpt.com' && location.pathname === '/' &&
+      Array.from(document.querySelectorAll(
+        'button[aria-label="Select ChatGPT model"]'
+      )).filter(visible).length === 1,
+
     chat_count: chats.length,
     work_count: works.length,
     chat_selected: chats.length === 1 &&

@@ -93,21 +93,22 @@ func TestWorkflowOwnedErrorPreservesKeepOpen(t *testing.T) {
 }
 
 func TestWorkflowOwnedPagesCloseOnCommandTimeout(t *testing.T) {
+	// Allow setup to create the owned page; each provider wait exceeds the deadline.
 	tests := []struct {
 		name string
 		args []string
 	}{
 		{
 			name: "feeds",
-			args: []string{"--timeout", "500ms", "workflow", "feeds", "https://example.test/timeout", "--wait-load", "5s", "--json"},
+			args: []string{"--timeout", "2s", "workflow", "feeds", "https://example.test/timeout", "--wait-load", "5s", "--json"},
 		},
 		{
 			name: "visible posts",
-			args: []string{"--timeout", "500ms", "workflow", "visible-posts", "https://example.test/no-results", "--wait", "5s", "--json"},
+			args: []string{"--timeout", "2s", "workflow", "visible-posts", "https://example.test/no-results", "--wait", "5s", "--json"},
 		},
 		{
 			name: "hacker news",
-			args: []string{"--timeout", "500ms", "workflow", "hacker-news", "https://news.ycombinator.com/no-results", "--wait", "5s", "--json"},
+			args: []string{"--timeout", "2s", "workflow", "hacker-news", "https://news.ycombinator.com/no-results", "--wait", "5s", "--json"},
 		},
 	}
 

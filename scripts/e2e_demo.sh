@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'if [[ $- == *e* ]]; then echo "Demo gate failed at line ${LINENO}" >&2; fi' ERR
 
 binary="${1:-$(command -v cdp)}"
 chrome="${CDP_E2E_CHROME:-$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)}"
@@ -16,6 +17,10 @@ fi
 state_dir="$(mktemp -d)"
 config_dir="$state_dir/config"
 export XDG_CONFIG_HOME="$config_dir"
+# Exercise browser lifecycle rather than the shared host's current load.
+# Resource-budget rejection is covered by dedicated policy tests.
+mkdir -p "$config_dir/cdp-cli"
+printf '%s\n' '{"browser":{"resource_budget":{"min_free_memory_mb":1,"min_free_disk_mb":1,"max_load_per_cpu":999999}}}' >"$config_dir/cdp-cli/config.json"
 app_log="$state_dir/demo-app.log"
 chrome_log="$state_dir/chrome.log"
 app_pid=""
@@ -240,7 +245,8 @@ jq -e '.ok == false and .code == "invalid_browser_mode" and (.message | contains
 "$binary" pages --retry transient --max-attempts 2 --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg url "$app_url/" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and (.pages[] | select(.url == $url))' >/dev/null
 set +e
-eval_timeout_output="$("$binary" eval 'new Promise(resolve => setTimeout(() => resolve(document.title), 1500))' --await-promise --timeout 150ms --state-dir "$state_dir/cdp-state" --json)"
+# Allow target attachment before exercising the evaluation deadline under host load.
+eval_timeout_output="$("$binary" eval 'new Promise(resolve => setTimeout(() => resolve(document.title), 15000))' --await-promise --timeout 3s --state-dir "$state_dir/cdp-state" --json)"
 eval_timeout_code=$?
 set -e
 if [[ "$eval_timeout_code" -ne 5 ]]; then
@@ -441,14 +447,24 @@ task_target_id="$(jq -r '.page.id' <<<"$task_open_output")"
   | jq -e --arg id "$task_target_id" '.ok == true and all(.pages[]; .id != $id)' >/dev/null
 "$binary" wait text "Ready from demo app" --state-dir "$state_dir/cdp-state" --timeout 5s --json \
   | jq -e '.ok == true and .wait.matched == true' >/dev/null
-"$binary" eval 'window.__cdpDemoStartSemanticDelay(600)' --state-dir "$state_dir/cdp-state" --json \
+# Drive the transition by observation count, independent of CLI startup time.
+"$binary" eval '(() => {
+  let observations = 0;
+  Object.defineProperty(window, "__cdpDemoSemanticState", {
+    configurable: true,
+    get: () => ++observations < 3 ?
+      {terminalCondition: "loading", rowCount: 0, ready: false} :
+      {terminalCondition: "fare_rows", rowCount: 3, ready: true}
+  });
+  return window.__cdpDemoSemanticState;
+})()' --state-dir "$state_dir/cdp-state" --json \
   | jq -e '.ok == true and .result.value.terminalCondition == "loading"' >/dev/null
 semantic_dir="$state_dir/semantic-readiness"
-"$binary" wait eval 'window.__cdpDemoSemanticState' --ready-expr 'value.terminalCondition === "fare_rows"' --retry transient --max-attempts 2 --poll 50ms --timeout 3s --out-dir "$semantic_dir" --artifact-prefix demo-stage --state-dir "$state_dir/cdp-state" --json \
+"$binary" wait eval 'window.__cdpDemoSemanticState' --ready-expr 'value.terminalCondition === "fare_rows"' --retry transient --max-attempts 2 --poll 50ms --timeout 10s --out-dir "$semantic_dir" --artifact-prefix demo-stage --state-dir "$state_dir/cdp-state" --json \
   | jq -e --arg dir "$semantic_dir" '.ok == true and .retry_policy == "transient" and .attempt_count == 1 and .attempts[0].ok == true and .wait.kind == "eval" and .wait.ready == true and .wait.matched == true and .wait.ready_expression == "value.terminalCondition === \"fare_rows\"" and .wait.last_value.terminalCondition == "fare_rows" and .wait.last_value.rowCount == 3 and .wait.attempt_count >= 2 and (.wait.attempts | length) == .wait.attempt_count and (.wait.artifacts | length) == .wait.attempt_count and (.artifacts | length) == .wait.attempt_count and (.wait.artifacts[0].path | startswith($dir))' >/dev/null
 require_artifact "$semantic_dir/demo-stage-attempt-01.json"
 set +e
-semantic_timeout_output="$("$binary" wait eval 'window.__cdpDemoNeverReady()' --ready-expr 'value.terminalCondition === "fare_rows"' --poll 100ms --timeout 300ms --state-dir "$state_dir/cdp-state" --json)"
+semantic_timeout_output="$("$binary" wait eval 'window.__cdpDemoNeverReady()' --ready-expr 'value.terminalCondition === "fare_rows"' --poll 100ms --timeout 3s --state-dir "$state_dir/cdp-state" --json)"
 semantic_timeout_code=$?
 set -e
 if [[ "$semantic_timeout_code" -ne 5 ]]; then

@@ -145,7 +145,8 @@ func TestEventsStreamStopsOnContextDeadline(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	defer writer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Let the synthetic daemon attach before exercising stream deadline handling.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var out, errOut bytes.Buffer
 	code := cli.ExecuteWithInput(ctx, []string{

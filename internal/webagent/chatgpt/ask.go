@@ -3,6 +3,7 @@ package chatgpt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -18,10 +19,10 @@ import (
 const (
 	AskSchemaVersion              = "chatgpt-ask/v1"
 	MaxPromptCharacters           = 18_000
-	defaultAskTimeout             = 4 * time.Minute
+	defaultAskTimeout             = 10 * time.Minute
 	defaultProviderGateAskTimeout = 8 * time.Minute
 	defaultImageAskTimeout        = 40 * time.Minute
-	defaultComposerTimeout        = 45 * time.Second
+	defaultComposerTimeout        = 4 * time.Minute
 	defaultAmbiguousCooldown      = 5 * time.Minute
 	finalSelectionGuardTimeout    = 5 * time.Second
 	renderedWaitFraction          = 0.85
@@ -30,7 +31,7 @@ const (
 type AskConfig struct {
 	BrowserConfig
 	Store           *Store
-	FilePath        string
+	FilePaths       []string
 	Tool            string
 	Timeout         time.Duration
 	ComposerTimeout time.Duration
@@ -72,12 +73,14 @@ type AskData struct {
 	PromptFingerprint  string                   `json:"prompt_fingerprint,omitempty"`
 	PromptCharacters   int                      `json:"prompt_characters"`
 	DetailReadAttempts int                      `json:"detail_read_attempts"`
-	Attachment         *AttachmentData          `json:"attachment,omitempty"`
+	InputAttachments   []AttachmentData         `json:"input_attachments,omitempty"`
 	Attachments        []ConversationAttachment `json:"attachments"`
 	Metadata           map[string]any           `json:"metadata"`
 }
 
 type composerObservation struct {
+	DefaultChatSurface      bool    `json:"default_chat_surface"`
+	DocumentReadyState      string  `json:"document_ready_state"`
 	RouteReady              bool    `json:"route_ready"`
 	EditorReady             bool    `json:"editor_ready"`
 	EditorCount             int     `json:"editor_count"`
@@ -174,6 +177,7 @@ type renderedObservation struct {
 	PromptCandidates             []string `json:"prompt_candidates"`
 	Streaming                    bool     `json:"is_streaming"`
 	TerminalControl              bool     `json:"terminal_control_present"`
+	CompletionControl            bool     `json:"completion_control_present"`
 	AssistantCount               int      `json:"assistant_count"`
 	UserMessageCount             int      `json:"user_message_count"`
 	StoppedThinkingMarkerPresent bool     `json:"stopped_thinking_marker_present"`
@@ -193,9 +197,10 @@ type chatgptSendDispatcher struct {
 	tool         string
 	attachment   *attachmentExpectation
 	expectation  thinkingSelectionExpectation
+	diagnostics  map[string]any
 }
 
-const chatGPTComposerSelector = "#prompt-textarea"
+const chatGPTComposerSelector = `[contenteditable="true"][role="textbox"]`
 
 func pressChatGPTComposerEnter(
 	ctx context.Context,
@@ -208,6 +213,12 @@ func pressChatGPTComposerEnter(
 	)
 }
 
+func (d chatgptSendDispatcher) recordGuardPhase(phase string) {
+	if d.diagnostics != nil {
+		d.diagnostics["dispatch_guard_phase"] = phase
+	}
+}
+
 func (d chatgptSendDispatcher) Dispatch(
 	ctx context.Context,
 	session *cdp.PageSession,
@@ -216,6 +227,7 @@ func (d chatgptSendDispatcher) Dispatch(
 	// before MarkPrepared. Once action_pending is durable this dispatcher must
 	// perform no reversible raw clicks: it passively observes the selection
 	// guard and composer, then emits at most the single irreversible Send input.
+	d.recordGuardPhase("selection")
 	if err := observeSelectionGuardAtSendWithExpectation(
 		ctx,
 		session,
@@ -226,6 +238,7 @@ func (d chatgptSendDispatcher) Dispatch(
 			Dispatch: browserflow.DispatchNotPerformed,
 		}, err
 	}
+	d.recordGuardPhase("attachment")
 	var attachment attachmentObservation
 	if err := observeExpectedAttachment(
 		ctx,
@@ -242,6 +255,7 @@ func (d chatgptSendDispatcher) Dispatch(
 	// submits the form. Focus the exact editor and send one trusted CDP Enter;
 	// do not synthesize DOM KeyboardEvents or click a potentially re-rendered
 	// coordinate.
+	d.recordGuardPhase("composer")
 	var observation composerObservation
 	observeErr := observeComposer(
 		ctx,
@@ -265,9 +279,7 @@ func (d chatgptSendDispatcher) Dispatch(
 		!observation.EditorReady ||
 		observation.EditorCount != 1 ||
 		!observation.PromptMatches ||
-		observation.ChatCount != 1 ||
-		observation.WorkCount != 1 ||
-		!observation.ChatSelected ||
+		!composerChatProductReady(observation) ||
 		observation.IntelligenceCount != 1 ||
 		!strings.EqualFold(
 			observation.SelectedIntelligence,
@@ -286,6 +298,7 @@ func (d chatgptSendDispatcher) Dispatch(
 			Dispatch: browserflow.DispatchNotPerformed,
 		}, fmt.Errorf("exact ChatGPT Send control was not actionable")
 	}
+	d.recordGuardPhase("editor_focus_or_enter")
 	return pressChatGPTComposerEnter(ctx, session)
 }
 
@@ -375,7 +388,7 @@ func Ask(
 			},
 		)
 	}
-	upload, uploadErr := resolveLocalUpload(config.FilePath)
+	uploads, uploadErr := resolveLocalUploads(config)
 	if uploadErr != nil {
 		return askFailure(
 			runID, config, webagent.StagePlanned, nil,
@@ -383,7 +396,7 @@ func Ask(
 			notPerformed, nil,
 			"chatgpt_attachment_invalid", "usage",
 			uploadErr.Error(), "", data,
-			[]string{"Pass one readable regular file with --file."},
+			[]string{"Pass readable regular files with repeated --file flags."},
 		)
 	}
 	data.PromptFingerprint = fingerprintPrompt(prompt)
@@ -450,6 +463,7 @@ func Ask(
 			}
 			var composer composerObservation
 			var surface selectionSurface
+			observationPhase := "composer_dom"
 			readiness, err := authreadiness.WaitForEvidence(
 				ctx,
 				session,
@@ -457,6 +471,7 @@ func Ask(
 				config.ComposerTimeout,
 				config.PollInterval,
 				func(observationCtx context.Context) (bool, error) {
+					observationPhase = "composer_dom"
 					if err := observeComposer(
 						observationCtx,
 						session,
@@ -469,8 +484,8 @@ func Ask(
 					composerReady := composer.RouteReady &&
 						composer.EditorReady &&
 						composer.EditorCount == 1 &&
-						composer.ChatCount == 1 &&
-						composer.WorkCount == 1 &&
+						(composerChatProductReady(composer) ||
+							(composer.ChatCount == 1 && composer.WorkCount == 1)) &&
 						composer.IntelligenceCount == 1 &&
 						composer.AssistantCount == 0 &&
 						composer.UserMessageCount == 0 &&
@@ -478,6 +493,7 @@ func Ask(
 					if !composerReady {
 						return false, nil
 					}
+					observationPhase = "selection_dom"
 					if err := observeSelectionSurface(
 						observationCtx,
 						session,
@@ -495,7 +511,11 @@ func Ask(
 			data.Metadata["composer_readiness_stage"] = readiness.Stage
 			data.Metadata["composer_observations"] =
 				readiness.SuccessfulObservations
+			data.Metadata["composer_stage_observations"] = readiness.StageObservations
+			data.Metadata["composer_observation_phase"] = observationPhase
+			data.Metadata["composer_document_ready_state"] = composer.DocumentReadyState
 			if err != nil || readiness.ObservationFailed() {
+				data.Metadata["composer_observation_error_kind"] = composerObservationErrorKind(err, readiness.LastObservationError)
 				data.Metadata["observed_route_ready"] = composer.RouteReady
 				data.Metadata["observed_editor_count"] = composer.EditorCount
 				data.Metadata["observed_chat_count"] = composer.ChatCount
@@ -597,15 +617,15 @@ func Ask(
 				data.Metadata["selected_tool"] = selectedTool
 			}
 			var expectedAttachment *attachmentExpectation
-			if upload != nil {
-				attachment, expectation, attachFailure := attachLocalFileOnce(
+			if len(uploads) > 0 {
+				attachments, expectation, attachFailure := attachLocalFilesOnce(
 					ctx,
 					session,
-					*upload,
+					uploads,
 					minDuration(config.ComposerTimeout, 60*time.Second),
 					config.PollInterval,
 				)
-				data.Attachment = &attachment
+				data.InputAttachments = attachments
 				expectedAttachment = expectation
 				if attachFailure != nil {
 					_ = lease.MarkIncomplete(context.Background())
@@ -688,8 +708,8 @@ func Ask(
 					"", data, cleanupCommands(runID, pending),
 				)
 			}
-			if data.Attachment != nil {
-				data.Attachment.SendReadyAfterUpload = composer.SendReady
+			for i := range data.InputAttachments {
+				data.InputAttachments[i].SendReadyAfterUpload = composer.SendReady
 			}
 			if err := lease.BindInputFingerprint(
 				ctx,
@@ -742,6 +762,7 @@ func Ask(
 					tool:         data.Tool,
 					attachment:   expectedAttachment,
 					expectation:  selection.expectation,
+					diagnostics:  data.Metadata,
 				}
 			}
 			outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
@@ -1015,9 +1036,7 @@ func Ask(
 			data.Metadata["rendered_prompt_identity_proved"] =
 				renderedPromptMatched
 			textAnswerReady := !isImageTool(data.Tool) &&
-				len(strings.TrimSpace(rendered.Text)) >=
-					minimumUsefulAnswerChars(prompt) &&
-				terminalAnswerTextValid(rendered.Text, map[string]any{})
+				renderedTextAnswerReady(rendered, prompt)
 			imageAnswerReady := isImageTool(data.Tool) &&
 				rendered.GeneratedImageReady
 			renderedTerminal := rendered.RouteMatches &&
@@ -1231,6 +1250,27 @@ func Ask(
 	)
 }
 
+func composerObservationErrorKind(err, observationErr error) string {
+	if err == nil {
+		err = observationErr
+	}
+	var failure *evaluationFailure
+	switch {
+	case errors.As(err, &failure):
+		return failure.kind
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, authreadiness.ErrObservationIncomplete):
+		return "stage_without_valid_observation"
+	case err != nil:
+		return "observation_transport_failed"
+	default:
+		return "stage_without_valid_observation"
+	}
+}
+
 func observeComposer(
 	ctx context.Context,
 	session *cdp.PageSession,
@@ -1304,7 +1344,7 @@ func observeComposerWithTool(
 	    };
 	  };
 	  const allEditors = Array.from(document.querySelectorAll(
-	    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+	    '[contenteditable="true"][role="textbox"]'
 	  )).filter((element, index, values) =>
 	    values.indexOf(element) === index && visible(element) && element.isContentEditable
 	  );
@@ -1395,12 +1435,7 @@ func observeComposerWithTool(
 	        candidate.getAttribute('aria-valuemax') !== null &&
 	        candidate.getAttribute('aria-valuenow') !== null
 	      ) || null;
-	    const hasKnownLegacyOption = Array.from(
-	      menu.querySelectorAll('[role="menuitemradio"]')
-	    ).some(option => knownThinking.some(item =>
-	      item.toLowerCase() === label(option).toLowerCase()
-	    ));
-	    if (!slider && !hasKnownLegacyOption) return null;
+	    if (!slider) return null;
 	    return {menu, slider};
 	  };
 	  const selectedThinkingFromOpenMenu = button => {
@@ -1411,18 +1446,14 @@ func observeComposerWithTool(
 	      const maximum = Number(picker.slider.getAttribute('aria-valuemax'));
 	      const current = Number(picker.slider.getAttribute('aria-valuenow'));
 	      const labels = maximum - minimum + 1 === knownThinking.length - 1 ?
-	        knownThinking.slice(1) : knownThinking;
+	        knownThinking.slice(1) : [];
 	      const selected = labels[current - minimum];
 	      if (Number.isInteger(minimum) && Number.isInteger(maximum) &&
 	          Number.isInteger(current) && selected) {
 	        return selected;
 	      }
 	    }
-	    const checked = Array.from(
-	      picker.menu.querySelectorAll('[role="menuitemradio"]')
-	    ).find(option => option.getAttribute('aria-checked') === 'true');
-	    return checked ? label(checked) :
-	      canonicalThinkingLabel(label(button)) || label(button);
+	    return canonicalThinkingLabel(label(button)) || label(button);
   };
 	  const composerForm = editor ? editor.closest('form') : null;
 	  const intelligence = Array.from(document.querySelectorAll(
@@ -1445,36 +1476,27 @@ func observeComposerWithTool(
 	      exactThinking ||
 	      (isComposerTrigger && Boolean(compactThinking)) ||
 	      Boolean(openPicker);
-	  })
-  );
-	  const sends = Array.from(document.querySelectorAll(
-	    'button[data-testid="send-button"],button#composer-submit-button,' +
-	    'button[aria-label="Send prompt"]'
-	  )).filter((button, index, values) =>
+	  });
+	  // Current composers expose a native submit button without legacy Send
+	  // identifiers. Scope native submit discovery to the exact editor's form;
+	  // unrelated forms cannot provide evidence that this prompt can be sent.
+	  const sends = [
+	    ...Array.from(document.querySelectorAll(
+	      'button[data-testid="send-button"],button#composer-submit-button,' +
+	      'button[aria-label="Send prompt"]'
+	    )),
+	    ...(composerForm ? Array.from(composerForm.querySelectorAll('button'))
+	      .filter(button => button.type === 'submit') : []),
+	  ].filter((button, index, values) =>
 	    values.indexOf(button) === index && visible(button)
 	  );
 	  const send = sends.length === 1 ? sends[0] : null;
 	  const sendAction = actionable(send);
 	  const route = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
-	  const assistantTurns = Array.from(document.querySelectorAll(
-	    'section[data-turn="assistant"],[data-turn="assistant"]'
-	  ));
-	  const assistantMessages = Array.from(document.querySelectorAll(
-	    '[data-message-author-role="assistant"]'
-	  )).filter((element, index, values) =>
-	    values.indexOf(element) === index
-	  );
-	  const assistants = assistantTurns.length ?
-	    assistantTurns : assistantMessages;
-	  const userTurns = Array.from(document.querySelectorAll(
-	    'section[data-turn="user"],[data-turn="user"]'
-	  ));
-	  const userMessages = Array.from(document.querySelectorAll(
-	    '[data-message-author-role="user"]'
-	  )).filter((element, index, values) =>
-	    values.indexOf(element) === index
-	  );
-	  const users = userTurns.length ? userTurns : userMessages;
+	  const assistants = Array.from(new Set(Array.from(document.querySelectorAll(
+    '[data-conversation-role="assistant"]'
+  )).map(heading => heading.closest('[data-content-search-unit-key]')).filter(Boolean)));
+  const users = Array.from(new Set(document.querySelectorAll('[data-user-message-bubble]')));
 	  const specialized = Array.from(document.querySelectorAll(
 	    'iframe[src*="deep-research"],iframe[src*="connector_openai_deep_research"],' +
 	    '[data-testid*="deep-research"][aria-pressed="true"],' +
@@ -1484,6 +1506,14 @@ func observeComposerWithTool(
 	  const editorTextContent = editor ? (expectedTool ? toolFreeEditorText : normalize(editor.textContent || '')) : '';
 	  const expectedPrompt = expectedTool ? normalize(expected).replace(/^\s+|\s+$/g, '') : normalize(expected);
 	  return {
+	    document_ready_state: document.readyState,
+    default_chat_surface: chats.length === 0 && works.length === 0 &&
+      Boolean(editor) && specialized.length === 0 &&
+      location.origin === 'https://chatgpt.com' && location.pathname === '/' &&
+      Array.from(document.querySelectorAll(
+        'button[aria-label="Select ChatGPT model"]'
+      )).filter(visible).length === 1,
+
 	    route_ready: location.origin === 'https://chatgpt.com' &&
 	      location.pathname === '/',
 	    editor_ready: Boolean(editor),
@@ -1559,7 +1589,7 @@ func prepareExactPromptWithTool(
 	}
 	expression := fmt.Sprintf(`(() => {
 	  const editors = Array.from(document.querySelectorAll(
-	    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+	    '[contenteditable="true"][role="textbox"]'
 	  )).filter((element, index, values) =>
 	    values.indexOf(element) === index && element.isContentEditable &&
 	    (%s === '' || Array.from(element.querySelectorAll(
@@ -1832,15 +1862,20 @@ func prepareVerifiedPromptWithExpectation(
 	return attempts, observation, lastErr
 }
 
+func composerChatProductReady(observation composerObservation) bool {
+	if observation.ChatCount == 0 && observation.WorkCount == 0 {
+		return observation.DefaultChatSurface && observation.SpecializedSurfaceCount == 0
+	}
+	return observation.ChatCount == 1 && observation.WorkCount == 1 && observation.ChatSelected
+}
+
 func composerPreparedExceptSend(
 	observation composerObservation,
 	intelligence string,
 ) bool {
 	return observation.RouteReady &&
 		observation.PromptMatches &&
-		observation.ChatCount == 1 &&
-		observation.WorkCount == 1 &&
-		observation.ChatSelected &&
+		composerChatProductReady(observation) &&
 		observation.IntelligenceCount == 1 &&
 		strings.EqualFold(
 			observation.SelectedIntelligence,
@@ -1872,40 +1907,18 @@ func observeRendered(
 	    (element.offsetWidth || element.offsetHeight || element.getClientRects().length)
 	  );
 	  const unique = nodes => Array.from(new Set(nodes));
-	  const assistantTurns = unique(Array.from(document.querySelectorAll(
-	    'section[data-turn="assistant"],[data-turn="assistant"]'
-	  )));
-	  const assistantMessages = unique(Array.from(document.querySelectorAll(
-	    '[data-message-author-role="assistant"]'
-	  )));
-	  const assistants = assistantTurns.length ?
-	    assistantTurns : assistantMessages;
-	  const userTurns = unique(Array.from(document.querySelectorAll(
-	    'section[data-turn="user"],[data-turn="user"]'
-	  )));
-	  const userMessages = unique(Array.from(document.querySelectorAll(
-	    '[data-message-author-role="user"]'
-	  )));
-	  const users = userTurns.length ? userTurns : userMessages;
+	  const assistants = unique(Array.from(document.querySelectorAll(
+    '[data-conversation-role="assistant"]'
+  )).map(heading => heading.closest('[data-content-search-unit-key]')).filter(Boolean));
+  const users = unique(Array.from(document.querySelectorAll('[data-user-message-bubble]')));
 	  const imageAssistantTurn = [...assistants].reverse().find(turn =>
 	    turn.querySelector('img[alt^="Generated image"]')
 	  );
 	  const assistantTurn = imageAssistantTurn || (assistants.length ?
 	    assistants[assistants.length - 1] : null);
 	  const userTurn = users.length ? users[users.length - 1] : null;
-	  const assistant = assistantTurn && (
-	    assistantTurn.matches('[data-message-author-role="assistant"]') ?
-	      assistantTurn :
-	      assistantTurn.querySelector(
-	        '[data-message-author-role="assistant"],.markdown'
-	      ) || assistantTurn
-	  );
-	  const user = userTurn && (
-	    userTurn.matches('[data-message-author-role="user"]') ?
-	      userTurn :
-	      userTurn.querySelector('[data-message-author-role="user"]') ||
-	        userTurn
-	  );
+	  const assistant = assistantTurn && assistantTurn.querySelector('.markdown,[data-markdown-text-style]');
+  const user = userTurn;
 	  const promptNode = user && (
 	    user.querySelector('.whitespace-pre-wrap') || user
 	  );
@@ -1979,10 +1992,27 @@ func observeRendered(
 	  const substantiveAssistantText =
 	    normalizeMarker(rawAssistantText) === 'stopped thinking' ?
 	      '' : rawAssistantText;
-	  const terminalControl = Boolean(turn && Array.from(turn.querySelectorAll(
+	  let completionControl = Boolean(turn && Array.from(turn.querySelectorAll(
 	    'button[data-testid="copy-turn-action-button"],' +
 	    'button[aria-label^="Copy"],button[aria-label="Regenerate response"]'
-	  )).some(visible)) ||
+	  )).some(visible));
+	  // Current action bars are siblings of the searchable response body. Only
+	  // accept controls following that body in a bounded, single-response scope;
+	  // the preceding user-message Copy control is not completion evidence.
+	  if (!completionControl && turn) {
+	    for (let scope = turn, depth = 0; scope && depth < 5;
+	         scope = scope.parentElement, depth++) {
+	      if (scope.querySelectorAll('[data-conversation-role="assistant"]').length !== 1) break;
+	      completionControl = Array.from(scope.querySelectorAll(
+	        'button[data-testid="copy-turn-action-button"],' +
+	        'button[aria-label="Copy"],button[aria-label="Regenerate response"]'
+	      )).some(control => visible(control) && Boolean(
+	        turn.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING
+	      ));
+	      if (completionControl) break;
+	    }
+	  }
+	  const terminalControl = completionControl ||
 	    (substantiveAssistantText.length >= 40 &&
 	      !streamingState && !streamingControl);
 	  const stoppedThinkingMarker = Boolean(turn && Array.from(
@@ -2005,6 +2035,7 @@ func observeRendered(
 	    prompt_candidates: promptCandidates,
 	    is_streaming: streamingState || streamingControl,
 	    terminal_control_present: terminalControl,
+	    completion_control_present: completionControl,
 	    assistant_count: assistants.length,
 	    user_message_count: users.length,
 	    stopped_thinking_marker_present: stoppedThinkingMarker,
@@ -2100,9 +2131,9 @@ func observeAnswerNowGate(
   const buttons = Array.from(document.querySelectorAll('button')).filter(
     button => visible(button) && normalize(button.innerText || button.textContent) === 'Answer now'
   );
-  const turns = Array.from(document.querySelectorAll(
-    'section[data-turn="assistant"],[data-message-author-role="assistant"]'
-  ));
+  const turns = Array.from(new Set(Array.from(document.querySelectorAll(
+    '[data-conversation-role="assistant"]'
+  )).map(heading => heading.closest('[data-content-search-unit-key]')).filter(Boolean)));
   const turn = turns.length ? turns[turns.length - 1] : null;
   const text = normalize(turn && (turn.innerText || turn.textContent));
   const terminalButton = Boolean(turn && Array.from(turn.querySelectorAll(
@@ -2183,8 +2214,7 @@ func waitRenderedAnswer(
 				promptMatched &&
 				!observation.Streaming &&
 				((!isImageTool(tool) &&
-					len(text) >= minimumUsefulAnswerChars(prompt) &&
-					terminalAnswerTextValid(text, map[string]any{})) ||
+					renderedTextAnswerReady(observation, prompt)) ||
 					(isImageTool(tool) && observation.GeneratedImageReady))
 			if valid {
 				resultKey := text
@@ -2477,6 +2507,15 @@ func minimumUsefulAnswerChars(prompt string) int {
 		return 80
 	}
 	return 20
+}
+
+// Short answers need an explicit completion control. Absence of Stop and the
+// length heuristic alone cannot prove a short response has finished.
+func renderedTextAnswerReady(observation renderedObservation, prompt string) bool {
+	return !observation.Streaming &&
+		terminalAnswerTextValid(observation.Text, map[string]any{}) &&
+		(len(strings.TrimSpace(observation.Text)) >= minimumUsefulAnswerChars(prompt) ||
+			observation.CompletionControl)
 }
 
 func minDuration(left time.Duration, right time.Duration) time.Duration {

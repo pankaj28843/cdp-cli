@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	chatGPTFileInputSelector         = "#upload-files"
+	chatGPTFileInputSelector         = `form:has([contenteditable="true"][role="textbox"]) input[type="file"]:not([accept])`
 	attachmentAssignmentNotAttempted = "not_attempted"
 	attachmentAssignmentConfirmed    = "confirmed"
 	attachmentAssignmentUnknown      = "unknown"
@@ -58,7 +58,7 @@ type attachmentObservation struct {
 }
 
 type attachmentExpectation struct {
-	Name                     string
+	Names                    []string
 	PreflightAttachmentCount int
 }
 
@@ -66,7 +66,6 @@ type attachmentPreflight struct {
 	OK                      bool `json:"ok"`
 	InputCount              int  `json:"input_count"`
 	InputFileCount          int  `json:"input_file_count"`
-	PreexistingNameMatch    bool `json:"preexisting_name_match"`
 	RenderedAttachmentCount int  `json:"rendered_attachment_count"`
 }
 
@@ -121,31 +120,53 @@ func resolveLocalUpload(rawPath string) (*localUpload, error) {
 	}, nil
 }
 
-func attachLocalFileOnce(
+func resolveLocalUploads(config AskConfig) ([]localUpload, error) {
+	paths := config.FilePaths
+	uploads := make([]localUpload, 0, len(paths))
+	names := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		upload, err := resolveLocalUpload(path)
+		if err != nil {
+			return nil, err
+		}
+		if upload == nil {
+			return nil, fmt.Errorf("ChatGPT attachment path must not be empty")
+		}
+		key := strings.ToLower(upload.Name)
+		if names[key] {
+			return nil, fmt.Errorf("ChatGPT attachment filenames must be distinct")
+		}
+		names[key] = true
+		uploads = append(uploads, *upload)
+	}
+	return uploads, nil
+}
+
+func attachLocalFilesOnce(
 	ctx context.Context,
 	session *cdp.PageSession,
-	upload localUpload,
+	uploads []localUpload,
 	timeout time.Duration,
 	poll time.Duration,
-) (AttachmentData, *attachmentExpectation, *attachmentFailure) {
-	data := AttachmentData{
-		Name:              upload.Name,
-		Size:              upload.Size,
-		Transport:         "headed_cdp_file_input",
-		AssignmentOutcome: attachmentAssignmentNotAttempted,
+) ([]AttachmentData, *attachmentExpectation, *attachmentFailure) {
+	data := make([]AttachmentData, len(uploads))
+	paths := make([]string, len(uploads))
+	names := make([]string, len(uploads))
+	if len(uploads) == 0 {
+		return data, nil, nil
 	}
-	if err := validateLocalUploadUnchanged(upload); err != nil {
-		return data, nil, &attachmentFailure{
-			Code:      "chatgpt_attachment_changed",
-			Message:   "ChatGPT attachment changed after validation and before assignment",
-			RetrySafe: true,
-			Cause:     err,
+	for i, upload := range uploads {
+		data[i] = AttachmentData{Name: upload.Name, Size: upload.Size, Transport: "headed_cdp_file_input", AssignmentOutcome: attachmentAssignmentNotAttempted}
+		paths[i], names[i] = upload.Path, upload.Name
+	}
+	for _, upload := range uploads {
+		if err := validateLocalUploadUnchanged(upload); err != nil {
+			return data, nil, &attachmentFailure{Code: "chatgpt_attachment_changed", Message: "ChatGPT attachment changed after validation and before assignment", RetrySafe: true, Cause: err}
 		}
 	}
 	preflight, err := verifyAttachmentPreflight(
 		ctx,
 		session,
-		upload.Name,
 	)
 	if err != nil {
 		return data, nil, &attachmentFailure{
@@ -160,14 +181,18 @@ func attachLocalFileOnce(
 		ctx,
 		session,
 		chatGPTFileInputSelector,
-		upload.Path,
+		paths...,
 	)
 	if attempted {
-		data.AssignmentAttempts = 1
+		for i := range data {
+			data[i].AssignmentAttempts = 1
+		}
 	}
 	if err != nil {
 		if attempted {
-			data.AssignmentOutcome = attachmentAssignmentUnknown
+			for i := range data {
+				data[i].AssignmentOutcome = attachmentAssignmentUnknown
+			}
 			return data, nil, &attachmentFailure{
 				Code:      "chatgpt_attachment_assignment_unknown",
 				Message:   "ChatGPT file assignment outcome is unknown; do not repeat the request",
@@ -182,28 +207,36 @@ func attachLocalFileOnce(
 			Cause:     err,
 		}
 	}
-	data.AssignmentOutcome = attachmentAssignmentConfirmed
+	for i := range data {
+		data[i].AssignmentOutcome = attachmentAssignmentConfirmed
+	}
 
-	var observation attachmentObservation
+	observations := make([]attachmentObservation, len(uploads))
 	_, err = pollUntil(ctx, timeout, poll, func() (bool, error) {
-		if err := observeAttachment(
-			ctx,
-			session,
-			upload.Name,
-			preflight.RenderedAttachmentCount,
-			&observation,
-		); err != nil {
-			return false, err
+		ready := true
+		for i, name := range names {
+			if err := observeAttachment(ctx, session, name, preflight.RenderedAttachmentCount, &observations[i], len(uploads)); err != nil {
+				return false, err
+			}
+			if observations[i].DuplicateRejected {
+				return true, nil
+			}
+			ready = ready && observations[i].OK && !observations[i].Processing
 		}
-		return observation.OK || observation.DuplicateRejected, nil
+		return ready, nil
 	})
-	data.AttachmentObserved = observation.OK
-	data.InputMatch = observation.InputMatch
-	data.RenderedAttachmentAdded = observation.RenderedAttachmentAdded
-	data.RenderedNameMatch = observation.RenderedNameMatch
-	data.RenderedName = observation.RenderedName
-	data.DuplicateRejected = observation.DuplicateRejected
-	data.ProcessingComplete = observation.OK && !observation.Processing
+	observation := attachmentObservation{OK: true}
+	for i, current := range observations {
+		data[i].AttachmentObserved = current.OK
+		data[i].InputMatch = current.InputMatch
+		data[i].RenderedAttachmentAdded = current.RenderedAttachmentAdded
+		data[i].RenderedNameMatch = current.RenderedNameMatch
+		data[i].RenderedName = current.RenderedName
+		data[i].DuplicateRejected = current.DuplicateRejected
+		data[i].ProcessingComplete = current.OK && !current.Processing
+		observation.OK = observation.OK && current.OK && !current.Processing
+		observation.DuplicateRejected = observation.DuplicateRejected || current.DuplicateRejected
+	}
 	if observation.DuplicateRejected {
 		return data, nil, &attachmentFailure{
 			Code:      "chatgpt_attachment_duplicate_rejected",
@@ -214,13 +247,13 @@ func attachLocalFileOnce(
 	if err != nil || !observation.OK {
 		return data, nil, &attachmentFailure{
 			Code:      "chatgpt_attachment_observation_incomplete",
-			Message:   "ChatGPT confirmed one file assignment but did not retain the exact active-composer file selection; do not repeat the request",
+			Message:   "ChatGPT confirmed one batch assignment but did not retain the exact active-composer file selection; do not repeat the request",
 			RetrySafe: false,
 			Cause:     err,
 		}
 	}
 	return data, &attachmentExpectation{
-		Name:                     upload.Name,
+		Names:                    names,
 		PreflightAttachmentCount: preflight.RenderedAttachmentCount,
 	}, nil
 }
@@ -235,13 +268,21 @@ func observeExpectedAttachment(
 		*observation = attachmentObservation{OK: true}
 		return nil
 	}
-	return observeAttachment(
-		ctx,
-		session,
-		expectation.Name,
-		expectation.PreflightAttachmentCount,
-		observation,
-	)
+	names := expectation.Names
+	*observation = attachmentObservation{OK: true, InputMatch: true, RenderedAttachmentAdded: true, RenderedNameMatch: true}
+	for _, name := range names {
+		var current attachmentObservation
+		if err := observeAttachment(ctx, session, name, expectation.PreflightAttachmentCount, &current, len(names)); err != nil {
+			return err
+		}
+		observation.OK = observation.OK && current.OK && !current.Processing
+		observation.InputMatch = observation.InputMatch && current.InputMatch
+		observation.RenderedAttachmentAdded = observation.RenderedAttachmentAdded && current.RenderedAttachmentAdded
+		observation.RenderedNameMatch = observation.RenderedNameMatch && current.RenderedNameMatch
+		observation.Processing = observation.Processing || current.Processing
+		observation.DuplicateRejected = observation.DuplicateRejected || current.DuplicateRejected
+	}
+	return nil
 }
 
 func validateLocalUploadUnchanged(upload localUpload) error {
@@ -280,70 +321,24 @@ func fingerprintLocalFile(path string) ([sha256.Size]byte, error) {
 	return result, nil
 }
 
-func verifyAttachmentPreflight(
-	ctx context.Context,
-	session *cdp.PageSession,
-	fileName string,
-) (attachmentPreflight, error) {
+func verifyAttachmentPreflight(ctx context.Context, session *cdp.PageSession) (attachmentPreflight, error) {
 	var preflight attachmentPreflight
-	encodedName, err := json.Marshal(fileName)
-	if err != nil {
-		return preflight, fmt.Errorf(
-			"encode ChatGPT attachment name: %w",
-			err,
-		)
-	}
-	expression := fmt.Sprintf(`(() => {
-	  const expected = %s;
-	  const inputs = Array.from(document.querySelectorAll('#upload-files'));
-	  const editors = Array.from(document.querySelectorAll(
-	    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
-	  )).filter(node => node.isContentEditable);
-	  const input = inputs.length === 1 ? inputs[0] : null;
-	  const composer = input ? input.closest('form') : null;
-	  const activeComposer = Boolean(
-	    composer && editors.length === 1 && composer.contains(editors[0])
-	  );
-	  const escapeRegExp = value => String(value || '')
-	    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	  const providerNameMatches = (actual, wanted) => {
-	    actual = String(actual || '').trim();
-	    wanted = String(wanted || '').trim();
-	    if (actual === wanted) return true;
-	    const dot = wanted.lastIndexOf('.');
-	    const stem = dot > 0 ? wanted.slice(0, dot) : wanted;
-	    const extension = dot > 0 ? wanted.slice(dot) : '';
-	    return new RegExp(
-	      '^' + escapeRegExp(stem) + '\\s*\\(\\d+\\)' +
-	      escapeRegExp(extension) + '$'
-	    ).test(actual);
-	  };
-	  const candidates = composer ? Array.from(composer.querySelectorAll(
-	    '[role="group"][aria-label]'
-	  )).filter(node =>
-	    node.querySelector('button[aria-label^="Remove file "]')
-	  ) : [];
-	  const preexistingNameMatch = candidates.some(node =>
-	    providerNameMatches(node.getAttribute('aria-label'), expected)
-	  );
-	  const inputFileCount = input && input.files ? input.files.length : -1;
-	  return {
-	    ok: activeComposer && input.type === 'file' &&
-	      inputFileCount === 0 && candidates.length === 0 &&
-	      !preexistingNameMatch,
-	    input_count: inputs.length,
-	    input_file_count: inputFileCount,
-	    preexisting_name_match: preexistingNameMatch,
-	    rendered_attachment_count: candidates.length
-	  };
-	})()`, encodedName)
+	expression := `(() => {
+  const inputs = Array.from(document.querySelectorAll('` + chatGPTFileInputSelector + `'));
+  const editors = Array.from(document.querySelectorAll('[contenteditable="true"][role="textbox"]')).filter(node => node.isContentEditable);
+  const input = inputs.length === 1 ? inputs[0] : null;
+  const composer = input ? input.closest('form') : null;
+  const activeComposer = Boolean(composer && editors.length === 1 && composer.contains(editors[0]));
+  const candidates = composer ? composer.querySelectorAll('[data-composer-attachments] button[aria-label^="Remove "]') : [];
+  const inputFileCount = input && input.files ? input.files.length : -1;
+  return {ok:activeComposer && input.type === 'file' && inputFileCount === 0 && candidates.length === 0,
+   input_count:inputs.length,input_file_count:inputFileCount,rendered_attachment_count:candidates.length};
+ })()`
 	if err := evaluateInto(ctx, session, expression, &preflight); err != nil {
 		return preflight, err
 	}
 	if !preflight.OK {
-		return preflight, fmt.Errorf(
-			"active composer file input is not uniquely empty",
-		)
+		return preflight, fmt.Errorf("exact empty attachment input was not proven")
 	}
 	return preflight, nil
 }
@@ -352,7 +347,7 @@ func setFileInputFilesOnce(
 	ctx context.Context,
 	session *cdp.PageSession,
 	selector string,
-	path string,
+	paths ...string,
 ) (bool, error) {
 	if session == nil {
 		return false, fmt.Errorf("ChatGPT attachment session is unavailable")
@@ -417,7 +412,7 @@ func setFileInputFilesOnce(
 		"DOM.setFileInputFiles",
 		map[string]any{
 			"nodeId": query.NodeID,
-			"files":  []string{path},
+			"files":  paths,
 		},
 		nil,
 	); err != nil {
@@ -442,6 +437,7 @@ func observeAttachment(
 	fileName string,
 	preflightAttachmentCount int,
 	observation *attachmentObservation,
+	expectedCount int,
 ) error {
 	encodedName, err := json.Marshal(fileName)
 	if err != nil {
@@ -450,6 +446,7 @@ func observeAttachment(
 	expression := fmt.Sprintf(`(() => {
 	  const expected = %s;
 	  const preflightAttachmentCount = %d;
+	  const expectedCount = %d;
 	  const visible = element => {
 	    if (!(element instanceof HTMLElement)) return false;
 	    const style = getComputedStyle(element);
@@ -458,9 +455,9 @@ func observeAttachment(
 	      Number(style.opacity || '1') !== 0 &&
 	      rect.width > 0 && rect.height > 0;
 	  };
-	  const inputs = Array.from(document.querySelectorAll('#upload-files'));
+	  const inputs = Array.from(document.querySelectorAll('`+chatGPTFileInputSelector+`'));
 	  const editors = Array.from(document.querySelectorAll(
-	    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+	    '[contenteditable="true"][role="textbox"]'
 	  )).filter(node => node.isContentEditable);
 	  const input = inputs.length === 1 ? inputs[0] : null;
 	  const composer = input ? input.closest('form') : null;
@@ -468,7 +465,7 @@ func observeAttachment(
 	    composer && editors.length === 1 && composer.contains(editors[0])
 	  );
 	  const files = input && input.files ? Array.from(input.files) : [];
-	  const inputMatch = files.length === 1 && files[0].name === expected;
+	  const inputMatch = files.length === expectedCount && files.filter(file => file.name === expected).length === 1;
 	  const escapeRegExp = value => String(value || '')
 	    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	  const providerNameMatches = (actual, wanted) => {
@@ -484,15 +481,13 @@ func observeAttachment(
 	    ).test(actual);
 	  };
 	  const candidates = composer ? Array.from(composer.querySelectorAll(
-	    '[role="group"][aria-label]'
-	  )).filter(node =>
-	    node.querySelector('button[aria-label^="Remove file "]')
-	  ) : [];
+    '[data-composer-attachments] button[aria-label^="Remove "]'
+  )) : [];
 	  const matchingCandidates = candidates.filter(node =>
-	    providerNameMatches(node.getAttribute('aria-label'), expected)
+	    providerNameMatches(node.getAttribute('aria-label').slice('Remove '.length), expected)
 	  );
 	  const matchingNames = matchingCandidates.map(node =>
-	    String(node.getAttribute('aria-label') || '').trim()
+	    String(node.getAttribute('aria-label') || '').slice('Remove '.length).trim()
 	  );
 	  const duplicateRejected = Array.from(document.querySelectorAll(
 	    '[role="dialog"]'
@@ -504,11 +499,11 @@ func observeAttachment(
 	  });
 	  const renderedNameMatch = matchingNames.length === 1;
 	  const processing = matchingCandidates.some(node =>
-	    Array.from(node.querySelectorAll('[class*="animate-spin"]'))
+	    Array.from((node.parentElement.parentElement || node.parentElement).querySelectorAll('[class*="animate-spin"],[role="progressbar"],[aria-busy="true"]'))
 	      .some(visible)
 	  );
 	  const renderedAttachmentAdded =
-	    candidates.length === preflightAttachmentCount + 1;
+	    candidates.length === preflightAttachmentCount + expectedCount;
 	  return {
 	    ok: !duplicateRejected && activeComposer &&
 	      renderedAttachmentAdded && renderedNameMatch,
@@ -520,7 +515,7 @@ func observeAttachment(
 	    duplicate_rejected: duplicateRejected,
 	    processing
 	  };
-	})()`, encodedName, preflightAttachmentCount)
+	})()`, encodedName, preflightAttachmentCount, expectedCount)
 	if err := evaluateInto(ctx, session, expression, observation); err != nil {
 		return err
 	}

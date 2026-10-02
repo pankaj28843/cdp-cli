@@ -71,7 +71,7 @@ func TestCapabilityMessageReportsIndependentlyObservedModelCatalog(t *testing.T)
 	}
 }
 
-func TestNormalizeRuntimeCapabilitiesMigratesObservedModelCatalog(t *testing.T) {
+func TestNormalizeRuntimeCapabilitiesDoesNotInferModelObservation(t *testing.T) {
 	runtime := RuntimeCapabilities{
 		State:                "ready",
 		ComposerObserved:     true,
@@ -84,10 +84,10 @@ func TestNormalizeRuntimeCapabilitiesMigratesObservedModelCatalog(t *testing.T) 
 	}
 
 	got := normalizeRuntimeCapabilities(runtime)
-	if !got.ModelOptionsObserved {
-		t.Fatal("legacy selected visible model catalog was not migrated")
+	if got.ModelOptionsObserved {
+		t.Fatal("persisted labels invented model observation")
 	}
-	if !strings.Contains(got.Message, "visible model options were observed") {
+	if !strings.Contains(got.Message, "model catalog was not observed") {
 		t.Fatalf("message = %q", got.Message)
 	}
 }
@@ -111,12 +111,12 @@ func TestNormalizeRuntimeCapabilitiesDoesNotInventMissingModelCatalog(t *testing
 	}
 }
 
-func TestNormalizeRuntimeCapabilitiesDowngradesLegacyMixedSelection(t *testing.T) {
+func TestNormalizeRuntimeCapabilitiesDowngradesMissingSelection(t *testing.T) {
 	runtime := RuntimeCapabilities{
 		State:                "ready",
 		ComposerObserved:     true,
 		ProductModes:         []string{"Chat", "Work"},
-		IntelligenceOptions:  []string{"Medium", "GPT-5.6 Sol"},
+		IntelligenceOptions:  []string{"Medium"},
 		SelectedIntelligence: "GPT-5.6 Sol",
 		Source:               "headed-cdp-sanitized-composer-probe",
 	}
@@ -129,12 +129,6 @@ func TestNormalizeRuntimeCapabilitiesDowngradesLegacyMixedSelection(t *testing.T
 		t.Fatalf(
 			"selected_intelligence = %q, want empty",
 			got.SelectedIntelligence,
-		)
-	}
-	if containsString(got.IntelligenceOptions, "GPT-5.6 Sol") {
-		t.Fatalf(
-			"legacy model remains in thinking options: %#v",
-			got.IntelligenceOptions,
 		)
 	}
 	if got.ModelOptionsObserved {

@@ -122,7 +122,7 @@ func observeChatGPTToolSurface(
       .filter(Boolean)
   ));
   const editors = Array.from(document.querySelectorAll(
-    '#prompt-textarea,[contenteditable="true"][role="textbox"]'
+    '[contenteditable="true"][role="textbox"]'
   )).filter(element => visible(element) && element.isContentEditable);
   const selected = Array.from(new Set(
     editors.flatMap(editor => Array.from(editor.querySelectorAll(

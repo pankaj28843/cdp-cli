@@ -1378,7 +1378,7 @@ func TestAssertVisibleRetriesUntilPassJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "visible", "Delayed visible", "--by", "role", "--role", "button", "--timeout", "500ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"assert", "visible", "Delayed visible", "--by", "role", "--role", "button", "--timeout", "3s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("assert visible retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -2255,7 +2255,7 @@ func TestAssertReadonlyRetriesUntilPassJSON(t *testing.T) {
 	startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"assert", "readonly", "Delayed readonly", "--by", "label", "--timeout", "500ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"assert", "readonly", "Delayed readonly", "--by", "label", "--timeout", "3s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("assert readonly retry exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}

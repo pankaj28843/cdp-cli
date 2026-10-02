@@ -130,7 +130,7 @@ func TestNetworkControlsSelectExistingPageByTargetIndex(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "block", args: []string{"network", "block", "--pattern", "*://*/analytics/*", "--duration", "50ms"}},
+		{name: "block", args: []string{"network", "block", "--pattern", "*://*/analytics/*", "--duration", "2s"}},
 		{name: "mock", args: []string{"network", "mock", "--rule", `{"url_pattern":"*://*/api/config","method":"GET","status":200,"body":"{\"enabled\":true}","max_matches":1}`, "--duration", "250ms"}},
 	}
 	for _, command := range commands {
@@ -192,7 +192,7 @@ func TestNetworkControlsReportOutOfRangeTargetIndex(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "block", args: []string{"network", "block", "--pattern", "*://*/analytics/*", "--duration", "50ms"}},
+		{name: "block", args: []string{"network", "block", "--pattern", "*://*/analytics/*", "--duration", "2s"}},
 		{name: "mock", args: []string{"network", "mock", "--rule", `{"url_pattern":"*://*/api/config","status":200,"body":"ok"}`, "--duration", "50ms"}},
 	}
 	for _, command := range commands {

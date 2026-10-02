@@ -3342,3 +3342,20 @@ func TestExtractConversationTextKeepsNumericCompleteWithoutEndTurnIncomplete(
 		t.Fatalf("extracted = %#v", got)
 	}
 }
+
+func TestBrowserReadObservationFailureOffersRenderedRecovery(t *testing.T) {
+	conversation := conversationRef("synthetic-conversation")
+	data := newConversationDetailData(conversation.ID, "candidate_browser_context_http", "headed_browser_fetch")
+	result := browserReadFailureResult("synthetic-run", "synthetic-build", webagent.OperationConversationsDetail, webagent.StageAttached, nil, webagent.CleanupEvidence{}, readFailure{code: "chatgpt_browser_read_request_observation_failed", errClass: "connection", message: "synthetic event observation failed"}, data, conversation)
+	if result.Error == nil || result.Error.Code != "chatgpt_browser_read_request_observation_failed" {
+		t.Fatalf("error=%+v", result.Error)
+	}
+	observed := result.Data.(ConversationDetailData)
+	if observed.Metadata["observation_phase"] != "conversation_read_request_events" || observed.Metadata["logout_proven"] != false || observed.Metadata["submission_required"] != false {
+		t.Fatalf("diagnostics=%+v", observed.Metadata)
+	}
+	commands := strings.Join(result.NextCommands, "\n")
+	if !strings.Contains(commands, "cdp --browser-mode headed open https://chatgpt.com/c/synthetic-conversation") || !strings.Contains(commands, "page close") || strings.Contains(commands, "chatgpt ask") || strings.Contains(commands, "auth refresh") {
+		t.Fatalf("recovery=%s", commands)
+	}
+}

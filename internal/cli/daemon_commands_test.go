@@ -584,6 +584,7 @@ func flagInfoContains(flags []struct {
 }
 
 func TestDaemonHealthCheckClearsKeepaliveReadErrorDegradationJSON(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := shortCLIStateDir(t)
 	artifactDir := filepath.Join(stateDir, "health-artifacts")
 	server := newFakeCDPServer(t, []map[string]any{
@@ -630,7 +631,7 @@ func TestDaemonHealthCheckClearsKeepaliveReadErrorDegradationJSON(t *testing.T) 
 	})
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon health before health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -650,14 +651,14 @@ func TestDaemonHealthCheckClearsKeepaliveReadErrorDegradationJSON(t *testing.T) 
 
 	out.Reset()
 	errOut.Reset()
-	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--require-healthy", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code = cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "health-check", "--require-healthy", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitCheckFailed {
 		t.Fatalf("daemon health-check --require-healthy exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitCheckFailed, out.String(), errOut.String())
 	}
 
 	out.Reset()
 	errOut.Reset()
-	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code = cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "health-check", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -678,7 +679,7 @@ func TestDaemonHealthCheckClearsKeepaliveReadErrorDegradationJSON(t *testing.T) 
 
 	out.Reset()
 	errOut.Reset()
-	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code = cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "health", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon health after health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -698,6 +699,7 @@ func TestDaemonHealthCheckClearsKeepaliveReadErrorDegradationJSON(t *testing.T) 
 }
 
 func TestDaemonHealthCheckHeadlessHealthyJSON(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := shortCLIStateDir(t)
 	artifactDir := filepath.Join(stateDir, "health-artifacts")
 	server := newFakeCDPServer(t, []map[string]any{
@@ -737,7 +739,7 @@ func TestDaemonHealthCheckHeadlessHealthyJSON(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "health-check", "--state-dir", stateDir, "--out-dir", artifactDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon health-check exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -793,6 +795,7 @@ func TestDaemonHealthCheckHeadlessHealthyJSON(t *testing.T) {
 }
 
 func TestDaemonHealthCheckRepairUsesKeepaliveForStaleHeadlessRuntime(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := shortCLIStateDir(t)
 	artifactDir := filepath.Join(stateDir, "health-artifacts")
 	server := newFakeCDPServer(t, []map[string]any{
@@ -838,11 +841,11 @@ func TestDaemonHealthCheckRepairUsesKeepaliveForStaleHeadlessRuntime(t *testing.
 	}
 	t.Cleanup(func() {
 		var stopOut, stopErr bytes.Buffer
-		_ = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+		_ = cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
 	})
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "health-check", "--repair", "--state-dir", stateDir, "--out-dir", artifactDir, "--chrome-command", "", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "health-check", "--repair", "--state-dir", stateDir, "--out-dir", artifactDir, "--chrome-command", "", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("daemon health-check repair exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -2205,6 +2208,7 @@ func TestAutoConnectPagesRequiresRunningDaemon(t *testing.T) {
 }
 
 func TestHeadlessPagesAutoRepairsManagedDaemon(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell chrome test is unix-only")
 	}
@@ -2225,19 +2229,19 @@ func TestHeadlessPagesAutoRepairsManagedDaemon(t *testing.T) {
 	t.Setenv("CDP_CHROME_CANDIDATES", chromePath)
 	t.Cleanup(func() {
 		var stopOut, stopErr bytes.Buffer
-		_ = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+		_ = cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
 	})
 
 	var out, errOut bytes.Buffer
 	staleBrowserURL := "http://" + net.JoinHostPort("127.0.0.1", "1")
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "connection", "add", "headless", "--browser-url", staleBrowserURL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "connection", "add", "headless", "--browser-url", staleBrowserURL, "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("connection add stale headless exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}
 
 	out.Reset()
 	errOut.Reset()
-	code = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code = cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "pages", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("headless pages exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}

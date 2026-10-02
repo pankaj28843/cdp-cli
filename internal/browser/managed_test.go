@@ -918,7 +918,7 @@ func TestStopManagedChromeTracksDescendantAfterOwnedRootExits(t *testing.T) {
 	}
 	readyFile := filepath.Join(t.TempDir(), "child-ready")
 	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
-	script := "#!/usr/bin/env sh\n/bin/sleep 30 &\necho $! > \"$CDP_TEST_READY\"\nwait\n"
+	script := "#!/usr/bin/env sh\n/bin/sleep 30 &\necho $! > \"$CDP_TEST_READY.tmp\"\nmv \"$CDP_TEST_READY.tmp\" \"$CDP_TEST_READY\"\nwait\n"
 	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write synthetic managed process: %v", err)
 	}

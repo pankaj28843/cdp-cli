@@ -225,29 +225,13 @@ func (s *Store) LoadRuntime(ctx context.Context) (RuntimeCapabilities, error) {
 }
 
 func normalizeRuntimeCapabilities(runtime RuntimeCapabilities) RuntimeCapabilities {
-	runtime.IntelligenceOptions = removeLegacyMixedIntelligenceLabels(
-		runtime.IntelligenceOptions,
-	)
-	if legacyMixedIntelligenceLabel(runtime.SelectedIntelligence) ||
-		(strings.TrimSpace(runtime.SelectedIntelligence) != "" &&
-			!containsString(
-				runtime.IntelligenceOptions,
-				runtime.SelectedIntelligence,
-			)) {
+	if strings.TrimSpace(runtime.SelectedIntelligence) != "" &&
+		!containsString(runtime.IntelligenceOptions, runtime.SelectedIntelligence) {
 		runtime.SelectedIntelligence = ""
 	}
 	if runtime.State == "ready" &&
 		strings.TrimSpace(runtime.SelectedIntelligence) == "" {
 		runtime.State = "unknown"
-	}
-	if !runtime.ModelOptionsObserved &&
-		len(runtime.ModelOptions) > 0 &&
-		strings.TrimSpace(runtime.SelectedModel) != "" &&
-		containsString(runtime.ModelOptions, runtime.SelectedModel) {
-		// Compatibility with capability state written before the independent
-		// observation bit existed. A selected member of the persisted visible
-		// catalog is the old format's positive observation evidence.
-		runtime.ModelOptionsObserved = true
 	}
 	_, runtime.Message = capabilityStateAndMessage(capabilityProbe{
 		OK:                   runtime.State == "ready",
@@ -260,25 +244,6 @@ func normalizeRuntimeCapabilities(runtime RuntimeCapabilities) RuntimeCapabiliti
 		ModelOptionsObserved: runtime.ModelOptionsObserved,
 	})
 	return runtime
-}
-
-func removeLegacyMixedIntelligenceLabels(values []string) []string {
-	normalized := make([]string, 0, len(values))
-	for _, value := range values {
-		if legacyMixedIntelligenceLabel(value) ||
-			containsString(normalized, value) {
-			continue
-		}
-		normalized = append(normalized, value)
-	}
-	return normalized
-}
-
-func legacyMixedIntelligenceLabel(value string) bool {
-	// The previous v1 writer admitted this model label into the thinking list.
-	// Keep the compatibility rule narrow; do not classify future dynamic
-	// thinking labels as models by heuristic.
-	return strings.EqualFold(strings.TrimSpace(value), "GPT-5.6 Sol")
 }
 
 func (s *Store) RuntimeStatus(ctx context.Context, now time.Time, ttl time.Duration) RuntimeStatus {

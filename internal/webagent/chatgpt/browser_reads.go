@@ -616,7 +616,7 @@ func prepareBrowserRead(
 		return RequestTemplate{}, &readFailure{
 			code:     "chatgpt_browser_read_request_observation_failed",
 			errClass: "connection",
-			message:  "ChatGPT fresh conversation-read request observation failed on the exact headed target",
+			message:  "ChatGPT signed-in UI and session-cookie evidence were observed, but the exact-target conversation-read event observation failed; this is not logout evidence. Inspect the conversation through an owned rendered target without submitting another prompt",
 		}
 	}
 	now := time.Now().UTC()
@@ -917,12 +917,27 @@ func browserReadFailureResult(
 	data any,
 	conversation *webagent.ConversationRef,
 ) webagent.Result {
+	commands := readNextCommands(operation, conversation)
+	if failure.code == "chatgpt_browser_read_request_observation_failed" {
+		if conversation != nil {
+			commands = []string{fmt.Sprintf("cdp --browser-mode headed open %s --task-id chatgpt-read-recovery --json", conversation.URL), "cdp --browser-mode headed eval 'document.querySelector(\"main\")?.innerText' --target <opened-target-id> --json", "cdp --browser-mode headed page close --target <opened-target-id> --json"}
+		}
+		metadata := map[string]any{"observation_phase": "conversation_read_request_events", "signed_in_ui_observed": true, "session_cookie_observed": true, "logout_proven": false, "submission_required": false}
+		switch value := data.(type) {
+		case ConversationDetailData:
+			maps.Copy(value.Metadata, metadata)
+			data = value
+		case ConversationListData:
+			maps.Copy(value.Metadata, metadata)
+			data = value
+		}
+	}
 	result := operationFailure(
 		runID, buildCommit, operation,
 		stage, readModeFromData(data),
 		target, cleanup,
 		failure.code, failure.errClass, failure.message,
-		data, readNextCommands(operation, conversation),
+		data, commands,
 	)
 	result.Conversation = conversation
 	if result.Error != nil && !failure.retryAt.IsZero() {

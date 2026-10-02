@@ -171,6 +171,12 @@ func preparePage(
 	return err
 }
 
+type evaluationFailure struct {
+	kind string
+}
+
+func (e *evaluationFailure) Error() string { return "exact-target evaluation failed: " + e.kind }
+
 func evaluateInto(
 	ctx context.Context,
 	session *cdp.PageSession,
@@ -181,11 +187,14 @@ func evaluateInto(
 	if err != nil {
 		return err
 	}
-	if evaluated.Exception != nil || len(evaluated.Object.Value) == 0 {
-		return fmt.Errorf("exact-target evaluation failed")
+	if evaluated.Exception != nil {
+		return &evaluationFailure{kind: "javascript_exception"}
+	}
+	if len(evaluated.Object.Value) == 0 {
+		return &evaluationFailure{kind: "missing_value"}
 	}
 	if err := json.Unmarshal(evaluated.Object.Value, target); err != nil {
-		return fmt.Errorf("decode exact-target evaluation")
+		return &evaluationFailure{kind: "invalid_value"}
 	}
 	return nil
 }

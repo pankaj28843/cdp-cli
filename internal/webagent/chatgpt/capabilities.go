@@ -121,7 +121,7 @@ func RefreshCapabilities(
 					err := evaluateInto(
 						observationCtx,
 						session,
-						`Boolean(document.querySelector('#prompt-textarea') || document.querySelector('[contenteditable="true"][role="textbox"]'))`,
+						`Boolean(document.querySelector('[contenteditable="true"][role="textbox"]'))`,
 						&observed,
 					)
 					return observed, err
@@ -390,8 +390,7 @@ const capabilityProbeExpression = `(async () => {
   const exactKnown = (values, known) => known.filter((candidate) =>
     values.some((value) => value.toLowerCase() === candidate.toLowerCase())
   );
-  const prompt = document.querySelector('#prompt-textarea') ||
-    document.querySelector('[contenteditable="true"][role="textbox"]');
+  const prompt = document.querySelector('[contenteditable="true"][role="textbox"]');
   const form = prompt && prompt.closest('form');
   if (!prompt || !form) {
     return {
@@ -440,11 +439,6 @@ const capabilityProbeExpression = `(async () => {
 	    if (!menu || menu.getAttribute('role') !== 'menu' || !visible(menu)) {
 	      return false;
 	    }
-	    const hasKnownLegacyOption = Array.from(
-	      menu.querySelectorAll('[role="menuitemradio"]')
-	    ).some((option) => intelligenceKnown.some((candidate) =>
-	      candidate.toLowerCase() === textOf(option).toLowerCase()
-	    ));
 	    const hasSemanticSlider = Array.from(
 	      menu.querySelectorAll('[role="slider"]')
 	    ).some((slider) =>
@@ -453,7 +447,7 @@ const capabilityProbeExpression = `(async () => {
 	      slider.getAttribute('aria-valuemax') !== null &&
 	      slider.getAttribute('aria-valuenow') !== null
 	    );
-	    return hasKnownLegacyOption || hasSemanticSlider;
+	    return hasSemanticSlider;
 	  };
 	  const selectedThinkingFromOpenMenu = (button) => {
 	    if (!openThinkingPicker(button)) return '';
@@ -471,16 +465,14 @@ const capabilityProbeExpression = `(async () => {
 	      const maximum = Number(slider.getAttribute('aria-valuemax'));
 	      const current = Number(slider.getAttribute('aria-valuenow'));
 	      const labels = maximum - minimum + 1 === intelligenceKnown.length - 1 ?
-	        intelligenceKnown.slice(1) : intelligenceKnown;
+	        intelligenceKnown.slice(1) : [];
 	      const selected = labels[current - minimum];
 	      if (Number.isInteger(minimum) && Number.isInteger(maximum) &&
 	          Number.isInteger(current) && selected) {
 	        return selected;
 	      }
 	    }
-	    const checked = Array.from(menu.querySelectorAll('[role="menuitemradio"]'))
-	      .find((option) => option.getAttribute('aria-checked') === 'true');
-	    return checked ? textOf(checked) : '';
+	    return '';
 	  };
 	  const accessibleName = (element) => normalize(
     element && (

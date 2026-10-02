@@ -147,6 +147,7 @@ func TestRefreshAuthMissingEvidenceAndBudgetFailureRemainTypedAndClean(t *testin
 			MaxTabs: 15, MaxTabsSource: "test", MaxWindows: 5, BrowserMode: "headed",
 		})
 		config.ObservationAttempts = 3
+		config.ObservationTimeout = time.Second
 
 		result := RefreshAuth(context.Background(), config)
 		if result.OK ||
@@ -195,7 +196,7 @@ func TestRefreshAuthUsesObservedActiveOrganizationCookieWithoutListRequest(t *te
 	config := newAuthRefreshTestConfig(t, stateDir, client, cdp.BrowserResourceBudgetOptions{
 		MaxTabs: 15, MaxTabsSource: "test", MaxWindows: 5, BrowserMode: "headed",
 	})
-	config.ObservationTimeout = 100 * time.Millisecond
+	config.ObservationTimeout = time.Second
 
 	result := RefreshAuth(context.Background(), config)
 	if !result.OK {

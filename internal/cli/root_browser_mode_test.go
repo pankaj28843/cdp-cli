@@ -480,6 +480,7 @@ func TestBrowserProfileSeedDefaultDoesNotCopyDefaultProfile(t *testing.T) {
 }
 
 func TestBrowserProfileSeedCopyDefaultUsesSyntheticProfile(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	sourceRoot := filepath.Join(homeDir, ".config", "google-chrome")
@@ -505,7 +506,7 @@ func TestBrowserProfileSeedCopyDefaultUsesSyntheticProfile(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	code := Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("browser profile seed copy-default exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -633,6 +634,7 @@ func TestBrowserProfileSeedWritesPrivacySafeStatusArtifact(t *testing.T) {
 }
 
 func TestBrowserProfileSeedIfOlderThanSkipsRecentCopyDefault(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	sourceRoot := filepath.Join(homeDir, ".config", "google-chrome")
@@ -658,7 +660,7 @@ func TestBrowserProfileSeedIfOlderThanSkipsRecentCopyDefault(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	code := Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("initial copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -670,7 +672,7 @@ func TestBrowserProfileSeedIfOlderThanSkipsRecentCopyDefault(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	code = Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "6h", "--json"}, &out, &errOut, BuildInfo{})
+	code = Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "6h", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("age-gated copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -699,12 +701,13 @@ func TestBrowserProfileSeedIfOlderThanSkipsRecentCopyDefault(t *testing.T) {
 }
 
 func TestBrowserProfileSeedIfOlderThanSeedsMissingCopyDefault(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	writeSyntheticDefaultChromeProfile(t, homeDir, "cookie-db")
 
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "6h", "--json"}, &out, &errOut, BuildInfo{})
+	code := Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "6h", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("age-gated missing copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -730,12 +733,13 @@ func TestBrowserProfileSeedIfOlderThanSeedsMissingCopyDefault(t *testing.T) {
 }
 
 func TestBrowserProfileSeedIfOlderThanReseedsStaleCopyDefault(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	writeSyntheticDefaultChromeProfile(t, homeDir, "cookie-db")
 
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	code := Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("initial copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -754,7 +758,7 @@ func TestBrowserProfileSeedIfOlderThanReseedsStaleCopyDefault(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	code = Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "6h", "--json"}, &out, &errOut, BuildInfo{})
+	code = Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "6h", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("stale age-gated copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -780,12 +784,13 @@ func TestBrowserProfileSeedIfOlderThanReseedsStaleCopyDefault(t *testing.T) {
 }
 
 func TestBrowserProfileSeedZeroIfOlderThanForcesCopyDefault(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := t.TempDir()
 	homeDir := t.TempDir()
 	writeSyntheticDefaultChromeProfile(t, homeDir, "cookie-db")
 
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	code := Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("initial copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -796,7 +801,7 @@ func TestBrowserProfileSeedZeroIfOlderThanForcesCopyDefault(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	code = Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "0s", "--json"}, &out, &errOut, BuildInfo{})
+	code = Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--if-older-than", "0s", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("zero age-gated copy-default seed exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}
@@ -822,6 +827,7 @@ func TestBrowserProfileSeedZeroIfOlderThanForcesCopyDefault(t *testing.T) {
 }
 
 func TestBrowserProfileSeedCopyDefaultReapsAndStopsManagedProcessesBeforeReplace(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("managed process command-line fixture is unix-only")
 	}
@@ -842,7 +848,7 @@ func TestBrowserProfileSeedCopyDefaultReapsAndStopsManagedProcessesBeforeReplace
 	waitForManagedProcessCount(t, stateDir, 2)
 
 	var out, errOut bytes.Buffer
-	code := Execute(context.Background(), []string{"--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
+	code := Execute(context.Background(), []string{"--config", configPath, "--state-dir", stateDir, "browser", "profile", "seed", "--strategy", "copy-default", "--json"}, &out, &errOut, BuildInfo{})
 	if code != ExitOK {
 		t.Fatalf("browser profile seed copy-default exit code = %d, want %d; stdout=%s stderr=%s", code, ExitOK, out.String(), errOut.String())
 	}

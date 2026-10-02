@@ -888,7 +888,7 @@ func (a *app) newWorkflowAgentChatGPTCapabilitiesRefreshCommand() *cobra.Command
 
 func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 	var stdin bool
-	var filePath string
+	var filePaths []string
 	var thinking string
 	var reasoning string
 	var intelligence string
@@ -899,12 +899,14 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible ChatGPT request",
 		Long: "Open one fresh headed tab, apply the configured or explicit thinking/model policy, optionally select one verified tool, submit the exact prompt with one Send, " +
-			"advance one provider Answer-now gate when it appears, read the assistant response or generated image, preserve the observed conversation ID, and close only that tab.",
+			"advance one provider Answer-now gate when it appears, read the assistant response or generated image, preserve the observed conversation ID, and close only that tab. " +
+			"Allow up to four minutes for composer hydration within a ten-minute default request budget; --timeout overrides the request budget.",
 		Example: "  printf '%s' 'I keep waking with the taste of salt in my mouth, and every morning there is one more wet footprint on the attic stairs. Write the opening scene of an original gothic story.' | cdp workflow agent chatgpt ask --stdin --thinking Medium --model 'GPT-5.6 Sol' --json\n" +
+			"  cdp workflow agent chatgpt ask 'Review both layouts against the contract.' --file mobile.png --file desktop.png --file contract.md --model current --thinking 'Extra High' --minimum-thinking 'Extra High' --json\n" +
 			"  printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm. Paint the moment the keeper opens it.' | cdp workflow agent chatgpt ask --stdin --tool create-image --thinking Pro --model 'GPT-5.6 Sol' --json --timeout 40m",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			commandTimeout := 4 * time.Minute
+			commandTimeout := 10 * time.Minute
 			if normalizedTool, err := chatgpt.NormalizeTool(tool); err == nil {
 				switch normalizedTool {
 				case chatgpt.ToolWebSearch, chatgpt.ToolGitHub, chatgpt.ToolOpenAIPlatform:
@@ -983,7 +985,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 			}
 			timeout := a.opts.timeout
 			if timeout <= 0 {
-				timeout = 4 * time.Minute
+				timeout = 10 * time.Minute
 				if normalizedTool, err := chatgpt.NormalizeTool(tool); err == nil {
 					switch normalizedTool {
 					case chatgpt.ToolWebSearch, chatgpt.ToolGitHub, chatgpt.ToolOpenAIPlatform:
@@ -996,7 +998,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 			result := chatgpt.Ask(ctx, chatgpt.AskConfig{
 				BrowserConfig: browserConfig,
 				Store:         store,
-				FilePath:      filePath,
+				FilePaths:     filePaths,
 				Tool:          tool,
 				Timeout:       timeout,
 				Selection:     selection,
@@ -1009,11 +1011,11 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&stdin, "stdin", false, "read the exact prompt from stdin")
-	cmd.Flags().StringVar(
-		&filePath,
+	cmd.Flags().StringArrayVar(
+		&filePaths,
 		"file",
-		"",
-		"attach one readable local file to the visible request",
+		nil,
+		"attach a readable local file; repeat for multiple files assigned together once",
 	)
 	cmd.Flags().StringVar(
 		&tool,

@@ -48,7 +48,7 @@ func TestAskRejectsInvalidPromptBeforeBrowserWork(t *testing.T) {
 func TestAskRejectsInvalidAttachmentBeforeBrowserWork(t *testing.T) {
 	result := Ask(
 		context.Background(),
-		AskConfig{FilePath: filepath.Join(t.TempDir(), "missing.txt")},
+		AskConfig{FilePaths: []string{filepath.Join(t.TempDir(), "missing.txt")}},
 		"review this attachment",
 	)
 	if result.OK ||

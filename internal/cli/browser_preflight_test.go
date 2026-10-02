@@ -221,6 +221,7 @@ func TestBrowserPreflightPermissionPendingJSON(t *testing.T) {
 }
 
 func TestBrowserPreflightHeadlessRepairUsesKeepaliveJSON(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	stateDir := shortCLIStateDir(t)
 	server := newFakeCDPServer(t, []map[string]any{
 		{"targetId": "page-1", "type": "page", "title": "Example App", "url": "https://example.test/app", "attached": false},
@@ -265,11 +266,11 @@ func TestBrowserPreflightHeadlessRepairUsesKeepaliveJSON(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		var stopOut, stopErr bytes.Buffer
-		_ = cli.Execute(context.Background(), []string{"--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
+		_ = cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "daemon", "stop", "--state-dir", stateDir, "--json"}, &stopOut, &stopErr, cli.BuildInfo{})
 	})
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"--browser-mode", "headless", "browser", "preflight", "--repair", "--chrome-command", "", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "--browser-mode", "headless", "browser", "preflight", "--repair", "--chrome-command", "", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("browser preflight repair exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}
@@ -297,12 +298,13 @@ func TestBrowserPreflightHeadlessRepairUsesKeepaliveJSON(t *testing.T) {
 }
 
 func TestBrowserPreflightOpenReadinessJSON(t *testing.T) {
+	configPath := writeSyntheticResourceConfig(t)
 	server := newFakeCDPServer(t, nil)
 	defer server.Close()
 	stateDir := startFakeDaemon(t, server, "browser_url")
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"browser", "preflight", "--open-readiness", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"--config", configPath, "browser", "preflight", "--open-readiness", "--state-dir", stateDir, "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("browser preflight open-readiness exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitOK, out.String(), errOut.String())
 	}

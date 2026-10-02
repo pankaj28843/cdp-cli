@@ -3,6 +3,8 @@ package chatgpt
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -161,7 +163,7 @@ func TestSendDispatcherFailsClosedWhenAttachmentDropsBeforeSend(t *testing.T) {
 		prompt:       "review the attached diff",
 		intelligence: "Pro",
 		attachment: &attachmentExpectation{
-			Name:                     "review.zip",
+			Names:                    []string{"review.zip"},
 			PreflightAttachmentCount: 0,
 		},
 	}
@@ -198,7 +200,7 @@ func TestSendDispatcherUsesFocusedComposerEnterAfterAttachmentTelemetry(t *testi
 				"rendered_name":"review (1).zip",
 				"rendered_attachment_count":1,
 				"duplicate_rejected":false,
-				"processing":true
+				"processing":false
 			}`),
 			json.RawMessage(`{
 				"route_ready":true,
@@ -225,7 +227,7 @@ func TestSendDispatcherUsesFocusedComposerEnterAfterAttachmentTelemetry(t *testi
 		prompt:       "review the attached diff",
 		intelligence: "Pro",
 		attachment: &attachmentExpectation{
-			Name:                     "review.zip",
+			Names:                    []string{"review.zip"},
 			PreflightAttachmentCount: 0,
 		},
 	}
@@ -257,13 +259,32 @@ func TestSendDispatcherUsesFocusedComposerEnterAfterAttachmentTelemetry(t *testi
 			)
 		}
 	}
-	if !strings.Contains(string(client.calls[3].params), "#prompt-textarea") {
-		t.Fatalf("composer focus evaluation=%s", client.calls[3].params)
+	if strings.Contains(string(client.calls[3].params), "#prompt-textarea") ||
+		!strings.Contains(string(client.calls[3].params), "[contenteditable") ||
+		!strings.Contains(string(client.calls[3].params), "[role=") {
+		t.Fatalf("composer focus must support the observed rich-text editor: %s", client.calls[3].params)
 	}
 	if !strings.Contains(string(client.calls[4].params), `"type":"keyDown"`) ||
 		!strings.Contains(string(client.calls[4].params), `"key":"Enter"`) ||
 		!strings.Contains(string(client.calls[5].params), `"type":"keyUp"`) {
 		t.Fatalf("Enter events=%s %s", client.calls[4].params, client.calls[5].params)
+	}
+}
+
+func TestSendDispatcherRejectsAttachmentStillProcessing(t *testing.T) {
+	client := &selectionActivationClient{evaluations: []json.RawMessage{
+		exactSelectionGuard("Pro", ""),
+		json.RawMessage(`{"ok":true,"rendered_attachment_added":true,"rendered_name_match":true,"processing":true}`),
+	}}
+	dispatcher := chatgptSendDispatcher{prompt: "review", intelligence: "Pro", attachment: &attachmentExpectation{Names: []string{"contract.md"}}}
+	outcome, err := dispatcher.Dispatch(context.Background(), newSelectionActivationSession(t, client))
+	if err == nil || outcome.Dispatch != browserflow.DispatchNotPerformed || outcome.RawInputAttempted {
+		t.Fatalf("processing attachment reached Send: outcome=%+v err=%v", outcome, err)
+	}
+	for _, call := range client.calls {
+		if call.method == "Input.dispatchKeyEvent" {
+			t.Fatal("processing attachment dispatched input")
+		}
 	}
 }
 
@@ -274,7 +295,9 @@ func TestSendDispatcherFailsClosedWhenModelChangesBeforeSend(t *testing.T) {
 		},
 	}
 	session := newSelectionActivationSession(t, client)
+	diagnostics := map[string]any{}
 	dispatcher := chatgptSendDispatcher{
+		diagnostics:  diagnostics,
 		prompt:       "review the current diff",
 		intelligence: "Pro",
 		model:        "GPT-5.6 Sol",
@@ -286,6 +309,9 @@ func TestSendDispatcherFailsClosedWhenModelChangesBeforeSend(t *testing.T) {
 		outcome.Dispatch != browserflow.DispatchNotPerformed ||
 		outcome.RawInputAttempted {
 		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if diagnostics["dispatch_guard_phase"] != "selection" {
+		t.Fatalf("missing safe failure phase: %+v", diagnostics)
 	}
 	assertObservationOnly(t, client.calls)
 }
@@ -333,5 +359,126 @@ func assertObservationOnly(t *testing.T, calls []selectionActivationCall) {
 	t.Helper()
 	if len(calls) != 1 || calls[0].method != "Runtime.evaluate" {
 		t.Fatalf("calls=%+v, want one passive selection observation", calls)
+	}
+}
+
+// Parse the actual generated observation, rather than accepting a fake DOM result.
+func TestObserveComposerJavaScriptSyntax(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for JavaScript syntax validation")
+	}
+	client := &selectionActivationClient{evaluation: json.RawMessage(`{}`)}
+	session := newSelectionActivationSession(t, client)
+	var observation composerObservation
+	if err := observeComposer(context.Background(), session, "synthetic prompt", "Extra High", &observation); err != nil {
+		t.Fatal(err)
+	}
+	var surface selectionSurface
+	if err := observeSelectionSurface(context.Background(), session, &surface); err != nil {
+		t.Fatal(err)
+	}
+	for index, call := range client.calls {
+		var params struct {
+			Expression string `json:"expression"`
+		}
+		if err := json.Unmarshal(call.params, &params); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(node, "--check")
+		command.Stdin = strings.NewReader(params.Expression)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("observation %d JavaScript does not parse: %v\n%s", index, err, output)
+		}
+	}
+}
+
+func TestComposerObservationDiagnosticsDoNotExposeObservedException(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		want string
+	}{
+		{&evaluationFailure{kind: "javascript_exception"}, "javascript_exception"},
+		{context.DeadlineExceeded, "deadline_exceeded"},
+		{errors.New("private browser response with credentials"), "observation_transport_failed"},
+	} {
+		if got := composerObservationErrorKind(nil, test.err); got != test.want {
+			t.Fatalf("diagnostic = %q, want %q", got, test.want)
+		}
+	}
+}
+
+func TestCurrentHomeComposerRequiresPositiveDefaultChatProof(t *testing.T) {
+	observation := composerObservation{DefaultChatSurface: true}
+	if !composerChatProductReady(observation) {
+		t.Fatal("current home composer rejected")
+	}
+	observation.DefaultChatSurface = false
+	if composerChatProductReady(observation) {
+		t.Fatal("missing controls treated as product proof")
+	}
+	observation.DefaultChatSurface = true
+	observation.SpecializedSurfaceCount = 1
+	if composerChatProductReady(observation) {
+		t.Fatal("specialized composer accepted")
+	}
+	observation.SpecializedSurfaceCount = 0
+	observation.ChatCount = 2
+	if composerChatProductReady(observation) {
+		t.Fatal("ambiguous product controls accepted")
+	}
+	surface := selectionSurface{DefaultChatSurface: true, PickerCount: 1, Picker: selectionPoint{Ready: true}, SelectedThinking: "Extra High"}
+	if !selectionSurfaceReady(surface, false) {
+		t.Fatal("current model control rejected")
+	}
+	surface.DefaultChatSurface = false
+	if selectionSurfaceReady(surface, false) {
+		t.Fatal("unproven missing product controls accepted")
+	}
+}
+
+func TestComposerSendDiscoveryScopesNativeSubmitToActiveForm(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for JavaScript observation validation")
+	}
+	client := &selectionActivationClient{evaluation: json.RawMessage(`{}`)}
+	var observation composerObservation
+	if err := observeComposer(context.Background(), newSelectionActivationSession(t, client), "synthetic", "Extra High", &observation); err != nil {
+		t.Fatal(err)
+	}
+	var params struct {
+		Expression string `json:"expression"`
+	}
+	if err := json.Unmarshal(client.calls[0].params, &params); err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(params.Expression, "const sends =")
+	end := strings.Index(params.Expression, "const send =")
+	if start < 0 || end <= start {
+		t.Fatal("Send discovery expression missing")
+	}
+	discovery := params.Expression[start:end]
+	script := `const assert = require('node:assert/strict');
+ const native = {type:'submit', visible:true};
+ const unrelated = {type:'submit', visible:true};
+ const hidden = {type:'submit', visible:false};
+ const ordinary = {type:'button', visible:true};
+ const visible = element => element.visible;
+ function discover(legacy, formButtons, hasForm=true) {
+   const document = {querySelectorAll: () => legacy};
+   const composerForm = hasForm ? {querySelectorAll: () => formButtons} : null;
+   ` + discovery + `
+   return sends;
+ }
+ assert.deepEqual(discover([], [native,hidden,ordinary]), [native]);
+ assert.deepEqual(discover([native], [native]), [native]);
+ assert.deepEqual(discover([], [native,unrelated]), [native,unrelated]);
+ assert.deepEqual(discover([], [unrelated], false), []);
+ `
+	command := exec.Command(node)
+	command.Stdin = strings.NewReader(script)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("scoped Send discovery: %v\n%s", err, output)
 	}
 }
