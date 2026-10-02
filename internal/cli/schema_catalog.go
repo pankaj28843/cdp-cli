@@ -111,7 +111,7 @@ func schemaCatalog() map[string]schemaInfo {
 		},
 		"webagent-aggregate-refresh": {
 			Name:        "webagent-aggregate-refresh",
-			Description: "Provider-neutral refresh report that preserves independent auth or capability outcomes for every requested provider.",
+			Description: "Provider-neutral refresh report using the provider-specific adapters. Auth supports every provider; dynamic capabilities support chatgpt,gemini,grok,m365,perplexity. Outcomes remain independent.",
 			Fields: []schemaField{
 				{Name: "schema_version", Type: "string", Required: true, Description: "Stable aggregate refresh data version, currently webagent-aggregate-refresh/v1."},
 				{Name: "operation", Type: "string", Required: true, Description: "The provider refresh operation, auth.refresh or capabilities."},

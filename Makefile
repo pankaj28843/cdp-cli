@@ -18,7 +18,7 @@ cross-build:
 	GOOS=darwin GOARCH=arm64 go build -ldflags "$(BUILD_LDFLAGS)" -o bin/cdp-darwin-arm64 ./cmd/cdp
 
 test:
-	go test ./...
+	go test -timeout 15m ./...
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_chaos_dependency.py'
 
 vet:

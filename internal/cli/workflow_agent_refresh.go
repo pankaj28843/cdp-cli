@@ -8,8 +8,13 @@ import (
 
 	"github.com/pankaj28843/cdp-cli/internal/providerpolicy"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/alex"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/chatgpt"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/gemini"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/grok"
 	"github.com/pankaj28843/cdp-cli/internal/webagent/m365"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/perplexity"
+	"github.com/pankaj28843/cdp-cli/internal/webagent/tripadvisor"
 	"github.com/spf13/cobra"
 )
 
@@ -44,7 +49,7 @@ func (a *app) newWorkflowAgentAggregateAuthCommand() *cobra.Command {
 			"Each provider is attempted independently; one provider failure never prevents the others from running. " +
 			"Provider-specific commands remain available for diagnostics and recovery.",
 		Example: "  cdp workflow agent auth refresh --json\n" +
-			"  cdp workflow agent auth refresh --provider m365 --json",
+			"  cdp workflow agent auth refresh --provider claude,gemini,grok --json",
 	}
 	cmd.AddCommand(a.newWorkflowAgentAggregateRefreshCommand(webagent.OperationAuthRefresh))
 	return cmd
@@ -82,10 +87,10 @@ func (a *app) newWorkflowAgentAggregateRefreshCommand(operation webagent.Operati
 		Example: func() string {
 			if operation == webagent.OperationCapabilities {
 				return "  cdp workflow agent capabilities refresh --json\n" +
-					"  cdp workflow agent capabilities refresh --provider m365 --json"
+					"  cdp workflow agent capabilities refresh --provider gemini,grok --json"
 			}
 			return "  cdp workflow agent auth refresh --json\n" +
-				"  cdp workflow agent auth refresh --provider m365 --json"
+				"  cdp workflow agent auth refresh --provider claude,gemini,grok --json"
 		}(),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -117,7 +122,7 @@ func (a *app) newWorkflowAgentAggregateRefreshCommand(operation webagent.Operati
 			return a.renderWebAgentResult(ctx, human, result)
 		},
 	}
-	cmd.Flags().StringSliceVar(&requested, "provider", nil, "provider to refresh; repeat or comma-separate (default: chatgpt,m365)")
+	cmd.Flags().StringSliceVar(&requested, "provider", nil, "provider to refresh; repeat or comma-separate (default: chatgpt,m365); auth supports every provider, runtime capabilities support chatgpt,gemini,grok,m365,perplexity")
 	return cmd
 }
 
@@ -182,7 +187,7 @@ func (a *app) runAggregateRefresh(
 			data.Results = append(data.Results, aggregateProviderResult{
 				Provider: provider,
 				Status:   "deferred",
-				Reason:   "provider-specific refresh adapter is not registered at this release gate",
+				Reason:   "runtime capability refresh is not implemented for this provider",
 			})
 			continue
 		}
@@ -253,8 +258,17 @@ func aggregateHasEnabledProvider(providers []webagent.Provider, policy providerp
 }
 
 func aggregateProviderSupported(provider webagent.Provider, operation webagent.Operation) bool {
-	return (provider == webagent.ProviderChatGPT || provider == webagent.ProviderM365) &&
-		(operation == webagent.OperationAuthRefresh || operation == webagent.OperationCapabilities)
+	if operation != webagent.OperationAuthRefresh && operation != webagent.OperationCapabilities {
+		return false
+	}
+	switch provider {
+	case webagent.ProviderChatGPT, webagent.ProviderGemini, webagent.ProviderGrok, webagent.ProviderM365, webagent.ProviderPerplexity:
+		return true
+	case webagent.ProviderClaude, webagent.ProviderAlex, webagent.ProviderTripadvisor:
+		return operation == webagent.OperationAuthRefresh
+	default:
+		return false
+	}
 }
 
 func (a *app) refreshAggregateProvider(
@@ -272,6 +286,53 @@ func (a *app) refreshAggregateProvider(
 		}
 		return chatgpt.RefreshCapabilities(ctx, chatgpt.CapabilityRefreshConfig{BrowserConfig: config, Store: store})
 	}
+	if provider == webagent.ProviderClaude && operation == webagent.OperationAuthRefresh {
+		return a.refreshClaudeAuth(ctx)
+	}
+	if provider == webagent.ProviderGemini {
+		config, store, unavailable := a.geminiBrowserOperationConfig(ctx, operation)
+		if unavailable != nil {
+			return *unavailable
+		}
+		if operation == webagent.OperationAuthRefresh {
+			return gemini.RefreshAuth(ctx, gemini.AuthRefreshConfig{BrowserConfig: config, Store: store, Timeout: 30 * time.Second})
+		}
+		return gemini.RefreshCapabilities(ctx, gemini.CapabilityRefreshConfig{BrowserConfig: config, Store: store, Timeout: 30 * time.Second})
+	}
+	if provider == webagent.ProviderGrok {
+		config, store, unavailable := a.grokBrowserOperationConfig(ctx, operation)
+		if unavailable != nil {
+			return *unavailable
+		}
+		if operation == webagent.OperationAuthRefresh {
+			return grok.RefreshAuth(ctx, grok.AuthRefreshConfig{BrowserConfig: config, Store: store})
+		}
+		return grok.RefreshCapabilities(ctx, grok.CapabilityRefreshConfig{BrowserConfig: config, Store: store})
+	}
+	if provider == webagent.ProviderPerplexity {
+		config, store, unavailable := a.perplexityBrowserOperationConfig(ctx, operation)
+		if unavailable != nil {
+			return *unavailable
+		}
+		if operation == webagent.OperationAuthRefresh {
+			return perplexity.RefreshAuth(ctx, perplexity.AuthRefreshConfig{BrowserConfig: config, Store: store})
+		}
+		return perplexity.RefreshCapabilities(ctx, perplexity.CapabilityRefreshConfig{BrowserConfig: config, Store: store})
+	}
+	if provider == webagent.ProviderAlex && operation == webagent.OperationAuthRefresh {
+		config, store, unavailable := a.alexBrowserOperationConfig(ctx, operation)
+		if unavailable != nil {
+			return *unavailable
+		}
+		return alex.RefreshAuth(ctx, alex.AuthRefreshConfig{BrowserConfig: config, Store: store, Timeout: 45 * time.Second})
+	}
+	if provider == webagent.ProviderTripadvisor && operation == webagent.OperationAuthRefresh {
+		config, store, unavailable := a.tripadvisorBrowserOperationConfig(ctx, operation)
+		if unavailable != nil {
+			return *unavailable
+		}
+		return tripadvisor.RefreshAuth(ctx, tripadvisor.AuthRefreshConfig{BrowserConfig: config, Store: store, Timeout: 30 * time.Second})
+	}
 	if provider == webagent.ProviderM365 {
 		config, store, unavailable := a.m365BrowserOperationConfig(ctx, operation)
 		if unavailable != nil {
@@ -288,7 +349,7 @@ func (a *app) refreshAggregateProvider(
 		operation,
 		"provider_refresh_deferred",
 		"unsupported",
-		fmt.Sprintf("aggregate refresh for %s is deferred until its provider adapter is proven", provider),
+		fmt.Sprintf("aggregate %s refresh is not implemented for %s", operation, provider),
 	)
 }
 

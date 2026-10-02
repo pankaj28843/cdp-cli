@@ -588,6 +588,18 @@ route that cannot run. Use `cdp workflow agent providers --include-disabled
 requests fail before browser or adapter dispatch, and aggregate refresh keeps
 enabled providers independent.
 
+The shared refresh entrypoints use the same adapters as provider-specific
+commands. Auth refresh supports every listed provider; dynamic capability
+refresh supports ChatGPT, Gemini, Grok, Microsoft 365, and Perplexity. Claude,
+Ask Alex, and Tripadvisor currently return an explicit deferred result for
+dynamic capability refresh. Select providers explicitly to avoid unnecessary
+browser visits; the default maintenance pair is ChatGPT and Microsoft 365.
+
+```bash
+cdp workflow agent auth refresh --provider claude,gemini,grok --json
+cdp workflow agent capabilities refresh --provider gemini,grok --json
+```
+
 For headed providers, `cdp --browser-mode headed pages --json` returning open
 tabs proves that the selected headed runtime is reachable. Each ask then opens
 one fresh tab, verifies the live composer, applies any requested mode/model,

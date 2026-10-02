@@ -1071,11 +1071,7 @@ func TestStartManagedChromeReportsImmediateExitWithBoundedStderr(t *testing.T) {
 	chromePath := filepath.Join(t.TempDir(), "fake-chrome")
 	script := `#!/usr/bin/env sh
 printf 'synthetic launch failure\nsecond line\tvalue\n' >&2
-i=0
-while [ "$i" -lt 7000 ]; do
-  printf x >&2
-  i=$((i + 1))
-done
+printf '` + strings.Repeat("x", 7000) + `' >&2
 exit 23
 `
 	if err := os.WriteFile(chromePath, []byte(script), 0o755); err != nil {

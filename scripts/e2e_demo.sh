@@ -868,14 +868,17 @@ suggestion_probe="$(date +%s%N)"
   | jq -e '.ok == true and .workflow.name == "submit-search" and .workflow.wait_requested == true and .workflow.verified == true and .fill.filled == true and .fill.verified == true and .verification.kind == "load-state" and .verification.state == "domcontentloaded" and (.verification.ready_state == "interactive" or .verification.ready_state == "complete") and .verification.matched == true' >/dev/null
 idle_probe="$(date +%s%N)"
 wait_idle_output="$state_dir/wait-network-idle.json"
-"$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output" &
-wait_idle_pid=$!
-sleep 0.05
-"$binary" eval "fetch('$app_url/api/ok?wait_idle=$idle_probe').then(r => r.status)" --state-dir "$state_dir/cdp-state" --await-promise --json \
+# Keep traffic active while the observer attaches, then let it become idle.
+# Consume each body so Chrome emits the complete request lifecycle.
+"$binary" eval "(() => { const request = () => fetch('$app_url/api/ok?wait_idle=$idle_probe').then(async r => { await r.arrayBuffer(); return r.status; }); const timer = setInterval(request, 100); setTimeout(() => clearInterval(timer), 2000); return request(); })()" --state-dir "$state_dir/cdp-state" --await-promise --json \
   | jq -e '.ok == true and .result.value == 200' >/dev/null
-wait "$wait_idle_pid"
+"$binary" wait network-idle --idle 500ms --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_idle_output"
 require_artifact "$wait_idle_output"
-jq -e '.ok == true and .wait.kind == "network-idle" and .wait.matched == true and .wait.idle == "500ms" and .wait.in_flight_count == 0 and .wait.request_count >= 1 and .wait.completed_count >= 1 and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and (.wait.warnings[] | contains("quiescence signal"))' "$wait_idle_output" >/dev/null
+jq -e '.ok == true and .wait.kind == "network-idle" and .wait.matched == true and .wait.idle == "500ms" and .wait.in_flight_count == 0 and .wait.request_count >= 1 and .wait.completed_count >= 1 and .wait.evidence.bounded == true and .wait.evidence.headers == false and .wait.evidence.bodies == false and (.wait.warnings[] | contains("quiescence signal"))' "$wait_idle_output" >/dev/null || {
+  echo "network-idle assertion failed; observed wait metadata:" >&2
+  jq '{ok, wait: (.wait | {kind, matched, idle, in_flight_count, request_count, completed_count, evidence, warnings})}' "$wait_idle_output" >&2
+  exit 1
+}
 wait_file_chooser_output="$state_dir/wait-file-chooser.json"
 "$binary" wait file-chooser --mode single --timeout 5s --state-dir "$state_dir/cdp-state" --json >"$wait_file_chooser_output" &
 wait_file_chooser_pid=$!
