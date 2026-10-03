@@ -332,19 +332,17 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 			action = actionEvidence(lease.Record())
 
 			detailAttempts := 0
+			var completion answerCompletion
+			terminal := false
 			for {
 				detailAttempts++
-				_ = observeConversationDetail(
-					ctx,
-					session,
-					conversationID,
-					&observation,
-				)
-				if observation.RouteMatches &&
-					observation.ConversationID == conversationID &&
-					observation.AnswerCount > 0 &&
-					strings.TrimSpace(observation.Text) != "" &&
-					!observation.Streaming {
+				next := detailObservation{}
+				err := observeConversationDetail(ctx, session, conversationID, &next)
+				if err == nil {
+					observation = next
+				}
+				terminal = completion.observe(next, conversationID, err)
+				if terminal {
 					break
 				}
 				remaining := time.Until(deadline)
@@ -356,6 +354,8 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 			data.ReadMode = "headed_browser"
 			data.Metadata["source"] = "headed-cdp-visible-submit-rendered-answer"
 			data.Metadata["answer_count"] = observation.AnswerCount
+			data.Metadata["completion_controls_ready"] = observation.CompletionReady
+			data.Metadata["completion_confirmed"] = terminal
 			var promptCapture promptCaptureObservation
 			captureErr := captureExactRenderedPrompt(ctx, session, &promptCapture)
 			data.Metadata["prompt_query_count"] = promptCapture.QueryCount
@@ -398,11 +398,7 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 					},
 				)
 			}
-			terminal := observation.RouteMatches &&
-				observation.ConversationID == conversationID &&
-				observation.AnswerCount > 0 &&
-				strings.TrimSpace(observation.Text) != "" &&
-				!observation.Streaming
+
 			if terminal {
 				data.Text = strings.TrimSpace(observation.Text)
 				data.CompletionState = "terminal"
@@ -529,27 +525,7 @@ func observeAskState(
 	session *cdp.PageSession,
 	observation *detailObservation,
 ) error {
-	return evaluateInto(ctx, session, `(() => {
-	  const match = location.pathname.match(/^\/app\/([A-Za-z0-9_-]{16})$/);
-	  const answers = Array.from(
-	    document.querySelectorAll('model-response message-content')
-	  ).map(element =>
-	    (element.innerText || element.textContent || '').trim()
-	  ).filter(Boolean);
-	  const streaming = Array.from(document.querySelectorAll('button')).some(button => {
-	    const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
-	    return /stop/i.test(button.getAttribute('aria-label') || '') &&
-	      rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
-	      style.visibility !== 'hidden' && Number(style.opacity || '1') !== 0;
-	  });
-	  return {
-	    route_matches: location.origin === 'https://gemini.google.com' && Boolean(match),
-	    conversation_id: match ? match[1] : '',
-	    text: answers.at(-1) || '',
-	    is_streaming: streaming,
-	    answer_count: answers.length
-	  };
-	})()`, observation)
+	return observeConversationDetail(ctx, session, "", observation)
 }
 
 func askFailure(

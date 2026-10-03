@@ -97,11 +97,12 @@ type actionablePoint struct {
 }
 
 type detailObservation struct {
-	RouteMatches   bool   `json:"route_matches"`
-	ConversationID string `json:"conversation_id"`
-	Text           string `json:"text"`
-	Streaming      bool   `json:"is_streaming"`
-	AnswerCount    int    `json:"answer_count"`
+	RouteMatches    bool   `json:"route_matches"`
+	ConversationID  string `json:"conversation_id"`
+	Text            string `json:"text"`
+	Streaming       bool   `json:"is_streaming"`
+	AnswerCount     int    `json:"answer_count"`
+	CompletionReady bool   `json:"completion_ready"`
 }
 
 type promptCaptureObservation struct {
@@ -596,30 +597,28 @@ func readConversation(
 				)
 			}
 			var observation detailObservation
+			var completion answerCompletion
+			terminal := false
 			attempts, pollErr := pollUntil(
 				ctx,
 				config.Timeout,
 				config.PollInterval,
 				func() (bool, error) {
-					if err := observeConversationDetail(
-						ctx,
-						session,
-						conversationID,
-						&observation,
-					); err != nil {
-						return false, err
+					next := detailObservation{}
+					err := observeConversationDetail(ctx, session, conversationID, &next)
+					if err == nil {
+						observation = next
 					}
-					return observation.RouteMatches &&
-						observation.ConversationID == conversationID &&
-						observation.AnswerCount > 0 &&
-						strings.TrimSpace(observation.Text) != "" &&
-						!observation.Streaming, nil
+					terminal = completion.observe(next, conversationID, err)
+					return terminal, err
 				},
 			)
 			data.Metadata["detail_read_attempts"] = attempts
 			data.Metadata["source"] = "headed-cdp-rendered-detail"
 			data.Metadata["exact_route_ready"] = observation.RouteMatches
 			data.Metadata["answer_count"] = observation.AnswerCount
+			data.Metadata["completion_controls_ready"] = observation.CompletionReady
+			data.Metadata["completion_confirmed"] = terminal
 			if !observation.RouteMatches || observation.ConversationID != conversationID {
 				_ = lease.MarkIncomplete(context.Background())
 				return readFailure(
@@ -640,10 +639,7 @@ func readConversation(
 			data.Metadata["prompt_query_count"] = promptCapture.QueryCount
 			data.Metadata["prompt_copy_button_count"] = promptCapture.CopyButtonCount
 			data.Metadata["prompt_clipboard_intercepted"] = promptCapture.ClipboardIntercepted
-			terminal := pollErr == nil &&
-				observation.AnswerCount > 0 &&
-				strings.TrimSpace(observation.Text) != "" &&
-				!observation.Streaming
+			terminal = terminal && pollErr == nil
 			if terminal {
 				data.Text = strings.TrimSpace(observation.Text)
 				data.CompletionState = "terminal"
@@ -871,9 +867,17 @@ func observeConversationDetail(
 	conversationID string,
 	observation *detailObservation,
 ) error {
+	expression, err := conversationDetailExpression(conversationID)
+	if err != nil {
+		return err
+	}
+	return evaluateInto(ctx, session, expression, observation)
+}
+
+func conversationDetailExpression(conversationID string) (string, error) {
 	idJSON, err := json.Marshal(conversationID)
 	if err != nil {
-		return fmt.Errorf("encode Gemini conversation id")
+		return "", fmt.Errorf("encode Gemini conversation id")
 	}
 	expression := fmt.Sprintf(`(() => {
 	  const expected = %s;
@@ -889,16 +893,27 @@ func observeConversationDetail(
 	      rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
 	      style.visibility !== 'hidden' && Number(style.opacity || '1') !== 0;
 	  });
+	  const response = Array.from(document.querySelectorAll('model-response')).at(-1);
+	  const content = response?.querySelector('message-content');
+	  const busy = Array.from(content?.querySelectorAll('[aria-busy]') || []);
+	  const copyButtons = Array.from(response?.querySelectorAll('button') || []).filter(button => {
+	    const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
+	    return button.getAttribute('aria-label') === 'Copy' && !button.disabled &&
+	      button.getAttribute('aria-disabled') !== 'true' && rect.width > 0 && rect.height > 0 &&
+	      style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') !== 0;
+	  });
 	  return {
 	    route_matches: location.origin === 'https://gemini.google.com' &&
-	      Boolean(match) && match[1] === expected,
+	      Boolean(match) && (expected === '' || match[1] === expected),
 	    conversation_id: match ? match[1] : '',
-	    text: answers.at(-1) || '',
+	    text: (content?.innerText || content?.textContent || '').trim(),
 	    is_streaming: streaming,
+	    completion_ready: !streaming && busy.length > 0 &&
+	      busy.every(element => element.getAttribute('aria-busy') === 'false') && copyButtons.length === 1,
 	    answer_count: answers.length
 	  };
 	})()`, idJSON)
-	return evaluateInto(ctx, session, expression, observation)
+	return expression, nil
 }
 
 func exactCapturedPromptFingerprint(observation *promptCaptureObservation) string {

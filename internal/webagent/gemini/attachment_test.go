@@ -97,7 +97,7 @@ func TestAskAttachmentBatchAndFailureBeforeSend(t *testing.T) {
 				case strings.Contains(expression, "navigator.clipboard"):
 					return map[string]any{"prompt": prompt, "query_count": 1, "copy_button_count": 1, "clipboard_intercepted": true, "captured": true}, nil
 				case strings.Contains(expression, "conversation_id"):
-					return map[string]any{"route_matches": true, "conversation_id": "abcdefghijklmnop", "text": "Synthetic answer", "is_streaming": false, "answer_count": 1}, nil
+					return map[string]any{"route_matches": true, "conversation_id": "abcdefghijklmnop", "text": "Synthetic answer", "is_streaming": false, "completion_ready": true, "answer_count": 1}, nil
 				default:
 					return map[string]any{}, nil
 				}

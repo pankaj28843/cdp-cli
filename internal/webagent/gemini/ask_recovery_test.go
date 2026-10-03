@@ -47,11 +47,12 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 				return map[string]any{}, nil
 			}
 			return map[string]any{
-				"route_matches":   true,
-				"conversation_id": conversationID,
-				"text":            "Gemini terminal answer",
-				"is_streaming":    false,
-				"answer_count":    1,
+				"route_matches":    true,
+				"conversation_id":  conversationID,
+				"text":             "Gemini terminal answer",
+				"is_streaming":     false,
+				"completion_ready": true,
+				"answer_count":     1,
 			}, nil
 		default:
 			return map[string]any{}, nil

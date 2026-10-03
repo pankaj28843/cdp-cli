@@ -77,7 +77,8 @@ e2e-demo-installed:
 		exit 2; \
 	fi; \
 	bash scripts/e2e_demo.sh "$$cdp_bin" && \
-	CDP_GROK_COMPOSER_INSTALLED_BINARY="$$cdp_bin" go test ./internal/webagent/grok -run '^TestGrokComposerInstalled$$' -count=1
+	CDP_GROK_COMPOSER_INSTALLED_BINARY="$$cdp_bin" go test ./internal/webagent/grok -run '^TestGrokComposerInstalled$$' -count=1 && \
+	CDP_GEMINI_COMPLETION_INSTALLED_BINARY="$$cdp_bin" go test ./internal/webagent/gemini -run '^TestGeminiCompletionInstalled$$' -count=1
 
 e2e-transcription-live-installed:
 	@cdp_bin="$$(command -v cdp)"; \

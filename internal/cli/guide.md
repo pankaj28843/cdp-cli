@@ -702,3 +702,5 @@ ChatGPT conversation await also honors the rate-limit retry time, including its
 five-minute estimate when the provider omits a usable retry header. If the retry
 time is beyond the command deadline, await returns the rate-limit error without
 issuing another read. It does not shorten that cooldown to fit the deadline.
+
+Gemini Ask, detail, and await certify terminal text only after the last answer exposes idle content and an enabled Copy control, and two consecutive exact snapshots agree. Growing, unconfirmed, or interrupted readback stays incomplete with the same conversation locator; use its returned await command rather than sending the prompt again.

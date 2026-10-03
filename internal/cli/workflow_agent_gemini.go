@@ -199,7 +199,7 @@ func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 		Short: "Submit one exact visible Gemini request",
 		Long: "Open one fresh headed tab, verify the visible mode, submit the exact prompt with one Send, read the rendered answer, " +
 			"preserve the observed conversation ID, and close only that tab. " +
-			"Repeat --file to upload current accepted document or code files in one batch and verify processing before Send. Use --mode with the current picker label (for example Flash or Pro); unavailable or unverified selection stops before Send.",
+			"Terminal readback requires idle answer content, a ready Copy control, and consecutive matching snapshots; otherwise use the retained conversation to await completion. Repeat --file to upload current accepted document or code files in one batch and verify processing before Send. Use --mode with the current picker label (for example Flash or Pro); unavailable or unverified selection stops before Send.",
 		Example: "  cdp workflow agent gemini ask 'Review this design.' --mode Flash --json\n" +
 			"  cdp workflow agent gemini ask 'Review the attached code.' --file ./main.go --json\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent gemini ask --stdin --json",

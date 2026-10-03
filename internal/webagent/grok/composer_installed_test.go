@@ -1,16 +1,14 @@
 package grok
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/pankaj28843/cdp-cli/internal/testsupport"
 )
 
 // This opt-in gate runs the production JavaScript through installed cdp and an
@@ -35,64 +33,8 @@ func TestGrokComposerInstalled(t *testing.T) {
 	if len(observer) != 2 || len(selection) != 2 {
 		t.Fatal("production composer script extraction contract changed")
 	}
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"browser":{"resource_budget":{"min_free_memory_mb":1,"min_free_disk_mb":1,"max_load_per_cpu":999999}}}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	base := []string{"--config", configPath, "--state-dir", filepath.Join(dir, "state"), "--browser-mode", "headless"}
-	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "CDP_") {
-			env = append(env, entry)
-		}
-	}
-	call := func(args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, binary, append(append(append([]string{}, base...), args...), "--timeout", "45s", "--json")...)
-		cmd.Env = env
-		return cmd.CombinedOutput()
-	}
-	mustCall := func(tb testing.TB, args ...string) []byte {
-		tb.Helper()
-		output, err := call(args...)
-		if err != nil {
-			tb.Fatalf("synthetic composer command %s: %v: %s", args[0], err, output)
-		}
-		return output
-	}
-	t.Cleanup(func() {
-		if output, err := call("daemon", "stop", "--force-managed"); err != nil {
-			t.Errorf("stop owned synthetic browser: %v: %s", err, output)
-		}
-	})
-	mustCall(t, "daemon", "keepalive", "--repair")
-	var opened struct {
-		Page struct {
-			ID string `json:"id"`
-		} `json:"page"`
-	}
-	if err := json.Unmarshal(mustCall(t, "open", "data:text/html,<html><body></body></html>", "--created-by", "grok-composer-fixture"), &opened); err != nil || opened.Page.ID == "" {
-		t.Fatalf("open synthetic page: %v", err)
-	}
-	t.Cleanup(func() { mustCall(t, "page", "close", "--target", opened.Page.ID) })
-	evaluate := func(tb testing.TB, expression string, value any) {
-		tb.Helper()
-		var result struct {
-			Result struct {
-				Value json.RawMessage `json:"value"`
-			} `json:"result"`
-		}
-		if err := json.Unmarshal(mustCall(tb, "eval", expression, "--target", opened.Page.ID), &result); err != nil {
-			tb.Fatal(err)
-		}
-		if value != nil {
-			if err := json.Unmarshal(result.Result.Value, value); err != nil {
-				tb.Fatal(err)
-			}
-		}
-	}
+	browser := testsupport.NewInstalledBrowser(t, binary)
+	evaluate := browser.Eval
 	const textarea = `<textarea aria-label="Ask Grok anything" style="width:400px;height:60px">old text</textarea>`
 	const editable = `<div contenteditable="true" role="textbox" aria-label="Ask Grok anything" style="width:400px;min-height:60px">old text</div>`
 	const transition = `document.querySelector('textarea').addEventListener('input', e => {const next=document.createElement('div'); next.contentEditable='true'; next.setAttribute('role','textbox'); next.setAttribute('aria-label','Ask Grok anything'); next.style.cssText='width:400px;min-height:60px'; next.innerText=e.target.value; e.target.replaceWith(next); next.focus();});`
@@ -124,8 +66,7 @@ func TestGrokComposerInstalled(t *testing.T) {
 			}
 			const prompt = "Καλημέρα 🌍\nReplacement üñicode"
 			if selected.OK {
-				params, _ := json.Marshal(map[string]string{"text": prompt})
-				mustCall(t, "protocol", "exec", "Input.insertText", string(params), "--target", opened.Page.ID)
+				browser.InsertText(t, prompt)
 			}
 			promptJSON, _ := json.Marshal(prompt)
 			var observed struct {
