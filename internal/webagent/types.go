@@ -129,7 +129,15 @@ type TargetEvidence struct {
 	Closed    bool   `json:"closed"`
 }
 
+type ReadCacheEvidence struct {
+	CapturedAt  string `json:"captured_at"`
+	AgeMS       int64  `json:"age_ms"`
+	TTLSeconds  int    `json:"ttl_seconds"`
+	SourceRunID string `json:"source_run_id"`
+}
+
 type Evidence struct {
+	Cache            *ReadCacheEvidence        `json:"cache,omitempty"`
 	RunID            string                    `json:"run_id"`
 	BuildCommit      string                    `json:"build_commit"`
 	BrowserMode      string                    `json:"browser_mode"`

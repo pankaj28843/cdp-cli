@@ -271,6 +271,7 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "browser_mode", Type: "string", Required: true, Description: "none, headed, or headless."},
 				{Name: "read_mode", Type: "string", Required: true, Description: "Provider-specific read path such as local_metadata or rendered_same_target."},
 				{Name: "target", Type: "webagent_target", Required: false, Description: "Exact target/session evidence when browser work occurred."},
+				{Name: "cache", Type: "object", Required: false, Description: "Shared conversation cache hit: captured_at (UTC), age_ms (<30000), ttl_seconds (30), source_run_id. read_mode=cache and no browser target for this invocation."},
 			},
 		},
 		"webagent-operation-failure": {

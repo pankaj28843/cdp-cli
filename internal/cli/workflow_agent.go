@@ -36,7 +36,9 @@ func (a *app) newWorkflowAgentCommand() *cobra.Command {
 	cmd.AddCommand(a.newWorkflowAgentAggregateAuthCommand())
 	cmd.AddCommand(a.newWorkflowAgentAggregateCapabilitiesCommand())
 	for _, provider := range webagent.Providers() {
-		cmd.AddCommand(a.newWorkflowAgentProviderCommand(provider))
+		providerCommand := a.newWorkflowAgentProviderCommand(provider)
+		a.configureConversationCache(providerCommand, provider)
+		cmd.AddCommand(providerCommand)
 	}
 	return cmd
 }
@@ -792,6 +794,7 @@ func (a *app) renderWebAgentResult(ctx context.Context, human string, result web
 			[]string{"cdp schema webagent-operation --json"},
 		)
 	}
+	captureConversationRead(ctx, human, result)
 	if err := a.render(ctx, human, result); err != nil {
 		return err
 	}

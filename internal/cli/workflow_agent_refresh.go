@@ -276,6 +276,30 @@ func (a *app) refreshAggregateProvider(
 	provider webagent.Provider,
 	operation webagent.Operation,
 ) webagent.Result {
+	if operation == webagent.OperationAuthRefresh {
+		cacheFailure := func(message string) webagent.Result {
+			result := webagent.NewMetadataResult(provider, operation, map[string]any{}, a.build.Commit, nil)
+			result.OK = false
+			result.State = webagent.StateFailed
+			result.Error = &webagent.OperationError{Code: "conversation_cache_unavailable", ErrClass: "internal", Message: message, RetrySafe: true}
+			return result
+		}
+		store, err := a.stateStore()
+		if err != nil {
+			result := cacheFailure("provider state is unavailable")
+			result.Error.Code = string(provider) + "_state_unavailable"
+			return result
+		}
+		marker := conversationCacheGenerationPath(store.Dir, provider)
+		if err := invalidateConversationCache(marker); err != nil {
+			return cacheFailure("conversation cache invalidation failed")
+		}
+		defer func() {
+			if err := invalidateConversationCache(marker); err != nil {
+				fmt.Fprintln(a.err, "warning: conversation cache invalidation failed; use --fresh for reads")
+			}
+		}()
+	}
 	if provider == webagent.ProviderChatGPT {
 		config, store, unavailable := a.chatgptBrowserOperationConfig(ctx, operation)
 		if unavailable != nil {

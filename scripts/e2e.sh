@@ -398,6 +398,14 @@ grep -q -- '--provider gemini,grok' <<<"$aggregate_capabilities_help"
 "$binary" schema chatgpt-ask --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("input_attachments")) and (.schema.description | contains("one batch"))' >/dev/null
 "$binary" workflow agent chatgpt ask --help | grep -Fq -- '--file mobile.png --file desktop.png --file contract.md'
 "$binary" schema webagent-capabilities --json | jq -e '.ok == true and .schema.name == "webagent-capabilities" and (.schema.fields | map(.name) | index("operations"))' >/dev/null
+# Shared read cache is discoverable for every conversation provider; await stays fresh.
+for provider in chatgpt claude gemini grok perplexity tripadvisor; do
+  for operation in list detail; do
+    "$binary" describe --command "workflow agent $provider conversations $operation" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "fresh" and .type == "bool"))' >/dev/null
+  done
+  "$binary" describe --command "workflow agent $provider conversations await" --json | jq -e '.ok == true and ([(.commands.flags // [])[] | select(.name == "fresh")] | length == 0)' >/dev/null
+done
+"$binary" schema webagent-evidence --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("cache"))' >/dev/null
 "$binary" schema webagent-evidence --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("operation_failure"))' >/dev/null
 "$binary" schema webagent-operation-failure --json | jq -e '.ok == true and (.schema.fields | map(.name) | sort) == ["code", "err_class", "stage"]' >/dev/null
 "$binary" schema webagent-cleanup --json | jq -e '.ok == true and .schema.name == "webagent-cleanup" and (.schema.fields[] | select(.name == "identity_omitted" and .type == "boolean" and (.description | contains("privacy-safe") and contains("lifecycle state"))))' >/dev/null

@@ -668,3 +668,22 @@ Use passive diagnostics while unattended:
 cdp --browser-mode headed daemon status --json
 cdp --browser-mode headed daemon keepalive --auto-connect --probe passive --json
 ```
+
+### Provider conversation read cache
+
+`workflow agent <provider> conversations list` and `detail` share an owner-only
+disk cache across CLI processes. Successful lists and completed details expire
+30 seconds after capture. Identical concurrent reads share one provider call.
+Pagination, conversation identity, provider auth state, runtime/configuration,
+and build identity select separate cache entries. Ask, research, continue,
+delete, and auth refresh invalidate that provider's entries, including uncertain
+failures. `await` and internal terminal polling always read fresh.
+
+Use `conversations list --fresh` or `conversations detail <id> --fresh` to force
+a provider read. A failed fresh read removes the previous cached success. Hits
+report `evidence.read_mode=cache` and `evidence.cache` with `captured_at`, `age_ms`,
+`ttl_seconds=30`, and `source_run_id`; this invocation opens no browser target.
+Caches contain private conversation content, are restricted to the owner, and
+are bounded to 64 entries/16 MiB per provider. Expired entries are pruned on the
+next read. This reduces duplicate calls; new queries and explicit fresh reads
+still consume provider capacity.

@@ -192,6 +192,23 @@ func (a ActionEvidence) Validate() error {
 }
 
 func (e Evidence) Validate() error {
+	if e.Cache != nil {
+		if e.ReadMode != "cache" || e.Target != nil || e.Cache.TTLSeconds != 30 || e.Cache.AgeMS < 0 || e.Cache.AgeMS >= 30000 {
+			return fmt.Errorf("invalid conversation cache evidence")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, e.Cache.CapturedAt); err != nil {
+			return fmt.Errorf("invalid cache captured_at")
+		}
+		if strings.TrimSpace(e.Cache.SourceRunID) == "" {
+			return fmt.Errorf("cache source_run_id is required")
+		}
+		if err := validateSafeString("evidence.cache.source_run_id", e.Cache.SourceRunID, 512); err != nil {
+			return err
+		}
+	} else if e.ReadMode == "cache" {
+		return fmt.Errorf("cache read_mode requires cache evidence")
+	}
+
 	if failure := e.OperationFailure; failure != nil {
 		if !validStage(failure.Stage) {
 			return fmt.Errorf("invalid operation failure stage %q", failure.Stage)
