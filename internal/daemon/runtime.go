@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -1686,12 +1687,26 @@ func writeRPCResponse(ctx context.Context, conn net.Conn, response RPCResponse) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Serialization can exceed the stalled-reader budget for large artifacts.
+	// Start that budget only when the complete response is ready to write.
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("encode daemon rpc response: %w", err)
+	}
+	encoded = append(encoded, '\n')
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	writeCtx, cancel := context.WithTimeout(ctx, rpcResponseWriteTimeout)
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
-		done <- json.NewEncoder(conn).Encode(response)
+		n, err := conn.Write(encoded)
+		if err == nil && n != len(encoded) {
+			err = io.ErrShortWrite
+		}
+		done <- err
 	}()
 	select {
 	case err := <-done:
