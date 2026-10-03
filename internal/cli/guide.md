@@ -680,10 +680,25 @@ delete, and auth refresh invalidate that provider's entries, including uncertain
 failures. `await` and internal terminal polling always read fresh.
 
 Use `conversations list --fresh` or `conversations detail <id> --fresh` to force
-a provider read. A failed fresh read removes the previous cached success. Hits
+a provider read outside a rate-limit cooldown. A failed fresh read removes the
+previous cached success. Hits
 report `evidence.read_mode=cache` and `evidence.cache` with `captured_at`, `age_ms`,
 `ttl_seconds=30`, and `source_run_id`; this invocation opens no browser target.
 Caches contain private conversation content, are restricted to the owner, and
 are bounded to 64 entries/16 MiB per provider. Expired entries are pruned on the
 next read. This reduces duplicate calls; new queries and explicit fresh reads
 still consume provider capacity.
+
+Conversation list/detail rate-limit errors impose a shared cooldown in the same
+provider/auth/profile/configuration scope. A future provider `retry_at` is
+honored; otherwise the cooldown lasts 30 seconds. During that window, including
+with `--fresh`, another cache miss returns the typed error with `retry_at` and
+`evidence.read_mode=rate_limit_cooldown` without requesting the provider. Existing
+valid success hits can still be served. Content mutations do not bypass the
+cooldown; other errors are not reused. This suppresses repeated requests after
+a rate limit, but cannot guarantee provider quota availability.
+
+ChatGPT conversation await also honors the rate-limit retry time, including its
+five-minute estimate when the provider omits a usable retry header. If the retry
+time is beyond the command deadline, await returns the rate-limit error without
+issuing another read. It does not shorten that cooldown to fit the deadline.

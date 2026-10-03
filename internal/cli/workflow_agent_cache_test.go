@@ -280,10 +280,16 @@ func TestConversationCacheProcessHelper(t *testing.T) {
 		fmt.Fprintln(f, "read")
 		f.Close()
 		time.Sleep(100 * time.Millisecond)
-		return cacheFixtureResult(webagent.OperationConversationsList)
+		r := cacheFixtureResult(webagent.OperationConversationsList)
+		if os.Getenv("CDP_CACHE_TEST_RATE_LIMIT") == "1" {
+			r.OK = false
+			r.State = webagent.StateFailed
+			r.Error = &webagent.OperationError{Code: "chatgpt_rate_limited", ErrClass: "rate_limit", Message: "synthetic rate limit", RetrySafe: true}
+		}
+		return r
 	}, nil)
-	if err != nil {
-		t.Fatal(err)
+	if (err != nil) != (os.Getenv("CDP_CACHE_TEST_RATE_LIMIT") == "1") {
+		t.Fatalf("rate-limit exit mismatch: %v", err)
 	}
 }
 func TestConversationCacheOldReadCannotSurviveMutation(t *testing.T) {
@@ -405,6 +411,38 @@ func TestConversationCacheInstalled(t *testing.T) {
 			}
 		}
 	}
+	// A synthetic 429 must block both installed commands, including --fresh.
+	provider := webagent.ProviderChatGPT
+	scope, err := a.conversationCacheScope(root, provider, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := cacheFixtureResult(webagent.OperationConversationsList)
+	limited.OK = false
+	limited.State = webagent.StateFailed
+	limited.Error = &webagent.OperationError{Code: "chatgpt_rate_limited", ErrClass: "rate_limit", Message: "synthetic rate limit", RetrySafe: true, RetryAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}
+	entries := map[string]conversationCacheEntry{"cooldown:" + scope: {CapturedAt: time.Now().UTC(), Result: limited}}
+	if err := saveConversationCache(filepath.Join(dir, "webagent/read-cache/chatgpt.json"), entries); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"list", "detail"} {
+		args := []string{"--config", filepath.Join(dir, "config.json"), "--state-dir", dir, "--browser-mode", "headed", "workflow", "agent", "chatgpt", "conversations", operation}
+		if operation == "detail" {
+			args = append(args, "synthetic-conversation")
+		}
+		args = append(args, "--fresh", "--json")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		output, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
+		cancel()
+		var got webagent.Result
+		if parseErr := json.Unmarshal(output, &got); parseErr != nil {
+			t.Fatalf("installed cooldown: %v %s", parseErr, output)
+		}
+		if err == nil || got.OK || got.Error == nil || got.Error.Code != "chatgpt_rate_limited" || got.Evidence.ReadMode != "rate_limit_cooldown" || got.Evidence.Target != nil || got.Cleanup.State != webagent.CleanupNotRequired {
+			t.Fatalf("installed %s cooldown: err=%v result=%+v", operation, err, got)
+		}
+	}
+
 	// Policy enforcement must run before a cached result can bypass the provider.
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"agents":{"disabled_providers":["chatgpt"]}}`), 0600); err != nil {
 		t.Fatal(err)
@@ -412,5 +450,141 @@ func TestConversationCacheInstalled(t *testing.T) {
 	output, err := exec.Command(binary, "--config", filepath.Join(dir, "config.json"), "--state-dir", dir, "workflow", "agent", "chatgpt", "conversations", "list", "--json").CombinedOutput()
 	if err == nil || !bytes.Contains(output, []byte("disabled_by_config")) {
 		t.Fatal("cache bypassed disabled provider policy")
+	}
+}
+
+func TestConversationCacheSharesRateLimitCooldown(t *testing.T) {
+	dir := cacheFixtureDir(t)
+	calls := 0
+	read := func() webagent.Result {
+		calls++
+		r := cacheFixtureResult(webagent.OperationConversationsList)
+		r.OK = false
+		r.State = webagent.StateFailed
+		r.Error = &webagent.OperationError{Code: "chatgpt_rate_limited", ErrClass: "rate_limit", Message: "provider rate limited", RetrySafe: true}
+		return r
+	}
+	if _, err := cacheFixture(t, dir, "list", nil, read, nil); err == nil {
+		t.Fatal("first rate limit lost")
+	}
+	for _, command := range []string{"list", "detail"} {
+		args := []string{"--fresh"}
+		if command == "detail" {
+			args = append(args, "synthetic-conversation")
+		}
+		got, err := cacheFixture(t, dir, command, args, read, nil)
+		if err == nil || got.OK || got.Error == nil || got.Error.RetryAt == "" || got.Evidence.ReadMode != "rate_limit_cooldown" {
+			t.Fatalf("%s cooldown result=%+v err=%v", command, got, err)
+		}
+		if command == "detail" && got.Operation != webagent.OperationConversationsDetail {
+			t.Fatal("cooldown retained list operation")
+		}
+		if got.Evidence.Target != nil || got.Action != nil || got.Cleanup.State != webagent.CleanupNotRequired {
+			t.Fatal("cooldown retained browser/action evidence")
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls=%d want 1", calls)
+	}
+}
+
+func TestConversationCooldownConcurrentProcesses(t *testing.T) {
+	dir := cacheFixtureDir(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestConversationCacheProcessHelper$")
+			cmd.Env = append(os.Environ(), "CDP_CACHE_TEST_DIR="+dir, "CDP_CACHE_TEST_RATE_LIMIT=1")
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("child: %v %s", err, b)
+			}
+		}()
+	}
+	wg.Wait()
+	b, err := os.ReadFile(filepath.Join(dir, "provider-calls"))
+	if err != nil || string(b) != "read\n" {
+		t.Fatalf("provider calls=%q err=%v", b, err)
+	}
+}
+
+func TestConversationCooldownExpiryAndScope(t *testing.T) {
+	dir := cacheFixtureDir(t)
+	calls := 0
+	retryAt := time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339Nano)
+	read := func() webagent.Result {
+		calls++
+		r := cacheFixtureResult(webagent.OperationConversationsList)
+		r.OK = false
+		r.State = webagent.StateFailed
+		r.Error = &webagent.OperationError{Code: "chatgpt_rate_limited", ErrClass: "rate_limit", Message: "synthetic rate limit", RetrySafe: true, RetryAt: retryAt}
+		return r
+	}
+	_, _ = cacheFixture(t, dir, "list", nil, read, nil)
+	if _, err := cacheFixture(t, dir, "ask", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := cacheFixture(t, dir, "list", nil, read, nil)
+	if calls != 1 || got.Error == nil || got.Error.RetryAt != retryAt {
+		t.Fatal("mutation bypassed cooldown or Retry-After changed")
+	}
+	path := filepath.Join(dir, "webagent/read-cache/chatgpt.json")
+	entries := loadConversationCache(path)
+	for key, entry := range entries {
+		if strings.HasPrefix(key, "cooldown:") {
+			entry.Result.Error.RetryAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+			entries[key] = entry
+		}
+	}
+	if err := saveConversationCache(path, entries); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = cacheFixture(t, dir, "list", nil, read, nil)
+	if calls != 2 {
+		t.Fatal("expired cooldown blocked provider")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"browser":{"mode":"headed"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = cacheFixture(t, dir, "list", nil, read, nil)
+	if calls != 3 {
+		t.Fatal("different configuration reused cooldown")
+	}
+}
+
+func TestConversationCacheAfterReadRefreshesTemplate(t *testing.T) {
+	for _, rateLimited := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rate_limited=%v", rateLimited), func(t *testing.T) {
+			dir := cacheFixtureDir(t)
+			calls := 0
+			read := func() webagent.Result {
+				calls++
+				providerDir := filepath.Join(dir, "webagent/chatgpt")
+				if err := os.MkdirAll(providerDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(providerDir, "request-template.json"), []byte(`{"captured_at":"synthetic-new-read-evidence"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				r := cacheFixtureResult(webagent.OperationConversationsList)
+				if rateLimited {
+					r.OK, r.State = false, webagent.StateFailed
+					r.Error = &webagent.OperationError{Code: "chatgpt_rate_limited", ErrClass: "rate_limit", Message: "synthetic rate limit", RetrySafe: true, RetryAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}
+				}
+				return r
+			}
+			if _, err := cacheFixture(t, dir, "list", nil, read, nil); (err != nil) != rateLimited {
+				t.Fatalf("first read error=%v", err)
+			}
+			command, args, mode := "list", []string(nil), "cache"
+			if rateLimited {
+				command, args, mode = "detail", []string{"synthetic", "--fresh"}, "rate_limit_cooldown"
+			}
+			got, err := cacheFixture(t, dir, command, args, read, nil)
+			if (err != nil) != rateLimited || calls != 1 || got.Evidence.ReadMode != mode {
+				t.Fatalf("calls=%d mode=%s err=%v; refresh during first read must preserve cache/cooldown", calls, got.Evidence.ReadMode, err)
+			}
+		})
 	}
 }

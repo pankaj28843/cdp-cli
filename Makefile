@@ -76,7 +76,8 @@ e2e-demo-installed:
 		echo "cdp binary at $$cdp_bin is not executable" >&2; \
 		exit 2; \
 	fi; \
-	bash scripts/e2e_demo.sh "$$cdp_bin"
+	bash scripts/e2e_demo.sh "$$cdp_bin" && \
+	CDP_GROK_COMPOSER_INSTALLED_BINARY="$$cdp_bin" go test ./internal/webagent/grok -run '^TestGrokComposerInstalled$$' -count=1
 
 e2e-transcription-live-installed:
 	@cdp_bin="$$(command -v cdp)"; \

@@ -2447,13 +2447,7 @@ func collectPageSnapshot(ctx context.Context, session *cdp.PageSession, selector
 	}
 	result, err := session.Evaluate(ctx, snapshotExpression(selector, limit, minChars), true)
 	if err != nil {
-		return pageSnapshot{}, commandError(
-			"connection_failed",
-			"connection",
-			fmt.Sprintf("snapshot target %s: %v", session.TargetID, err),
-			ExitConnection,
-			[]string{"cdp pages --json", "cdp doctor --json"},
-		)
+		return pageSnapshot{}, snapshotEvaluationError(session.TargetID, err)
 	}
 	if result.Exception != nil {
 		return pageSnapshot{}, commandError(
@@ -2484,6 +2478,19 @@ func collectPageSnapshot(ctx context.Context, session *cdp.PageSession, selector
 		)
 	}
 	return snapshot, nil
+}
+
+func snapshotEvaluationError(targetID string, err error) error {
+	code, class, exit := "connection_failed", "connection", ExitConnection
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		code, class, exit = "timeout", "timeout", ExitTimeout
+	}
+	return &CommandError{
+		Code: code, Class: class, ExitCode: exit,
+		Message:             fmt.Sprintf("snapshot target %s: %v", targetID, err),
+		RemediationCommands: []string{"cdp pages --json", "cdp doctor --json"},
+		Err:                 err,
+	}
 }
 
 func collectExtractionDiagnostics(ctx context.Context, session *cdp.PageSession, selector string) extractionDiagnostics {

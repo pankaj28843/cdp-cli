@@ -27,10 +27,11 @@ type conversationCacheEntry struct {
 	Result     webagent.Result `json:"result"`
 }
 type conversationCacheCapture struct {
-	path, key, generation string
-	provider              webagent.Provider
-	operation             webagent.Operation
-	entries               map[string]conversationCacheEntry
+	path, generation string
+	keys             func() (string, string, error)
+	provider         webagent.Provider
+	operation        webagent.Operation
+	entries          map[string]conversationCacheEntry
 }
 type conversationCacheContextKey struct{}
 
@@ -72,15 +73,11 @@ func (a *app) configureConversationCache(cmd *cobra.Command, provider webagent.P
 	if cmd.Long == "" {
 		cmd.Long = cmd.Short
 	}
-	cmd.Long += "\nSuccessful lists and completed details are cached for 30 seconds across CLI invocations. Use --fresh to force a provider read; await always polls fresh."
+	cmd.Long += "\nSuccessful lists and completed details are cached for 30 seconds across CLI invocations. Use --fresh to force a provider read; await always polls fresh. Provider rate limits impose a shared cooldown on list/detail, including --fresh."
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := a.commandContextWithDefault(cmd, 45*time.Second)
 		defer cancel()
 		store, err := a.stateStore()
-		if err != nil {
-			return err
-		}
-		key, err := a.conversationCacheKey(cmd, args, provider, store.Dir)
 		if err != nil {
 			return err
 		}
@@ -93,6 +90,22 @@ func (a *app) configureConversationCache(cmd *cobra.Command, provider webagent.P
 			return fmt.Errorf("acquire conversation cache lock: %w", err)
 		}
 		defer lock.Release()
+		// Resolve after acquiring the lock: another reader may refresh auth while
+		// this invocation waits. Resolve again when capturing the result because
+		// this read itself may refresh the request template.
+		keys := func() (string, string, error) {
+			scope, err := a.conversationCacheScope(cmd, provider, store.Dir)
+			if err != nil {
+				return "", "", err
+			}
+			key, err := a.conversationCacheKey(cmd, args, provider, store.Dir)
+			return key, "cooldown:" + scope, err
+		}
+		key, cooldownKey, err := keys()
+		if err != nil {
+			return err
+		}
+
 		path := filepath.Join(store.Dir, "webagent", "read-cache", string(provider)+".json")
 		generation, err := readConversationCacheGeneration(conversationCacheGenerationPath(store.Dir, provider))
 		if err != nil {
@@ -112,10 +125,21 @@ func (a *app) configureConversationCache(cmd *cobra.Command, provider webagent.P
 			result.Action = nil
 			return a.renderWebAgentResult(ctx, entry.Human, result)
 		}
+		if entry, ok := entries[cooldownKey]; ok && entry.Result.Provider == provider && conversationCooldownValid(entry, now) {
+			failure := *entry.Result.Error
+			result := webagent.NewMetadataResult(provider, operation, map[string]any{
+				"cooldown": true, "source_run_id": entry.Result.Evidence.RunID,
+			}, a.build.Commit, nil)
+			result.OK = false
+			result.State = webagent.StateFailed
+			result.Error = &failure
+			result.Evidence.ReadMode = "rate_limit_cooldown"
+			return a.renderWebAgentResult(ctx, "conversation read: provider rate-limit cooldown until "+failure.RetryAt, result)
+		}
 		// --fresh must discard the old entry even if the new read fails.
 		delete(entries, key)
 		for k, entry := range entries {
-			if entry.Generation != generation || !conversationCacheValid(entry, now) {
+			if !conversationCooldownValid(entry, now) && (entry.Generation != generation || !conversationCacheValid(entry, now)) {
 				delete(entries, k)
 			}
 		}
@@ -125,7 +149,7 @@ func (a *app) configureConversationCache(cmd *cobra.Command, provider webagent.P
 		if err := saveConversationCache(path, entries); err != nil {
 			return err
 		}
-		capture := &conversationCacheCapture{path: path, key: key, generation: generation, entries: entries, provider: provider, operation: operation}
+		capture := &conversationCacheCapture{path: path, keys: keys, generation: generation, entries: entries, provider: provider, operation: operation}
 		old := cmd.Context()
 		cmd.SetContext(context.WithValue(ctx, conversationCacheContextKey{}, capture))
 		defer cmd.SetContext(old)
@@ -150,6 +174,17 @@ func conversationCacheValid(entry conversationCacheEntry, now time.Time) bool {
 	age := now.Sub(entry.CapturedAt)
 	return age >= 0 && age < conversationCacheTTL && entry.Result.Evidence.Cache == nil && entry.Result.Cleanup.State != webagent.CleanupFailed && entry.Result.Cleanup.State != webagent.CleanupPending && entry.Result.OK && (entry.Result.Operation == webagent.OperationConversationsList && entry.Result.State == webagent.StateReady || entry.Result.Operation == webagent.OperationConversationsDetail && entry.Result.State == webagent.StateTerminal) && entry.Result.Validate() == nil
 }
+
+// A cooldown is provider-scoped, survives content mutations, and never reports a
+// cached error as a successful conversation read.
+func conversationCooldownValid(entry conversationCacheEntry, now time.Time) bool {
+	if entry.Result.OK || entry.Result.Error == nil || entry.Result.Error.ErrClass != "rate_limit" || entry.Result.Validate() != nil || now.Before(entry.CapturedAt) {
+		return false
+	}
+	until, err := time.Parse(time.RFC3339Nano, entry.Result.Error.RetryAt)
+	return err == nil && now.Before(until)
+}
+
 func loadConversationCache(path string) map[string]conversationCacheEntry {
 	entries := make(map[string]conversationCacheEntry)
 	info, err := os.Lstat(path)
@@ -183,10 +218,29 @@ func captureConversationRead(ctx context.Context, human string, result webagent.
 		return
 	}
 	entry := conversationCacheEntry{CapturedAt: time.Now().UTC(), Generation: capture.generation, Human: human, Result: result}
-	if result.Provider != capture.provider || result.Operation != capture.operation || !conversationCacheValid(entry, entry.CapturedAt) {
+	if result.Provider != capture.provider || result.Operation != capture.operation {
 		return
 	}
-	capture.entries[capture.key] = entry
+	key, cooldownKey, err := capture.keys()
+	if err != nil {
+		return
+	}
+	if !result.OK && result.Error != nil && result.Error.ErrClass == "rate_limit" {
+		failure := *result.Error
+		until, err := time.Parse(time.RFC3339Nano, failure.RetryAt)
+		if err != nil || !until.After(entry.CapturedAt) {
+			until = entry.CapturedAt.Add(conversationCacheTTL)
+		}
+		failure.RetryAt = until.UTC().Format(time.RFC3339Nano)
+		entry.Result.Error = &failure
+		capture.entries[cooldownKey] = entry
+		_ = saveConversationCache(capture.path, capture.entries)
+		return
+	}
+	if !conversationCacheValid(entry, entry.CapturedAt) {
+		return
+	}
+	capture.entries[key] = entry
 	// A failed optional cache write must not turn a successful provider read into a retry.
 	_ = saveConversationCache(capture.path, capture.entries)
 }
@@ -200,11 +254,24 @@ func (a *app) conversationCacheKey(cmd *cobra.Command, args []string, provider w
 			flags[flag.Name] = flag.Value.String()
 		}
 	})
+	scope, err := a.conversationCacheScope(cmd, provider, root)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal([]any{scope, cmd.Name(), args, flags})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+func (a *app) conversationCacheScope(cmd *cobra.Command, provider webagent.Provider, root string) (string, error) {
 	mode, err := a.resolveBrowserMode(cmd)
 	if err != nil {
 		return "", err
 	}
-	scope := []any{provider, cmd.Name(), args, flags, a.opts.profile, mode.Mode, a.opts.connection, a.opts.browserURL, a.opts.userDataDir, a.opts.autoConnect, a.opts.channel, a.opts.fingerprintProfile, a.build}
+	scope := []any{provider, a.opts.profile, mode.Mode, a.opts.connection, a.opts.browserURL, a.opts.userDataDir, a.opts.autoConnect, a.opts.channel, a.opts.fingerprintProfile, a.build}
 	// Changes to config or owner-only provider templates select a new cache namespace.
 	connectionState, err := os.ReadFile(filepath.Join(root, "connections.json"))
 	if err != nil && !os.IsNotExist(err) {

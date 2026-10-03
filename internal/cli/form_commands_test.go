@@ -305,7 +305,7 @@ func TestAssertTextTimeoutJSON(t *testing.T) {
 	// This budget includes target discovery, locator resolution, and repeated
 	// text reads through the fake daemon; keep enough margin for host scheduling
 	// so the fixture validates last-observation diagnostics reliably.
-	code := cli.Execute(context.Background(), []string{"assert", "text", "Search", "Never text", "--by", "role", "--role", "button", "--timeout", "250ms", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"assert", "text", "Search", "Never text", "--by", "role", "--role", "button", "--timeout", "1s", "--poll", "10ms", "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitTimeout {
 		t.Fatalf("assert text timeout exit code = %d, want %d; stdout=%s stderr=%s", code, cli.ExitTimeout, out.String(), errOut.String())
 	}

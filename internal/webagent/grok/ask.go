@@ -644,7 +644,7 @@ func observeComposer(
 	      Number(style.opacity || '1') !== 0 && rect.width > 0 && rect.height > 0;
 	  };
 	  const editors = Array.from(document.querySelectorAll(
-	    'textarea[aria-label="Ask Grok anything"]'
+	    'textarea[aria-label="Ask Grok anything"], [contenteditable="true"][role="textbox"][aria-label="Ask Grok anything"]'
 	  )).filter(visible);
 	  const editor = editors.length === 1 ? editors[0] : null;
 	  const modes = Array.from(document.querySelectorAll(
@@ -663,12 +663,14 @@ func observeComposer(
 	    submit && top && (top === submit || submit.contains(top)) &&
 	    !submit.hasAttribute('disabled') && submit.getAttribute('aria-disabled') !== 'true'
 	  );
-	  const editorText = editor?.value || '';
+	  const editorText = editor instanceof HTMLTextAreaElement ? editor.value : (editor?.innerText || '');
 	  const match = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
 	  return {
 	    route_ready: location.origin === 'https://grok.com' &&
 	      location.pathname === '/',
-	    editor_ready: Boolean(editor && !editor.disabled && !editor.readOnly),
+	    editor_ready: Boolean(editor && !editor.disabled && !editor.readOnly &&
+	      editor.getAttribute('aria-disabled') !== 'true' &&
+	      editor.getAttribute('aria-readonly') !== 'true'),
 	    editor_count: editors.length,
 	    prompt_matches: Boolean(editor) && (editorText || '').trim() === expected,
 	    mode_count: modes.length,
@@ -696,16 +698,27 @@ func prepareExactPrompt(
 	}
 	if err := evaluateInto(ctx, session, `(() => {
 	  const editors = Array.from(document.querySelectorAll(
-	    'textarea[aria-label="Ask Grok anything"]'
+	    'textarea[aria-label="Ask Grok anything"], [contenteditable="true"][role="textbox"][aria-label="Ask Grok anything"]'
 	  )).filter(e => {
 	    const r = e.getBoundingClientRect(), s = getComputedStyle(e);
 	    return r.width > 0 && r.height > 0 && s.display !== 'none' &&
 	      s.visibility !== 'hidden' && Number(s.opacity || '1') !== 0;
 	  });
 	  const editor = editors.length === 1 ? editors[0] : null;
-	  if (!editor || editor.disabled || editor.readOnly) return {ok: false};
+	  if (!editor || editor.disabled || editor.readOnly ||
+	      editor.getAttribute('aria-disabled') === 'true' ||
+	      editor.getAttribute('aria-readonly') === 'true') return {ok: false};
 	  editor.focus();
-	  editor.select();
+	  if (editor instanceof HTMLTextAreaElement) {
+	    editor.select();
+	  } else {
+	    const range = document.createRange();
+	    range.selectNodeContents(editor);
+	    const selection = getSelection();
+	    if (!selection) return {ok: false};
+	    selection.removeAllRanges();
+	    selection.addRange(range);
+	  }
 	  return {ok: document.activeElement === editor};
 	})()`, &selected); err != nil || !selected.OK {
 		return fmt.Errorf("select exact Grok composer")

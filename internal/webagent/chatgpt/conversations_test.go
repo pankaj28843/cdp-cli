@@ -2003,24 +2003,26 @@ func TestAwaitRetriesRateLimitWithinDeadline(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		retryAfter []string
-		wantWait   time.Duration
+		name        string
+		retryAfter  []string
+		wantWait    time.Duration
+		wantLimited bool
 	}{
+		{name: "missing retry header stops without early retry", wantLimited: true},
 		{
 			name:       "valid delay seconds controls retry",
 			retryAfter: []string{"1"},
 			wantWait:   time.Second,
 		},
 		{
-			name:       "non-fitting provider delay uses local backoff",
-			retryAfter: []string{"30"},
-			wantWait:   2 * time.Second,
+			name:        "non-fitting provider delay stops without early retry",
+			retryAfter:  []string{"30"},
+			wantLimited: true,
 		},
 		{
-			name:       "duplicate provider delays use local backoff",
-			retryAfter: []string{"1", "30"},
-			wantWait:   2 * time.Second,
+			name:        "duplicate provider delays stop without early retry",
+			retryAfter:  []string{"1", "30"},
+			wantLimited: true,
 		},
 		{
 			name: "duplicate fields cannot synthesize an HTTP date",
@@ -2028,7 +2030,7 @@ func TestAwaitRetriesRateLimitWithinDeadline(t *testing.T) {
 				"Mon",
 				"27 Jul 2026 12:00:01 GMT",
 			},
-			wantWait: 2 * time.Second,
+			wantLimited: true,
 		},
 	}
 	for _, test := range tests {
@@ -2071,6 +2073,12 @@ func TestAwaitRetriesRateLimitWithinDeadline(t *testing.T) {
 					return nil
 				},
 			}, "conversation-1", 10*time.Second)
+			if test.wantLimited {
+				if result.OK || result.Error == nil || result.Error.ErrClass != "rate_limit" || attempts != 1 || len(waits) != 0 {
+					t.Fatalf("rate-limit retry: attempts=%d waits=%v result=%+v", attempts, waits, result)
+				}
+				return
+			}
 			if !result.OK || result.State != webagent.StateTerminal {
 				t.Fatalf("AwaitConversation result = %+v", result)
 			}

@@ -161,7 +161,7 @@ func waitForDaemonRuntime(t *testing.T, ctx context.Context, stateDir string) {
 
 func waitForDaemonRuntimeForMode(t *testing.T, ctx context.Context, stateDir, browserMode string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		runtime, ok, err := daemon.LoadRuntimeForMode(ctx, stateDir, browserMode)
 		if err != nil {

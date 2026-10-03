@@ -737,9 +737,12 @@ func nextConversationAwaitDelay(
 ) (time.Duration, bool, bool) {
 	now := nowForRead(config)
 	if failure != nil && failure.errClass == "rate_limit" {
-		if failure.retryAuthoritative &&
-			failure.retryAt.After(now) &&
-			failure.retryAt.Before(deadline) {
+		// Respect estimated cooldowns too: short local backoff after a 429
+		// amplifies account-wide throttling when Retry-After is unavailable.
+		if failure.retryAt.After(now) {
+			if !failure.retryAt.Before(deadline) {
+				return 0, false, false
+			}
 			return failure.retryAt.Sub(now), false, true
 		}
 	}
