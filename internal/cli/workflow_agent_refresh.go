@@ -318,10 +318,14 @@ func (a *app) refreshAggregateProvider(
 		if unavailable != nil {
 			return *unavailable
 		}
-		if operation == webagent.OperationAuthRefresh {
-			return gemini.RefreshAuth(ctx, gemini.AuthRefreshConfig{BrowserConfig: config, Store: store, Timeout: 30 * time.Second})
+		timeout := 30 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			timeout = time.Until(deadline)
 		}
-		return gemini.RefreshCapabilities(ctx, gemini.CapabilityRefreshConfig{BrowserConfig: config, Store: store, Timeout: 30 * time.Second})
+		if operation == webagent.OperationAuthRefresh {
+			return gemini.RefreshAuth(ctx, gemini.AuthRefreshConfig{BrowserConfig: config, Store: store, Timeout: timeout})
+		}
+		return gemini.RefreshCapabilities(ctx, gemini.CapabilityRefreshConfig{BrowserConfig: config, Store: store, Timeout: timeout})
 	}
 	if provider == webagent.ProviderGrok {
 		config, store, unavailable := a.grokBrowserOperationConfig(ctx, operation)
