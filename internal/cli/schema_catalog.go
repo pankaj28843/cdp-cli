@@ -90,6 +90,18 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "metadata", Type: "object", Required: false, Description: "Safe readiness stages, observation counters, exact prompt and model policy proof, and answer-readback evidence."},
 			},
 		},
+		"gemini-ask": {
+			Name:        "gemini-ask",
+			Description: "Gemini ask data inside webagent-operation. Repeated --file flags assign accepted documents/code together once, verify exact previews and processing, then permit one Send. Images and Drive imports remain unsupported.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Currently gemini-ask/v1."},
+				{Name: "text", Type: "string", Required: true, Description: "Terminal rendered answer from the exact owned conversation."},
+				{Name: "completion_state", Type: "string", Required: true, Description: "Whether submission and terminal readback completed."},
+				{Name: "current_mode", Type: "string", Required: false, Description: "Live mode verified before Send."},
+				{Name: "input_attachments", Type: "array<object>", Required: false, Description: "Name, size, assignment_attempts, assignment_outcome (not_attempted/confirmed/unknown), and processing_complete for each file. Assignment is never retried."},
+				{Name: "metadata", Type: "object", Required: true, Description: "Readiness, prompt identity and answer-readback evidence."},
+			},
+		},
 		"webagent-capabilities": {
 			Name:        "webagent-capabilities",
 			Description: "Capability-backed provider contract; planned and unsupported operations remain explicit and are never treated as callable.",

@@ -19,6 +19,8 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 	client := testsupport.NewBrowser("user-page")
 	client.Evaluate = func(expression string, browser *testsupport.Browser) (any, error) {
 		switch {
+		case strings.Contains(expression, "geminiSendControl"):
+			return map[string]any{"ready": true, "x": 20, "y": 20}, nil
 		case strings.Contains(expression, "Open mode picker, currently "):
 			ready := len(browser.Reloads) >= 2
 			return map[string]any{
@@ -41,7 +43,7 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 				"captured":              true,
 			}, nil
 		case strings.Contains(expression, "conversation_id"):
-			if browser.SendCount == 0 {
+			if browser.Counts["Input.dispatchMouseEvent"] < 3 {
 				return map[string]any{}, nil
 			}
 			return map[string]any{
@@ -92,7 +94,7 @@ func TestAskTreatsCachesAsAdvisoryAndRecoversBeforePromptMutation(t *testing.T) 
 	if len(reloads) != 2 || reloads[0] || !reloads[1] {
 		t.Fatalf("reloads=%v, want [false true]", reloads)
 	}
-	if inserted != prompt || insertCount != 1 || sendCount != 1 {
+	if inserted != prompt || insertCount != 1 || counts["Input.dispatchMouseEvent"] != 3 {
 		t.Fatalf(
 			"inserted=%q insert_count=%d send_count=%d counts=%v",
 			inserted,

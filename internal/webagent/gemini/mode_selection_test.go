@@ -41,6 +41,8 @@ func TestAskRequestedModeBeforeSend(t *testing.T) {
 					mode = tc.readback
 				}
 				switch {
+				case strings.Contains(expression, "geminiSendControl"):
+					return map[string]any{"ready": true, "x": 20, "y": 20}, nil
 				case strings.Contains(expression, "geminiModeSelection"):
 					return map[string]any{"match_count": tc.matches, "ready": tc.matches == 1 && !tc.disabled, "x": 20, "y": 20}, nil
 				case strings.Contains(expression, "mode_options:"):
@@ -89,7 +91,7 @@ func TestAskRequestedModeBeforeSend(t *testing.T) {
 			}
 			if tc.wantOK {
 				data := result.Data.(AskData)
-				if data.CurrentMode != "Flash" || result.Action == nil || result.Action.RawInputCount != 1 || counts["Input.dispatchKeyEvent"] != 2 {
+				if data.CurrentMode != "Flash" || result.Action == nil || result.Action.RawInputCount != 1 || counts["Input.dispatchMouseEvent"] != 9 || counts["Input.dispatchKeyEvent"] != 0 {
 					t.Fatalf("mode/Send not verified: result=%+v data=%+v counts=%v", result, data, counts)
 				}
 			} else if counts["Input.dispatchKeyEvent"] != 0 || insertCount != 0 || result.Action == nil || result.Action.RawInputCount != 0 {

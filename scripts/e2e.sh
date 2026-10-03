@@ -348,6 +348,9 @@ grep -q -- '--overwrite' <<<"$chatgpt_research_export_help"
 "$binary" describe --command "workflow agent chatgpt conversations download-attachments" --json | jq -e '.ok == true and .commands.name == "download-attachments" and (.commands.use | contains("download-attachments CONVERSATION_ID")) and (.commands.flags[] | select(.name == "output-dir" and .type == "string"))' >/dev/null
 gemini_ask_help="$("$binary" workflow agent gemini ask --help)"
 grep -q -- '--mode string' <<<"$gemini_ask_help"
+grep -q -- '--file stringArray' <<<"$gemini_ask_help"
+"$binary" describe --command "workflow agent gemini ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "file" and .type == "stringArray")) and (.commands.examples | any(contains("--file ./main.go")))' >/dev/null
+"$binary" schema gemini-ask --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("input_attachments"))' >/dev/null
 "$binary" describe --command "workflow agent gemini ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "mode" and .type == "string")) and (.commands.examples | any(contains("--mode Flash")))' >/dev/null
 "$binary" describe --command "workflow agent claude ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "model" and .type == "string")) and (.commands.flags[] | select(.name == "effort" and .type == "string")) and (.commands.examples | any(contains("--effort Medium")))' >/dev/null
 "$binary" schema webagent-claude-controls --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("efforts")) and (.schema.description | contains("entitlement"))' >/dev/null

@@ -669,7 +669,12 @@ scroller to a stable bottom, so a partial first batch is not accepted as
 complete. Post-Send prompt identity uses one strict rendered `Copy prompt`
 control intercepted inside the owned target and hashes the captured prompt
 after outer trim only; it does not write the observed copy through to the
-system clipboard or collapse interior whitespace:
+system clipboard or collapse interior whitespace. Repeated `--file` flags upload
+readable document or code files accepted by the live menu in one batch. Ask
+verifies each exact filename through its preview, completed processing, and
+Send readiness, then checks attachments again after prompt preparation. An
+uncertain assignment is never retried and stops before Send. Images and Drive
+imports remain unsupported:
 
 ```bash
 cdp workflow agent gemini capabilities --json
@@ -677,6 +682,7 @@ cdp workflow agent gemini auth refresh --json
 cdp workflow agent gemini capabilities refresh --json
 cdp workflow agent gemini doctor --json
 printf '%s' 'Review this design.' | cdp workflow agent gemini ask --stdin --mode Flash --json
+cdp workflow agent gemini ask 'Review these files.' --file ./main.go --file ./README.md --json
 cdp workflow agent gemini conversations list --limit 30 --json
 cdp workflow agent gemini conversations detail <conversation-id> --json
 cdp workflow agent gemini conversations await <conversation-id> --json

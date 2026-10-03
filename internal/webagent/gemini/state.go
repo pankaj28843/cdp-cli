@@ -352,8 +352,11 @@ func (c RuntimeCapabilities) Validate() error {
 	if c.FileUploadControl != "observed" && c.FileUploadControl != "not_observed" {
 		return fmt.Errorf("file_upload_control is invalid")
 	}
-	if c.FileUploadAction != "unsupported" {
-		return fmt.Errorf("file_upload_action must remain unsupported")
+	if c.FileUploadAction != "unsupported" && c.FileUploadAction != "headed_documents" {
+		return fmt.Errorf("file_upload_action is invalid")
+	}
+	if c.FileUploadAction == "headed_documents" && c.FileUploadControl != "observed" {
+		return fmt.Errorf("document upload requires an observed control")
 	}
 	if c.ExplicitModeSelection != "headed_rendered_controls" {
 		return fmt.Errorf("explicit_mode_selection must remain headed_rendered_controls")

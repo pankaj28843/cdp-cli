@@ -180,8 +180,10 @@ func RefreshCapabilities(
 			}
 			capturedAt := now().UTC().Format(time.RFC3339Nano)
 			upload := "not_observed"
+			uploadAction := "unsupported"
 			if observation.FileUploadControlObserved {
 				upload = "observed"
+				uploadAction = "headed_documents"
 			}
 			runtime := RuntimeCapabilities{
 				SchemaVersion:         RuntimeCapabilitiesSchemaVersion,
@@ -189,7 +191,7 @@ func RefreshCapabilities(
 				CurrentMode:           strings.TrimSpace(observation.CurrentMode),
 				ModeOptions:           options,
 				FileUploadControl:     upload,
-				FileUploadAction:      "unsupported",
+				FileUploadAction:      uploadAction,
 				DeepResearchSelected:  observation.DeepResearchSelected,
 				ExplicitModeSelection: "headed_rendered_controls",
 				Source:                "headed-cdp-rendered-controls",

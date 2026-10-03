@@ -148,7 +148,7 @@ func (a *app) newWorkflowAgentGeminiCapabilitiesRefreshCommand() *cobra.Command 
 		Example: "  cdp workflow agent gemini capabilities refresh --json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContextWithDefault(cmd, 45*time.Second)
+			ctx, cancel := a.commandContextWithDefault(cmd, 90*time.Second)
 			defer cancel()
 			if !a.selectHeadedProviderRuntime() {
 				result := geminiUnavailableOperation(
@@ -175,10 +175,11 @@ func (a *app) newWorkflowAgentGeminiCapabilitiesRefreshCommand() *cobra.Command 
 					*unavailable,
 				)
 			}
+			deadline, _ := ctx.Deadline()
 			result := gemini.RefreshCapabilities(ctx, gemini.CapabilityRefreshConfig{
 				BrowserConfig: config,
 				Store:         providerStore,
-				Timeout:       30 * time.Second,
+				Timeout:       time.Until(deadline),
 			})
 			return a.renderWebAgentResult(
 				ctx,
@@ -192,13 +193,15 @@ func (a *app) newWorkflowAgentGeminiCapabilitiesRefreshCommand() *cobra.Command 
 func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 	var stdin bool
 	var mode string
+	var filePaths []string
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible Gemini request",
 		Long: "Open one fresh headed tab, verify the visible mode, submit the exact prompt with one Send, read the rendered answer, " +
 			"preserve the observed conversation ID, and close only that tab. " +
-			"Use --mode with the current picker label (for example Flash or Pro); unavailable or unverified selection stops before Send.",
+			"Repeat --file to upload current accepted document or code files in one batch and verify processing before Send. Use --mode with the current picker label (for example Flash or Pro); unavailable or unverified selection stops before Send.",
 		Example: "  cdp workflow agent gemini ask 'Review this design.' --mode Flash --json\n" +
+			"  cdp workflow agent gemini ask 'Review the attached code.' --file ./main.go --json\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent gemini ask --stdin --json",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -260,6 +263,7 @@ func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 				Store:         providerStore,
 				Timeout:       timeout,
 				Mode:          mode,
+				FilePaths:     filePaths,
 			}, prompt)
 			human := fmt.Sprintf("gemini ask: %v", result.State)
 			if data, ok := result.Data.(gemini.AskData); ok && data.Text != "" {
@@ -268,6 +272,7 @@ func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 			return a.renderWebAgentResult(ctx, human, result)
 		},
 	}
+	cmd.Flags().StringArrayVar(&filePaths, "file", nil, "attach a readable document or code file accepted by the current upload menu; repeat for one batch")
 	cmd.Flags().StringVar(&mode, "mode", "", "select and verify a current Gemini picker mode before Send (for example Flash or Pro)")
 	cmd.Flags().BoolVar(&stdin, "stdin", false, "read the exact prompt from stdin")
 	return cmd

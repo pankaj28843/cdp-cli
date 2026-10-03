@@ -112,7 +112,7 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) webagent.Result 
 			}
 			const readinessAttempts = 3
 			var observation authObservation
-			readiness, readinessErr := authreadiness.WaitForEvidence(
+			readiness, readinessErr := authreadiness.WaitForHydration(
 				ctx,
 				session,
 				readinessAttempts,

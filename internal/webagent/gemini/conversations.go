@@ -954,13 +954,17 @@ func captureExactRenderedPrompt(
 	    : null;
 	  let prompt = '';
 	  let clipboardIntercepted = false;
+	  let captured;
+	  const copied = new Promise(resolve => { captured = resolve; });
 	  if (clipboard && buttons.length === 1) {
 	    const intercept = async value => {
 	      prompt = String(value);
+	      captured();
 	    };
 	    const interceptWrite = async items => {
 	      if (items.length !== 1 || !items[0].types.includes('text/plain')) return;
 	      prompt = await (await items[0].getType('text/plain')).text();
+	      captured();
 	    };
 	    try {
 	      Object.defineProperty(clipboard, 'writeText', {
@@ -975,7 +979,12 @@ func captureExactRenderedPrompt(
 	        clipboard.write === interceptWrite;
 	      if (clipboardIntercepted) {
 	        buttons[0].click();
-	        await new Promise(resolve => setTimeout(resolve, 100));
+	        let timer;
+	        try {
+	          await Promise.race([copied, new Promise(resolve => { timer = setTimeout(resolve, 2000); })]);
+	        } finally {
+	          clearTimeout(timer);
+	        }
 	      }
 	    } finally {
 	      if (prior) {

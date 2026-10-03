@@ -1049,6 +1049,7 @@ func commandExamples(path string) []string {
 	}
 	examples["cdp workflow agent gemini ask"] = []string{
 		"cdp workflow agent gemini ask 'Review this design.' --mode Flash --json",
+		"cdp workflow agent gemini ask 'Review the attached code.' --file ./main.go --json",
 		"printf '%s' 'Review this diff.' | cdp workflow agent gemini ask --stdin --json",
 	}
 	examples["cdp workflow agent gemini conversations"] = []string{

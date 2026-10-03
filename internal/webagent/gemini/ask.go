@@ -17,7 +17,7 @@ const (
 	AskSchemaVersion         = "gemini-ask/v1"
 	MaxPromptCharacters      = 18_000
 	defaultAskTimeout        = 3 * time.Minute
-	defaultComposerTimeout   = 45 * time.Second
+	defaultComposerTimeout   = 90 * time.Second
 	defaultAmbiguousCooldown = 5 * time.Minute
 )
 
@@ -25,6 +25,7 @@ type AskConfig struct {
 	BrowserConfig
 	Store           *Store
 	Mode            string
+	FilePaths       []string
 	Timeout         time.Duration
 	ComposerTimeout time.Duration
 	PollInterval    time.Duration
@@ -33,16 +34,17 @@ type AskConfig struct {
 }
 
 type AskData struct {
-	SchemaVersion      string         `json:"schema_version"`
-	ConversationMode   string         `json:"conversation_mode"`
-	Text               string         `json:"text"`
-	CompletionState    string         `json:"completion_state"`
-	ReadMode           string         `json:"read_mode"`
-	CurrentMode        string         `json:"current_mode,omitempty"`
-	PromptFingerprint  string         `json:"prompt_fingerprint,omitempty"`
-	PromptCharacters   int            `json:"prompt_characters"`
-	DetailReadAttempts int            `json:"detail_read_attempts"`
-	Metadata           map[string]any `json:"metadata"`
+	SchemaVersion      string            `json:"schema_version"`
+	ConversationMode   string            `json:"conversation_mode"`
+	Text               string            `json:"text"`
+	CompletionState    string            `json:"completion_state"`
+	ReadMode           string            `json:"read_mode"`
+	CurrentMode        string            `json:"current_mode,omitempty"`
+	PromptFingerprint  string            `json:"prompt_fingerprint,omitempty"`
+	PromptCharacters   int               `json:"prompt_characters"`
+	DetailReadAttempts int               `json:"detail_read_attempts"`
+	InputAttachments   []InputAttachment `json:"input_attachments,omitempty"`
+	Metadata           map[string]any    `json:"metadata"`
 }
 
 type composerObservation struct {
@@ -89,6 +91,13 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 			[]string{"Split the request into self-contained prompts below the limit."},
 		)
 	}
+	files, attachments, attachmentErr := resolveAttachments(config.FilePaths)
+	if attachmentErr != nil {
+		return askFailure(runID, config, webagent.StagePlanned, nil,
+			webagent.CleanupEvidence{State: webagent.CleanupNotRequired}, notPerformed, nil,
+			"gemini_attachment_invalid", "usage", attachmentErr.Error(), "", data, nil)
+	}
+	data.InputAttachments = attachments
 	data.PromptFingerprint = fingerprintPrompt(prompt)
 	if config.Timeout <= 0 {
 		config.Timeout = defaultAskTimeout
@@ -204,6 +213,13 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 			}
 			expectedMode = liveMode
 			data.CurrentMode = liveMode
+			if len(files) > 0 {
+				if err := prepareAttachments(ctx, session, files, data.InputAttachments, 60*time.Second, config.PollInterval); err != nil {
+					_ = lease.MarkIncomplete(context.Background())
+					return askFailure(runID, config, webagent.StageAttached, target, pending, notPerformed, nil,
+						"gemini_attachment_prepare_failed", "capability", "Gemini attachments could not be verified before Send", "", data, cleanupCommands(runID, pending))
+				}
+			}
 			if err := prepareExactPrompt(ctx, session, prompt); err != nil {
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
@@ -213,6 +229,18 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 					"Gemini composer did not preserve the exact prompt before Send",
 					"", data, cleanupCommands(runID, pending),
 				)
+			}
+			if len(files) > 0 {
+				names := make([]string, len(data.InputAttachments))
+				for i := range names {
+					names[i] = data.InputAttachments[i].Name
+				}
+				attachmentState, err := observeAttachments(ctx, session, names)
+				if err != nil || !attachmentState.Ready || attachmentState.Failed {
+					_ = lease.MarkIncomplete(context.Background())
+					return askFailure(runID, config, webagent.StageAttached, target, pending, notPerformed, nil,
+						"gemini_attachment_readiness_changed", "provider", "Gemini attachments changed during prompt preparation; Send was not performed", "", data, cleanupCommands(runID, pending))
+				}
 			}
 			if err := observeComposer(ctx, session, prompt, &composer); err != nil ||
 				!composer.PromptMatches ||
@@ -239,7 +267,9 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 			}
 			dispatcher := config.Send
 			if dispatcher == nil {
-				dispatcher = browserflow.DispatchFunc(browserflow.PressEnter)
+				dispatcher = browserflow.DispatchFunc(func(ctx context.Context, session *cdp.PageSession) (browserflow.DispatchOutcome, error) {
+					return clickSend(ctx, session)
+				})
 			}
 			outcome, _ := lease.Dispatch(ctx, dispatcher)
 			action := actionEvidence(lease.Record())
@@ -575,4 +605,26 @@ func waitRendered(ctx context.Context, poll time.Duration, remaining time.Durati
 	case <-timer.C:
 		return true
 	}
+}
+
+// Click only the unique, enabled and unobscured current Send control.
+func clickSend(ctx context.Context, session *cdp.PageSession) (browserflow.DispatchOutcome, error) {
+	var control struct {
+		Ready bool    `json:"ready"`
+		X     float64 `json:"x"`
+		Y     float64 `json:"y"`
+	}
+	err := evaluateInto(ctx, session, `(() => {
+  const geminiSendControl = [...document.querySelectorAll('button[aria-label="Send message"]')].filter(e => {
+   const r=e.getBoundingClientRect(), s=getComputedStyle(e);
+   return r.width>0 && r.height>0 && s.display !== 'none' && s.visibility !== 'hidden';
+  });
+  const e=geminiSendControl.length===1 ? geminiSendControl[0] : null, r=e?.getBoundingClientRect();
+  const x=r ? r.left+r.width/2 : 0, y=r ? r.top+r.height/2 : 0, top=e ? document.elementFromPoint(x,y) : null;
+  return {x,y,ready:Boolean(e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' && top && (top===e || e.contains(top)))};
+ })()`, &control)
+	if err != nil || !control.Ready {
+		return browserflow.DispatchOutcome{Dispatch: browserflow.DispatchNotPerformed}, fmt.Errorf("unique Gemini Send control is not actionable")
+	}
+	return browserflow.ClickPoint(ctx, session, control.X, control.Y)
 }
