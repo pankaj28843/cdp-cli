@@ -91,7 +91,7 @@ func TestOwnerOnlyStateRoundTripAfterLiveContract(t *testing.T) {
 		FileUploadControl:     "observed",
 		FileUploadAction:      "unsupported",
 		DeepResearchSelected:  false,
-		ExplicitModeSelection: "request_shape_unobserved",
+		ExplicitModeSelection: "headed_rendered_controls",
 		Source:                "headed-cdp-rendered-controls",
 	}); err != nil {
 		t.Fatalf("SaveRuntime: %v", err)

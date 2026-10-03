@@ -154,12 +154,13 @@ func (a *app) newWorkflowAgentProviderCommand(provider webagent.Provider) *cobra
 
 func (a *app) newWorkflowAgentClaudeAskCommand() *cobra.Command {
 	var stdin bool
+	var model, effort string
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one visible Claude request",
 		Long: "Open one fresh headed tab, submit the exact prompt with one Send, read the assistant response, " +
 			"preserve the observed conversation ID, and close only that tab.",
-		Example: "  cdp workflow agent claude ask 'Review this design.' --json\n" +
+		Example: "  cdp workflow agent claude ask 'Review this design.' --model 'Sonnet 5.5' --effort Medium --json\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent claude ask --stdin --json",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -276,6 +277,8 @@ func (a *app) newWorkflowAgentClaudeAskCommand() *cobra.Command {
 				Store:       authStore,
 				BuildCommit: a.build.Commit,
 				Timeout:     askTimeout,
+				Model:       model,
+				Effort:      effort,
 			}, prompt)
 			human := fmt.Sprintf("claude ask: %v", result.State)
 			if data, ok := result.Data.(claude.AskData); ok && data.Text != "" {
@@ -285,6 +288,8 @@ func (a *app) newWorkflowAgentClaudeAskCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&stdin, "stdin", false, "read the exact prompt from stdin")
+	cmd.Flags().StringVar(&model, "model", "", "select and verify an exact current Claude model menu label before Send")
+	cmd.Flags().StringVar(&effort, "effort", "", "select and verify an exact current Claude effort menu label before Send")
 	return cmd
 }
 

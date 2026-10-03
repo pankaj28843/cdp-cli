@@ -8,7 +8,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/pankaj28843/cdp-cli/internal/authreadiness"
 	"github.com/pankaj28843/cdp-cli/internal/browserflow"
 	"github.com/pankaj28843/cdp-cli/internal/cdp"
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
@@ -18,13 +17,14 @@ const (
 	AskSchemaVersion         = "gemini-ask/v1"
 	MaxPromptCharacters      = 18_000
 	defaultAskTimeout        = 3 * time.Minute
-	defaultComposerTimeout   = 30 * time.Second
+	defaultComposerTimeout   = 45 * time.Second
 	defaultAmbiguousCooldown = 5 * time.Minute
 )
 
 type AskConfig struct {
 	BrowserConfig
 	Store           *Store
+	Mode            string
 	Timeout         time.Duration
 	ComposerTimeout time.Duration
 	PollInterval    time.Duration
@@ -148,31 +148,18 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 				)
 			}
 			var composer composerObservation
-			readiness, readinessErr := authreadiness.WaitForEvidence(
-				ctx,
-				session,
-				authreadiness.MinimumAttempts,
-				config.ComposerTimeout,
-				config.PollInterval,
-				func(observationCtx context.Context) (bool, error) {
-					if err := observeComposer(
-						observationCtx,
-						session,
-						"",
-						&composer,
-					); err != nil {
-						return false, err
-					}
-					return composer.RouteReady &&
-						composer.EditorReady &&
-						composer.EditorCount == 1 &&
-						composer.PickerCount == 1 &&
-						composer.AnswerCount == 0 &&
-						strings.TrimSpace(composer.CurrentMode) != "", nil
-				},
-			)
+			readiness, readinessErr := waitForComposerReadiness(ctx, session, config, &composer)
 			data.Metadata["composer_readiness_attempt"] = readiness.Attempt
 			data.Metadata["composer_readiness_stage"] = readiness.Stage
+			data.Metadata["composer_successful_observations"] = readiness.SuccessfulObservations
+			data.Metadata["composer_stage_observations"] = readiness.StageObservations
+			data.Metadata["composer_observation_error"] = readiness.LastObservationError != nil
+			data.Metadata["composer_controls"] = map[string]any{
+				"route_ready":  composer.RouteReady,
+				"editor_count": composer.EditorCount,
+				"picker_count": composer.PickerCount,
+				"answer_count": composer.AnswerCount,
+			}
 			if readinessErr != nil || readiness.ObservationFailed() {
 				_ = lease.MarkIncomplete(context.Background())
 				return askFailure(
@@ -192,6 +179,23 @@ func Ask(ctx context.Context, config AskConfig, prompt string) webagent.Result {
 					"Gemini fresh composer and live mode were not observed after bounded load, reload, cache-bypassing hard reload, and final grace; the browser session may still be active",
 					"", data, cleanupCommands(runID, pending),
 				)
+			}
+			if mode := strings.TrimSpace(config.Mode); mode != "" {
+				data.Metadata["requested_mode"] = mode
+				modeErr := prepareMode(ctx, session, mode, min(config.ComposerTimeout, 30*time.Second), config.PollInterval)
+				if modeErr == nil {
+					modeErr = observeComposer(ctx, session, "", &composer)
+				}
+				if modeErr != nil || !strings.EqualFold(strings.TrimSpace(composer.CurrentMode), mode) {
+					_ = lease.MarkIncomplete(context.Background())
+					return askFailure(
+						runID, config, webagent.StageAttached, target, pending,
+						notPerformed, nil,
+						"gemini_mode_selection_failed", "capability",
+						"Gemini requested mode could not be uniquely selected and verified before Send",
+						"", data, cleanupCommands(runID, pending),
+					)
+				}
 			}
 			liveMode := strings.TrimSpace(composer.CurrentMode)
 			if cachedModeAvailable &&

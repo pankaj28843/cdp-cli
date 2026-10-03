@@ -332,7 +332,7 @@ func TestWorkflowAgentGeminiCapabilitiesAndDoctorNeedNoBrowser(t *testing.T) {
 		ModeOptions:           []string{"Flash", "Pro"},
 		FileUploadControl:     "observed",
 		FileUploadAction:      "unsupported",
-		ExplicitModeSelection: "request_shape_unobserved",
+		ExplicitModeSelection: "headed_rendered_controls",
 		Source:                "headed-cdp-rendered-controls",
 	}); err != nil {
 		t.Fatalf("save Gemini runtime capabilities: %v", err)

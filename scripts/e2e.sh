@@ -346,6 +346,10 @@ grep -q -- '--output string' <<<"$chatgpt_research_export_help"
 grep -q -- '--overwrite' <<<"$chatgpt_research_export_help"
 "$binary" describe --command "workflow agent" --json | jq -e '.ok == true and .commands.name == "agent" and (.commands.examples | any(contains("workflow agent auth refresh"))) and (.commands.examples | any(contains("workflow agent capabilities refresh"))) and (.commands.examples | any(contains("workflow agent claude capabilities"))) and (.commands.examples | any(contains("workflow agent gemini capabilities refresh"))) and (.commands.examples | any(contains("agents.google.exclusive_ai_mode"))) and (.commands.examples | any(contains("--google-ai auto")))' >/dev/null
 "$binary" describe --command "workflow agent chatgpt conversations download-attachments" --json | jq -e '.ok == true and .commands.name == "download-attachments" and (.commands.use | contains("download-attachments CONVERSATION_ID")) and (.commands.flags[] | select(.name == "output-dir" and .type == "string"))' >/dev/null
+gemini_ask_help="$("$binary" workflow agent gemini ask --help)"
+grep -q -- '--mode string' <<<"$gemini_ask_help"
+"$binary" describe --command "workflow agent gemini ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "mode" and .type == "string")) and (.commands.examples | any(contains("--mode Flash")))' >/dev/null
+"$binary" describe --command "workflow agent claude ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "model" and .type == "string")) and (.commands.flags[] | select(.name == "effort" and .type == "string")) and (.commands.examples | any(contains("--effort Medium")))' >/dev/null
 aggregate_auth_help="$("$binary" workflow agent auth refresh --help)"
 grep -q -- '--provider claude,gemini,grok' <<<"$aggregate_auth_help"
 aggregate_capabilities_help="$("$binary" workflow agent capabilities refresh --help)"

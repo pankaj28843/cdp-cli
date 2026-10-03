@@ -31,6 +31,8 @@ type AskConfig struct {
 	Store           *Store
 	HTTPClient      *http.Client
 	BuildCommit     string
+	Model           string
+	Effort          string
 	Timeout         time.Duration
 	ComposerTimeout time.Duration
 	PollInterval    time.Duration
@@ -308,6 +310,21 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			authRefreshNextCommands(runID, pendingCleanup),
 		)
 	}
+	if strings.TrimSpace(config.Model) != "" || strings.TrimSpace(config.Effort) != "" {
+		baseData.Metadata["requested_model"] = strings.TrimSpace(config.Model)
+		baseData.Metadata["requested_effort"] = strings.TrimSpace(config.Effort)
+		selectionErr := selectRequestedControls(ctx, session, config.Model, config.Effort, config.ComposerTimeout, config.PollInterval)
+		if selectionErr == nil {
+			composer, selectionErr = evaluateComposer(ctx, session)
+		}
+		if selectionErr != nil || !requestedSelectionMatches(composer.ModelLabel, config.Model, config.Effort) {
+			_ = lease.MarkIncomplete(context.Background())
+			return askFailure(runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup, notPerformed,
+				"claude_selection_unavailable", "capability", "Claude requested model or effort could not be selected and verified before prompt mutation", "",
+				baseData, nil, authRefreshNextCommands(runID, pendingCleanup))
+		}
+		baseData.ModelLabel = composer.ModelLabel
+	}
 	verifyAttempts, promptErr := prepareVerifiedPrompt(
 		ctx,
 		session,
@@ -326,6 +343,18 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			baseData, nil,
 			authRefreshNextCommands(runID, pendingCleanup),
 		)
+	}
+	if strings.TrimSpace(config.Model) != "" || strings.TrimSpace(config.Effort) != "" {
+		current, err := evaluateComposer(ctx, session)
+		if err != nil || !current.Ready || current.ModelLabel != baseData.ModelLabel {
+			_ = lease.MarkIncomplete(context.Background())
+			return askFailure(
+				runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup,
+				notPerformed, "claude_selection_changed", "provider",
+				"Claude model or effort changed during prompt preparation", "",
+				baseData, nil, authRefreshNextCommands(runID, pendingCleanup),
+			)
+		}
 	}
 	if err := lease.MarkPrepared(ctx); err != nil {
 		return askFailure(

@@ -191,7 +191,7 @@ func RefreshCapabilities(
 				FileUploadControl:     upload,
 				FileUploadAction:      "unsupported",
 				DeepResearchSelected:  observation.DeepResearchSelected,
-				ExplicitModeSelection: "request_shape_unobserved",
+				ExplicitModeSelection: "headed_rendered_controls",
 				Source:                "headed-cdp-rendered-controls",
 			}
 			if err := config.Store.SaveRuntime(ctx, runtime); err != nil {

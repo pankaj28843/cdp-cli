@@ -355,8 +355,8 @@ func (c RuntimeCapabilities) Validate() error {
 	if c.FileUploadAction != "unsupported" {
 		return fmt.Errorf("file_upload_action must remain unsupported")
 	}
-	if c.ExplicitModeSelection != "request_shape_unobserved" {
-		return fmt.Errorf("explicit_mode_selection must remain request_shape_unobserved")
+	if c.ExplicitModeSelection != "headed_rendered_controls" {
+		return fmt.Errorf("explicit_mode_selection must remain headed_rendered_controls")
 	}
 	if c.Source != "headed-cdp-rendered-controls" {
 		return fmt.Errorf("source is not an accepted capability observation")

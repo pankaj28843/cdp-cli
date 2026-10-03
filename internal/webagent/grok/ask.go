@@ -644,7 +644,7 @@ func observeComposer(
 	      Number(style.opacity || '1') !== 0 && rect.width > 0 && rect.height > 0;
 	  };
 	  const editors = Array.from(document.querySelectorAll(
-	    '[role=textbox][aria-label="Ask Grok anything"]'
+	    'textarea[aria-label="Ask Grok anything"]'
 	  )).filter(visible);
 	  const editor = editors.length === 1 ? editors[0] : null;
 	  const modes = Array.from(document.querySelectorAll(
@@ -663,14 +663,12 @@ func observeComposer(
 	    submit && top && (top === submit || submit.contains(top)) &&
 	    !submit.hasAttribute('disabled') && submit.getAttribute('aria-disabled') !== 'true'
 	  );
-	  const editorText = editor?.children.length
-	    ? Array.from(editor.children).map(node => node.textContent || '').join('\n')
-	    : (editor?.innerText || editor?.textContent || '');
+	  const editorText = editor?.value || '';
 	  const match = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
 	  return {
 	    route_ready: location.origin === 'https://grok.com' &&
 	      location.pathname === '/',
-	    editor_ready: Boolean(editor),
+	    editor_ready: Boolean(editor && !editor.disabled && !editor.readOnly),
 	    editor_count: editors.length,
 	    prompt_matches: Boolean(editor) && (editorText || '').trim() === expected,
 	    mode_count: modes.length,
@@ -697,17 +695,18 @@ func prepareExactPrompt(
 		OK bool `json:"ok"`
 	}
 	if err := evaluateInto(ctx, session, `(() => {
-	  const editor = document.querySelector(
-	    '[role=textbox][aria-label="Ask Grok anything"]'
-	  );
-	  if (!editor) return {ok: false};
+	  const editors = Array.from(document.querySelectorAll(
+	    'textarea[aria-label="Ask Grok anything"]'
+	  )).filter(e => {
+	    const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+	    return r.width > 0 && r.height > 0 && s.display !== 'none' &&
+	      s.visibility !== 'hidden' && Number(s.opacity || '1') !== 0;
+	  });
+	  const editor = editors.length === 1 ? editors[0] : null;
+	  if (!editor || editor.disabled || editor.readOnly) return {ok: false};
 	  editor.focus();
-	  const selection = window.getSelection();
-	  const range = document.createRange();
-	  range.selectNodeContents(editor);
-	  selection.removeAllRanges();
-	  selection.addRange(range);
-	  return {ok: true};
+	  editor.select();
+	  return {ok: document.activeElement === editor};
 	})()`, &selected); err != nil || !selected.OK {
 		return fmt.Errorf("select exact Grok composer")
 	}

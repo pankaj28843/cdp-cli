@@ -361,6 +361,9 @@ type authFakeClient struct {
 	composerReadyAfterReload int
 	quotaLimited             bool
 	modelLabel               string
+	selectionRowCount        int
+	selectionMenuOpen        bool
+	modelAfterInsert         string
 	ackConversationID        string
 	ackStreaming             bool
 	insertedPrompt           string
@@ -538,6 +541,10 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 				"is_streaming":    c.renderedDetailStreaming,
 				"answer_count":    boolCount(c.renderedDetailText != ""),
 			}
+		case strings.Contains(expression, "claudeSelectionPicker"):
+			value = map[string]any{"count": 1, "ready": true, "open": c.selectionMenuOpen}
+		case strings.Contains(expression, "claudeSelectionRow"):
+			value = map[string]any{"count": c.selectionRowCount, "ready": true, "checked": true}
 		case strings.Contains(expression, "composer_ready"):
 			composerReady := c.composerReady
 			if !composerReady &&
@@ -570,12 +577,16 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 		})
 	case "Input.insertText":
 		c.insertedPrompt = authStringParam(params, "text")
+		if c.modelAfterInsert != "" {
+			c.modelLabel = c.modelAfterInsert
+		}
 		return assignAuthJSON(result, map[string]any{})
 	case "Input.dispatchKeyEvent":
 		return assignAuthJSON(result, map[string]any{})
 	case "Input.dispatchMouseEvent":
 		if authStringParam(params, "type") == "mouseReleased" {
 			c.deleteStage++
+			c.selectionMenuOpen = !c.selectionMenuOpen
 		}
 		return assignAuthJSON(result, map[string]any{})
 	default:

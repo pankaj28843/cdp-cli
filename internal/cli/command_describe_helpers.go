@@ -1014,7 +1014,7 @@ func commandExamples(path string) []string {
 		"cdp workflow agent claude doctor --json",
 	}
 	examples["cdp workflow agent claude ask"] = []string{
-		"cdp workflow agent claude ask 'Review this design.' --json",
+		"cdp workflow agent claude ask 'Review this design.' --model 'Sonnet 5.5' --effort Medium --json",
 		"printf '%s' 'Review this diff.' | cdp workflow agent claude ask --stdin --json",
 	}
 	examples["cdp workflow agent claude conversations"] = []string{
@@ -1048,7 +1048,7 @@ func commandExamples(path string) []string {
 		"cdp workflow agent gemini doctor --json",
 	}
 	examples["cdp workflow agent gemini ask"] = []string{
-		"cdp workflow agent gemini ask 'Review this design.' --json",
+		"cdp workflow agent gemini ask 'Review this design.' --mode Flash --json",
 		"printf '%s' 'Review this diff.' | cdp workflow agent gemini ask --stdin --json",
 	}
 	examples["cdp workflow agent gemini conversations"] = []string{

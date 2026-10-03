@@ -191,12 +191,14 @@ func (a *app) newWorkflowAgentGeminiCapabilitiesRefreshCommand() *cobra.Command 
 
 func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 	var stdin bool
+	var mode string
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible Gemini request",
 		Long: "Open one fresh headed tab, verify the visible mode, submit the exact prompt with one Send, read the rendered answer, " +
-			"preserve the observed conversation ID, and close only that tab.",
-		Example: "  cdp workflow agent gemini ask 'Review this design.' --json\n" +
+			"preserve the observed conversation ID, and close only that tab. " +
+			"Use --mode with the current picker label (for example Flash or Pro); unavailable or unverified selection stops before Send.",
+		Example: "  cdp workflow agent gemini ask 'Review this design.' --mode Flash --json\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent gemini ask --stdin --json",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -257,6 +259,7 @@ func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 				BrowserConfig: config,
 				Store:         providerStore,
 				Timeout:       timeout,
+				Mode:          mode,
 			}, prompt)
 			human := fmt.Sprintf("gemini ask: %v", result.State)
 			if data, ok := result.Data.(gemini.AskData); ok && data.Text != "" {
@@ -265,6 +268,7 @@ func (a *app) newWorkflowAgentGeminiAskCommand() *cobra.Command {
 			return a.renderWebAgentResult(ctx, human, result)
 		},
 	}
+	cmd.Flags().StringVar(&mode, "mode", "", "select and verify a current Gemini picker mode before Send (for example Flash or Pro)")
 	cmd.Flags().BoolVar(&stdin, "stdin", false, "read the exact prompt from stdin")
 	return cmd
 }

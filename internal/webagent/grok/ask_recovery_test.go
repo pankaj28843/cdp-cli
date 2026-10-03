@@ -41,7 +41,7 @@ func TestAskUsesLiveModeAndRenderedFallbackAfterPreMutationRecovery(
 				"assistant_count": 0,
 				"conversation_id": "",
 			}, nil
-		case strings.Contains(expression, "range.selectNodeContents"):
+		case strings.Contains(expression, "editor.select()"):
 			return map[string]any{"ok": true}, nil
 		case strings.Contains(expression, "conversation_id"):
 			if browser.SendCount == 0 {
