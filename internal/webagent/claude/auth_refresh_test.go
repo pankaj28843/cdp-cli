@@ -361,6 +361,8 @@ type authFakeClient struct {
 	composerReadyAfterReload int
 	quotaLimited             bool
 	modelLabel               string
+	draftTextCharacters      int
+	draftAttachmentCount     int
 	selectionRowCount        int
 	selectionMenuOpen        bool
 	modelAfterInsert         string
@@ -555,9 +557,11 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 				composerReady = true
 			}
 			value = map[string]any{
-				"composer_ready": composerReady,
-				"quota_limited":  c.quotaLimited,
-				"model_label":    c.modelLabel,
+				"composer_ready":         composerReady,
+				"quota_limited":          c.quotaLimited,
+				"model_label":            c.modelLabel,
+				"draft_text_characters":  c.draftTextCharacters,
+				"draft_attachment_count": c.draftAttachmentCount,
 			}
 		case strings.Contains(expression, "range.selectNodeContents"):
 			value = map[string]any{"ok": true}

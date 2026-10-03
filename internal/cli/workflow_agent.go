@@ -162,7 +162,7 @@ func (a *app) newWorkflowAgentClaudeAskCommand() *cobra.Command {
 		Use:   "ask [PROMPT]",
 		Short: "Submit one visible Claude request",
 		Long: "Open one fresh headed tab, submit the exact prompt with one Send, read the assistant response, " +
-			"preserve the observed conversation ID, and close only that tab. Repeat --file to attach readable files together once and verify exact previews and processing before Send.",
+			"preserve the observed conversation ID, and close only that tab. An existing composer draft stops Ask before input, upload or Send. Repeat --file to attach readable files together once and verify exact previews and processing before Send.",
 		Example: "  cdp workflow agent claude ask 'Review this design.' --model 'Sonnet 5.5' --effort Medium --json\n" +
 			"  cdp workflow agent claude ask 'Review these files.' --file ./main.go --file ./README.md --json\n" +
 			"  printf '%s' 'Review this diff.' | cdp workflow agent claude ask --stdin --json",

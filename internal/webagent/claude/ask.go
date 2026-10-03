@@ -58,9 +58,11 @@ type AskData struct {
 }
 
 type composerObservation struct {
-	Ready        bool   `json:"composer_ready"`
-	QuotaLimited bool   `json:"quota_limited"`
-	ModelLabel   string `json:"model_label"`
+	Ready                bool   `json:"composer_ready"`
+	QuotaLimited         bool   `json:"quota_limited"`
+	ModelLabel           string `json:"model_label"`
+	DraftTextCharacters  int    `json:"draft_text_characters"`
+	DraftAttachmentCount int    `json:"draft_attachment_count"`
 }
 
 type acknowledgementObservation struct {
@@ -317,6 +319,14 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			baseData, nil,
 			authRefreshNextCommands(runID, pendingCleanup),
 		)
+	}
+	if composer.DraftTextCharacters > 0 || composer.DraftAttachmentCount > 0 {
+		baseData.Metadata["draft_text_characters"] = composer.DraftTextCharacters
+		baseData.Metadata["draft_attachment_count"] = composer.DraftAttachmentCount
+		_ = lease.MarkIncomplete(context.Background())
+		return askFailure(runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup, notPerformed,
+			"claude_existing_draft", "capability", "Claude fresh composer contains an existing draft; Ask did not modify or submit it", "",
+			baseData, nil, nil)
 	}
 	if strings.TrimSpace(config.Model) != "" || strings.TrimSpace(config.Effort) != "" {
 		baseData.Metadata["requested_model"] = strings.TrimSpace(config.Model)
@@ -605,20 +615,28 @@ func waitForComposer(
 	}
 }
 
-func evaluateComposer(ctx context.Context, session *cdp.PageSession) (composerObservation, error) {
-	const expression = `(() => {
+const composerExpression = `(() => {
 	  const editor = document.querySelector('[contenteditable="true"][aria-label="Write your prompt to Claude"]');
 	  const model = document.querySelector('button[data-testid="model-selector-dropdown"]');
+	  let root = editor?.parentElement;
+	  while (root && root.tagName !== 'BODY' && !root.querySelector('input#chat-input-file-upload-onpage[data-testid="file-upload"]')) root = root.parentElement;
+	  const input = root && root.tagName !== 'BODY' ? root.querySelector('input#chat-input-file-upload-onpage[data-testid="file-upload"]') : null;
+	  const previews = root && root.tagName !== 'BODY'
+	    ? Array.from(root.querySelectorAll('[data-testid="file-thumbnail"]')).filter(e => e.getBoundingClientRect().width > 0).length : 0;
 	  const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
 	  const quota = /(?:out of free messages|message limit|usage limit|reached (?:your|the) limit|limit (?:will )?reset|try again (?:at|after))/i.test(text);
 	  return {
 	    composer_ready: Boolean(editor),
 	    quota_limited: quota,
+	    draft_text_characters: (editor?.innerText || editor?.textContent || '').trim().length,
+	    draft_attachment_count: Math.max(input?.files?.length || 0, previews),
 	    model_label: (model?.getAttribute('aria-label') || '').replace(/^Model:\s*/, '')
 	  };
 	})()`
+
+func evaluateComposer(ctx context.Context, session *cdp.PageSession) (composerObservation, error) {
 	var observation composerObservation
-	if err := evaluateInto(ctx, session, expression, &observation); err != nil {
+	if err := evaluateInto(ctx, session, composerExpression, &observation); err != nil {
 		return composerObservation{}, err
 	}
 	return observation, nil
