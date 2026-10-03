@@ -949,18 +949,30 @@ func captureExactRenderedPrompt(
 	  const prior = clipboard
 	    ? Object.getOwnPropertyDescriptor(clipboard, 'writeText')
 	    : null;
+	  const priorWrite = clipboard
+	    ? Object.getOwnPropertyDescriptor(clipboard, 'write')
+	    : null;
 	  let prompt = '';
 	  let clipboardIntercepted = false;
 	  if (clipboard && buttons.length === 1) {
 	    const intercept = async value => {
 	      prompt = String(value);
 	    };
+	    const interceptWrite = async items => {
+	      if (items.length !== 1 || !items[0].types.includes('text/plain')) return;
+	      prompt = await (await items[0].getType('text/plain')).text();
+	    };
 	    try {
 	      Object.defineProperty(clipboard, 'writeText', {
 	        configurable: true,
 	        value: intercept
 	      });
-	      clipboardIntercepted = clipboard.writeText === intercept;
+	      Object.defineProperty(clipboard, 'write', {
+	        configurable: true,
+	        value: interceptWrite
+	      });
+	      clipboardIntercepted = clipboard.writeText === intercept &&
+	        clipboard.write === interceptWrite;
 	      if (clipboardIntercepted) {
 	        buttons[0].click();
 	        await new Promise(resolve => setTimeout(resolve, 100));
@@ -970,6 +982,11 @@ func captureExactRenderedPrompt(
 	        Object.defineProperty(clipboard, 'writeText', prior);
 	      } else {
 	        delete clipboard.writeText;
+	      }
+	      if (priorWrite) {
+	        Object.defineProperty(clipboard, 'write', priorWrite);
+	      } else {
+	        delete clipboard.write;
 	      }
 	    }
 	  }
