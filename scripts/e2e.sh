@@ -352,6 +352,10 @@ grep -q -- '--file stringArray' <<<"$gemini_ask_help"
 "$binary" describe --command "workflow agent gemini ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "file" and .type == "stringArray")) and (.commands.examples | any(contains("--file ./main.go")))' >/dev/null
 "$binary" schema gemini-ask --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("input_attachments"))' >/dev/null
 "$binary" describe --command "workflow agent gemini ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "mode" and .type == "string")) and (.commands.examples | any(contains("--mode Flash")))' >/dev/null
+claude_ask_help="$("$binary" workflow agent claude ask --help)"
+grep -q -- '--file stringArray' <<<"$claude_ask_help"
+"$binary" describe --command "workflow agent claude ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "file" and .type == "stringArray"))' >/dev/null
+"$binary" schema claude-ask --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("input_attachments"))' >/dev/null
 "$binary" describe --command "workflow agent claude ask" --json | jq -e '.ok == true and (.commands.flags[] | select(.name == "model" and .type == "string")) and (.commands.flags[] | select(.name == "effort" and .type == "string")) and (.commands.examples | any(contains("--effort Medium")))' >/dev/null
 "$binary" schema webagent-claude-controls --json | jq -e '.ok == true and (.schema.fields | map(.name) | index("efforts")) and (.schema.description | contains("entitlement"))' >/dev/null
 "$binary" --state-dir "$state_dir" workflow agent claude capabilities --json | jq -e '.ok == true and .data.runtime.state == "missing" and .evidence.browser_mode == "none"' >/dev/null

@@ -654,11 +654,18 @@ cdp workflow agent claude capabilities --jq '.data.operations[] | select(.suppor
 cdp workflow agent claude auth refresh --json
 cdp workflow agent claude doctor --json
 printf '%s' 'Review this design.' | cdp workflow agent claude ask --stdin --json
+cdp workflow agent claude ask 'Review these files.' --file ./main.go --file ./README.md --json
 cdp workflow agent claude conversations list --limit 30 --json
 cdp workflow agent claude conversations detail <conversation-id> --json
 cdp workflow agent claude conversations await <conversation-id> --json
 cdp workflow agent claude conversations delete <conversation-id> --json
 ```
+
+Claude Ask accepts repeated `--file` flags as one batch. It verifies exact
+filenames in current previews and completed processing, then checks the
+attachments again after prompt preparation. An uncertain assignment stops
+before Send and is never retried. Existing draft attachments are preserved and
+reported before any new assignment.
 
 Gemini deliberately stays rendered-only: there is no coded `batchexecute`
 replay. Auth refresh persists only safe signed-in/session-cookie booleans.

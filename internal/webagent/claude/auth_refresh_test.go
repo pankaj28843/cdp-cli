@@ -489,6 +489,8 @@ func (c *authFakeClient) CallSession(_ context.Context, sessionID, method string
 		expression := authStringParam(params, "expression")
 		value := any(map[string]any{})
 		switch {
+		case strings.Contains(expression, "target_found"):
+			value = map[string]any{"target_found": true, "focused": true}
 		case strings.Contains(expression, "menu_delete:"):
 			value = map[string]any{
 				"route_matches": c.deleteRoute,

@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,6 +33,7 @@ type AskConfig struct {
 	HTTPClient      *http.Client
 	BuildCommit     string
 	Model           string
+	FilePaths       []string
 	Effort          string
 	Timeout         time.Duration
 	ComposerTimeout time.Duration
@@ -42,16 +44,17 @@ type AskConfig struct {
 }
 
 type AskData struct {
-	SchemaVersion      string         `json:"schema_version"`
-	ConversationMode   string         `json:"conversation_mode"`
-	Text               string         `json:"text"`
-	CompletionState    string         `json:"completion_state"`
-	ReadMode           string         `json:"read_mode"`
-	ModelLabel         string         `json:"model_label,omitempty"`
-	PromptFingerprint  string         `json:"prompt_fingerprint,omitempty"`
-	PromptCharacters   int            `json:"prompt_characters"`
-	DetailReadAttempts int            `json:"detail_read_attempts"`
-	Metadata           map[string]any `json:"metadata"`
+	SchemaVersion      string            `json:"schema_version"`
+	ConversationMode   string            `json:"conversation_mode"`
+	Text               string            `json:"text"`
+	CompletionState    string            `json:"completion_state"`
+	ReadMode           string            `json:"read_mode"`
+	ModelLabel         string            `json:"model_label,omitempty"`
+	PromptFingerprint  string            `json:"prompt_fingerprint,omitempty"`
+	PromptCharacters   int               `json:"prompt_characters"`
+	DetailReadAttempts int               `json:"detail_read_attempts"`
+	InputAttachments   []InputAttachment `json:"input_attachments,omitempty"`
+	Metadata           map[string]any    `json:"metadata"`
 }
 
 type composerObservation struct {
@@ -140,6 +143,11 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			[]string{"Split the material into coherent self-contained requests below the limit."},
 		)
 	}
+	files, attachments, attachmentErr := resolveAttachments(config.FilePaths)
+	if attachmentErr != nil {
+		return askFailure(runID, config.BuildCommit, webagent.StagePlanned, nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired}, notPerformed, "claude_attachment_invalid", "usage", attachmentErr.Error(), "", baseData, nil, nil)
+	}
+	baseData.InputAttachments = attachments
 	baseData.PromptFingerprint = fingerprintPrompt(prompt)
 	if config.Timeout <= 0 {
 		config.Timeout = defaultAskTimeout
@@ -325,6 +333,20 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 		}
 		baseData.ModelLabel = composer.ModelLabel
 	}
+	if len(files) > 0 {
+		if err := prepareAttachments(ctx, session, files, baseData.InputAttachments, config.PollInterval); err != nil {
+			var preparation *attachmentPreparationError
+			if errors.As(err, &preparation) {
+				baseData.Metadata["attachment_prepare_stage"] = preparation.stage
+				if preparation.stage == "existing_attachments" {
+					_ = lease.MarkIncomplete(context.Background())
+					return askFailure(runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup, notPerformed, "claude_attachment_existing_draft", "capability", "Claude composer already contains attachments; clear the existing draft before attaching new files", "", baseData, nil, nil)
+				}
+			}
+			_ = lease.MarkIncomplete(context.Background())
+			return askFailure(runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup, notPerformed, "claude_attachment_prepare_failed", "capability", "Claude attachments could not be verified before Send", "", baseData, nil, authRefreshNextCommands(runID, pendingCleanup))
+		}
+	}
 	verifyAttempts, promptErr := prepareVerifiedPrompt(
 		ctx,
 		session,
@@ -356,6 +378,13 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 			)
 		}
 	}
+	if len(files) > 0 {
+		state, err := observeAttachments(ctx, session, baseData.InputAttachments)
+		if err != nil || !state.Ready || !state.SendReady || state.Failed {
+			_ = lease.MarkIncomplete(context.Background())
+			return askFailure(runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup, notPerformed, "claude_attachment_readiness_changed", "provider", "Claude attachments changed during prompt preparation; Send was not performed", "", baseData, nil, authRefreshNextCommands(runID, pendingCleanup))
+		}
+	}
 	if err := lease.MarkPrepared(ctx); err != nil {
 		return askFailure(
 			runID, config.BuildCommit, webagent.StageAttached, target, pendingCleanup,
@@ -369,7 +398,9 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 
 	dispatcher := config.Send
 	if dispatcher == nil {
-		dispatcher = browserflow.DispatchFunc(browserflow.PressEnter)
+		dispatcher = browserflow.DispatchFunc(func(ctx context.Context, session *cdp.PageSession) (browserflow.DispatchOutcome, error) {
+			return browserflow.PressEnterOnSelector(ctx, session, `[contenteditable="true"][aria-label="Write your prompt to Claude"]`)
+		})
 	}
 	outcome, dispatchErr := lease.Dispatch(ctx, dispatcher)
 	record := lease.Record()

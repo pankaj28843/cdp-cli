@@ -1014,6 +1014,7 @@ func commandExamples(path string) []string {
 		"cdp workflow agent claude doctor --json",
 	}
 	examples["cdp workflow agent claude ask"] = []string{
+		"cdp workflow agent claude ask 'Review these files.' --file ./main.go --file ./README.md --json",
 		"cdp workflow agent claude ask 'Review this design.' --model 'Sonnet 5.5' --effort Medium --json",
 		"printf '%s' 'Review this diff.' | cdp workflow agent claude ask --stdin --json",
 	}

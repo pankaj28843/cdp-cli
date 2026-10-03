@@ -90,6 +90,16 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "metadata", Type: "object", Required: false, Description: "Safe readiness stages, observation counters, exact prompt and model policy proof, and answer-readback evidence."},
 			},
 		},
+		"claude-ask": {
+			Name: "claude-ask", Description: "Claude Ask data inside webagent-operation; repeated --file assigns one verified batch before one Send.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Currently claude-ask/v1."},
+				{Name: "text", Type: "string", Required: true, Description: "Terminal answer from the exact acknowledged conversation."},
+				{Name: "completion_state", Type: "string", Required: true, Description: "Submission and terminal readback state."},
+				{Name: "input_attachments", Type: "array<object>", Required: false, Description: "Name, size, assignment_attempts, assignment_outcome and processing_complete for each file. Uncertain assignment is never repeated."},
+				{Name: "metadata", Type: "object", Required: true, Description: "Readiness, selection and exact prompt identity evidence."},
+			},
+		},
 		"gemini-ask": {
 			Name:        "gemini-ask",
 			Description: "Gemini ask data inside webagent-operation. Repeated --file flags assign accepted documents/code together once, verify exact previews and processing, then permit one Send. Images and Drive imports remain unsupported.",
