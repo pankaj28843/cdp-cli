@@ -582,7 +582,7 @@ func (a *app) newWorkflowAgentClaudeAuthRefreshCommand() *cobra.Command {
 		Use:   "refresh",
 		Short: "Refresh Claude auth without creating a conversation",
 		Long: "Own one fresh headed target, derive Claude organization and request shape from exact-session network evidence, " +
-			"persist credentials in owner-only state, and exact-close that target without submitting a prompt.",
+			"persist credentials and observed model, effort, and file-input controls in owner-only state, and exact-close that target without submitting a prompt.",
 		Example: "  cdp workflow agent claude auth refresh --json\n" +
 			"  cdp workflow agent claude doctor --json",
 		Args: cobra.NoArgs,
@@ -669,11 +669,12 @@ func (a *app) refreshClaudeAuth(ctx context.Context) webagent.Result {
 		)
 	}
 	return claude.RefreshAuth(ctx, claude.AuthRefreshConfig{
-		Client:      client,
-		Engine:      engine,
-		Journal:     journal,
-		Store:       authStore,
-		BuildCommit: a.build.Commit,
+		DiscoverControls: true,
+		Client:           client,
+		Engine:           engine,
+		Journal:          journal,
+		Store:            authStore,
+		BuildCommit:      a.build.Commit,
 	})
 }
 
@@ -756,6 +757,9 @@ func (a *app) workflowAgentCapabilitiesData(
 	provider webagent.Provider,
 	capabilities webagent.Capabilities,
 ) any {
+	if provider == webagent.ProviderClaude {
+		return a.claudeCapabilitiesData(ctx, capabilities)
+	}
 	if provider == webagent.ProviderGemini {
 		return a.geminiCapabilitiesData(ctx, capabilities)
 	}

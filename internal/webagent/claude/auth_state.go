@@ -31,6 +31,7 @@ const (
 var organizationPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
 
 type AuthTemplate struct {
+	Controls         *Controls         `json:"controls,omitempty"`
 	SchemaVersion    string            `json:"schema_version"`
 	Method           string            `json:"method"`
 	Origin           string            `json:"origin"`

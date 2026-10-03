@@ -23,10 +23,11 @@ const (
 
 type EventClient interface {
 	cdp.CommandClient
-	ReadEvent(context.Context) (cdp.Event, error)
+	ReadSessionEvent(context.Context, string) (cdp.Event, error)
 }
 
 type AuthRefreshConfig struct {
+	DiscoverControls    bool
 	Client              EventClient
 	Engine              *browserflow.Engine
 	Journal             browserflow.Journal
@@ -38,14 +39,16 @@ type AuthRefreshConfig struct {
 }
 
 type AuthRefreshData struct {
-	SchemaVersion         string `json:"schema_version"`
-	AuthState             string `json:"auth_state"`
-	TemplatePath          string `json:"template_path"`
-	OrganizationDerived   bool   `json:"organization_derived"`
-	SessionCookieObserved bool   `json:"session_cookie_observed"`
-	CookieCount           int    `json:"cookie_count"`
-	RequestShape          string `json:"request_shape"`
-	CapturedAt            string `json:"captured_at,omitempty"`
+	Controls              *Controls `json:"controls,omitempty"`
+	ControlsState         string    `json:"controls_state,omitempty"`
+	SchemaVersion         string    `json:"schema_version"`
+	AuthState             string    `json:"auth_state"`
+	TemplatePath          string    `json:"template_path"`
+	OrganizationDerived   bool      `json:"organization_derived"`
+	SessionCookieObserved bool      `json:"session_cookie_observed"`
+	CookieCount           int       `json:"cookie_count"`
+	RequestShape          string    `json:"request_shape"`
+	CapturedAt            string    `json:"captured_at,omitempty"`
 }
 
 type requestRecord struct {
@@ -364,6 +367,13 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 		CapturedAt:       capturedAt,
 		Source:           observation.Source,
 	}
+	controlsState := "not_observed"
+	if config.DiscoverControls {
+		if controls, err := discoverControls(ctx, session); err == nil {
+			template.Controls = controls
+			controlsState = "observed"
+		}
+	}
 	if err := config.Store.Save(ctx, template); err != nil {
 		_ = lease.MarkIncomplete(context.Background())
 		return authRefreshFailure(
@@ -397,6 +407,8 @@ func RefreshAuth(ctx context.Context, config AuthRefreshConfig) (result webagent
 	}
 
 	data := AuthRefreshData{
+		Controls:              template.Controls,
+		ControlsState:         controlsState,
 		SchemaVersion:         AuthRefreshSchemaVersion,
 		AuthState:             "ready",
 		TemplatePath:          RelativeTemplatePath,
@@ -491,7 +503,7 @@ func observeAuthRequest(
 			if sliceErr != nil {
 				return false, sliceErr
 			}
-			event, readErr := client.ReadEvent(readCtx)
+			event, readErr := client.ReadSessionEvent(readCtx, session.SessionID)
 			readExpired := readCtx.Err() != nil
 			stageExpired := observationCtx.Err() != nil
 			cancelRead()

@@ -601,18 +601,19 @@ func boolCount(value bool) int {
 	return 0
 }
 
-func (c *authFakeClient) ReadEvent(ctx context.Context) (cdp.Event, error) {
+func (c *authFakeClient) ReadSessionEvent(ctx context.Context, sessionID string) (cdp.Event, error) {
 	for {
 		c.mu.Lock()
 		if c.readDeadlineImmediately {
 			c.mu.Unlock()
 			return cdp.Event{}, context.DeadlineExceeded
 		}
-		if len(c.events) > 0 {
-			event := c.events[0]
-			c.events = c.events[1:]
-			c.mu.Unlock()
-			return event, nil
+		for i, event := range c.events {
+			if event.SessionID == sessionID {
+				c.events = append(c.events[:i], c.events[i+1:]...)
+				c.mu.Unlock()
+				return event, nil
+			}
 		}
 		c.mu.Unlock()
 		select {
@@ -717,4 +718,25 @@ func mustAuthJSON(value any) json.RawMessage {
 		panic(err)
 	}
 	return data
+}
+
+func TestAuthRefreshDoesNotConsumeOtherSessionEvents(t *testing.T) {
+	client := newAuthFakeClient("user-page")
+	client.events = append(client.events, networkRequestEvent("session-user-page", "foreign-request"))
+	config := newAuthRefreshTestConfig(t, t.TempDir(), client, cdp.BrowserResourceBudgetOptions{MaxTabs: 15, MaxWindows: 5, BrowserMode: "headed"})
+	result := RefreshAuth(context.Background(), config)
+	if !result.OK {
+		t.Fatalf("refresh failed: %+v", result)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	found := false
+	for _, event := range client.events {
+		if event.SessionID == "session-user-page" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("foreign session event was consumed")
+	}
 }

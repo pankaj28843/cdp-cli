@@ -19,7 +19,7 @@ const (
 	AskSchemaVersion         = "claude-ask/v1"
 	MaxPromptCharacters      = 18_000
 	defaultAskTimeout        = 3 * time.Minute
-	defaultComposerTimeout   = 30 * time.Second
+	defaultComposerTimeout   = 45 * time.Second
 	defaultAskPollInterval   = 250 * time.Millisecond
 	defaultAmbiguousCooldown = 5 * time.Minute
 )
@@ -254,7 +254,7 @@ func Ask(ctx context.Context, config AskConfig, prompt string) (result webagent.
 		)
 	}
 	var composer composerObservation
-	readiness, readinessErr := authreadiness.WaitForEvidence(
+	readiness, readinessErr := authreadiness.WaitForHydration(
 		ctx,
 		session,
 		authreadiness.MinimumAttempts,

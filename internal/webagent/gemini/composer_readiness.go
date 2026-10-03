@@ -18,29 +18,5 @@ func waitForComposerReadiness(ctx context.Context, session *cdp.PageSession, con
 		return composer.RouteReady && composer.EditorReady && composer.EditorCount == 1 &&
 			composer.PickerCount == 1 && composer.AnswerCount == 0 && strings.TrimSpace(composer.CurrentMode) != "", nil
 	}
-	initial := authreadiness.Result{Attempt: 1, Stage: authreadiness.StageInitialLoad}
-	initialCtx, cancel := context.WithTimeout(ctx, config.ComposerTimeout)
-	_, err := pollUntil(initialCtx, config.ComposerTimeout, config.PollInterval, func() (bool, error) {
-		ready, err := observe(initialCtx)
-		if initialCtx.Err() != nil {
-			return false, initialCtx.Err()
-		}
-		initial.LastObservationError = err
-		if err == nil {
-			initial.SuccessfulObservations++
-			initial.StageObservations++
-		}
-		return ready, err
-	})
-	cancel()
-	if err == nil {
-		initial.Observed = true
-		return initial, nil
-	}
-	if ctx.Err() != nil {
-		return initial, ctx.Err()
-	}
-	recovered, recoveryErr := authreadiness.WaitForEvidence(ctx, session, authreadiness.MinimumAttempts, config.ComposerTimeout, config.PollInterval, observe)
-	recovered.SuccessfulObservations += initial.SuccessfulObservations
-	return recovered, recoveryErr
+	return authreadiness.WaitForHydration(ctx, session, authreadiness.MinimumAttempts, config.ComposerTimeout, config.PollInterval, observe)
 }

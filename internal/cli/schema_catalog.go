@@ -99,6 +99,18 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "display_name", Type: "string", Required: true, Description: "Human-facing provider name."},
 				{Name: "implementation_status", Type: "string", Required: true, Description: "Overall provider migration state such as partial or implemented."},
 				{Name: "operations", Type: "array<webagent_operation_capability>", Required: true, Description: "Every public provider operation with installed command, status, support, side effect, browser need, and unavailability reason."},
+				{Name: "runtime", Type: "object", Required: false, Description: "Provider-specific cached runtime evidence. Claude includes state, captured_at and controls (webagent-claude-controls), refreshed by auth refresh; absent control evidence is not_observed."},
+			},
+		},
+		"webagent-claude-controls": {
+			Name:        "webagent-claude-controls",
+			Description: "Current Claude composer controls observed during auth refresh; menu visibility does not prove subscription entitlement. Returned as data.controls by auth refresh and data.runtime.controls by capabilities.",
+			Fields: []schemaField{
+				{Name: "selected", Type: "string", Required: true, Description: "Verified unchanged current model and effort label."},
+				{Name: "models", Type: "array<string>", Required: true, Description: "Enabled model radio rows; upgrade entries are excluded."},
+				{Name: "efforts", Type: "array<string>", Required: true, Description: "Enabled effort radio rows; successful selection remains a separate proof."},
+				{Name: "file_inputs", Type: "integer", Required: true, Description: "Observed file input count; not an upload-success claim."},
+				{Name: "file_accept", Type: "array<string>", Required: true, Description: "Observed browser accept attributes, including empty unrestricted browser filters; provider validation remains independent."},
 			},
 		},
 		"webagent-provider-catalog": {

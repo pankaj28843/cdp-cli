@@ -506,3 +506,57 @@ func TestWebAgentSchemaCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkflowAgentClaudeCapabilitiesReturnsOnlyObservedControls(t *testing.T) {
+	stateDir := t.TempDir()
+	store, err := claude.NewStore(stateDir)
+	if err != nil {
+		t.Fatalf("claude.NewStore: %v", err)
+	}
+	now := time.Now().UTC()
+	template := claude.AuthTemplate{
+		SchemaVersion:    claude.AuthTemplateSchemaVersion,
+		Method:           "GET",
+		Origin:           claude.Origin,
+		OrganizationID:   "org-test",
+		ListURL:          claude.Origin + "/api/organizations/org-test/chat_conversations_v2?limit=30&starred=false&consistency=eventual",
+		Headers:          map[string]string{"accept": "application/json"},
+		Cookies:          map[string]string{"sessionKey": "private-test-session"},
+		BrowserUserAgent: "Browser/Test",
+		CapturedAt:       now.Format(time.RFC3339Nano),
+		Source:           "headed-cdp-observed-list-request",
+	}
+	template.Controls = &claude.Controls{Selected: "Sonnet 5.5 Medium", Models: []string{"Sonnet 5.5", "Haiku 4.5"}, Efforts: []string{"Low", "Medium"}, FileInputs: 1, FileAccept: []string{""}}
+	if err := store.Save(context.Background(), template); err != nil {
+		t.Fatalf("save Claude auth template: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cli.Execute(
+		context.Background(),
+		[]string{"--state-dir", stateDir, "workflow", "agent", "claude", "capabilities", "--json"},
+		&out,
+		&errOut,
+		cli.BuildInfo{Commit: "test-commit"},
+	)
+	if code != cli.ExitOK {
+		t.Fatalf("Claude capabilities exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var result webagent.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode Claude capabilities: %v", err)
+	}
+	if !result.OK ||
+		result.Operation != webagent.OperationCapabilities ||
+		result.Evidence.BrowserMode != "none" ||
+		result.Evidence.ReadMode != "local_metadata" ||
+		result.Cleanup.State != webagent.CleanupNotRequired {
+		t.Fatalf("Claude capabilities = %+v", result)
+	}
+	if !strings.Contains(out.String(), "Haiku 4.5") || !strings.Contains(out.String(), "file_inputs") {
+		t.Fatalf("controls missing: %s", out.String())
+	}
+	if strings.Contains(out.String(), "private-test-session") || strings.Contains(out.String(), "org-test") {
+		t.Fatalf("Claude capabilities leaked private auth material: %s", out.String())
+	}
+}

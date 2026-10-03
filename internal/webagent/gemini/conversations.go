@@ -883,9 +883,12 @@ func observeConversationDetail(
 	  ).map(element =>
 	    (element.innerText || element.textContent || '').trim()
 	  ).filter(Boolean);
-	  const streaming = Array.from(document.querySelectorAll('button')).some(button =>
-	    /stop/i.test(button.getAttribute('aria-label') || '')
-	  );
+	  const streaming = Array.from(document.querySelectorAll('button')).some(button => {
+	    const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
+	    return /stop/i.test(button.getAttribute('aria-label') || '') &&
+	      rect.width > 0 && rect.height > 0 && style.display !== 'none' &&
+	      style.visibility !== 'hidden' && Number(style.opacity || '1') !== 0;
+	  });
 	  return {
 	    route_matches: location.origin === 'https://gemini.google.com' &&
 	      Boolean(match) && match[1] === expected,
