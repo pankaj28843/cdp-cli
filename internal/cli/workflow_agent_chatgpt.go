@@ -895,12 +895,13 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 	var minimumThinking string
 	var model string
 	var tool string
+	var conversationID string
 	cmd := &cobra.Command{
 		Use:   "ask [PROMPT]",
 		Short: "Submit one exact visible ChatGPT request",
 		Long: "Open one fresh headed tab, apply the configured or explicit thinking/model policy, optionally select one verified tool, submit the exact prompt with one Send, " +
 			"advance one provider Answer-now gate when it appears, read the assistant response or generated image, preserve the observed conversation ID, and close only that tab. " +
-			"Allow up to four minutes for composer hydration within a ten-minute default request budget; --timeout overrides the request budget.",
+			"Use --conversation ID to continue an existing conversation with the same explicit tool and single-Send safeguards. Allow up to four minutes for composer hydration within a ten-minute default request budget; --timeout overrides the request budget.",
 		Example: "  printf '%s' 'I keep waking with the taste of salt in my mouth, and every morning there is one more wet footprint on the attic stairs. Write the opening scene of an original gothic story.' | cdp workflow agent chatgpt ask --stdin --thinking Medium --model 'GPT-5.6 Sol' --json\n" +
 			"  cdp workflow agent chatgpt ask 'Review both layouts against the contract.' --file mobile.png --file desktop.png --file contract.md --model current --thinking 'Extra High' --minimum-thinking 'Extra High' --json\n" +
 			"  printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm. Paint the moment the keeper opens it.' | cdp workflow agent chatgpt ask --stdin --tool create-image --thinking Pro --model 'GPT-5.6 Sol' --json --timeout 40m",
@@ -917,6 +918,9 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 			}
 			ctx, cancel := a.commandContextWithDefault(cmd, commandTimeout)
 			defer cancel()
+			if conversationID != "" && len(filePaths) > 0 {
+				return commandError("chatgpt_continuation_attachments_unsupported", "usage", "--conversation does not support new --file uploads; use the existing conversation attachments", ExitUsage, nil)
+			}
 			if stdin && len(args) > 0 {
 				return commandError(
 					"chatgpt_prompt_source_conflict",
@@ -995,6 +999,14 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 					}
 				}
 			}
+			if conversationID != "" {
+				result := chatgpt.ContinueConversation(ctx, chatgpt.ContinueConfig{BrowserConfig: browserConfig, Store: store, Tool: tool, Timeout: timeout, Selection: selection}, conversationID, prompt)
+				human := fmt.Sprintf("chatgpt continuation: %v", result.State)
+				if data, ok := result.Data.(chatgpt.ContinueData); ok && data.Text != "" {
+					human = data.Text
+				}
+				return a.renderWebAgentResult(ctx, human, result)
+			}
 			result := chatgpt.Ask(ctx, chatgpt.AskConfig{
 				BrowserConfig: browserConfig,
 				Store:         store,
@@ -1010,6 +1022,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 			return a.renderWebAgentResult(ctx, human, result)
 		},
 	}
+	cmd.Flags().StringVar(&conversationID, "conversation", "", "continue this exact conversation ID in a fresh owned headed tab; supports --tool, not new --file uploads")
 	cmd.Flags().BoolVar(&stdin, "stdin", false, "read the exact prompt from stdin")
 	cmd.Flags().StringArrayVar(
 		&filePaths,

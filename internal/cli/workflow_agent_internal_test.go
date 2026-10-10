@@ -206,3 +206,28 @@ func TestRenderWebAgentResultPreservesAttachmentOnlyChatGPTDetail(
 		t.Fatalf("rendered detail = %+v", rendered.Data)
 	}
 }
+
+func TestChatGPTImageContinuationIsDiscoverable(t *testing.T) {
+	root := (&app{out: &bytes.Buffer{}, err: &bytes.Buffer{}}).newRoot()
+	command, _, err := root.Find([]string{"workflow", "agent", "chatgpt", "ask"})
+	if err != nil || command == nil || command.Flag("conversation") == nil || command.Flag("tool") == nil {
+		t.Fatalf("image continuation flags unavailable: %v", err)
+	}
+	if !strings.Contains(command.Long, "--conversation ID") {
+		t.Fatal("continuation help missing")
+	}
+}
+
+func TestChatGPTContinuationDoesNotSilentlyDropNewFiles(t *testing.T) {
+	command := (&app{out: &bytes.Buffer{}, err: &bytes.Buffer{}}).newWorkflowAgentChatGPTAskCommand()
+	command.SetContext(context.Background())
+	for key, value := range map[string]string{"conversation": "example-id", "tool": "create-image", "file": "missing.png"} {
+		if err := command.Flags().Set(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := command.RunE(command, []string{"draw"})
+	if err == nil || !strings.Contains(err.Error(), "--conversation does not support new --file uploads") {
+		t.Fatalf("expected pre-browser usage failure: %v", err)
+	}
+}

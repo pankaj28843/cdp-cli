@@ -1457,7 +1457,7 @@ func activateSelectionControl(
 	      values.indexOf(element) === index &&
 	      element.isContentEditable && enabled(element) &&
 	      Array.from(element.querySelectorAll(
-	        '[data-inline-selection-pill][data-keyword]'
+	        '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
 	      )).some(pill => label(pill).toLowerCase() === expected)
 	    );
 	    candidates = editors;
@@ -1465,16 +1465,27 @@ func activateSelectionControl(
 	  }
 	  case 'tool-menu':
 	    candidates = Array.from(document.querySelectorAll(
-	      'button#composer-plus-btn'
-	    )).filter(element => enabled(element));
+	      'button#composer-plus-btn,button[aria-label="Add files and more"]'
+	    )).filter(element => {
+	      if (!enabled(element)) return false;
+	      if (element.id === 'composer-plus-btn') return true;
+	      const composer = element.closest('[data-composer-body]');
+	      return Boolean(composer) && Array.from(composer.querySelectorAll(
+	        '[contenteditable="true"][role="textbox"]'
+	      )).filter(enabled).length === 1;
+	    });
 	    break;
 	  case 'tool':
 	    candidates = Array.from(document.querySelectorAll(
-	      'div[tabindex="0"][data-fill]'
+	      'div[tabindex="0"][data-fill],button[data-list-navigation-item]'
 	    )).filter(element => {
-	      const popover = element.closest('div[class*="popover"]');
-	      const first = element.querySelector('span.max-w-full,span');
+	      const current = element.matches('button[data-list-navigation-item]');
+	      const popover = current ? element.closest('[data-composer-overlay-floating-ui]') : element.closest('div[class*="popover"]');
+	      const first = current ? Array.from(element.querySelectorAll('[data-menu-row-content] span')).find(span =>
+	        span.children.length === 0 && !span.classList.contains('text-codex-description') && label(span))
+	        : element.querySelector('span.max-w-full,span');
 	      return enabled(element) && Boolean(popover) && visible(popover) &&
+	        (!current || Boolean(element.closest('[data-mention-section-id="chatgpt-primary"]'))) &&
 	        label(first).toLowerCase() === expected;
 	    });
 	    break;

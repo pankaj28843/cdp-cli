@@ -82,6 +82,7 @@ type composerObservation struct {
 	DefaultChatSurface      bool    `json:"default_chat_surface"`
 	DocumentReadyState      string  `json:"document_ready_state"`
 	RouteReady              bool    `json:"route_ready"`
+	ConversationRouteReady  bool    `json:"conversation_route_ready"`
 	EditorReady             bool    `json:"editor_ready"`
 	EditorCount             int     `json:"editor_count"`
 	PromptMatches           bool    `json:"prompt_matches"`
@@ -670,6 +671,21 @@ func Ask(
 				config.PollInterval,
 			)
 			data.Metadata["prompt_verify_attempts"] = verifyAttempts
+			if boundary, uncertain := preparationRecovery(verifyErr); uncertain {
+				_ = lease.MarkIncomplete(context.Background())
+				data.CompletionState = "submission_ack_unknown"
+				data.Metadata["preparation_submission_uncertain"] = true
+				data.Metadata["matching_submitted_prompt"] = boundary.MatchingPrompt
+				result := askFailureWithoutActionRetry(runID, config, webagent.StageAttached, target, pending,
+					"chatgpt_preparation_submission_unknown", "completion", boundary.Error(), "", data, cleanupCommands(runID, pending))
+				result.Action = notPerformed
+				result.Action.RetrySafe = false
+				if boundary.ConversationID != "" {
+					result.NextCommands = append(continuationTerminalCommands(boundary.ConversationID, data.Tool), result.NextCommands...)
+					result.Conversation = &webagent.ConversationRef{ID: boundary.ConversationID, URL: "https://chatgpt.com/c/" + boundary.ConversationID}
+				}
+				return result
+			}
 			if verifyErr != nil {
 				data.Metadata["prompt_verify_failure"] = verifyErr.Error()
 				data.Metadata["observed_route_ready"] = composer.RouteReady
@@ -1350,7 +1366,7 @@ func observeComposerWithTool(
 	  );
 	  const editors = expectedTool ? allEditors.filter(editor =>
 	    Array.from(editor.querySelectorAll(
-	      '[data-inline-selection-pill][data-keyword]'
+	      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
 	    )).some(pill => label(pill).toLowerCase() === expectedTool.toLowerCase())
 	  ) : allEditors;
 	  const editor = editors.length === 1 ? editors[0] : null;
@@ -1373,23 +1389,12 @@ func observeComposerWithTool(
 	  };
 	  const canonicalEditorText = editor ?
 	    normalize(Array.from(editor.childNodes).map(blockText).join('\n')) : '';
-	  const withoutToolPill = node => {
-	    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
-	    if (!(node instanceof HTMLElement)) return '';
-	    if (node.matches(
-	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
-	    )) return '';
-	    if (node.tagName === 'BR') return '\n';
-	    return Array.from(node.childNodes).map(withoutToolPill).join('');
-	  };
-	  const toolFreeEditorText = editor ? normalize(
-	    Array.from(editor.childNodes).map(withoutToolPill).join('\n')
-	  ).replace(/^\s+|\s+$/g, '') : '';
-	  const editorPromptText = expectedTool ? toolFreeEditorText : canonicalEditorText;
+	  const toolFreeEditorText = canonicalEditorText.replace(/^\s+|\s+$/g, '');
+  const editorPromptText = expectedTool ? toolFreeEditorText : canonicalEditorText;
 	  const selectedTools = editor ? Array.from(editor.querySelectorAll(
-	    '[data-inline-selection-pill][data-keyword]'
+	    '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
 	  )).filter(visible).map(pill => String(
-	    pill.getAttribute('data-keyword') || label(pill)
+	    pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || label(pill)
 	  ).trim()).filter(Boolean) : [];
 	  const radios = Array.from(document.querySelectorAll(
 	    'button[role="radio"]'
@@ -1495,7 +1500,16 @@ func observeComposerWithTool(
 	  const route = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
 	  const assistants = Array.from(new Set(Array.from(document.querySelectorAll(
     '[data-conversation-role="assistant"]'
-  )).map(heading => heading.closest('[data-content-search-unit-key]')).filter(Boolean)));
+  )).map(heading => {
+    const searchable = heading.closest('[data-content-search-unit-key]');
+    if (searchable) return searchable;
+    const shell = heading.parentElement;
+    // Bound image-only responses to their assistant-only message shell.
+    return shell && shell.querySelectorAll('[data-conversation-role="assistant"]').length === 1 &&
+      !shell.querySelector('[data-user-message-bubble]') &&
+      shell.querySelectorAll('[data-chatgpt-search-message-ids]').length === 1 &&
+      shell.querySelectorAll('[data-chatgpt-search-message-ids] [data-testid="generated-image-gallery"]').length === 1 ? shell : heading;
+  }).filter(Boolean)));
   const users = Array.from(new Set(document.querySelectorAll('[data-user-message-bubble]')));
 	  const specialized = Array.from(document.querySelectorAll(
 	    'iframe[src*="deep-research"],iframe[src*="connector_openai_deep_research"],' +
@@ -1516,6 +1530,7 @@ func observeComposerWithTool(
 
 	    route_ready: location.origin === 'https://chatgpt.com' &&
 	      location.pathname === '/',
+ conversation_route_ready: location.origin === 'https://chatgpt.com' && Boolean(route),
 	    editor_ready: Boolean(editor),
 	    editor_count: editors.length,
 	    prompt_matches: Boolean(editor) &&
@@ -1593,9 +1608,9 @@ func prepareExactPromptWithTool(
 	  )).filter((element, index, values) =>
 	    values.indexOf(element) === index && element.isContentEditable &&
 	    (%s === '' || Array.from(element.querySelectorAll(
-	      '[data-inline-selection-pill][data-keyword]'
+	      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
 	    )).some(pill => String(
-	      pill.getAttribute('data-keyword') || pill.innerText || pill.textContent || ''
+	      pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || pill.innerText || pill.textContent || ''
 	    ).trim().toLowerCase() === %s.toLowerCase()))
 	  );
 	  if (editors.length !== 1) return {ok: false};
@@ -1606,7 +1621,7 @@ func prepareExactPromptWithTool(
 	  const range = document.createRange();
 	  range.selectNodeContents(editor);
 	  if (%s !== '') {
-	    const pills = editor.querySelectorAll('[data-inline-selection-pill][data-keyword]');
+	    const pills = editor.querySelectorAll('[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]');
 	    if (pills.length !== 1) return {ok: false};
 	    // Preserve the selected tool, but replace the entire previous draft.
 	    // Collapsing at the end would append another prompt on every retry.
@@ -1714,6 +1729,47 @@ func prepareVerifiedPromptWithTool(
 	)
 }
 
+// promptPreparationBoundaryError means preparation may already have submitted.
+// It must never be converted into permission to refill or retry the request.
+type promptPreparationBoundaryError struct {
+	ConversationID string
+	MatchingPrompt bool
+}
+
+func (e *promptPreparationBoundaryError) Error() string {
+	return "ChatGPT preparation route or turn baseline changed; observe only, do not resubmit"
+}
+
+func preparationBaselineUnchanged(o composerObservation, conversationID string, users, assistants int) bool {
+	route := o.ConversationID == conversationID && o.ConversationRouteReady
+	if conversationID == "" {
+		route = o.ConversationID == "" && o.RouteReady
+	}
+	return route && o.DocumentReadyState == "complete" && o.EditorReady && o.EditorCount == 1 &&
+		o.UserMessageCount == users && o.AssistantCount == assistants
+}
+
+func observePreparationBoundary(ctx context.Context, session *cdp.PageSession, prompt, tool, intelligence, conversationID string, users, assistants int, o *composerObservation) error {
+	if err := observeComposerForTool(ctx, session, prompt, tool, intelligence, o); err == nil && preparationBaselineUnchanged(*o, conversationID, users, assistants) {
+		return nil
+	}
+	e := &promptPreparationBoundaryError{}
+	var rendered renderedObservation
+	if observeRendered(ctx, session, &rendered) == nil && rendered.RouteMatches && rendered.ConversationID != "" &&
+		rendered.UserMessageCount == users+1 && rendered.AssistantCount >= assistants &&
+		(conversationID == "" || rendered.ConversationID == conversationID) && renderedPromptMatches(rendered, fingerprintPrompt(prompt)) {
+		e.ConversationID = rendered.ConversationID
+		e.MatchingPrompt = true
+	}
+	return e
+}
+
+func preparationRecovery(err error) (*promptPreparationBoundaryError, bool) {
+	var boundary *promptPreparationBoundaryError
+	ok := errors.As(err, &boundary)
+	return boundary, ok
+}
+
 func prepareVerifiedPromptWithExpectation(
 	ctx context.Context,
 	session *cdp.PageSession,
@@ -1732,12 +1788,23 @@ func prepareVerifiedPromptWithExpectation(
 	var lastErr error
 	attempts := 0
 	// File processing and paid-mode composer rerenders are nondeterministic.
-	// Keep retrying reversible preparation until the caller's bounded composer
-	// deadline instead of closing the exact target after a fixed small count.
+	// Retry preparation only while passive route/turn observations still prove
+	// the unchanged baseline. Input may cause native submission; never refill
+	// after that boundary becomes uncertain.
 	for attempt := 1; ; attempt++ {
 		attempts = attempt
+		if err := observePreparationBoundary(ctx, session, prompt, tool, intelligence, "", 0, 0, &observation); err != nil {
+			return attempts, observation, err
+		}
 		if err := prepareExactPromptWithTool(ctx, session, prompt, tool); err != nil {
-			lastErr = err
+			if boundaryErr := observePreparationBoundary(ctx, session, prompt, tool, intelligence, "", 0, 0, &observation); boundaryErr != nil {
+				return attempts, observation, boundaryErr
+			}
+			return attempts, observation, &promptPreparationBoundaryError{}
+		} else if err := observePreparationBoundary(ctx, session, prompt, tool, intelligence, "", 0, 0, &observation); err != nil {
+			return attempts, observation, err
+		} else if !observation.PromptMatches {
+			return attempts, observation, &promptPreparationBoundaryError{}
 		} else if err := verifySelectionAtSendWithExpectation(
 			ctx,
 			session,
@@ -1766,7 +1833,9 @@ func prepareVerifiedPromptWithExpectation(
 			intelligence,
 			&observation,
 		); err != nil {
-			lastErr = err
+			return attempts, observation, &promptPreparationBoundaryError{}
+		} else if !preparationBaselineUnchanged(observation, "", 0, 0) {
+			return attempts, observation, &promptPreparationBoundaryError{}
 		} else if composerReadyForTool(observation, intelligence, tool) {
 			return attempt, observation, nil
 		} else if composerPreparedForTool(observation, intelligence, tool) {
@@ -1783,7 +1852,10 @@ func prepareVerifiedPromptWithExpectation(
 						intelligence,
 						&observation,
 					); err != nil {
-						return false, err
+						return false, &promptPreparationBoundaryError{}
+					}
+					if !preparationBaselineUnchanged(observation, "", 0, 0) {
+						return false, &promptPreparationBoundaryError{}
 					}
 					if err := observeExpectedAttachment(
 						ctx,
@@ -1837,6 +1909,9 @@ func prepareVerifiedPromptWithExpectation(
 					return attempts, observation, nil
 				}
 			} else {
+				if _, boundary := preparationRecovery(waitErr); boundary {
+					return attempts, observation, waitErr
+				}
 				lastErr = waitErr
 			}
 		} else {
@@ -1909,19 +1984,30 @@ func observeRendered(
 	  const unique = nodes => Array.from(new Set(nodes));
 	  const assistants = unique(Array.from(document.querySelectorAll(
     '[data-conversation-role="assistant"]'
-  )).map(heading => heading.closest('[data-content-search-unit-key]')).filter(Boolean));
+  )).map(heading => {
+    const searchable = heading.closest('[data-content-search-unit-key]');
+    if (searchable) return searchable;
+    const shell = heading.parentElement;
+    // Bound image-only responses to their assistant-only message shell.
+    return shell && shell.querySelectorAll('[data-conversation-role="assistant"]').length === 1 &&
+      !shell.querySelector('[data-user-message-bubble]') &&
+      shell.querySelectorAll('[data-chatgpt-search-message-ids]').length === 1 &&
+      shell.querySelectorAll('[data-chatgpt-search-message-ids] [data-testid="generated-image-gallery"]').length === 1 ? shell : heading;
+  }).filter(Boolean));
   const users = unique(Array.from(document.querySelectorAll('[data-user-message-bubble]')));
-	  const imageAssistantTurn = [...assistants].reverse().find(turn =>
-	    turn.querySelector('img[alt^="Generated image"]')
-	  );
-	  const assistantTurn = imageAssistantTurn || (assistants.length ?
-	    assistants[assistants.length - 1] : null);
+	  // Read only the latest assistant turn. An older completed image must not
+	  // become completion evidence for a new image-pending continuation.
+	  const assistantTurn = assistants.length ?
+	    assistants[assistants.length - 1] : null;
 	  const userTurn = users.length ? users[users.length - 1] : null;
 	  const assistant = assistantTurn && assistantTurn.querySelector('.markdown,[data-markdown-text-style]');
   const user = userTurn;
-	  const promptNode = user && (
-	    user.querySelector('.whitespace-pre-wrap') || user
-	  );
+	  const userContentRoots = user ? Array.from(user.querySelectorAll(
+    '[data-markdown-text-tone="user-message"]'
+  )) : [];
+  const promptNode = userContentRoots.length === 1 ? userContentRoots[0] : user && (
+    user.querySelector('.whitespace-pre-wrap') || user
+  );
 	  const trimTrailingNewlines = value => String(value || '')
 	    .replace(/\r\n/g, '\n')
 	    .replace(/[\r\n]+$/, '');
@@ -1931,7 +2017,8 @@ func observeRendered(
 	    }
 	    if (!(node instanceof HTMLElement)) return '';
 	    if (node.matches(
-	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
+	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target],' +
+      '[data-prompt-link-href="chatgpt-system-hint://picture_v2"][data-prompt-link-label="Create image"][data-layout="selection-pill"]'
 	    )) return '';
 	    if (node.tagName === 'BR') return '\n';
 	    return Array.from(node.childNodes).map(inlineText).join('');
@@ -1955,11 +2042,12 @@ func observeRendered(
 	      children.map(blockText).join('\n') :
 	      inlineText(element);
 	    const hasSelectionPill = Boolean(element.querySelector(
-	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
+	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target],' +
+      '[data-prompt-link-href="chatgpt-system-hint://picture_v2"][data-prompt-link-label="Create image"][data-layout="selection-pill"]'
 	    ));
 	    return hasSelectionPill ? value.replace(/^\s+/, '') : value;
 	  };
-	  const promptCandidates = unique([
+	  const promptCandidates = userContentRoots.length > 1 ? [] : unique([
 	    user && user.innerText,
 	    user && user.textContent,
 	    promptNode && promptNode.innerText,
@@ -1975,7 +2063,10 @@ func observeRendered(
 	  const readyImage = generatedImages.find(image =>
 	    image.complete && image.naturalWidth > 0
 	  );
-	  const generatedImageReady = Boolean(readyImage);
+	  const imageOnlyMessage = assistantTurn && assistantTurn.querySelector('[data-chatgpt-search-message-ids]');
+  const imageOnlyState = imageOnlyMessage && assistantTurn.closest('[data-talvt-turn-state]');
+  const generatedImageReady = Boolean(readyImage) && (!imageOnlyMessage ||
+    Boolean(imageOnlyState && imageOnlyState.getAttribute('data-talvt-turn-state') === 'complete'));
 	  const streamingState = turn ? Array.from(turn.querySelectorAll(
 	    '[data-is-streaming="true"],[aria-busy="true"]'
 	  )).some(visible) : false;
@@ -2029,7 +2120,7 @@ func observeRendered(
 	    substantiveAssistantText === '';
 	  const match = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
 	  return {
-	    route_matches: Boolean(match),
+	    route_matches: location.origin === 'https://chatgpt.com' && Boolean(match),
 	    conversation_id: match ? match[1] : '',
 	    text: substantiveAssistantText,
 	    prompt_candidates: promptCandidates,

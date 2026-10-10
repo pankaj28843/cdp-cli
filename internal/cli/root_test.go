@@ -1857,7 +1857,7 @@ func TestDoctorBrowserURLWarnsForNonCDPEndpoint(t *testing.T) {
 	defer server.Close()
 
 	var out, errOut bytes.Buffer
-	code := cli.Execute(context.Background(), []string{"doctor", "--browser-url", server.URL, "--json"}, &out, &errOut, cli.BuildInfo{})
+	code := cli.Execute(context.Background(), []string{"doctor", "--browser-url", server.URL, "--state-dir", t.TempDir(), "--json"}, &out, &errOut, cli.BuildInfo{})
 	if code != cli.ExitOK {
 		t.Fatalf("Execute exit code = %d, want %d; stderr=%s", code, cli.ExitOK, errOut.String())
 	}

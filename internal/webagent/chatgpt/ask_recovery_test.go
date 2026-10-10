@@ -65,6 +65,7 @@ func TestAskRecoversSelectionControlsBeforePromptMutation(t *testing.T) {
 			}
 			sendReady := browser.InsertedText == prompt
 			return map[string]any{
+				"document_ready_state":      "complete",
 				"route_ready":               true,
 				"editor_ready":              true,
 				"editor_count":              1,
@@ -339,6 +340,7 @@ func TestAskAllowsPreparationAndSendWithoutProviderGate(t *testing.T) {
 				}
 			}
 			return map[string]any{
+				"document_ready_state":      "complete",
 				"route_ready":               true,
 				"editor_ready":              true,
 				"editor_count":              1,
@@ -553,6 +555,7 @@ func runHydratedAskTest(
 				browser.InsertedText == prompt
 			sendReady := browser.InsertedText == prompt
 			return map[string]any{
+				"document_ready_state":      "complete",
 				"route_ready":               true,
 				"editor_ready":              true,
 				"editor_count":              1,

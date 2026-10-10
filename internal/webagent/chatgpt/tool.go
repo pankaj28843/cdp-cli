@@ -105,30 +105,35 @@ func observeChatGPTToolSurface(
     return style.display !== 'none' && style.visibility !== 'hidden' &&
       Number(style.opacity || '1') !== 0 && rect.width > 0 && rect.height > 0;
   };
+  const currentMenu = item => item.closest('[data-composer-overlay-floating-ui]');
   const itemLabel = item => {
-    const first = item.querySelector('span.max-w-full,span');
+    const first = item.matches('button[data-list-navigation-item]')
+      ? Array.from(item.querySelectorAll('[data-menu-row-content] span')).find(span =>
+          span.children.length === 0 && !span.classList.contains('text-codex-description') && normalize(span.textContent))
+      : item.querySelector('span.max-w-full,span');
     return normalize(first && (first.innerText || first.textContent));
   };
   const items = Array.from(document.querySelectorAll(
-    'div[tabindex="0"][data-fill]'
+    'div[tabindex="0"][data-fill],button[data-list-navigation-item]'
   )).filter(item => {
-    const popover = item.closest('div[class*="popover"]');
-    return visible(item) && Boolean(popover) && visible(popover);
+    const popover = item.matches('button[data-list-navigation-item]')
+      ? currentMenu(item) : item.closest('div[class*="popover"]');
+    return visible(item) && Boolean(popover) && visible(popover) &&
+      (!item.matches('button[data-list-navigation-item]') || Boolean(item.closest('[data-mention-section-id="chatgpt-primary"]')));
   });
-  const menu = items.length ? items[0].closest('div[class*="popover"]') : null;
+  const menu = items.length ? (currentMenu(items[0]) || items[0].closest('div[class*="popover"]')) : null;
   const options = Array.from(new Set(
-    (menu ? items.filter(item => item.closest('div[class*="popover"]') === menu) : [])
-      .map(itemLabel)
-      .filter(Boolean)
+    (menu ? items.filter(item => (currentMenu(item) || item.closest('div[class*="popover"]')) === menu) : [])
+      .map(itemLabel).filter(Boolean)
   ));
   const editors = Array.from(document.querySelectorAll(
     '[contenteditable="true"][role="textbox"]'
   )).filter(element => visible(element) && element.isContentEditable);
   const selected = Array.from(new Set(
     editors.flatMap(editor => Array.from(editor.querySelectorAll(
-      '[data-inline-selection-pill][data-keyword]'
+      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
     )).filter(visible).map(pill => normalize(
-      pill.getAttribute('data-keyword') || pill.innerText || pill.textContent
+      pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || pill.innerText || pill.textContent
     )))
   )).filter(Boolean);
   return {

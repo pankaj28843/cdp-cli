@@ -43,7 +43,7 @@ global.HTMLElement = class {
  closest() { return null; }
  compareDocumentPosition(node) { return node.followsAssistant ? 4 : 2; }
 };
-global.location = {pathname: '/c/synthetic-conversation'};
+global.location = {origin:'https://chatgpt.com',pathname: '/c/synthetic-conversation'};
 const prompt = new HTMLElement('Exact synthetic prompt.');
 const answer = new HTMLElement('READY');
 const copy = new HTMLElement();
@@ -78,6 +78,9 @@ function observe() { return ` + params.Expression + `; }
  assert.equal(result.is_streaming, false);
 }
 
+location.origin='https://unrelated.example';
+assert.equal(observe().route_matches,false,'a matching path on another origin is not ChatGPT');
+location.origin='https://chatgpt.com';
 modern = false;
 assert.equal(observe().assistant_count, 0, 'obsolete author-role layout is not a supported answer surface');
 modern = true;
@@ -96,7 +99,11 @@ actions.querySelectorAll = selector => selector === '[data-conversation-role="as
 assert.equal(observe().completion_control_present, false, 'another response prevents widening the scope');
 heading.closest = () => null;
 modern = true;
-assert.equal(observe().assistant_count, 0, 'a role heading alone is not an answer');
+const headingOnly = observe();
+assert.equal(headingOnly.assistant_count, 1, 'an opaque role heading retains latest turn identity');
+assert.equal(headingOnly.text, '', 'a role heading alone is not an answer');
+assert.equal(headingOnly.generated_image_ready, false, 'a role heading cannot borrow an image');
+assert.equal(headingOnly.terminal_control_present, false, 'a role heading is not terminal');
 `
 	command := exec.Command(node)
 	command.Stdin = strings.NewReader(script)

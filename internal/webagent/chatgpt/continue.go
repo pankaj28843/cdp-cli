@@ -17,6 +17,7 @@ const ContinueSchemaVersion = "chatgpt-conversation-continue/v1"
 
 type ContinueConfig struct {
 	BrowserConfig
+	Tool            string
 	Store           *Store
 	Timeout         time.Duration
 	ComposerTimeout time.Duration
@@ -27,22 +28,25 @@ type ContinueConfig struct {
 }
 
 type ContinueData struct {
-	SchemaVersion          string         `json:"schema_version"`
-	ConversationID         string         `json:"conversation_id"`
-	ProductMode            string         `json:"product_mode"`
-	Intelligence           string         `json:"intelligence"`
-	ThinkingPolicy         string         `json:"thinking_policy"`
-	MinimumThinking        string         `json:"minimum_thinking,omitempty"`
-	ModelPolicy            string         `json:"model_policy"`
-	Model                  string         `json:"model,omitempty"`
-	Text                   string         `json:"text"`
-	CompletionState        string         `json:"completion_state"`
-	ReadMode               string         `json:"read_mode"`
-	PromptFingerprint      string         `json:"prompt_fingerprint,omitempty"`
-	PromptCharacters       int            `json:"prompt_characters"`
-	BaselineUserTurns      int            `json:"baseline_user_turns"`
-	BaselineAssistantTurns int            `json:"baseline_assistant_turns"`
-	Metadata               map[string]any `json:"metadata"`
+	Tool                   string                   `json:"tool,omitempty"`
+	OutputKind             string                   `json:"output_kind,omitempty"`
+	Attachments            []ConversationAttachment `json:"attachments,omitempty"`
+	SchemaVersion          string                   `json:"schema_version"`
+	ConversationID         string                   `json:"conversation_id"`
+	ProductMode            string                   `json:"product_mode"`
+	Intelligence           string                   `json:"intelligence"`
+	ThinkingPolicy         string                   `json:"thinking_policy"`
+	MinimumThinking        string                   `json:"minimum_thinking,omitempty"`
+	ModelPolicy            string                   `json:"model_policy"`
+	Model                  string                   `json:"model,omitempty"`
+	Text                   string                   `json:"text"`
+	CompletionState        string                   `json:"completion_state"`
+	ReadMode               string                   `json:"read_mode"`
+	PromptFingerprint      string                   `json:"prompt_fingerprint,omitempty"`
+	PromptCharacters       int                      `json:"prompt_characters"`
+	BaselineUserTurns      int                      `json:"baseline_user_turns"`
+	BaselineAssistantTurns int                      `json:"baseline_assistant_turns"`
+	Metadata               map[string]any           `json:"metadata"`
 }
 
 type chatgptContinueDispatcher struct {
@@ -52,6 +56,7 @@ type chatgptContinueDispatcher struct {
 	baselineAssistants int
 	intelligence       string
 	model              string
+	tool               string
 	expectation        thinkingSelectionExpectation
 }
 
@@ -87,7 +92,7 @@ func (d chatgptContinueDispatcher) Dispatch(
 			d.baselineUsers,
 			d.baselineAssistants,
 			d.intelligence,
-		) {
+		) || !continuationToolMatches(observation, d.tool) {
 		return browserflow.DispatchOutcome{
 			Dispatch: browserflow.DispatchNotPerformed,
 		}, fmt.Errorf("exact ChatGPT continuation Send control was not actionable")
@@ -113,6 +118,7 @@ func ContinueConversation(
 	conversationID = strings.TrimSpace(conversationID)
 	prompt = strings.TrimRight(prompt, "\r\n")
 	runID := webagent.NewRunID()
+	tool, toolErr := NormalizeTool(config.Tool)
 	selectionPolicy, selectionErr := NormalizeSelectionPolicy(config.Selection)
 	data := ContinueData{
 		SchemaVersion:    ContinueSchemaVersion,
@@ -126,7 +132,11 @@ func ContinueConversation(
 		PromptCharacters: utf8.RuneCountInString(prompt),
 		Metadata:         map[string]any{},
 	}
+	data.Tool = tool
 	notPerformed := notPerformedAction()
+	if toolErr != nil {
+		return continueFailure(runID, config, webagent.StagePlanned, nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired}, notPerformed, conversationRef(conversationID), "chatgpt_tool_invalid", "usage", toolErr.Error(), "", data, nil)
+	}
 	if selectionErr != nil {
 		return continueFailure(
 			runID, config, webagent.StagePlanned, nil,
@@ -174,6 +184,9 @@ func ContinueConversation(
 	data.PromptFingerprint = fingerprintPrompt(prompt)
 	if config.Timeout <= 0 {
 		config.Timeout = defaultAskTimeout
+		if isImageTool(tool) {
+			config.Timeout = defaultImageAskTimeout
+		}
 	}
 	if config.ComposerTimeout <= 0 {
 		config.ComposerTimeout = defaultComposerTimeout
@@ -273,7 +286,7 @@ func ContinueConversation(
 						rendered.UserMessageCount >= 1 &&
 						rendered.AssistantCount >= 1 &&
 						!rendered.Streaming &&
-						rendered.TerminalControl, nil
+						(rendered.TerminalControl || (isImageTool(tool) && rendered.GeneratedImageReady)), nil
 				},
 			)
 			data.Metadata["conversation_readiness_attempt"] =
@@ -381,9 +394,18 @@ func ContinueConversation(
 			data.Intelligence = selection.Intelligence
 			data.Model = selection.Model
 
+			if tool != "" {
+				selectedTool, err := selectChatGPTTool(ctx, session, tool, config.ComposerTimeout, config.PollInterval)
+				if err != nil {
+					_ = lease.MarkIncomplete(context.Background())
+					return continueFailure(runID, config, webagent.StageAttached, target, pending, notPerformed, conversation, "chatgpt_tool_selection_failed", "provider", err.Error(), "", data, cleanupCommands(runID, pending))
+				}
+				data.Tool = selectedTool
+				data.Metadata["selected_tool"] = selectedTool
+			}
 			dispatcher := config.Send
 			verifyAttempts, verified, verifyErr :=
-				prepareVerifiedContinuationPromptWithExpectation(
+				prepareVerifiedContinuationPromptWithToolExpectation(
 					ctx,
 					session,
 					conversationID,
@@ -393,12 +415,29 @@ func ContinueConversation(
 					data.Intelligence,
 					selection.expectation,
 					data.Model,
+					tool,
 					config.ComposerTimeout,
 					config.PollInterval,
 				)
 			data.Metadata["prompt_verify_attempts"] = verifyAttempts
-			if verifyErr != nil {
-				data.Metadata["prompt_verify_failure"] = verifyErr.Error()
+			if boundary, uncertain := preparationRecovery(verifyErr); uncertain {
+				_ = lease.MarkIncomplete(context.Background())
+				data.CompletionState = "submission_ack_unknown"
+				data.Metadata["preparation_submission_uncertain"] = true
+				data.Metadata["matching_submitted_prompt"] = boundary.MatchingPrompt
+				result := continueFailure(runID, config, webagent.StageAttached, target, pending, notPerformed, conversation,
+					"chatgpt_preparation_submission_unknown", "completion", boundary.Error(), "", data, cleanupCommands(runID, pending))
+				result.Error.RetrySafe = false
+				result.Action.RetrySafe = false
+				result.NextCommands = append(continuationTerminalCommands(conversationID, data.Tool), result.NextCommands...)
+				return result
+			}
+			if verifyErr != nil || !continuationToolMatches(verified, tool) {
+				if verifyErr != nil {
+					data.Metadata["prompt_verify_failure"] = verifyErr.Error()
+				} else {
+					data.Metadata["prompt_verify_failure"] = "selected tool changed before Send"
+				}
 				_ = lease.MarkIncomplete(context.Background())
 				return continueFailure(
 					runID, config, webagent.StageAttached,
@@ -459,7 +498,7 @@ func ContinueConversation(
 						data.BaselineUserTurns,
 						data.BaselineAssistantTurns,
 						data.Intelligence,
-					) {
+					) || !continuationToolMatches(guardedComposer, tool) {
 					_ = lease.MarkIncomplete(context.Background())
 					return continueFailure(
 						runID, config, webagent.StageAttached,
@@ -487,6 +526,7 @@ func ContinueConversation(
 					baselineAssistants: data.BaselineAssistantTurns,
 					intelligence:       data.Intelligence,
 					model:              data.Model,
+					tool:               tool,
 					expectation:        selection.expectation,
 				}
 			}
@@ -525,6 +565,7 @@ func ContinueConversation(
 				)
 			}
 
+			data.CompletionState = "submission_ack_unknown"
 			ackDeadline := time.Now().Add(
 				minDuration(45*time.Second, config.Timeout),
 			)
@@ -608,6 +649,7 @@ func ContinueConversation(
 					session,
 					conversationID,
 					prompt,
+					tool,
 					data.BaselineUserTurns+1,
 					data.BaselineAssistantTurns+1,
 					deadline,
@@ -620,17 +662,16 @@ func ContinueConversation(
 					rendered,
 					data.PromptFingerprint,
 				)
-			terminal := rendered.RouteMatches &&
-				rendered.ConversationID == conversationID &&
-				rendered.UserMessageCount ==
-					data.BaselineUserTurns+1 &&
-				rendered.AssistantCount ==
-					data.BaselineAssistantTurns+1 &&
-				!rendered.Streaming &&
-				rendered.TerminalControl &&
-				renderedTextAnswerReady(rendered, prompt)
+			terminal := continuationAnswerReady(rendered, conversationID, prompt, tool, data.BaselineUserTurns+1, data.BaselineAssistantTurns+1)
 			if terminal {
 				data.Text = strings.TrimSpace(rendered.Text)
+				if isImageTool(tool) {
+					data.Text = ""
+					data.OutputKind = "image"
+					data.Metadata["answer_kind"] = "generated_image"
+					data.Metadata["artifact_read_command"] = fmt.Sprintf("cdp workflow agent chatgpt conversations download-attachments %s --output-dir ./images --json", conversationID)
+					data.Attachments = []ConversationAttachment{{Kind: "image", Alt: "Generated image", Source: "headed_browser_rendered", Width: rendered.GeneratedImageWidth, Height: rendered.GeneratedImageHeight}}
+				}
 				data.CompletionState = "terminal"
 				data.ReadMode = "headed_browser_rendered"
 				data.Metadata["answer_source"] =
@@ -647,12 +688,7 @@ func ContinueConversation(
 				return continueSuccess(
 					runID, config, webagent.StateTerminal,
 					target, pending, action, conversation, data,
-					[]string{
-						fmt.Sprintf(
-							"cdp workflow agent chatgpt conversations detail %s --json",
-							conversationID,
-						),
-					},
+					continuationTerminalCommands(conversationID, tool),
 				)
 			}
 			_ = lease.MarkIncomplete(context.Background())
@@ -709,14 +745,41 @@ func prepareVerifiedContinuationPromptWithExpectation(
 	timeout time.Duration,
 	poll time.Duration,
 ) (int, composerObservation, error) {
+	return prepareVerifiedContinuationPromptWithToolExpectation(ctx, session, conversationID, prompt, baselineUsers, baselineAssistants, intelligence, expectation, model, "", timeout, poll)
+}
+
+func prepareVerifiedContinuationPromptWithToolExpectation(
+	ctx context.Context,
+	session *cdp.PageSession,
+	conversationID string,
+	prompt string,
+	baselineUsers int,
+	baselineAssistants int,
+	intelligence string,
+	expectation thinkingSelectionExpectation,
+	model string,
+	tool string,
+	timeout time.Duration,
+	poll time.Duration,
+) (int, composerObservation, error) {
 	deadline := time.Now().Add(timeout)
 	var observation composerObservation
 	var lastErr error
 	attempts := 0
 	for attempt := 1; ; attempt++ {
 		attempts = attempt
-		if err := prepareExactPrompt(ctx, session, prompt); err != nil {
-			lastErr = err
+		if err := observePreparationBoundary(ctx, session, prompt, tool, intelligence, conversationID, baselineUsers, baselineAssistants, &observation); err != nil {
+			return attempts, observation, err
+		}
+		if err := prepareExactPromptWithTool(ctx, session, prompt, tool); err != nil {
+			if boundaryErr := observePreparationBoundary(ctx, session, prompt, tool, intelligence, conversationID, baselineUsers, baselineAssistants, &observation); boundaryErr != nil {
+				return attempts, observation, boundaryErr
+			}
+			return attempts, observation, &promptPreparationBoundaryError{}
+		} else if err := observePreparationBoundary(ctx, session, prompt, tool, intelligence, conversationID, baselineUsers, baselineAssistants, &observation); err != nil {
+			return attempts, observation, err
+		} else if !observation.PromptMatches {
+			return attempts, observation, &promptPreparationBoundaryError{}
 		} else if err := verifySelectionAtSendWithExpectation(
 			ctx,
 			session,
@@ -726,14 +789,17 @@ func prepareVerifiedContinuationPromptWithExpectation(
 			poll,
 		); err != nil {
 			lastErr = err
-		} else if err := observeComposer(
+		} else if err := observeComposerForTool(
 			ctx,
 			session,
 			prompt,
+			tool,
 			intelligence,
 			&observation,
 		); err != nil {
-			lastErr = err
+			return attempts, observation, &promptPreparationBoundaryError{}
+		} else if !preparationBaselineUnchanged(observation, conversationID, baselineUsers, baselineAssistants) {
+			return attempts, observation, &promptPreparationBoundaryError{}
 		} else if continuationComposerReadyForSend(
 			observation,
 			conversationID,
@@ -754,14 +820,18 @@ func prepareVerifiedContinuationPromptWithExpectation(
 				time.Until(deadline),
 				poll,
 				func() (bool, error) {
-					if err := observeComposer(
+					if err := observeComposerForTool(
 						ctx,
 						session,
 						prompt,
+						tool,
 						intelligence,
 						&observation,
 					); err != nil {
-						return false, err
+						return false, &promptPreparationBoundaryError{}
+					}
+					if !preparationBaselineUnchanged(observation, conversationID, baselineUsers, baselineAssistants) {
+						return false, &promptPreparationBoundaryError{}
 					}
 					return continuationComposerReadyForSend(
 						observation,
@@ -783,10 +853,11 @@ func prepareVerifiedContinuationPromptWithExpectation(
 					poll,
 				); err != nil {
 					lastErr = err
-				} else if err := observeComposer(
+				} else if err := observeComposerForTool(
 					ctx,
 					session,
 					prompt,
+					tool,
 					intelligence,
 					&observation,
 				); err != nil ||
@@ -804,6 +875,9 @@ func prepareVerifiedContinuationPromptWithExpectation(
 					return attempts, observation, nil
 				}
 			} else {
+				if _, boundary := preparationRecovery(waitErr); boundary {
+					return attempts, observation, waitErr
+				}
 				lastErr = waitErr
 			}
 		} else {
@@ -873,6 +947,7 @@ func waitRenderedContinuationAnswer(
 	session *cdp.PageSession,
 	conversationID string,
 	prompt string,
+	tool string,
 	expectedUsers int,
 	expectedAssistants int,
 	deadline time.Time,
@@ -888,16 +963,7 @@ func waitRenderedContinuationAnswer(
 		if err := observeRendered(ctx, session, &current); err == nil {
 			observation = current
 			text := strings.TrimSpace(observation.Text)
-			valid := observation.RouteMatches &&
-				observation.ConversationID == conversationID &&
-				observation.UserMessageCount == expectedUsers &&
-				observation.AssistantCount == expectedAssistants &&
-				renderedPromptMatches(
-					observation,
-					fingerprintPrompt(prompt),
-				) &&
-				!observation.Streaming &&
-				renderedTextAnswerReady(observation, prompt)
+			valid := continuationAnswerReady(observation, conversationID, prompt, tool, expectedUsers, expectedAssistants)
 			if valid {
 				if text == lastText {
 					stable++
@@ -905,7 +971,7 @@ func waitRenderedContinuationAnswer(
 					lastText = text
 					stable = 1
 				}
-				if observation.TerminalControl {
+				if observation.TerminalControl || isImageTool(tool) {
 					return observation, stable, attempts
 				}
 			} else {
@@ -992,4 +1058,26 @@ func continuationProductModeReady(observation composerObservation) bool {
 	return observation.ChatCount == 1 &&
 		observation.WorkCount == 1 &&
 		observation.ChatSelected
+}
+
+func continuationToolMatches(observation composerObservation, tool string) bool {
+	return tool == "" || strings.EqualFold(observation.SelectedTool, toolDisplayLabel(tool))
+}
+
+func continuationAnswerReady(observation renderedObservation, conversationID, prompt, tool string, users, assistants int) bool {
+	if !observation.RouteMatches || observation.ConversationID != conversationID || observation.UserMessageCount != users || observation.AssistantCount != assistants || !renderedPromptMatches(observation, fingerprintPrompt(prompt)) || observation.Streaming {
+		return false
+	}
+	if isImageTool(tool) {
+		return observation.GeneratedImageReady
+	}
+	return observation.TerminalControl && renderedTextAnswerReady(observation, prompt)
+}
+
+func continuationTerminalCommands(conversationID, tool string) []string {
+	commands := []string{fmt.Sprintf("cdp workflow agent chatgpt conversations detail %s --json", conversationID)}
+	if isImageTool(tool) {
+		commands = append(commands, fmt.Sprintf("cdp workflow agent chatgpt conversations download-attachments %s --output-dir ./images --json", conversationID))
+	}
+	return commands
 }

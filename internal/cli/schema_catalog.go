@@ -90,6 +90,18 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "metadata", Type: "object", Required: false, Description: "Safe readiness stages, observation counters, exact prompt and model policy proof, and answer-readback evidence."},
 			},
 		},
+		"chatgpt-conversation-continue": {
+			Name: "chatgpt-conversation-continue", Description: "Exact-conversation continuation data inside the webagent-operation envelope; ask --conversation uses the same owned-tab, single-Send workflow.",
+			Fields: []schemaField{
+				{Name: "conversation_id", Type: "string", Required: true, Description: "Exact requested conversation ID."},
+				{Name: "completion_state", Type: "string", Required: true, Description: "Terminal or incomplete readback; incomplete never authorizes resend."},
+				{Name: "tool", Type: "string", Required: false, Description: "Explicit verified tool selected before Send."},
+				{Name: "output_kind", Type: "string", Required: false, Description: "image for a verified generated-image answer."},
+				{Name: "text", Type: "string", Required: true, Description: "Rendered answer text; empty for image-only answers."},
+				{Name: "attachments", Type: "array<conversation_attachment>", Required: false, Description: "Exact new assistant turn image metadata; recover bytes with the exact-conversation download command."},
+				{Name: "metadata", Type: "object", Required: true, Description: "Baseline, prompt identity, and safe artifact readback evidence."},
+			},
+		},
 		"claude-ask": {
 			Name: "claude-ask", Description: "Claude Ask data inside webagent-operation; repeated --file assigns one verified batch before one Send.",
 			Fields: []schemaField{

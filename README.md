@@ -476,6 +476,14 @@ printf '%s' 'A paper boat has washed up at the lighthouse during a silver storm.
   cdp workflow agent chatgpt ask \
     --stdin --tool create-image --thinking Pro \
     --model 'GPT-5.6 Sol' --json --timeout 40m
+# Continue an existing conversation with one explicit Create-image Send:
+printf '%s' 'Create a high-resolution image of the layout we just agreed.' |
+  cdp workflow agent chatgpt ask \
+    --stdin --conversation CONVERSATION_ID --tool create-image \
+    --thinking Pro --model highest --json --timeout 40m
+# Recover original output bytes after terminal readback:
+cdp workflow agent chatgpt conversations download-attachments CONVERSATION_ID \
+  --output-dir ./images --json
 printf '%s' 'What changed in the official Agent Skills specification, and what should I change in my local skill library?' |
   cdp workflow agent chatgpt ask \
     --stdin --tool web-search --thinking Medium \
@@ -1295,3 +1303,10 @@ go build ./cmd/cdp
 - Chrome DevTools Protocol: https://chromedevtools.github.io/devtools-protocol/
 - Rodney: https://github.com/simonw/rodney
 - Rod: https://github.com/go-rod/rod
+
+Image continuation uses a fresh owned headed tab and closes only that tab. New
+`--file` uploads cannot be combined with `--conversation`; retained conversation
+attachments remain available to the provider. If acknowledgement or completion
+is uncertain, follow the returned exact-conversation read command; never repeat
+Send to recover an answer. Image metadata is readiness evidence, not downloaded
+bytes: use `download-attachments` and its manifest for original artifact recovery.
