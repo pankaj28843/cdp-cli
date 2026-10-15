@@ -263,10 +263,14 @@ func (e *Engine) Acquire(ctx context.Context, request AcquireRequest) (*Lease, e
 		)
 	}
 	record.TargetID = targetID
-	if err := cdp.MarkTargetDisposable(ctx, e.client, targetID); err != nil {
+	// The durable browserflow journal owns exact-target cleanup. A generic
+	// invocation TTL cannot determine whether a vanished caller dispatched an
+	// irreversible action, or whether a person took over its page. Preserve it
+	// on abandonment; Close/Recover still close this exact journal-owned target.
+	if err := cdp.MarkTargetPersistent(ctx, e.client, targetID); err != nil {
 		_, cleanupErr := e.settleExactCleanup(&record, nil)
 		return nil, errors.Join(
-			fmt.Errorf("mark exact target %s disposable: %w", targetID, err),
+			fmt.Errorf("preserve exact target %s for journal recovery: %w", targetID, err),
 			cleanupErr,
 			releaseInput(),
 		)

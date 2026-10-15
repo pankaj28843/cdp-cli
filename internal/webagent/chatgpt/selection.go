@@ -674,7 +674,10 @@ func selectChatGPT(
 			requestedModel = option.Label
 		}
 		modelOption, ok := exactOption(surface.ModelOptions, requestedModel)
-		if !ok || !modelOption.Ready {
+		// A checked model can be pinned/disabled by the current ChatGPT
+		// surface. Its exact checked identity is sufficient when no click is
+		// needed; changing to another model still requires actionability.
+		if !ok || (!modelOption.Checked && !modelOption.Ready) {
 			return observation, fmt.Errorf(
 				"ChatGPT model option %q is unavailable",
 				requestedModel,
@@ -2049,8 +2052,10 @@ func observeSelectionSurface(
 	  const thinkingMenus = menus.filter(menu => Boolean(semanticSlider(menu)));
   // Model radio options share this menu; the effort slider identifies it.
   const thinkingMenu = thinkingMenus.length === 1 ? thinkingMenus[0] : null;
+  // Current ChatGPT puts the model radios beside the effort slider in one
+  // menu. Older observed surfaces use a separate model submenu. In either
+  // case require one unambiguous menu with direct model radio children.
   const modelMenus = menus.filter(menu =>
-    menu !== thinkingMenu &&
     directItems(menu, 'menuitemradio').length > 0
   );
   const modelMenu = modelMenus.length === 1 ? modelMenus[0] : null;
@@ -2109,7 +2114,8 @@ func observeSelectionSurface(
 	    selectedThinking = thinkingSliderLabels[sliderIndex] ||
 	      thinkingSliderLabel || selectedThinking;
 	  }
-	  const modelTriggers = directItems(thinkingMenu, 'menuitem');
+	  const modelTriggers = modelMenu === thinkingMenu ? [] :
+    directItems(thinkingMenu, 'menuitem');
   const modelOptions = directItems(modelMenu, 'menuitemradio').map(toOption);
   const selectedModels = modelOptions.filter(option => option.checked);
   return {

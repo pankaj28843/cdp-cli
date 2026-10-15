@@ -41,6 +41,26 @@ the focus-sensitive preparation and Send boundary; it is released before long
 answer observation. A vanished process or tab may lose that invocation's
 answer, but it does not poison or block the next fresh ask.
 
+A fresh ChatGPT home route must also have an empty composer. If ChatGPT restores
+a draft, ask returns `chatgpt_restored_draft_detected` before changing selection,
+uploading files, inserting text, or sending. Acquire failures include the durable
+`acquire_phase` and `acquire_error_class` in ask metadata, so an input-lease wait
+can be distinguished from failure to create a target.
+
+The current model picker can place model radios and the effort slider in one
+menu. Exact checked model identity remains valid when that selected radio is
+pinned or disabled; switching to an unchecked model still requires an
+actionable control. Multiple visible model menus fail closed.
+
+Browserflow journal ownership survives invocation expiry and daemon reconnects.
+Generic lease cleanup must preserve those targets because a missing caller can
+leave an unknown submission or a person may have taken over the page. Normal
+completion still closes the exact owned target and verifies its absence. An
+abandoned job requires journal and conversation reconciliation before explicit
+exact-target recovery; keep pending jobs bounded and close reconciled jobs after
+their answer and required artifacts have been persisted. Never reclaim memory by
+closing unrelated or user-owned tabs.
+
 The command never closes sibling tabs and never reuses a tab from a previous
 ask. It reports whether raw input was attempted, so callers can avoid
 duplicating a request after an ambiguous transport failure.
@@ -192,6 +212,13 @@ Every live invocation exact-closes the tab it created before returning. Normal
 completion reports `cleanup.state=closed`. If Chrome disappears or exact close
 cannot be proved, the result reports the exact target ID; it does not prescribe
 a follow-up command and it never blocks a later fresh ask.
+
+Known lifecycle gap (P1): the normal ChatGPT return path still exact-closes its
+target when submission returns UNKNOWN without a proved conversation ID. The
+invocation-expiry protection above covers abandoned callers, not this return
+path. Preserve and reconcile an UNKNOWN live job before its return deadline;
+never resubmit it. A follow-up must transfer unresolved ownership to durable
+recovery and emit explicit pending cleanup instead of closing that target.
 
 ## Capability Changes
 

@@ -87,6 +87,16 @@ func runOwned(
 			target, cleanup, code, errClass, message, data,
 			cleanupCommands(runID, cleanup),
 		)
+		// Keep the recovery boundary visible without exposing transport errors,
+		// page contents, or local paths. In particular, input-lock contention is
+		// different from failure to create a browser target.
+		if ask, ok := data.(AskData); ok {
+			if record, loadErr := config.Journal.Load(context.Background(), runID); loadErr == nil {
+				ask.Metadata["acquire_phase"] = string(record.Phase)
+				ask.Metadata["acquire_error_class"] = record.LastErrorClass
+				result.Data = ask
+			}
+		}
 		if cleanup.State == webagent.CleanupFailed {
 			result.Evidence.OperationFailure = originalFailure
 		}

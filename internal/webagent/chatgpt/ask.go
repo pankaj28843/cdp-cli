@@ -93,6 +93,7 @@ type composerObservation struct {
 	InnerTextCharacters     int     `json:"inner_text_characters"`
 	TextContentCharacters   int     `json:"text_content_characters"`
 	CanonicalCharacters     int     `json:"canonical_characters"`
+	DraftCharacters         int     `json:"draft_characters"`
 	ChatCount               int     `json:"chat_count"`
 	WorkCount               int     `json:"work_count"`
 	ChatSelected            bool    `json:"chat_selected"`
@@ -482,6 +483,12 @@ func Ask(
 					); err != nil {
 						return false, err
 					}
+					// A new target can restore a draft from another conversation.
+					// Stop before selection or input; a fresh URL is not proof of
+					// a fresh composer, and replacing this text would destroy it.
+					if restoredComposerDraft(composer) {
+						return true, nil
+					}
 					composerReady := composer.RouteReady &&
 						composer.EditorReady &&
 						composer.EditorCount == 1 &&
@@ -515,6 +522,16 @@ func Ask(
 			data.Metadata["composer_stage_observations"] = readiness.StageObservations
 			data.Metadata["composer_observation_phase"] = observationPhase
 			data.Metadata["composer_document_ready_state"] = composer.DocumentReadyState
+			if readiness.Observed && restoredComposerDraft(composer) {
+				data.Metadata["restored_draft_characters"] = composer.CanonicalCharacters
+				return askFailure(
+					runID, config, webagent.StageAttached, target, pending,
+					notPerformed, nil,
+					"chatgpt_restored_draft_detected", "provider",
+					"ChatGPT restored a nonempty draft on the fresh target; no prompt input or Send was attempted",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
 			if err != nil || readiness.ObservationFailed() {
 				data.Metadata["composer_observation_error_kind"] = composerObservationErrorKind(err, readiness.LastObservationError)
 				data.Metadata["observed_route_ready"] = composer.RouteReady
@@ -1287,6 +1304,13 @@ func composerObservationErrorKind(err, observationErr error) string {
 	}
 }
 
+func restoredComposerDraft(observation composerObservation) bool {
+	return observation.RouteReady && observation.EditorReady &&
+		observation.EditorCount == 1 && observation.ConversationID == "" &&
+		observation.UserMessageCount == 0 && observation.AssistantCount == 0 &&
+		observation.DraftCharacters > 0
+}
+
 func observeComposer(
 	ctx context.Context,
 	session *cdp.PageSession,
@@ -1545,6 +1569,7 @@ func observeComposerWithTool(
 	    inner_text_characters: editorInnerText.length,
 	    text_content_characters: editorTextContent.length,
 	    canonical_characters: canonicalEditorText.length,
+	    draft_characters: toolFreeEditorText.length,
 	    chat_count: chats.length,
 	    work_count: works.length,
 	    chat_selected: chats.length === 1 &&
