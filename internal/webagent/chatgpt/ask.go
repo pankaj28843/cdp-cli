@@ -2064,13 +2064,26 @@ func observeRendered(
 	  const canonical = element => {
 	    if (!element) return '';
 	    const children = Array.from(element.childNodes);
+	    const blankLines = node => node instanceof HTMLElement &&
+	      node.tagName === 'SPAN' &&
+	      node.getAttribute('data-markdown-copy') === 'blank-lines';
+	    const nativeParagraphs = children.some(blankLines);
+	    // Current user Markdown interleaves paragraphs with copy-only blank
+	    // lines. Those spans add spacing to the paragraph boundary; they do
+	    // not replace it. Reject malformed/mixed roots instead of guessing.
+	    if (nativeParagraphs && (children.length < 3 || children.length % 2 !== 1 ||
+	      !children.every((node, index) => index % 2 === 0 ?
+	        node instanceof HTMLElement && ['P', 'DIV'].includes(node.tagName) :
+	        blankLines(node) && /^\n+$/.test(inlineText(node))))) return null;
 	    const blockStructured = children.length > 1 &&
 	      children.every(node =>
 	        node.nodeType === Node.TEXT_NODE ||
 	        node instanceof HTMLElement &&
 	          ['P', 'DIV'].includes(node.tagName)
 	      );
-	    const value = blockStructured ?
+	    const value = nativeParagraphs ? children.map((node, index) =>
+	      index % 2 === 1 ? inlineText(node) :
+	        (index === 0 ? '' : '\n') + blockText(node)).join('') : blockStructured ?
 	      children.map(blockText).join('\n') :
 	      inlineText(element);
 	    const hasSelectionPill = Boolean(element.querySelector(
@@ -2079,12 +2092,13 @@ func observeRendered(
 	    ));
 	    return hasSelectionPill ? value.replace(/^\s+/, '') : value;
 	  };
-	  const promptCandidates = userContentRoots.length > 1 ? [] : unique([
+	  const canonicalPrompt = canonical(promptNode);
+	  const promptCandidates = userContentRoots.length > 1 || canonicalPrompt === null ? [] : unique([
 	    user && user.innerText,
 	    user && user.textContent,
 	    promptNode && promptNode.innerText,
 	    promptNode && promptNode.textContent,
-	    canonical(promptNode),
+	    canonicalPrompt,
 	  ].map(trimTrailingNewlines).filter(Boolean));
 	  const turn = assistantTurn || assistant && assistant.closest(
 	    'section[data-turn="assistant"],[data-turn="assistant"]'
