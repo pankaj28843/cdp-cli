@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pankaj28843/cdp-cli/internal/testsupport"
+	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
 func TestAskRefusesRestoredDraftBeforeSelectionOrInput(t *testing.T) {
@@ -38,8 +39,9 @@ func TestAskRefusesRestoredDraftBeforeSelectionOrInput(t *testing.T) {
 	if inserts != 0 || sends != 0 || len(reloads) != 0 {
 		t.Fatalf("mutations: insert=%d send=%d reload=%v", inserts, sends, reloads)
 	}
-	if len(targets) != 1 || targets["user-page"].TargetID != "user-page" {
-		t.Fatalf("wrong target cleanup: %v", targets)
+	if len(targets) != 2 || targets["user-page"].TargetID != "user-page" ||
+		result.Cleanup.State != webagent.CleanupPending || client.Counts["Target.closeTarget"] != 0 {
+		t.Fatalf("unknown restored draft was not preserved: %v", targets)
 	}
 }
 

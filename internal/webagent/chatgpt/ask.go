@@ -641,6 +641,18 @@ func Ask(
 				data.Tool = selectedTool
 				data.Metadata["selected_tool"] = selectedTool
 			}
+			if err := lease.BindInputFingerprint(
+				ctx,
+				data.PromptFingerprint,
+			); err != nil {
+				return askFailure(
+					runID, config, webagent.StageAttached, target, pending,
+					notPerformed, nil,
+					"chatgpt_prompt_identity_state_failed", "internal",
+					"ChatGPT prompt fingerprint could not be persisted before Send",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
 			var expectedAttachment *attachmentExpectation
 			if len(uploads) > 0 {
 				attachments, expectation, attachFailure := attachLocalFilesOnce(
@@ -750,18 +762,6 @@ func Ask(
 			}
 			for i := range data.InputAttachments {
 				data.InputAttachments[i].SendReadyAfterUpload = composer.SendReady
-			}
-			if err := lease.BindInputFingerprint(
-				ctx,
-				data.PromptFingerprint,
-			); err != nil {
-				return askFailure(
-					runID, config, webagent.StageAttached, target, pending,
-					notPerformed, nil,
-					"chatgpt_prompt_identity_state_failed", "internal",
-					"ChatGPT prompt fingerprint could not be persisted before Send",
-					"", data, cleanupCommands(runID, pending),
-				)
 			}
 			if dispatcher == nil {
 				if err := prepareSelectionGuardAtSendWithExpectation(

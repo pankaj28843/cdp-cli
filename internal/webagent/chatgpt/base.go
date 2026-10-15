@@ -115,6 +115,14 @@ func runOwned(
 		TargetID: lease.TargetID(),
 	}
 	defer func() {
+		if !ownedTargetSafeToClose(lease.Record(), result) {
+			// A persistent daemon target also needs protection from this normal
+			// return path. Release shared input without destroying recovery state.
+			_ = lease.ReleaseInput()
+			result.Evidence.Target = target
+			result.Cleanup = pending
+			return
+		}
 		cleanup, _ := lease.Close(context.Background())
 		if cleanup.State != browserflow.CleanupClosed || !cleanup.TargetGone {
 			result.PreserveOperationFailure()
@@ -154,6 +162,47 @@ func runOwned(
 		result.Stage = webagent.StageClosed
 	}()
 	return callback(lease, target, pending)
+}
+
+func ownedTargetSafeToClose(record browserflow.Record, result webagent.Result) bool {
+	if result.Error != nil && result.Error.Code == "chatgpt_restored_draft_detected" {
+		return false
+	}
+	// Fingerprints are persisted before any owned prompt or upload preparation.
+	// Zero Send attempts alone cannot establish that no persistent draft exists.
+	if record.InputFingerprint == "" && record.ActionAttemptCount == 0 &&
+		record.RawInputCount == 0 && !record.PendingPersisted &&
+		len(record.CompletedActions) == 0 &&
+		(record.Dispatch == "" || record.Dispatch == browserflow.DispatchNotPerformed) {
+		return true
+	}
+	if !result.OK || result.State != webagent.StateTerminal ||
+		record.Phase != browserflow.PhaseTerminal ||
+		record.Dispatch != browserflow.DispatchPerformed ||
+		result.Action == nil || result.Action.Dispatch != webagent.DispatchPerformed {
+		return false
+	}
+	if record.Operation != string(webagent.OperationAsk) &&
+		record.Operation != string(webagent.OperationConversationsContinue) {
+		return true
+	}
+	if record.ConversationID == "" || result.Conversation == nil ||
+		result.Conversation.ID != record.ConversationID {
+		return false
+	}
+	// The acknowledged ID durably identifies recoverable provider history.
+	// An image completion marker is not proof that its original was recovered:
+	// keep that target for the owner to download and explicitly close.
+	switch data := result.Data.(type) {
+	case AskData:
+		return !isImageTool(data.Tool) && data.OutputKind != "image" &&
+			strings.TrimSpace(data.Text) != ""
+	case ContinueData:
+		return !isImageTool(data.Tool) && data.OutputKind != "image" &&
+			strings.TrimSpace(data.Text) != ""
+	default:
+		return false
+	}
 }
 
 func conversationAwaitCommand(conversationID string) string {

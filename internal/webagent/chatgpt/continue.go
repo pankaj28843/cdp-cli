@@ -403,6 +403,18 @@ func ContinueConversation(
 				data.Tool = selectedTool
 				data.Metadata["selected_tool"] = selectedTool
 			}
+			if err := lease.BindInputFingerprint(
+				ctx,
+				data.PromptFingerprint,
+			); err != nil {
+				return continueFailure(
+					runID, config, webagent.StageAttached,
+					target, pending, notPerformed, conversation,
+					"chatgpt_prompt_identity_state_failed", "internal",
+					"ChatGPT continuation prompt fingerprint could not be persisted before Send",
+					"", data, cleanupCommands(runID, pending),
+				)
+			}
 			dispatcher := config.Send
 			verifyAttempts, verified, verifyErr :=
 				prepareVerifiedContinuationPromptWithToolExpectation(
@@ -454,18 +466,6 @@ func ContinueConversation(
 					target, pending, notPerformed, conversation,
 					"chatgpt_continuation_route_changed", "provider",
 					"ChatGPT continuation route changed before Send",
-					"", data, cleanupCommands(runID, pending),
-				)
-			}
-			if err := lease.BindInputFingerprint(
-				ctx,
-				data.PromptFingerprint,
-			); err != nil {
-				return continueFailure(
-					runID, config, webagent.StageAttached,
-					target, pending, notPerformed, conversation,
-					"chatgpt_prompt_identity_state_failed", "internal",
-					"ChatGPT continuation prompt fingerprint could not be persisted before Send",
 					"", data, cleanupCommands(runID, pending),
 				)
 			}

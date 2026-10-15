@@ -27,7 +27,7 @@ func (b *closeFailBrowser) Call(
 	return b.Browser.Call(ctx, method, params, result)
 }
 
-func TestRunOwnedCleanupFailurePreservesPerformedActionSafety(t *testing.T) {
+func TestRunOwnedPreservesIncompletePerformedAction(t *testing.T) {
 	t.Parallel()
 
 	const retryAt = "2026-07-27T12:00:30Z"
@@ -95,26 +95,28 @@ func TestRunOwnedCleanupFailurePreservesPerformedActionSafety(t *testing.T) {
 			)
 			current.Error.RetryAt = retryAt
 			current.Action = actionEvidence(lease.Record())
+			current.Error.RetrySafe = current.Action.RetrySafe
 			return current
 		},
 	)
 
 	if result.OK ||
 		result.Error == nil ||
-		result.Error.Code != "chatgpt_exact_target_cleanup_failed" ||
+		result.Error.Code != "chatgpt_rate_limited" ||
 		result.Error.RetryAt != retryAt ||
 		result.Error.RetrySafe ||
 		result.Action == nil ||
 		result.Action.Dispatch != webagent.DispatchPerformed ||
 		result.Action.RetrySafe ||
-		result.Cleanup.FailurePhase == "" {
+		result.Cleanup.State != webagent.CleanupPending ||
+		client.Counts["Target.closeTarget"] != 0 {
 		t.Fatalf("result=%+v error=%+v", result, result.Error)
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("cleanup failure result is invalid: %v; result=%+v", err, result)
 	}
-	if original := result.Evidence.OperationFailure; original == nil || original.Code != "chatgpt_rate_limited" || original.Stage != webagent.StageObserveTerminal {
-		t.Fatalf("original operation failure was lost: %+v", original)
+	if result.Evidence.OperationFailure != nil {
+		t.Fatalf("preservation invented a cleanup failure: %+v", result.Evidence.OperationFailure)
 	}
 }
 

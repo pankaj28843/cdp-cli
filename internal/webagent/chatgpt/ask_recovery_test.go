@@ -111,6 +111,18 @@ func TestAskRecoversSelectionControlsBeforePromptMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
+	fingerprintBeforeTyping := false
+	guardedJournal := &recordingJournal{Journal: journal, beforeSave: func(_ context.Context, record browserflow.Record) error {
+		if record.InputFingerprint != "" && !fingerprintBeforeTyping {
+			_, _, _, _, inserts, sends, _ := client.Snapshot()
+			if inserts != 0 || sends != 0 {
+				t.Fatal("owned draft input preceded durable identity")
+			}
+			fingerprintBeforeTyping = true
+		}
+		return nil
+	}}
+	engine = newReadTestEngine(t, client, guardedJournal)
 	store, err := NewStore(stateDir)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
@@ -119,7 +131,7 @@ func TestAskRecoversSelectionControlsBeforePromptMutation(t *testing.T) {
 		BrowserConfig: BrowserConfig{
 			Client:      client,
 			Engine:      engine,
-			Journal:     journal,
+			Journal:     guardedJournal,
 			BuildCommit: "test-commit",
 		},
 		Store:           store,
@@ -131,6 +143,9 @@ func TestAskRecoversSelectionControlsBeforePromptMutation(t *testing.T) {
 	}
 
 	result := Ask(context.Background(), config, prompt)
+	if !fingerprintBeforeTyping {
+		t.Fatal("owned draft identity was not persisted")
+	}
 	data, _ := result.Data.(AskData)
 	if !result.OK ||
 		result.State != webagent.StateTerminal ||

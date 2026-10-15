@@ -92,6 +92,13 @@ When validating a CLI behavior that users or agents will exercise through the in
   closing; after clearing, blur and prove a newly hydrated owned page remains
   blank with no turns or attachments. Preserve unknown restored input or
   uncertain submission for recovery.
+  Zero Send attempts do not prove a prepared draft is safe to close. Preserve
+  owned input preparation and pending/unknown dispatches on normal returns and
+  exceptions. Completed text may close with matching durable acknowledged
+  conversation identity and terminal text proof; completed image tabs require
+  original recovery and explicit owner closure, not an image completion marker.
+  Reconcile preserved jobs through their journal target and known conversation
+  URL before an explicit owner-authorized close; never resend an unknown action.
   Never close a user tab or unrelated Chrome to reclaim memory.
 - Prefer raw CDP escape hatches plus focused high-level workflows over broad shallow wrappers.
 - New command JSON needs a schema entry, help examples, and E2E coverage in `scripts/e2e.sh`.
