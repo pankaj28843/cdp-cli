@@ -225,6 +225,20 @@ func (d chatgptSendDispatcher) Dispatch(
 	ctx context.Context,
 	session *cdp.PageSession,
 ) (browserflow.DispatchOutcome, error) {
+	if err := d.verifyBeforeSend(ctx, session); err != nil {
+		return browserflow.DispatchOutcome{Dispatch: browserflow.DispatchNotPerformed}, err
+	}
+	d.recordGuardPhase("editor_focus_or_enter")
+	return pressChatGPTComposerEnter(ctx, session)
+}
+
+// verifyBeforeSend is the dispatcher's observation-only prefix. Sharing it
+// with the explicit live NO_SEND gate keeps that gate on the actual guarded
+// prompt/attachment path without focusing or emitting an Enter key.
+func (d chatgptSendDispatcher) verifyBeforeSend(
+	ctx context.Context,
+	session *cdp.PageSession,
+) error {
 	// Selection preflight, including the resolved model, finishes immediately
 	// before MarkPrepared. Once action_pending is durable this dispatcher must
 	// perform no reversible raw clicks: it passively observes the selection
@@ -236,9 +250,7 @@ func (d chatgptSendDispatcher) Dispatch(
 		d.selectionExpectation(),
 		d.model,
 	); err != nil {
-		return browserflow.DispatchOutcome{
-			Dispatch: browserflow.DispatchNotPerformed,
-		}, err
+		return err
 	}
 	d.recordGuardPhase("attachment")
 	var attachment attachmentObservation
@@ -248,9 +260,7 @@ func (d chatgptSendDispatcher) Dispatch(
 		d.attachment,
 		&attachment,
 	); err != nil || !attachment.OK {
-		return browserflow.DispatchOutcome{
-			Dispatch: browserflow.DispatchNotPerformed,
-		}, fmt.Errorf("exact ChatGPT attachment was not retained and ready at Send")
+		return fmt.Errorf("exact ChatGPT attachment was not retained and ready at Send")
 	}
 	// Keep the composer observation immediately before the one raw Send input.
 	// ChatGPT's current composer is a ProseMirror textbox whose Enter handler
@@ -296,12 +306,9 @@ func (d chatgptSendDispatcher) Dispatch(
 			observation.SelectedTool,
 			toolDisplayLabel(d.tool),
 		)) {
-		return browserflow.DispatchOutcome{
-			Dispatch: browserflow.DispatchNotPerformed,
-		}, fmt.Errorf("exact ChatGPT Send control was not actionable")
+		return fmt.Errorf("exact ChatGPT Send control was not actionable")
 	}
-	d.recordGuardPhase("editor_focus_or_enter")
-	return pressChatGPTComposerEnter(ctx, session)
+	return nil
 }
 
 func (d chatgptSendDispatcher) selectionExpectation() thinkingSelectionExpectation {

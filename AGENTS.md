@@ -85,7 +85,14 @@ When validating a CLI behavior that users or agents will exercise through the in
   Preserve pending or unknown jobs for journal reconciliation; generic daemon
   expiry must not close their tabs. Once the answer and required artifacts are
   persisted and verified through list/detail, close only the owned target and
-  prove it absent. Never close a user tab or unrelated Chrome to reclaim memory.
+  prove it absent. Bind the private ledger to the named owner, task/repository,
+  request and active connection generation; reconcile after connection changes
+  or user intervention and verify installed/source provenance before dispatch.
+  Clear only an owned unsent probe's exact known draft and prove it blank before
+  closing; after clearing, blur and prove a newly hydrated owned page remains
+  blank with no turns or attachments. Preserve unknown restored input or
+  uncertain submission for recovery.
+  Never close a user tab or unrelated Chrome to reclaim memory.
 - Prefer raw CDP escape hatches plus focused high-level workflows over broad shallow wrappers.
 - New command JSON needs a schema entry, help examples, and E2E coverage in `scripts/e2e.sh`.
 - See `ARCHITECTURE.md` for package boundaries and feature-shaping rules.

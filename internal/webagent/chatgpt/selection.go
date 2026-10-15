@@ -982,9 +982,7 @@ func prepareSelectionGuardAtSendWithExpectation(
 		// reversible click immediately before Send.
 		return nil
 	}
-	if surface.ModelMenuOpen ||
-		surface.ModelTriggerCount != 1 ||
-		!strings.EqualFold(surface.ModelTriggerLabel, model) {
+	if !finalModelGuardProved(surface, model) {
 		return fmt.Errorf(
 			"ChatGPT final model guard %q was not observed",
 			model,
@@ -1032,16 +1030,38 @@ func observeSelectionGuardAtSendWithExpectation(
 	if strings.TrimSpace(model) == "" {
 		return nil
 	}
-	if !surface.ThinkingMenuOpen ||
-		surface.ModelMenuOpen ||
-		surface.ModelTriggerCount != 1 ||
-		!strings.EqualFold(surface.ModelTriggerLabel, model) {
+	if !finalModelGuardProved(surface, model) {
 		return fmt.Errorf(
 			"ChatGPT final model guard %q changed before Send",
 			model,
 		)
 	}
 	return nil
+}
+
+// The current combined menu keeps the exact checked model beside the effort
+// slider. A pinned checked radio needs no click. Retain the observed separate
+// trigger proof only when model radios are not open.
+func finalModelGuardProved(surface selectionSurface, model string) bool {
+	if !surface.ThinkingMenuOpen {
+		return false
+	}
+	if surface.ModelMenuOpen {
+		checked, matching := 0, 0
+		matchedChecked := false
+		for _, option := range surface.ModelOptions {
+			if option.Checked {
+				checked++
+			}
+			if strings.EqualFold(option.Label, model) {
+				matching++
+				matchedChecked = option.Checked
+			}
+		}
+		return checked == 1 && matching == 1 && matchedChecked
+	}
+	return surface.ModelTriggerCount == 1 &&
+		strings.EqualFold(surface.ModelTriggerLabel, model)
 }
 
 func inspectChatGPTSelectionOptions(
