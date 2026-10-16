@@ -1,4 +1,5 @@
-.PHONY: build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-agent-workflows-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fixtures-generate fmt fmt-check install leak-check test verify vet
+.DEFAULT_GOAL := build
+.PHONY: help build clean cron-install cron-remove cron-show cross-build e2e e2e-demo e2e-demo-installed e2e-installed e2e-agent-workflows-installed e2e-openai-compat e2e-public-sources-installed e2e-transcription-live e2e-transcription-live-installed e2e-web-research-live-installed fixtures-generate fmt fmt-check install leak-check test verify vet
 
 BINARY := bin/cdp
 GUIDE := internal/cli/guide.md
@@ -8,6 +9,15 @@ BUILD_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
 BUILD_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || printf unknown)
 BUILD_DIRTY := $(shell if test -n "$$(git status --porcelain --untracked-files=normal 2>/dev/null)"; then printf true; else printf false; fi)
 BUILD_LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(BUILD_COMMIT) -X main.date=$(BUILD_DATE) -X main.dirty=$(BUILD_DIRTY) -X main.managedBuild=true
+
+help:
+	@printf '%s\n' \
+	  'make                 Build bin/cdp only.' \
+	  'make install         Install the CLI and guide to ~/.local (override PREFIX if needed).' \
+	  'cdp version --json   Verify the installed CLI.' \
+	  'Background services and scheduled jobs are unchanged by build/install.' \
+	  'cdp transcription service install --help   Optional transcription setup.' \
+	  'cdp transcription service uninstall --json Stop and remove the user transcription service.'
 
 build:
 	mkdir -p bin
@@ -44,6 +54,13 @@ install: build
 	install -m 0755 "$(BINARY)" "$(DESTDIR)$(PREFIX)/bin/cdp"
 	install -d "$(DESTDIR)$(PREFIX)/share/cdp-cli"
 	install -m 0644 "$(GUIDE)" "$(DESTDIR)$(PREFIX)/share/cdp-cli/guide.md"
+	@printf 'Installed %s\nServices and scheduled jobs are unchanged.\n' "$(DESTDIR)$(PREFIX)/bin/cdp"
+	@if [ -z "$(DESTDIR)" ]; then \
+	  case ":$$PATH:" in \
+	    *":$(PREFIX)/bin:"*) ;; \
+	    *) printf 'Add the CLI to this shell: export PATH="%s:$$PATH"\n' "$(PREFIX)/bin" ;; \
+	  esac; \
+	fi
 
 e2e-installed:
 	@cdp_bin="$$(command -v cdp)"; \

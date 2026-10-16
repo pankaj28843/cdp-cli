@@ -10,16 +10,42 @@ From the requested source revision, install and verify the CLI with:
 
 ```bash
 make install
+export PATH="$HOME/.local/bin:$PATH"
 cdp version --json
 cdp --help
 ```
 
-`make install` installs the binary and guide. An ordinary upgrade preserves
+Building from source requires Go (see `go.mod` for the minimum version), Git,
+and Make. The default installation location is `~/.local`; override it with
+`make install PREFIX=/your/location`. Run `make help` for the short command list.
+Plain `make` only builds `bin/cdp`. `make install` installs the binary and guide.
+Neither command installs cron jobs, starts transcription services, or opens
+provider pages. An ordinary upgrade preserves
 running services, browser attachment state, provider state, and open tabs.
 Provider auth refresh and live provider checks are explicit development or
 diagnostic operations and can open provider pages. Run them when provider
 qualification is part of the requested task. Updating a running transcription
 service is a separate deployment action.
+
+### Remove an unwanted transcription service
+
+For a normal user installation on macOS or Linux:
+
+```bash
+cdp transcription service uninstall --json
+cdp transcription service status --json
+```
+
+Verify that status reports `installed: false` and `running: false`. Removing
+the service stops its built-in provider auth-refresh schedule and preserves
+the CLI, browser daemon, browser profiles, and provider state. A machine-wide
+Linux service needs the same uninstall command with `--system`, run as root.
+
+Upgrading the CLI does not remove previously installed services or scheduled
+jobs. `cdp cron status --json` lists the separate managed browser maintenance
+tasks; they are not transcription auth-refresh jobs. For legacy/custom
+transcription jobs, identify and remove only those entries. Keep unrelated
+browser maintenance and other scheduled tasks.
 
 ## Status
 
