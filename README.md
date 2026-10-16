@@ -4,6 +4,23 @@
 
 The goal is a long-running local CDP process that can attach to a user-approved running Chrome session, keep that session warm, reconnect predictably, and expose browser debugging workflows through a shell interface that agents can inspect with `--help` and compose with `jq`.
 
+## Install or upgrade
+
+From the requested source revision, install and verify the CLI with:
+
+```bash
+make install
+cdp version --json
+cdp --help
+```
+
+`make install` installs the binary and guide. An ordinary upgrade preserves
+running services, browser attachment state, provider state, and open tabs.
+Provider auth refresh and live provider checks are explicit development or
+diagnostic operations and can open provider pages. Run them when provider
+qualification is part of the requested task. Updating a running transcription
+service is a separate deployment action.
+
 ## Status
 
 Active implementation. The command tree, JSON/error conventions, connection

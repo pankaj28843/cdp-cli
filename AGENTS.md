@@ -9,6 +9,17 @@ This is a public, machine-agnostic repository. Do not commit local machine detai
 - No browser profile paths, cookies, tokens, request headers, screenshots, traces, logs, or page content unless they are synthetic fixtures.
 - Keep installation-specific notes outside the repo, or document them generically with placeholders.
 
+## Ordinary installation and upgrades
+
+For a request to install or upgrade cdp-cli, update the requested checkout while
+preserving local work, run `make install`, and verify `cdp version --json` and
+`cdp --help` from `PATH`. Installation publishes only the binary and guide.
+Preserve running services, browser attachment state, open tabs, provider state,
+and scheduled tasks. Provider auth/capability refreshes and live provider gates
+require a task that explicitly includes provider qualification; they are not
+ordinary upgrade checks. The development gates below apply when changing the
+product, rather than installing an existing revision.
+
 ## Build
 
 ```bash
@@ -61,8 +72,9 @@ Microsoft 365, and Bing.
 For work on `main`, keep the checkout synchronized with `origin/main` and
 install the exact checkout around every synchronization boundary. Run
 `make install` immediately before and immediately after each fetch, pull,
-merge, rebase, or push; then verify the installed build identity and restart
-any service that consumes the binary before live validation. Resolve divergence
+merge, rebase, or push; then verify the installed build identity. Restart a
+consuming service only when the task explicitly includes deploying that
+service; an ordinary binary upgrade preserves service state. Resolve divergence
 on `main` explicitly and leave the worktree and `origin/main` aligned.
 
 When validating a CLI behavior that users or agents will exercise through the installed `cdp` binary, run `make install` before the live/manual validation and again after final code changes. Run the validation with `cdp ...` from `PATH`, not `go run`, so the improved command is actually available to everyone using the local install.
