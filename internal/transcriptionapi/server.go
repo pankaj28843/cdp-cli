@@ -483,6 +483,7 @@ func includeDisabledProviders(r *http.Request) bool {
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
+	started := time.Now().UTC()
 	if r.Method != http.MethodPost {
 		writeAPIError(w, http.StatusMethodNotAllowed, APIError{Type: "invalid_request_error", Message: "method not allowed"})
 		return
@@ -582,6 +583,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 
 	provider, providerErr := s.config.Registry.Select(request.Provider, s.config.DefaultProvider)
 	record := newRequestRecord(request, providerID(provider), PhasePersisted)
+	// Include multipart upload and audio persistence in request latency.
+	record.CreatedAt = started
 	if err := s.saveRecord(r.Context(), record); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, APIError{Type: "internal_error", Code: "record_persist_failed", Message: "transcription request could not be persisted"})
 		return
@@ -590,14 +593,14 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	s.traceFile("file.persisted", transport, record, nil)
 	if providerErr != nil {
 		s.failRecord(r.Context(), &record, providerErr)
-		s.traceFile("file.failed", transport, record, providerErr)
+		defer s.traceFile("file.failed", transport, record, providerErr)
 		writeProviderError(w, providerErr)
 		return
 	}
 	if silent, _ := mostlySilentAudio(request.Audio.PersistedPath); silent {
 		contentErr := mostlySilenceError()
 		s.failRecord(r.Context(), &record, contentErr)
-		s.traceFile("file.failed", transport, record, contentErr)
+		defer s.traceFile("file.failed", transport, record, contentErr)
 		if request.Stream {
 			s.writeSSEError(w, contentErr)
 			return
@@ -608,7 +611,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	if err := s.ensureProviderAuth(r.Context(), provider); err != nil {
 		s.recordObservedFileFailure(provider, err)
 		s.failRecord(r.Context(), &record, err)
-		s.traceFile("file.failed", transport, record, err)
+		defer s.traceFile("file.failed", transport, record, err)
 		writeProviderError(w, err)
 		return
 	}
@@ -621,7 +624,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 	if runErr != nil {
 		s.recordObservedFileFailure(provider, runErr)
 		s.failRecord(r.Context(), &record, runErr)
-		s.traceFile("file.failed", transport, record, runErr)
+		defer s.traceFile("file.failed", transport, record, runErr)
 		if request.Stream {
 			s.writeSSEError(w, runErr)
 			return
@@ -638,7 +641,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request, task Task) {
 		return
 	}
 	_ = s.config.Store.SaveResult(r.Context(), record, result)
-	s.traceFile("file.completed", transport, record, nil)
+	// Record terminal latency after the response write, including SSE flushes.
+	defer s.traceFile("file.completed", transport, record, nil)
 	if request.Stream {
 		s.writeSSE(w, result)
 		return

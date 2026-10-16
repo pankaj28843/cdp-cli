@@ -343,6 +343,12 @@ request records at `~/.cdp-cli/transcription/trace.jsonl` (or
 `<state-dir>/transcription/trace.jsonl`). It records request ID, provider,
 phase, audio byte/chunk counts, attempts, duration, and typed error
 metadata. It never records audio, transcript text, cookies, or bearer tokens.
+For file requests, `elapsed_ms` starts when the HTTP handler receives the
+request, including multipart upload and audio persistence. Terminal
+`file.completed` and `file.failed` events are written after the response write
+returns, including SSE flushes. This measures server handling time; it does not
+measure when the client receives the response. Requests rejected before a request
+record is created do not emit these lifecycle events.
 The active file rotates once it reaches 8 MiB; the previous file is kept as
 `trace.jsonl.previous`.
 

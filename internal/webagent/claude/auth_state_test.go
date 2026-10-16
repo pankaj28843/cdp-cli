@@ -52,6 +52,64 @@ func TestStoreRoundTripOwnerOnlyAndStatus(t *testing.T) {
 	}
 }
 
+func TestControlsDoNotChangeDistributedV1AuthTemplate(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	template := validAuthTemplate(now)
+	template.Controls = &Controls{Selected: "Synthetic model", Models: []string{"Synthetic model"}}
+	if err := store.Save(ctx, template); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	// These are the fields accepted by the original strict v1 reader.
+	allowed := map[string]bool{"schema_version": true, "method": true, "origin": true, "organization_id": true, "list_url": true, "headers": true, "cookies": true, "browser_user_agent": true, "captured_at": true, "source": true}
+	for field := range fields {
+		if !allowed[field] {
+			t.Fatalf("distributed v1 template gained incompatible field %q", field)
+		}
+	}
+	loaded, err := store.Load(ctx)
+	if err != nil || loaded.Controls == nil || loaded.Controls.Selected != template.Controls.Selected {
+		t.Fatalf("local controls did not survive reload: controls=%+v err=%v", loaded.Controls, err)
+	}
+	controlsPath := filepath.Join(filepath.Dir(store.Path()), "controls.json")
+	info, err := os.Stat(controlsPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("local controls are not owner-only: info=%v err=%v", info, err)
+	}
+	if err := os.WriteFile(controlsPath, []byte("invalid optional UI cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Status(ctx, now, time.Hour).Ready {
+		t.Fatal("an invalid optional UI cache made valid transcription credentials unavailable")
+	}
+	if err := store.Save(ctx, template); err != nil {
+		t.Fatal(err)
+	}
+	// Refreshing credentials without rediscovering UI controls must not reuse
+	// observations from the previous credential generation.
+	template.CapturedAt = now.Add(time.Second).Format(time.RFC3339Nano)
+	template.Controls = nil
+	if err := store.Save(ctx, template); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = store.Load(ctx)
+	if err != nil || loaded.Controls != nil {
+		t.Fatalf("credential refresh reused old controls: controls=%+v err=%v", loaded.Controls, err)
+	}
+}
+
 func TestStoreStatusMissingInvalidAndSymlinkAreSafe(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {

@@ -59,6 +59,11 @@ type Store struct {
 	path string
 }
 
+type controlsSnapshot struct {
+	CapturedAt string    `json:"captured_at"`
+	Controls   *Controls `json:"controls"`
+}
+
 func NewStore(stateDir string) (*Store, error) {
 	stateDir = strings.TrimSpace(stateDir)
 	if stateDir == "" {
@@ -86,12 +91,25 @@ func (s *Store) Save(ctx context.Context, template AuthTemplate) error {
 	if err := template.Validate(); err != nil {
 		return fmt.Errorf("validate Claude auth template: %w", err)
 	}
+	// UI observations are local capabilities, not part of the distributed v1
+	// credential contract. Older strict readers must still accept this file.
+	controls := template.Controls
+	template.Controls = nil
 	data, err := json.MarshalIndent(template, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal Claude auth template: %w", err)
 	}
 	data = append(data, '\n')
 	return artifacts.WithOwnerOnlyFileLock(ctx, s.path+".lock", func() error {
+		if controls != nil {
+			snapshot, err := json.Marshal(controlsSnapshot{CapturedAt: template.CapturedAt, Controls: controls})
+			if err != nil {
+				return fmt.Errorf("marshal Claude controls: %w", err)
+			}
+			if err := artifacts.WriteOwnerOnlyFileAtomic(filepath.Join(filepath.Dir(s.path), "controls.json"), snapshot); err != nil {
+				return fmt.Errorf("save Claude controls: %w", err)
+			}
+		}
 		return artifacts.WriteOwnerOnlyFileAtomic(s.path, data)
 	})
 }
@@ -120,6 +138,14 @@ func (s *Store) Load(ctx context.Context) (AuthTemplate, error) {
 	}
 	if err := template.Validate(); err != nil {
 		return AuthTemplate{}, fmt.Errorf("validate Claude auth template: %w", err)
+	}
+	if template.Controls == nil {
+		// Missing, invalid, or stale UI observations must not invalidate auth.
+		data, err := artifacts.ReadOwnerOnlyFile(filepath.Join(filepath.Dir(s.path), "controls.json"))
+		var snapshot controlsSnapshot
+		if err == nil && json.Unmarshal(data, &snapshot) == nil && snapshot.CapturedAt == template.CapturedAt {
+			template.Controls = snapshot.Controls
+		}
 	}
 	return template, nil
 }

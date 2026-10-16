@@ -62,6 +62,13 @@ Provider state is runtime secret material. Its directory is owner-only mode
 replaced, bounded in size, and excluded from source control, support bundles,
 diagnostics, and benchmark artifacts.
 
+An auth-template schema version is a wire contract for older readers, including
+nodes that have not yet upgraded. Keep optional UI capability observations out
+of that contract. Claude stores its menu controls in a separate owner-only
+`controls.json`, tied to the auth template's capture timestamp. Missing,
+invalid, or older UI observations leave credential readiness unchanged. The
+auth file remains readable by the original strict v1 reader.
+
 ## Serving and Repair Invariants
 
 With a fresh replay template:
