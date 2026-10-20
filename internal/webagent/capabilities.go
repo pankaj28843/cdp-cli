@@ -204,7 +204,7 @@ var operationSpecs = []operationSpec{
 		path:       "research",
 		sideEffect: "conversation",
 		browser:    "headed",
-		summary:    "Submit one visible Deep Research request only when the exact runtime product control is proven.",
+		summary:    "Submit one Deep Research request through the observed app mention and one journaled Send; return the exact acknowledged conversation as incomplete until report export proves completion.",
 		providers:  []Provider{ProviderChatGPT},
 	},
 	{
@@ -357,7 +357,7 @@ func providerOperationImplemented(
 	case OperationConversationsContinue:
 		return provider == ProviderChatGPT
 	case OperationArtifactDownload, OperationAttachmentsDownload,
-		OperationResearchExport:
+		OperationResearch, OperationResearchExport:
 		return provider == ProviderChatGPT
 	case OperationAsk:
 		return true

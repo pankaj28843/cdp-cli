@@ -1479,9 +1479,11 @@ func activateSelectionControl(
 	    )).filter((element, index, values) =>
 	      values.indexOf(element) === index &&
 	      element.isContentEditable && enabled(element) &&
-	      Array.from(element.querySelectorAll(
-	        '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
-	      )).some(pill => label(pill).toLowerCase() === expected)
+      Array.from(element.querySelectorAll(
+        '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"],span[app-mention-name="deep-research"][app-mention-path="app://connector_openai_deep_research"]'
+      )).some(pill => String(
+        pill.getAttribute('app-mention-display-name') || label(pill)
+      ).toLowerCase() === expected)
 	    );
 	    candidates = editors;
 	    break;

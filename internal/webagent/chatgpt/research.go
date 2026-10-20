@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,6 +26,17 @@ const (
 	maxResearchOOPIFCandidates  = 8
 	researchSandboxHost         = "connector-openai-deep-research.web-sandbox.oaiusercontent.com"
 )
+
+var skybridgeResearchHost = regexp.MustCompile(`^mcp-app-[0-9a-f]{64}\.web-sandbox\.oaiusercontent\.com$`)
+
+// SubmitResearch uses the fresh-composer, durable single-Send ask journal.
+// An acknowledged request remains incomplete until an exact report read proves
+// the rendered Deep Research document has finished.
+func SubmitResearch(ctx context.Context, config AskConfig, prompt string) webagent.Result {
+	config.operation = webagent.OperationResearch
+	config.Tool = ToolDeepResearch
+	return Ask(ctx, config, prompt)
+}
 
 // ResearchExportConfig controls an owner-only, read-only rendered report
 // export. OutputPath is always explicit and is written atomically.
@@ -101,6 +113,7 @@ type researchFrameObservation struct {
 	Streaming       bool   `json:"streaming"`
 	TooLarge        bool   `json:"too_large"`
 	DocumentTrusted bool   `json:"document_trusted"`
+	Completed       bool   `json:"completed"`
 }
 
 // ExportResearch reads one exact completed Deep Research report from its
@@ -407,6 +420,13 @@ func readEmbeddedResearchReport(
 	if failure != nil {
 		return "", failure
 	}
+	frameURL, _ := url.Parse(surface.FrameSources[0])
+	if skybridgeResearchFrameURL(frameURL) {
+		return readEmbeddedResearchOOPIFReport(
+			ctx, config.Client, lease.Session(), surface,
+			semanticFrame.BackendNodeID, timeout,
+		)
+	}
 	directBinding, failure := bindDirectResearchFrame(
 		ctx,
 		lease.Session(),
@@ -686,8 +706,12 @@ func resolveSemanticResearchFrame(
   );
   const frames = Array.from(document.querySelectorAll(
     'iframe[src*="deep-research"],iframe[src*="connector_openai_deep_research"],' +
-    '[data-testid*="deep-research"] iframe,[data-testid*="research-report"] iframe'
-  )).filter(visible).filter(frame => String(frame.src || '') === source);
+    '[data-testid*="deep-research"] iframe,[data-testid*="research-report"] iframe,' +
+    'iframe[title="Deep research"]'
+  )).filter(visible).filter(frame => String(frame.src || '') === source &&
+    (frame.getAttribute('title') !== 'Deep research' ||
+      Boolean(frame.closest('[data-mcp-app-frame="true"]')) &&
+      Boolean(frame.closest('[data-mcp-app-portal-target="true"]'))));
   return frames.length === 1 ? frames[0] : null;
 })()`, source)
 	params, err := json.Marshal(map[string]any{
@@ -899,8 +923,11 @@ func observeResearchSurface(
   );
   const frames = Array.from(document.querySelectorAll(
     'iframe[src*="deep-research"],iframe[src*="connector_openai_deep_research"],' +
-    '[data-testid*="deep-research"] iframe,[data-testid*="research-report"] iframe'
-  )).filter(visible);
+    '[data-testid*="deep-research"] iframe,[data-testid*="research-report"] iframe,' +
+    'iframe[title="Deep research"]'
+  )).filter(visible).filter(frame => frame.getAttribute('title') !== 'Deep research' ||
+    Boolean(frame.closest('[data-mcp-app-frame="true"]')) &&
+    Boolean(frame.closest('[data-mcp-app-portal-target="true"]')));
   const sources = frames.map(frame => String(frame.src || ''))
     .filter(source => source.startsWith('https://'));
   const match = location.pathname.match(/^\/c\/([A-Za-z0-9_-]+)$/);
@@ -1132,6 +1159,12 @@ func researchTargetReportFrame(
 	}
 	switch len(children) {
 	case 0:
+		if parsed, err := url.Parse(root.URL); err == nil && skybridgeResearchFrameURL(parsed) {
+			return researchFrameTargetRoot{}, researchFrameTargetRoot{}, &readFailure{
+				code: "chatgpt_research_frame_unavailable", errClass: "provider",
+				message: "ChatGPT research app did not expose its ready report frame",
+			}
+		}
 		if len(directChildren) > 0 {
 			return researchFrameTargetRoot{}, researchFrameTargetRoot{}, &readFailure{
 				code:     "chatgpt_research_frame_unavailable",
@@ -1141,6 +1174,24 @@ func researchTargetReportFrame(
 		}
 		return root, root, nil
 	case 1:
+		if parsed, err := url.Parse(root.URL); err == nil && skybridgeResearchFrameURL(parsed) {
+			if len(directChildren) != 1 || children[0].URL != root.URL {
+				return researchFrameTargetRoot{}, researchFrameTargetRoot{}, &readFailure{
+					code: "chatgpt_research_frame_unavailable", errClass: "provider",
+					message: "ChatGPT research app report frame changed before it could be read",
+				}
+			}
+			ready, failure := skybridgeReadyChild(ctx, session, children[0].ID)
+			if failure != nil {
+				return researchFrameTargetRoot{}, researchFrameTargetRoot{}, failure
+			}
+			if !ready {
+				return researchFrameTargetRoot{}, researchFrameTargetRoot{}, &readFailure{
+					code: "chatgpt_research_frame_unavailable", errClass: "provider",
+					message: "ChatGPT research app did not expose its ready report frame",
+				}
+			}
+		}
 		return root, researchFrameTargetRoot{
 			ID:  children[0].ID,
 			URL: children[0].URL,
@@ -1152,6 +1203,49 @@ func researchTargetReportFrame(
 			message:  "ChatGPT embedded research target exposed multiple sandbox report frames",
 		}
 	}
+}
+
+// The skybridge renderer uses one inherited-URL child whose DOM src is
+// about:blank. Bind that exact ready child node to the frame-tree ID; neither
+// property alone authorizes reading an arbitrary blank frame.
+func skybridgeReadyChild(ctx context.Context, session *cdp.PageSession, frameID string) (bool, *readFailure) {
+	params, _ := json.Marshal(map[string]any{
+		"expression": `(() => {
+  const children = Array.from(document.querySelectorAll('iframe#root[data-preview-ready]'))
+    .filter(frame => frame.getAttribute('src') === 'about:blank');
+  return children.length === 1 ? children[0] : null;
+})()`,
+		"returnByValue": false,
+	})
+	raw, err := session.Exec(ctx, "Runtime.evaluate", params)
+	if err != nil {
+		return false, &readFailure{code: "chatgpt_research_oopif_unreadable", errClass: "connection", message: "ChatGPT research app child frame could not be observed"}
+	}
+	var evaluation struct {
+		Result struct {
+			ObjectID string `json:"objectId"`
+		} `json:"result"`
+		ExceptionDetails any `json:"exceptionDetails"`
+	}
+	if json.Unmarshal(raw, &evaluation) != nil || evaluation.ExceptionDetails != nil || evaluation.Result.ObjectID == "" {
+		return false, nil
+	}
+	defer releaseResearchFrameObject(session, evaluation.Result.ObjectID)
+	describeParams, _ := json.Marshal(map[string]any{"objectId": evaluation.Result.ObjectID})
+	raw, err = session.Exec(ctx, "DOM.describeNode", describeParams)
+	if err != nil {
+		return false, &readFailure{code: "chatgpt_research_oopif_unreadable", errClass: "connection", message: "ChatGPT research app child frame could not be described"}
+	}
+	var description struct {
+		Node struct {
+			NodeName string `json:"nodeName"`
+			FrameID  string `json:"frameId"`
+		} `json:"node"`
+	}
+	if json.Unmarshal(raw, &description) != nil {
+		return false, nil
+	}
+	return strings.EqualFold(description.Node.NodeName, "IFRAME") && description.Node.FrameID == frameID, nil
 }
 
 func collectResearchFrames(
@@ -1205,7 +1299,8 @@ func trustedResearchFrameURL(raw string) bool {
 	}
 	host := frameURL.Hostname()
 	return strings.EqualFold(host, providerURL.Hostname()) ||
-		strings.EqualFold(host, researchSandboxHost)
+		strings.EqualFold(host, researchSandboxHost) ||
+		skybridgeResearchFrameURL(frameURL)
 }
 
 func researchSandboxFrameURL(raw string) bool {
@@ -1213,7 +1308,16 @@ func researchSandboxFrameURL(raw string) bool {
 		return false
 	}
 	frameURL, err := url.Parse(raw)
-	return err == nil && strings.EqualFold(frameURL.Hostname(), researchSandboxHost)
+	return err == nil && (strings.EqualFold(frameURL.Hostname(), researchSandboxHost) ||
+		skybridgeResearchFrameURL(frameURL))
+}
+
+func skybridgeResearchFrameURL(frameURL *url.URL) bool {
+	if frameURL == nil || !skybridgeResearchHost.MatchString(strings.ToLower(frameURL.Hostname())) {
+		return false
+	}
+	values := frameURL.Query()["app"]
+	return len(values) == 1 && values[0] == "skybridge"
 }
 
 func (binding *researchFrameBinding) verify(
@@ -1323,6 +1427,14 @@ func waitForBoundResearchFrameReport(
 	if failure := binding.verify(ctx, surface); failure != nil {
 		return "", failure
 	}
+	if !trustedResearchFrameURL(binding.FrameURL) {
+		return "", &readFailure{code: "chatgpt_research_frame_unavailable", errClass: "provider", message: "ChatGPT research report frame URL was not trusted"}
+	}
+	frameURL, _ := url.Parse(binding.FrameURL)
+	if skybridgeResearchFrameURL(frameURL) &&
+		(!binding.TargetRootFrameRead || binding.FrameID == binding.OwnerFrameID) {
+		return "", &readFailure{code: "chatgpt_research_frame_unavailable", errClass: "provider", message: "ChatGPT research app ready child was not bound"}
+	}
 	contextID, failure := researchFrameExecutionContext(
 		ctx,
 		binding.ReportSession,
@@ -1340,6 +1452,7 @@ func waitForBoundResearchFrameReport(
 				ctx,
 				binding.ReportSession,
 				contextID,
+				binding.FrameURL,
 			)
 			if trustFailure != nil {
 				return "", trustFailure
@@ -1356,6 +1469,7 @@ func waitForBoundResearchFrameReport(
 			ctx,
 			binding.ReportSession,
 			contextID,
+			binding.FrameURL,
 		)
 		if failure != nil {
 			return "", failure
@@ -1381,7 +1495,7 @@ func waitForBoundResearchFrameReport(
 				message:  "ChatGPT embedded research frame exposed multiple report roots",
 			}
 		}
-		if !observation.Streaming &&
+		if observation.Completed && !observation.Streaming &&
 			len([]rune(strings.TrimSpace(observation.Text))) >= minResearchReportRunes {
 			return observation.Text, nil
 		}
@@ -1407,33 +1521,18 @@ func researchFrameDocumentTrusted(
 	ctx context.Context,
 	session *cdp.PageSession,
 	contextID int,
+	expectedURL string,
 ) (bool, *readFailure) {
-	providerURL, err := url.Parse(Origin)
-	if err != nil {
-		return false, internalReadFailure(
-			"ChatGPT research renderer origin could not be prepared",
-		)
-	}
-	allowedHosts, err := json.Marshal([]string{
-		strings.ToLower(providerURL.Hostname()),
-		strings.ToLower(researchSandboxHost),
-	})
-	if err != nil {
-		return false, internalReadFailure(
-			"ChatGPT research renderer allowlist could not be encoded",
-		)
-	}
 	params, err := json.Marshal(map[string]any{
 		"expression": fmt.Sprintf(`(() => {
   try {
     const current = new URL(location.href);
-    const allowedHosts = %s;
-    return current.protocol === 'https:' && current.port === '' &&
-      allowedHosts.includes(String(current.hostname || '').toLowerCase());
+    const expected = new URL(%q);
+    return current.protocol === 'https:' && current.port === '' && current.href === expected.href;
   } catch (_) {
     return false;
   }
-})()`, allowedHosts),
+})()`, expectedURL),
 		"contextId":     contextID,
 		"returnByValue": true,
 		"awaitPromise":  true,
@@ -1508,9 +1607,10 @@ func observeResearchFrame(
 	ctx context.Context,
 	session *cdp.PageSession,
 	contextID int,
+	expectedURL string,
 ) (researchFrameObservation, *readFailure) {
 	params, err := json.Marshal(map[string]any{
-		"expression":    researchFrameObservationExpression(),
+		"expression":    researchFrameObservationExpression(expectedURL),
 		"contextId":     contextID,
 		"returnByValue": true,
 		"awaitPromise":  true,
@@ -1553,15 +1653,19 @@ func observeResearchFrame(
 	return observation, nil
 }
 
-func researchFrameObservationExpression() string {
+func researchFrameObservationExpression(expectedURL string) string {
+	frameURL, _ := url.Parse(expectedURL)
+	useBoundSkybridgeBody := skybridgeResearchFrameURL(frameURL)
 	return fmt.Sprintf(`(() => {
   const maxCharacters = %d;
-  const allowedHosts = ["chatgpt.com", %q];
+  const expectedURL = %q;
+	const useBoundSkybridgeBody = %t;
   let documentTrusted = false;
   try {
     const current = new URL(location.href);
+    const expected = new URL(expectedURL);
     documentTrusted = current.protocol === 'https:' && current.port === '' &&
-      allowedHosts.includes(String(current.hostname || '').toLowerCase());
+      current.href === expected.href;
   } catch (_) {}
   if (!documentTrusted) {
     return {
@@ -1583,19 +1687,21 @@ func researchFrameObservationExpression() string {
   const roots = allRoots.filter(root => !allRoots.some(other =>
     other !== root && root.contains(other)
   ));
-  const root = roots.length === 1 ? roots[0] : null;
+  const root = useBoundSkybridgeBody ? document.body : (roots.length === 1 ? roots[0] : null);
   const text = root ? String(root.innerText || root.textContent || '').trim() : '';
   const streaming = Array.from(document.querySelectorAll(
     '[aria-busy="true"],[data-is-streaming="true"]'
   )).some(visible);
+  const completed = /^Research completed in\s+\d+\s*[smhd]\b/i.test(text);
   return {
     text: text.length > maxCharacters ? '' : text,
-    root_count: roots.length,
+    root_count: useBoundSkybridgeBody ? (root ? 1 : 0) : roots.length,
     streaming,
+    completed,
     too_large: text.length > maxCharacters,
     document_trusted: true
   };
-})()`, maxResearchReportBytes, researchSandboxHost)
+})()`, maxResearchReportBytes, expectedURL, useBoundSkybridgeBody)
 }
 
 func normalizedResearchReport(report string) ([]byte, *readFailure) {

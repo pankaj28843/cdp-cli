@@ -476,7 +476,7 @@ func observeAttachment(
 	    const stem = dot > 0 ? wanted.slice(0, dot) : wanted;
 	    const extension = dot > 0 ? wanted.slice(dot) : '';
 	    return new RegExp(
-	      '^' + escapeRegExp(stem) + '\\s*\\(\\d+\\)' +
+	      '^' + escapeRegExp(stem) + '\\s*\\((?:\\d+|\\d{8}-\\d{6})\\)' +
 	      escapeRegExp(extension) + '$'
 	    ).test(actual);
 	  };

@@ -1,6 +1,13 @@
 package chatgpt
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/pankaj28843/cdp-cli/internal/browserflow"
+	"github.com/pankaj28843/cdp-cli/internal/webagent"
+)
 
 func TestNormalizeTool(t *testing.T) {
 	tests := []struct {
@@ -17,7 +24,7 @@ func TestNormalizeTool(t *testing.T) {
 		{name: "github", input: "GitHub", want: ToolGitHub},
 		{name: "openai platform", input: "OpenAI Platform", want: ToolOpenAIPlatform},
 		{name: "visualize", input: "Visualize", want: ToolVisualize},
-		{name: "unsupported", input: "deep-research", err: true},
+		{name: "deep research", input: "deep-research", want: ToolDeepResearch},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -35,6 +42,38 @@ func TestNormalizeTool(t *testing.T) {
 				t.Fatalf("NormalizeTool(%q) = %q, want %q", test.input, got, test.want)
 			}
 		})
+	}
+}
+
+func TestResearchNeedsDedicatedCommandBeforeBrowser(t *testing.T) {
+	result := Ask(context.Background(), AskConfig{Tool: ToolDeepResearch}, "research this")
+	if result.Error == nil || result.Error.Code != "chatgpt_research_command_required" ||
+		result.Operation != webagent.OperationAsk || result.Action == nil ||
+		result.Action.Dispatch != webagent.DispatchNotPerformed {
+		t.Fatalf("ordinary ask accepted research tool: %+v", result)
+	}
+	continued := ContinueConversation(context.Background(),
+		ContinueConfig{Tool: ToolDeepResearch}, "conversation-1", "research this")
+	if continued.Error == nil || continued.Error.Code != "chatgpt_research_command_required" ||
+		continued.Action == nil || continued.Action.Dispatch != webagent.DispatchNotPerformed {
+		t.Fatalf("ordinary continuation accepted research tool: %+v", continued)
+	}
+}
+
+func TestResearchSendRejectsMissingAppMention(t *testing.T) {
+	client := &selectionActivationClient{evaluations: []json.RawMessage{
+		exactSelectionGuard("Pro", ""),
+		json.RawMessage(`{"route_ready":true,"editor_ready":true,"editor_count":1,"prompt_matches":true,"default_chat_surface":true,"intelligence_count":1,"selected_intelligence":"Pro","send_count":1,"send_ready":true,"assistant_count":0,"user_message_count":0,"selected_tool":""}`),
+	}}
+	dispatcher := chatgptSendDispatcher{prompt: "research this", intelligence: "Pro", tool: ToolDeepResearch}
+	outcome, err := dispatcher.Dispatch(context.Background(), newSelectionActivationSession(t, client))
+	if err == nil || outcome.Dispatch != browserflow.DispatchNotPerformed || outcome.RawInputAttempted {
+		t.Fatalf("missing research mention reached Send: %+v %v", outcome, err)
+	}
+	for _, call := range client.calls {
+		if call.method != "Runtime.evaluate" {
+			t.Fatalf("missing mention caused raw input: %s", call.method)
+		}
 	}
 }
 

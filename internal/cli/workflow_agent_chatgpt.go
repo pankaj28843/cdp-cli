@@ -277,16 +277,15 @@ func (a *app) newWorkflowAgentChatGPTConversationsDownloadAttachmentsCommand() *
 
 func (a *app) newWorkflowAgentChatGPTResearchCommand() *cobra.Command {
 	var stdin bool
-	var browserExport bool
 	cmd := &cobra.Command{
 		Use:   "research [PROMPT]",
-		Short: "Report the live ChatGPT Deep Research boundary",
-		Long: "Deep Research remains capability-only at this boundary. The headed UI accepts the mode and embeds its report in a sandboxed app, but the current cdp page/frame reader cannot prove a readable terminal report or export lifecycle. " +
-			"No guessed DOM action, iframe replay, or second Send is attempted.",
-		Example: "  printf '%s' 'Research this topic.' | cdp workflow agent chatgpt research --stdin --browser-export --json",
-		Args:    cobra.MaximumNArgs(1),
+		Short: "Submit one fresh ChatGPT Deep Research request",
+		Long:  "Select the observed Deep research app mention on one fresh headed composer, verify the exact prompt and mention before one journaled Send, and return the acknowledged conversation ID. A submitted request remains incomplete until conversations export-research verifies a finished embedded report.",
+		Example: "  printf '%s' 'Research this topic.' | cdp workflow agent chatgpt research --stdin --json\n" +
+			"  cdp workflow agent chatgpt conversations export-research CONVERSATION_ID --output ./research.txt --json",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := a.commandContext(cmd)
+			ctx, cancel := a.commandContextWithDefault(cmd, 8*time.Minute)
 			defer cancel()
 			if stdin && len(args) == 1 {
 				return commandError(
@@ -297,16 +296,37 @@ func (a *app) newWorkflowAgentChatGPTResearchCommand() *cobra.Command {
 					nil,
 				)
 			}
-			_ = browserExport
-			result := chatgpt.UnsupportedOperation(
-				a.build.Commit,
-				webagent.OperationResearch,
-				"chatgpt_deep_research_control_unproven",
-				"ChatGPT Deep Research is visible and selectable, but its embedded sandbox report is not readable through the current cdp page/frame boundary",
-			)
+			prompt := ""
+			if stdin {
+				data, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), int64(chatgpt.MaxPromptCharacters*4+2)))
+				if err != nil {
+					return commandError("chatgpt_prompt_read_failed", "usage", "ChatGPT research prompt could not be read from stdin", ExitUsage, nil)
+				}
+				prompt = string(data)
+			} else if len(args) == 1 {
+				prompt = args[0]
+			}
+			if !a.selectHeadedProviderRuntime() {
+				result := chatgpt.UnavailableOperation(a.build.Commit, webagent.OperationResearch,
+					"chatgpt_headed_browser_required", "usage", "ChatGPT research requires the headed browser runtime")
+				return a.renderWebAgentResult(ctx, "chatgpt research: headed browser required", result)
+			}
+			browserConfig, store, unavailable := a.chatgptBrowserOperationConfig(ctx, webagent.OperationResearch)
+			if unavailable != nil {
+				return a.renderWebAgentResult(ctx, "chatgpt research: unavailable", *unavailable)
+			}
+			timeout := a.opts.timeout
+			if timeout <= 0 {
+				timeout = 8 * time.Minute
+			}
+			result := chatgpt.SubmitResearch(ctx, chatgpt.AskConfig{
+				BrowserConfig: browserConfig,
+				Store:         store,
+				Timeout:       timeout,
+			}, prompt)
 			return a.renderWebAgentResult(
 				ctx,
-				"chatgpt research: unsupported",
+				fmt.Sprintf("chatgpt research: %v", result.State),
 				result,
 			)
 		},
@@ -316,12 +336,6 @@ func (a *app) newWorkflowAgentChatGPTResearchCommand() *cobra.Command {
 		"stdin",
 		false,
 		"read the research prompt from stdin",
-	)
-	cmd.Flags().BoolVar(
-		&browserExport,
-		"browser-export",
-		false,
-		"request headed report export when the capability becomes proven",
 	)
 	return cmd
 }
@@ -1034,7 +1048,7 @@ func (a *app) newWorkflowAgentChatGPTAskCommand() *cobra.Command {
 		&tool,
 		"tool",
 		"",
-		"verified ChatGPT tools: create-image, visualize, web-search, github, openai-platform; deep research and Gmail remain capability-only",
+		"verified ChatGPT ask tools: create-image, visualize, web-search, github, openai-platform; use research for Deep Research",
 	)
 	addChatGPTSelectionFlags(
 		cmd,

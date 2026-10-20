@@ -90,6 +90,17 @@ func schemaCatalog() map[string]schemaInfo {
 				{Name: "metadata", Type: "object", Required: false, Description: "Safe readiness stages, observation counters, exact prompt and model policy proof, and answer-readback evidence."},
 			},
 		},
+		"chatgpt-research": {
+			Name:        "chatgpt-research",
+			Description: "Fresh ChatGPT Deep Research submission data inside webagent-operation. One journaled Send returns an exact acknowledged conversation as incomplete; only export-research proves a finished report.",
+			Fields: []schemaField{
+				{Name: "schema_version", Type: "string", Required: true, Description: "Currently chatgpt-ask/v1, shared with the single-Send submission workflow."},
+				{Name: "tool", Type: "string", Required: true, Description: "The observed Deep research app mention selected and verified before Send."},
+				{Name: "completion_state", Type: "string", Required: true, Description: "research_submitted after exact conversation acknowledgement; report completion is unverified."},
+				{Name: "prompt_fingerprint", Type: "string", Required: true, Description: "Fingerprint of the exact submitted prompt, without report text."},
+				{Name: "metadata", Type: "object", Required: true, Description: "Safe app-mention, single-Send, and conversation identity evidence; report_state remains unverified."},
+			},
+		},
 		"chatgpt-conversation-continue": {
 			Name: "chatgpt-conversation-continue", Description: "Exact-conversation continuation data inside the webagent-operation envelope; ask --conversation uses the same owned-tab, single-Send workflow.",
 			Fields: []schemaField{

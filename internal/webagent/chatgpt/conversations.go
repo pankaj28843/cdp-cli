@@ -2565,6 +2565,9 @@ func mergeDirectBrowserListFallback(
 	direct webagent.Result,
 	browser webagent.Result,
 ) webagent.Result {
+	if browser.OK {
+		return recordDirectReadFallback(browser, direct)
+	}
 	data, ok := browser.Data.(ConversationListData)
 	directData, directOK := direct.Data.(ConversationListData)
 	if !directOK ||
@@ -2596,6 +2599,11 @@ func mergeDirectBrowserFallback(
 			browser.Data = direct.Data
 			browser.Evidence.ReadMode = direct.Evidence.ReadMode
 		}
+		return recordDirectReadFallback(browser, direct)
+	}
+	if browser.OK && ok && data.ReadMode == "headed_browser_rendered" &&
+		data.CompletionState == conversationCompletionTerminal &&
+		strings.TrimSpace(data.Text) != "" {
 		return recordDirectReadFallback(browser, direct)
 	}
 	if !ok || data.StatusCode != 0 {

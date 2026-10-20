@@ -82,6 +82,10 @@ func listConversationsViaBrowser(
 					webagent.StageAttached, target, pending, *failure, data, nil,
 				)
 			}
+			if template.ReadEventError {
+				data.Metadata["request_event_observation_failed"] = true
+				data.Metadata["request_template_source"] = "fresh_headed_session_only"
+			}
 			if failure = commitBrowserReadPreparation(ctx, lease); failure != nil {
 				return browserReadFailureResult(
 					runID, config.BuildCommit, webagent.OperationConversationsList,
@@ -246,10 +250,18 @@ func conversationViaBrowser(
 				return incompleteResult()
 			}
 			if failure != nil {
+				if recovered, ok := recoverRenderedDetail(ctx, config, lease, conversationID, data, failure.code, ""); ok {
+					return renderedDetailSuccess(ctx, lease, runID, config, operation,
+						target, pending, conversation, recovered, true)
+				}
 				return browserReadFailureResult(
 					runID, config.BuildCommit, operation,
 					webagent.StageAttached, target, pending, *failure, data, conversation,
 				)
+			}
+			if template.ReadEventError {
+				data.Metadata["request_event_observation_failed"] = true
+				data.Metadata["request_template_source"] = "fresh_headed_session_only"
 			}
 			failure = commitBrowserReadPreparation(ctx, lease)
 			switch stopState.observe() {
@@ -392,6 +404,10 @@ func conversationViaBrowser(
 				failure = nil
 			}
 			if failure != nil {
+				if recovered, ok := recoverRenderedDetail(ctx, config, lease, conversationID, data, failure.code, ""); ok {
+					return renderedDetailSuccess(ctx, lease, runID, config, operation,
+						target, pending, conversation, recovered, false)
+				}
 				return browserReadFailureResult(
 					runID, config.BuildCommit, operation,
 					webagent.StageObserveTerminal, target, pending,
@@ -612,12 +628,18 @@ func prepareBrowserRead(
 		defaultObservationAttempts,
 		defaultObservationTimeout,
 	)
-	if err != nil {
-		return RequestTemplate{}, &readFailure{
-			code:     "chatgpt_browser_read_request_observation_failed",
-			errClass: "connection",
-			message:  "ChatGPT signed-in UI and session-cookie evidence were observed, but the exact-target conversation-read event observation failed; this is not logout evidence. Inspect the conversation through an owned rendered target without submitting another prompt",
+	readEventError := err != nil
+	if readEventError {
+		if ctx.Err() != nil {
+			return RequestTemplate{}, &readFailure{
+				code: "chatgpt_browser_read_request_observation_failed", errClass: "connection",
+				message: "ChatGPT conversation-read event observation was canceled",
+			}
 		}
+		// A failed event stream does not invalidate independently observed signed-in
+		// UI and session cookies. Avoid a retained bearer token of unknown age;
+		// the one existing same-origin browser fetch reports its own HTTP outcome.
+		existing, observation, found = nil, readObservation{}, false
 	}
 	now := time.Now().UTC()
 	template, persist := browserReadTemplate(
@@ -629,13 +651,13 @@ func prepareBrowserRead(
 		now,
 	)
 	if persist {
-		err = store.SaveTemplate(ctx, template)
+		if saveErr := store.SaveTemplate(ctx, template); saveErr != nil {
+			return RequestTemplate{}, internalReadFailure(
+				"ChatGPT refreshed browser-context read evidence could not be persisted",
+			)
+		}
 	}
-	if err != nil {
-		return RequestTemplate{}, internalReadFailure(
-			"ChatGPT refreshed browser-context read evidence could not be persisted",
-		)
-	}
+	template.ReadEventError = readEventError
 	return template, nil
 }
 

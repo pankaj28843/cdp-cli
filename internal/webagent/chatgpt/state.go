@@ -41,6 +41,7 @@ type RequestTemplate struct {
 	BrowserUserAgent string            `json:"browser_user_agent"`
 	CapturedAt       string            `json:"captured_at"`
 	Source           string            `json:"source"`
+	ReadEventError   bool              `json:"-"`
 }
 
 type AuthStatus struct {

@@ -15,17 +15,18 @@ const (
 	ToolGitHub              = "github"
 	ToolOpenAIPlatform      = "openai-platform"
 	ToolVisualize           = "visualize"
+	ToolDeepResearch        = "deep-research"
 	toolCreateImageLabel    = "Create image"
 	toolWebSearchLabel      = "Web search"
 	toolGitHubLabel         = "GitHub"
 	toolOpenAIPlatformLabel = "OpenAI Platform"
 	toolVisualizeLabel      = "Visualize"
+	toolDeepResearchLabel   = "Deep research"
 )
 
-// NormalizeTool accepts only tools whose full send-and-read lifecycle is
-// proven by the headed ChatGPT surface. Runtime capability discovery may show
-// more tools; that is evidence for documentation, not permission to guess a
-// new automation contract.
+// NormalizeTool accepts known composer selections. Deep Research is only
+// submitted through the dedicated research operation, which returns an
+// acknowledged but incomplete request until report export proves completion.
 func NormalizeTool(value string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	normalized = strings.Join(strings.Fields(
@@ -49,6 +50,9 @@ func NormalizeTool(value string) (string, error) {
 	if normalized == "visualize" {
 		return ToolVisualize, nil
 	}
+	if normalized == "deep research" {
+		return ToolDeepResearch, nil
+	}
 	return "", fmt.Errorf(
 		"unsupported ChatGPT tool %q; verified direct-ask tools are create-image, web-search, github, openai-platform, and visualize",
 		value,
@@ -67,6 +71,8 @@ func toolDisplayLabel(tool string) string {
 		return toolOpenAIPlatformLabel
 	case ToolVisualize:
 		return toolVisualizeLabel
+	case ToolDeepResearch:
+		return toolDeepResearchLabel
 	default:
 		return ""
 	}
@@ -131,9 +137,9 @@ func observeChatGPTToolSurface(
   )).filter(element => visible(element) && element.isContentEditable);
   const selected = Array.from(new Set(
     editors.flatMap(editor => Array.from(editor.querySelectorAll(
-      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
+      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"],span[app-mention-name="deep-research"][app-mention-path="app://connector_openai_deep_research"]'
     )).filter(visible).map(pill => normalize(
-      pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || pill.innerText || pill.textContent
+      pill.getAttribute('app-mention-display-name') || pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || pill.innerText || pill.textContent
     )))
   )).filter(Boolean);
   return {

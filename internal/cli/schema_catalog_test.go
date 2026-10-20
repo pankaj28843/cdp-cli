@@ -57,6 +57,7 @@ func TestSchemaCatalogCriticalCommands(t *testing.T) {
 		"chatgpt-attachment-batch",
 		"chatgpt-attachment-manifest",
 		"chatgpt-research-export",
+		"chatgpt-research",
 		"webagent-operation-capability",
 		"webagent-action",
 		"webagent-error",

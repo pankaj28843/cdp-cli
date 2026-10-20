@@ -205,6 +205,14 @@ type authenticatedReadBrowser struct {
 	events []cdp.Event
 }
 
+type readEventFailureBrowser struct {
+	*authenticatedReadBrowser
+}
+
+func (b *readEventFailureBrowser) ReadEvent(context.Context) (cdp.Event, error) {
+	return cdp.Event{}, errors.New("synthetic request-event stream failure")
+}
+
 type cancelOnCloseBrowser struct {
 	*authenticatedReadBrowser
 	cancel context.CancelFunc
@@ -532,6 +540,88 @@ func TestListFallbackKeepsCompletedDirectObservation(t *testing.T) {
 			result,
 			data,
 		)
+	}
+}
+
+func TestListReadEventFailureUsesOneFreshHeadedFetch(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		status     int
+		wantCode   string
+		wantResult bool
+	}{
+		{name: "session fetch succeeds", status: http.StatusOK, wantResult: true},
+		{name: "session fetch unauthorized", status: http.StatusUnauthorized, wantCode: "chatgpt_browser_context_auth_failed"},
+		{name: "session fetch rate limited", status: http.StatusTooManyRequests, wantCode: "chatgpt_rate_limited"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			fetches := 0
+			client := &readEventFailureBrowser{newAuthenticatedReadBrowser(func(
+				expression string,
+				_ *testsupport.Browser,
+			) (any, error) {
+				if strings.Contains(expression, "signed_in:") {
+					return map[string]any{"signed_in": true, "signed_out": false}, nil
+				}
+				if strings.Contains(expression, "const response = await fetch") {
+					fetches++
+					if strings.Contains(expression, "Bearer test-only") {
+						t.Error("stale bearer header was sent by the headed session fallback")
+					}
+					return map[string]any{
+						"ok":          test.status == http.StatusOK,
+						"status_code": test.status,
+						"body":        `{"items":[]}`,
+						"body_bytes":  12,
+					}, nil
+				}
+				return map[string]any{}, nil
+			})}
+			engine, journal, err := testsupport.NewRuntime(t.TempDir(), client)
+			if err != nil {
+				t.Fatalf("NewRuntime: %v", err)
+			}
+			result := ListConversations(context.Background(), ReadConfig{
+				Store: newReadTestStore(t, now), HTTPClient: fixedHTTPClient(http.StatusUnauthorized, ""),
+				BrowserConfig: &BrowserConfig{Client: client, Engine: engine, Journal: journal},
+				Now:           func() time.Time { return now },
+			}, 3, 0)
+			data, ok := result.Data.(ConversationListData)
+			if !ok || fetches != 1 || result.OK != test.wantResult ||
+				result.Cleanup.State != webagent.CleanupClosed ||
+				data.Metadata["request_event_observation_failed"] != true ||
+				data.Metadata["request_template_source"] != "fresh_headed_session_only" ||
+				data.Metadata["direct_http_failure_code"] != "chatgpt_browser_context_required" {
+				t.Fatalf("fetches=%d result=%+v data=%+v", fetches, result, data)
+			}
+			if test.wantCode != "" && (result.Error == nil || result.Error.Code != test.wantCode || data.StatusCode != test.status) {
+				t.Fatalf("result=%+v data=%+v", result, data)
+			}
+			if test.wantResult && data.StatusCode != http.StatusOK {
+				t.Fatalf("result=%+v data=%+v", result, data)
+			}
+		})
+	}
+}
+
+func TestListMergeKeepsSuccessfulHeadedReadAfterDirectAuthFailure(t *testing.T) {
+	direct := webagent.Result{
+		Error: &webagent.OperationError{Code: "chatgpt_auth_expired", ErrClass: "auth"},
+		Data:  ConversationListData{StatusCode: http.StatusUnauthorized},
+	}
+	browser := webagent.Result{
+		OK: true,
+		Data: ConversationListData{
+			StatusCode: http.StatusOK,
+			Metadata:   map[string]any{},
+		},
+	}
+	result := mergeDirectBrowserListFallback(direct, browser)
+	data, ok := result.Data.(ConversationListData)
+	if !result.OK || !ok || data.StatusCode != http.StatusOK ||
+		data.Metadata["direct_http_failure_code"] != "chatgpt_auth_expired" {
+		t.Fatalf("result=%+v", result)
 	}
 }
 

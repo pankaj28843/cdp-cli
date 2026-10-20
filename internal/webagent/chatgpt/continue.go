@@ -137,6 +137,14 @@ func ContinueConversation(
 	if toolErr != nil {
 		return continueFailure(runID, config, webagent.StagePlanned, nil, webagent.CleanupEvidence{State: webagent.CleanupNotRequired}, notPerformed, conversationRef(conversationID), "chatgpt_tool_invalid", "usage", toolErr.Error(), "", data, nil)
 	}
+	if tool == ToolDeepResearch {
+		return continueFailure(runID, config, webagent.StagePlanned, nil,
+			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+			notPerformed, conversationRef(conversationID),
+			"chatgpt_research_command_required", "usage",
+			"Use the ChatGPT research command for fresh Deep Research requests", "", data,
+			[]string{"cdp workflow agent chatgpt research --help"})
+	}
 	if selectionErr != nil {
 		return continueFailure(
 			runID, config, webagent.StagePlanned, nil,

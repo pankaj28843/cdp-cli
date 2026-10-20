@@ -222,6 +222,9 @@ func TestAttachmentBatchRenderedObservation(t *testing.T) {
  function observe(){return ` + params.Expression + `;}
  assert.equal(observe().ok,true); assert.equal(observe().input_match,true);
  input.files=[]; assert.equal(observe().ok,true); assert.equal(observe().input_match,false);
+ groups[2].name='contract(20261017-055116).md'; assert.equal(observe().ok,true);
+ groups[2].name='contract(20261017-garbage).md'; assert.equal(observe().ok,false);
+ groups[2].name='contract.md';
  processing=true; assert.equal(observe().processing,true); processing=false;
  groups.pop(); assert.equal(observe().ok,false);
  groups.push(new Group('contract.md'),new Group('extra.md')); assert.equal(observe().ok,false);

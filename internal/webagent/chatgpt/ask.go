@@ -367,6 +367,13 @@ func Ask(
 			[]string{"cdp workflow agent chatgpt ask --help"},
 		)
 	}
+	if tool == ToolDeepResearch && askOperation(config) != webagent.OperationResearch {
+		return askFailure(runID, config, webagent.StagePlanned, nil,
+			webagent.CleanupEvidence{State: webagent.CleanupNotRequired},
+			notPerformed, nil, "chatgpt_research_command_required", "usage",
+			"Use the ChatGPT research command to submit Deep Research", "", data,
+			[]string{"cdp workflow agent chatgpt research --help"})
+	}
 	config.Selection = selectionPolicy
 	config.Tool = tool
 	if tool != "" {
@@ -855,6 +862,9 @@ func Ask(
 			var rendered renderedObservation
 			ackAttempts := 0
 			ackObservationErrors := 0
+			consecutiveAckErrors := 0
+			firstAckError := ""
+			lastAckError := ""
 			renderedIdentityMisses := 0
 			routeObserved := false
 			routeUserObserved := false
@@ -867,18 +877,36 @@ func Ask(
 				current := renderedObservation{}
 				if err := observeRendered(ctx, session, &current); err != nil {
 					ackObservationErrors++
+					consecutiveAckErrors++
+					lastAckError = classifyAckObservationError(err)
+					if firstAckError == "" {
+						firstAckError = lastAckError
+					}
 					if ctx.Err() != nil {
 						break
 					}
-					if !waitForObservation(
-						ctx,
-						config.PollInterval,
-						time.Until(ackDeadline),
-					) {
-						break
+					if consecutiveAckErrors >= 16 {
+						data.Metadata["acknowledgement_simple_probe_attempted"] = true
+						if probed, ok := probeAckIdentity(ctx, session,
+							data.PromptFingerprint); ok {
+							current = probed
+							data.Metadata["acknowledgement_simple_probe_matched"] = true
+						} else {
+							data.Metadata["acknowledgement_simple_probe_matched"] = false
+							break
+						}
+					} else {
+						if !waitForObservation(
+							ctx,
+							config.PollInterval,
+							time.Until(ackDeadline),
+						) {
+							break
+						}
+						continue
 					}
-					continue
 				}
+				consecutiveAckErrors = 0
 				rendered = current
 				currentRouteValid :=
 					conversationIDPattern.MatchString(
@@ -922,6 +950,13 @@ func Ask(
 			data.Metadata["acknowledgement_attempts"] = ackAttempts
 			data.Metadata["acknowledgement_observation_errors"] =
 				ackObservationErrors
+			if firstAckError != "" {
+				data.Metadata["acknowledgement_first_error_class"] = firstAckError
+				data.Metadata["acknowledgement_last_error_class"] = lastAckError
+				data.Metadata["acknowledgement_error_method"] = "Runtime.evaluate"
+				data.Metadata["acknowledgement_target_present"] =
+					probeAckTargetPresence(ctx, config.Client, lease.TargetID())
+			}
 			data.Metadata["acknowledgement_route_observed"] =
 				routeObserved
 			data.Metadata["acknowledgement_route_stable"] = routeStable
@@ -1001,6 +1036,29 @@ func Ask(
 				)
 			}
 			action = actionEvidence(lease.Record())
+			if askOperation(config) == webagent.OperationResearch {
+				if err := lease.MarkIncomplete(ctx); err != nil {
+					return askFailure(runID, config, webagent.StageAcknowledged,
+						target, pending, action, conversation,
+						"chatgpt_research_state_persist_failed", "internal",
+						"ChatGPT research acknowledgement could not be persisted", "", data,
+						cleanupCommands(runID, pending))
+				}
+				data.CompletionState = "research_submitted"
+				data.ReadMode = "same_target_exact_prompt_acknowledgement"
+				data.Metadata["report_state"] = "unverified"
+				result := operationSuccess(runID, config.BuildCommit,
+					webagent.OperationResearch, webagent.StageAcknowledged,
+					data.ReadMode, target, pending, data,
+					[]string{
+						fmt.Sprintf("cdp workflow agent chatgpt conversations detail %s --json", conversationID),
+						fmt.Sprintf("cdp workflow agent chatgpt conversations export-research %s --output ./research.txt --json", conversationID),
+					})
+				result.State = webagent.StateIncomplete
+				result.Action = action
+				result.Conversation = conversation
+				return result
+			}
 			renderedDeadline := webagent.FractionalDeadline(
 				time.Now(),
 				deadline,
@@ -1177,6 +1235,31 @@ func Ask(
 				ConversationDetailRoute,
 			)
 			if detailFailure != nil {
+				if recovered, ok := recoverRenderedDetail(
+					ctx,
+					ReadConfig{BrowserConfig: &config.BrowserConfig},
+					lease,
+					conversationID,
+					newConversationDetailData(conversationID, "candidate_rendered", ""),
+					detailFailure.code,
+					data.PromptFingerprint,
+				); ok {
+					data.Text = recovered.Text
+					data.CompletionState = "terminal"
+					data.ReadMode = recovered.ReadMode
+					data.Metadata["answer_source"] = "same_conversation_rendered_assistant_message"
+					data.Metadata["rendered_recovery_after"] = detailFailure.code
+					data.Metadata["rendered_terminal_stable_reads"] = recovered.Metadata["rendered_terminal_stable_reads"]
+					if err := lease.MarkTerminal(ctx); err != nil {
+						return askFailure(runID, config, webagent.StageAcknowledged,
+							target, pending, action, conversation,
+							"chatgpt_terminal_state_failed", "internal",
+							"ChatGPT rendered terminal state could not be persisted",
+							"", data, cleanupCommands(runID, pending))
+					}
+					return finishAsk(ctx, lease, runID, config, webagent.StateTerminal,
+						target, pending, action, conversation, data, nil)
+				}
 				_ = lease.MarkIncomplete(context.Background())
 				data.CompletionState = "detail_unavailable"
 				return askFailure(
@@ -1397,7 +1480,7 @@ func observeComposerWithTool(
 	  );
 	  const editors = expectedTool ? allEditors.filter(editor =>
 	    Array.from(editor.querySelectorAll(
-	      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
+	      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"],span[app-mention-name="deep-research"][app-mention-path="app://connector_openai_deep_research"]'
 	    )).some(pill => label(pill).toLowerCase() === expectedTool.toLowerCase())
 	  ) : allEditors;
 	  const editor = editors.length === 1 ? editors[0] : null;
@@ -1407,7 +1490,7 @@ func observeComposerWithTool(
 	    }
 	    if (!(node instanceof HTMLElement)) return '';
 	    if (node.matches(
-	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target]'
+	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target],span[app-mention-name="deep-research"][app-mention-path="app://connector_openai_deep_research"]'
 	    )) return '';
 	    if (node.tagName === 'BR') return '\n';
 	    return Array.from(node.childNodes).map(inlineText).join('');
@@ -1423,9 +1506,9 @@ func observeComposerWithTool(
 	  const toolFreeEditorText = canonicalEditorText.replace(/^\s+|\s+$/g, '');
   const editorPromptText = expectedTool ? toolFreeEditorText : canonicalEditorText;
 	  const selectedTools = editor ? Array.from(editor.querySelectorAll(
-	    '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
+	    '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"],span[app-mention-name="deep-research"][app-mention-path="app://connector_openai_deep_research"]'
 	  )).filter(visible).map(pill => String(
-	    pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || label(pill)
+	    pill.getAttribute('app-mention-display-name') || pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || label(pill)
 	  ).trim()).filter(Boolean) : [];
 	  const radios = Array.from(document.querySelectorAll(
 	    'button[role="radio"]'
@@ -1640,9 +1723,9 @@ func prepareExactPromptWithTool(
 	  )).filter((element, index, values) =>
 	    values.indexOf(element) === index && element.isContentEditable &&
 	    (%s === '' || Array.from(element.querySelectorAll(
-	      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]'
+	      '[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"],span[app-mention-name="deep-research"][app-mention-path="app://connector_openai_deep_research"]'
 	    )).some(pill => String(
-	      pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || pill.innerText || pill.textContent || ''
+	      pill.getAttribute('app-mention-display-name') || pill.getAttribute('data-keyword') || pill.getAttribute('data-system-hint-label') || pill.innerText || pill.textContent || ''
 	    ).trim().toLowerCase() === %s.toLowerCase()))
 	  );
 	  if (editors.length !== 1) return {ok: false};
@@ -1653,7 +1736,7 @@ func prepareExactPromptWithTool(
 	  const range = document.createRange();
 	  range.selectNodeContents(editor);
 	  if (%s !== '') {
-	    const pills = editor.querySelectorAll('[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"]');
+	    const pills = editor.querySelectorAll('[data-inline-selection-pill][data-keyword],[data-inline-selection-pill][data-system-hint-type="picture_v2"][data-system-hint-label="Create image"],span[app-mention-name="deep-research"][app-mention-path="app://connector_openai_deep_research"]');
 	    if (pills.length !== 1) return {ok: false};
 	    // Preserve the selected tool, but replace the entire previous draft.
 	    // Collapsing at the end would append another prompt on every retry.
@@ -2050,7 +2133,8 @@ func observeRendered(
 	    if (!(node instanceof HTMLElement)) return '';
 	    if (node.matches(
 	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target],' +
-      '[data-prompt-link-href="chatgpt-system-hint://picture_v2"][data-prompt-link-label="Create image"][data-layout="selection-pill"]'
+	      '[data-prompt-link-href="chatgpt-system-hint://picture_v2"][data-prompt-link-label="Create image"][data-layout="selection-pill"],' +
+	      '[data-prompt-link-href="app://connector_openai_deep_research"],span[app-mention-name="deep-research"]'
 	    )) return '';
 	    if (node.tagName === 'BR') return '\n';
 	    return Array.from(node.childNodes).map(inlineText).join('');
@@ -2088,7 +2172,8 @@ func observeRendered(
 	      inlineText(element);
 	    const hasSelectionPill = Boolean(element.querySelector(
 	      '[data-inline-selection-pill],[data-inline-selection-pill-cursor-target],' +
-      '[data-prompt-link-href="chatgpt-system-hint://picture_v2"][data-prompt-link-label="Create image"][data-layout="selection-pill"]'
+      '[data-prompt-link-href="chatgpt-system-hint://picture_v2"][data-prompt-link-label="Create image"][data-layout="selection-pill"],' +
+      '[data-prompt-link-href="app://connector_openai_deep_research"],span[app-mention-name="deep-research"]'
 	    ));
 	    return hasSelectionPill ? value.replace(/^\s+/, '') : value;
 	  };

@@ -18,7 +18,9 @@ import (
 	"github.com/pankaj28843/cdp-cli/internal/webagent"
 )
 
-const syntheticResearchReport = `# Synthetic research report
+const syntheticResearchReport = `Research completed in 1m · 3 citations · 7 searches
+
+# Synthetic research report
 
 This synthetic report stands in for a completed embedded research document. It
 contains enough ordinary prose to prove that the reader accepts a terminal
@@ -84,6 +86,7 @@ type researchTestBrowser struct {
 	isolatedWorldFailures   map[string]error
 	frameDocumentTrusted    bool
 	observationDocTrusted   bool
+	skybridgeChildReady     bool
 	documentTrustProbeCalls int
 }
 
@@ -109,6 +112,7 @@ func newResearchTestBrowserWithFrameURLs(
 		semanticOwnerNode:        101,
 		frameDocumentTrusted:     true,
 		observationDocTrusted:    true,
+		skybridgeChildReady:      true,
 		frameOwnerNodes: map[string]int64{
 			"research-frame": 101,
 		},
@@ -348,6 +352,7 @@ func (b *researchTestBrowser) CallSession(
 							"streaming":        false,
 							"too_large":        false,
 							"document_trusted": false,
+							"completed":        false,
 						},
 					},
 				})
@@ -362,8 +367,20 @@ func (b *researchTestBrowser) CallSession(
 						"streaming":        false,
 						"too_large":        false,
 						"document_trusted": true,
+						"completed":        strings.HasPrefix(b.report, "Research completed in "),
 					},
 				},
+			})
+		}
+		if strings.Contains(researchExpression(params), "iframe#root[data-preview-ready]") &&
+			strings.HasPrefix(sessionID, "session-") {
+			if !b.skybridgeChildReady {
+				return assignResearchTestResult(result, map[string]any{
+					"result": map[string]any{"type": "object", "subtype": "null", "value": nil},
+				})
+			}
+			return assignResearchTestResult(result, map[string]any{
+				"result": map[string]any{"type": "object", "subtype": "node", "objectId": "synthetic-ready-child"},
 			})
 		}
 		if len(b.frameOwnerNodes) > 0 &&
@@ -378,6 +395,13 @@ func (b *researchTestBrowser) CallSession(
 			})
 		}
 	case "DOM.describeNode":
+		if researchStringParam(params, "objectId") == "synthetic-ready-child" {
+			targetID := strings.TrimPrefix(sessionID, "session-")
+			child := b.oopifChildFrames[targetID]
+			return assignResearchTestResult(result, map[string]any{
+				"node": map[string]any{"nodeName": "IFRAME", "frameId": child.ID},
+			})
+		}
 		if len(b.frameOwnerNodes) > 0 && sessionID == "session-owned-1" {
 			ownerNode := b.semanticOwnerNode
 			if len(b.semanticOwnerIDs) > 0 {
@@ -641,6 +665,86 @@ func TestExportResearchReadsOOPIFThroughDaemonTarget(t *testing.T) {
 	}
 	if _, exists := targets["user-page"]; !exists {
 		t.Fatalf("user target was not preserved: %+v", targets)
+	}
+}
+
+func TestSkybridgeResearchFrameURLRequiresExactAppAndSandboxHost(t *testing.T) {
+	host := "mcp-app-" + strings.Repeat("a", 64) + ".web-sandbox.oaiusercontent.com"
+	for _, raw := range []string{
+		"https://" + host + "/?app=skybridge",
+		"https://" + host + "/?app=skybridge&session=synthetic",
+	} {
+		if !trustedResearchFrameURL(raw) || !researchSandboxFrameURL(raw) {
+			t.Fatalf("trusted skybridge frame rejected: %q", raw)
+		}
+	}
+	for _, raw := range []string{
+		"https://mcp-app-" + strings.Repeat("a", 63) + ".web-sandbox.oaiusercontent.com/?app=skybridge",
+		"https://" + host + ".evil.example/?app=skybridge",
+		"https://" + host + "/?app=other",
+		"https://" + host + "/?app=skybridge&app=other",
+		"http://" + host + "/?app=skybridge",
+		"https://user@" + host + "/?app=skybridge",
+		"https://" + host + ":8443/?app=skybridge",
+	} {
+		if trustedResearchFrameURL(raw) || researchSandboxFrameURL(raw) {
+			t.Fatalf("untrusted skybridge frame accepted: %q", raw)
+		}
+	}
+}
+
+func TestExportResearchReadsReadySkybridgeChild(t *testing.T) {
+	rendererURL := "https://mcp-app-" + strings.Repeat("a", 64) + ".web-sandbox.oaiusercontent.com/?app=skybridge&session=synthetic"
+	if !strings.Contains(researchFrameObservationExpression(rendererURL), "const useBoundSkybridgeBody = true;") ||
+		strings.Contains(researchFrameObservationExpression("https://chatgpt.com/deep-research/synthetic"), "const useBoundSkybridgeBody = true;") {
+		t.Fatal("skybridge body read was not confined to its bound renderer URL")
+	}
+	browser := newResearchTestBrowserWithOOPIF(syntheticResearchReport, rendererURL, rendererURL)
+	browser.parentTreeOnly = true
+	browser.addOOPIFChild(browser.oopifTargetID, "skybridge-report-child", rendererURL)
+	engine, journal := newResearchTestRuntime(t, browser)
+	outputPath := filepath.Join(t.TempDir(), "skybridge-report.txt")
+	result := ExportResearch(context.Background(), ResearchExportConfig{
+		BrowserConfig: BrowserConfig{Client: browser, Engine: engine, Journal: journal},
+		OutputPath:    outputPath,
+		Timeout:       time.Second,
+	}, "conversation-1")
+	if !result.OK || result.State != webagent.StateTerminal ||
+		len(browser.isolatedFrameIDs) != 1 || browser.isolatedFrameIDs[0] != "skybridge-report-child" ||
+		browser.reportReadCalls != 1 {
+		t.Fatalf("skybridge result=%+v frame_ids=%v reads=%d", result, browser.isolatedFrameIDs, browser.reportReadCalls)
+	}
+	written, err := os.ReadFile(outputPath)
+	if err != nil || string(written) != syntheticResearchReport+"\n" {
+		t.Fatalf("skybridge export=%q err=%v", written, err)
+	}
+
+	browser = newResearchTestBrowserWithOOPIF(syntheticResearchReport, rendererURL, rendererURL)
+	browser.parentTreeOnly = true
+	browser.addOOPIFChild(browser.oopifTargetID, "skybridge-report-child", rendererURL)
+	browser.skybridgeChildReady = false
+	engine, journal = newResearchTestRuntime(t, browser)
+	result = ExportResearch(context.Background(), ResearchExportConfig{
+		BrowserConfig: BrowserConfig{Client: browser, Engine: engine, Journal: journal},
+		OutputPath:    filepath.Join(t.TempDir(), "unready.txt"),
+		Timeout:       time.Second,
+	}, "conversation-1")
+	if result.OK || browser.reportReadCalls != 0 {
+		t.Fatalf("unready child was read: result=%+v reads=%d", result, browser.reportReadCalls)
+	}
+
+	incomplete := strings.TrimPrefix(syntheticResearchReport, "Research completed in 1m · 3 citations · 7 searches\n\n")
+	browser = newResearchTestBrowserWithOOPIF(incomplete, rendererURL, rendererURL)
+	browser.parentTreeOnly = true
+	browser.addOOPIFChild(browser.oopifTargetID, "skybridge-report-child", rendererURL)
+	engine, journal = newResearchTestRuntime(t, browser)
+	result = ExportResearch(context.Background(), ResearchExportConfig{
+		BrowserConfig: BrowserConfig{Client: browser, Engine: engine, Journal: journal},
+		OutputPath:    filepath.Join(t.TempDir(), "incomplete.txt"),
+		Timeout:       100 * time.Millisecond,
+	}, "conversation-1")
+	if result.OK || browser.reportReadCalls == 0 {
+		t.Fatalf("unmarked document was exported: result=%+v reads=%d", result, browser.reportReadCalls)
 	}
 }
 
